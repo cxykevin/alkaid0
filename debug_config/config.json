@@ -1,0 +1,22 @@
+{
+  "Version": 1,
+  "Model": {
+    "ProviderURL": "",
+    "ProviderKey": "",
+    "Models": null
+  },
+  "Agent": {
+    "Agents": null,
+    "DefaultModelConfig": {
+      "ModelName": "",
+      "ModelID": "",
+      "ModelDescription": "",
+      "ModelAddPrompt": "",
+      "ModelTopP": 0,
+      "ModelTopK": 0,
+      "ModelTemperature": 0
+    },
+    "GlobalPrompt": ""
+  },
+  "ThemeID": 0
+}
