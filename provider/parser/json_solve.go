@@ -535,11 +535,6 @@ func (p *JSONParser) AddToken(token string) error {
 		case 'n', 't', 'f':
 			p.mode = jsonModeInKeyword
 			p.keywordTmp = jsonKeywordType(string(rv))
-			// create placeholder for keyword value
-			if _, err := p.beginValueSlot(string(rv)); err != nil {
-				p.Stop = true
-				return err
-			}
 			continue
 		case ':':
 			// 切换对象模式到等待值
@@ -575,11 +570,6 @@ func (p *JSONParser) AddToken(token string) error {
 			if isNumChar(rv) {
 				p.mode = jsonModeInNumber
 				p.numTmp = string(rv)
-				// create placeholder for number
-				if _, err := p.beginValueSlot(p.numTmp); err != nil {
-					p.Stop = true
-					return err
-				}
 				continue
 			}
 			p.Stop = true

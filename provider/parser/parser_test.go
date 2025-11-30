@@ -737,7 +737,7 @@ func TestParserMaxTagLength(t *testing.T) {
 // TestParserComplexScenarios 测试复杂场景
 func TestParserComplexScenarios(t *testing.T) {
 	// 测试多个标签的复杂嵌套
-	complexContent := "文本1<think>思考1</think>文本2\n换行内容<think>思考2\n多行内容</think><tools>工具内容</tools>\n后续文本"
+	complexContent := "文本1<think>思考1</think>文本2\n换行内容<think>思考2\n多行内容</think><tools>[]</tools>\n后续文本"
 
 	p := parser.NewParser(testTools)
 	response, thinking, tools, err := p.AddToken(complexContent)

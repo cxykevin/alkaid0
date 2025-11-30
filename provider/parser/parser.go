@@ -43,6 +43,7 @@ type Parser struct {
 	KeyMode           int16
 	ToolCallingObject []ToolsResponse
 	Stop              bool
+	jsonParser        *JSONParser
 }
 
 // AddToken 流式传入 token
@@ -55,7 +56,10 @@ func (p *Parser) AddToken(token string) (string, string, *[]ToolsResponse, error
 			if p.KeyMode == 1 {
 				responseThinking += tokens
 			} else {
-				// TODO: 解析参数
+				if p.jsonParser != nil {
+					p.jsonParser.AddToken(tokens)
+					// TODO: 解析参数
+				}
 			}
 		}
 		switch p.Mode {
@@ -72,6 +76,7 @@ func (p *Parser) AddToken(token string) (string, string, *[]ToolsResponse, error
 				case "think":
 					p.KeyMode = 1
 				case "tools":
+					p.jsonParser = NewJSONParser()
 					p.KeyMode = 2
 				default:
 					response += "<" + p.TokenCache + ">"
@@ -112,6 +117,10 @@ func (p *Parser) AddToken(token string) (string, string, *[]ToolsResponse, error
 					p.KeyMode = 1
 				} else if p.KeyMode == 2 && p.TokenCache == "tools" {
 					p.KeyMode = 2
+					err := p.jsonParser.DoneToken()
+					if err != nil {
+						return "", "", nil, err
+					}
 				} else {
 					solveTag("</" + p.TokenCache + ">")
 					p.TokenCache = ""
