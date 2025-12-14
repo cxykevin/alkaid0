@@ -1,17 +1,39 @@
 package parser
 
-// ToolsDefine 工具接口
-type ToolsDefine struct {
-	Name        string                    `json:"name"`
-	Description string                    `json:"description"`
-	Parameters  map[string]ToolParameters `json:"parameters"`
+import (
+	"errors"
+
+	"github.com/cxykevin/alkaid0/library/json"
+)
+
+// import "github.com/cxykevin/alkaid0/log"
+
+// var logger *log.LogsObj
+
+// func init() {
+// 	logger = log.New("storage")
+// }
+
+// ToolsResponse 工具返回类
+type ToolsResponse struct {
+	Name       string
+	ID         string
+	Parameters map[string]any
 }
 
-// ToolsResponse 工具返回接口
-type ToolsResponse struct {
-	Name       string         `json:"name"`
-	ID         string         `json:"id"`
-	Parameters map[string]any `json:"parameters"`
+// ToolsDefine 工具接口
+type ToolsDefine struct {
+	Name        string                                    `json:"name"`
+	Description string                                    `json:"description"`
+	Parameters  map[string]ToolParameters                 `json:"parameters"`
+	Func        func(string, map[string]*any, bool) error `json:"-"`
+}
+
+// AIToolsResponse 工具返回接口
+type AIToolsResponse struct {
+	Name       string          `json:"name"`
+	ID         string          `json:"id"`
+	Parameters map[string]*any `json:"parameters"`
 }
 
 // ToolType 工具参数类型枚举
@@ -20,7 +42,8 @@ type ToolType string
 // 类型枚举
 const (
 	ToolTypeString ToolType = "string"
-	ToolTypeNumber ToolType = "number"
+	ToolTypeInt    ToolType = "int"
+	ToolTypeFloat  ToolType = "float"
 	ToolTypeBoolen ToolType = "boolen"
 	ToolTypeArray  ToolType = "array"
 	ToolTypeObject ToolType = "object"
@@ -41,26 +64,205 @@ type Parser struct {
 	TokenCache        string
 	Mode              int16
 	KeyMode           int16
-	ToolCallingObject []ToolsResponse
+	ToolCallingObject []AIToolsResponse
 	Stop              bool
-	jsonParser        *JSONParser
+	jsonParser        *json.Parser
+	toolSolveTmp      toolSolveTmp
+	ToolResponse      map[string]string
+}
+
+type toolSolveTmp struct {
+	toolNum int
+}
+
+func (p *Parser) findTool(toolName string) int {
+	for idx, tool := range p.Tools {
+		if tool.Name == toolName {
+			return idx
+		}
+	}
+	return -1
+}
+
+func (p *Parser) solveTool() {
+	if p.jsonParser.FullCallingObject == nil {
+		return
+	}
+	var pObjects []*any
+	var ok bool
+	if pObjects, ok = (*p.jsonParser.FullCallingObject).([]*any); !ok {
+		// 尝试 ArraySlot
+		if arraySlot, isArraySlot := (*p.jsonParser.FullCallingObject).(json.ArraySlot); isArraySlot {
+			pObjects = []*any(arraySlot)
+		} else {
+			p.Stop = true
+			return
+		}
+	}
+	if len(pObjects) == 0 {
+		return
+	}
+	for idx, pObject := range pObjects {
+		if idx < p.toolSolveTmp.toolNum {
+			continue
+		}
+		if pObject == nil {
+			if idx != len(pObjects)-1 { // 不是最后一个元素
+				p.Stop = true
+				return
+			}
+			continue
+		}
+		var pTools map[string]*any
+		var toolFinishTag bool = true
+		if pTools, ok = (*pObject).(map[string]*any); !ok {
+			toolFinishTag = false
+			pTools, ok = (*pObject).(json.ObjectSlot)
+			if !ok {
+				p.Stop = true
+				return
+			}
+		}
+		toolNameOrigin, ok := pTools["name"]
+		if !ok {
+			if idx != len(pObjects)-1 { // 不是最后一个元素
+				p.Stop = true
+				return
+			}
+			continue
+		}
+		toolName, ok := (*toolNameOrigin).(string)
+		if !ok {
+			if idx != len(pObjects)-1 { // 不是最后一个元素
+				p.Stop = true
+				return
+			}
+			continue
+		}
+		// 在 tools 中寻找工具
+		toolID := p.findTool(toolName)
+		if toolID == -1 {
+			p.Stop = true
+			return
+		}
+		toolCallIDOrigin, ok := pTools["id"]
+		if !ok {
+			if idx != len(pObjects)-1 { // 不是最后一个元素
+				p.Stop = true
+				return
+			}
+			continue
+		}
+		toolCallID, ok := (*toolCallIDOrigin).(string)
+		if !ok {
+			if idx != len(pObjects)-1 { // 不是最后一个元素
+				p.Stop = true
+				return
+			}
+			continue
+		}
+		toolParametersOrigin, ok := pTools["parameters"]
+		if !ok {
+			if idx != len(pObjects)-1 { // 不是最后一个元素
+				p.Stop = true
+				return
+			}
+			continue
+		}
+		toolParameters, ok := (*toolParametersOrigin).(map[string]*any)
+		if !ok {
+			toolParameters, ok = (*toolParametersOrigin).(json.ObjectSlot)
+			if !ok {
+				if idx != len(pObjects)-1 { // 不是最后一个元素
+					p.Stop = true
+					return
+				}
+				continue
+			}
+		}
+		// 参数类型校验
+		for key, value := range toolParameters {
+			switch p.Tools[toolID].Parameters[key].Type {
+			case ToolTypeString:
+				_, okStr := (*value).(string)
+				_, okTmpStr := (*value).(json.StringSlot)
+				if !okStr && !okTmpStr {
+					p.Stop = true
+					return
+				}
+			case ToolTypeInt: // 即使是 IntType，后端获取仍旧是 float64
+				val, ok := (*value).(float64)
+				if !ok {
+					p.Stop = true
+					return
+				}
+				// 校验是否为整数
+				if val != float64(int64(val)) {
+					p.Stop = true
+					return
+				}
+			case ToolTypeFloat:
+				_, ok := (*value).(float64)
+				if !ok {
+					p.Stop = true
+					return
+				}
+			case ToolTypeBoolen:
+				_, ok := (*value).(bool)
+				if !ok {
+					p.Stop = true
+					return
+				}
+			case ToolTypeArray:
+				_, ok := (*value).([]any)
+				if !ok {
+					p.Stop = true
+					return
+				}
+			case ToolTypeObject:
+				_, okMap := (*value).(map[string]*any)
+				_, okMapSlot := (*value).(json.ObjectSlot)
+				if !okMap && !okMapSlot {
+					p.Stop = true
+					return
+				}
+			}
+		}
+		// 调用工具
+		err := p.Tools[toolID].Func(toolCallID, map[string]*any(toolParameters), toolFinishTag)
+		if err != nil {
+			p.Stop = true
+			return
+		}
+		if toolFinishTag {
+			p.toolSolveTmp.toolNum = idx + 1
+		}
+	}
 }
 
 // AddToken 流式传入 token
-func (p *Parser) AddToken(token string) (string, string, *[]ToolsResponse, error) {
+func (p *Parser) AddToken(token string) (string, string, *any, error) {
+	if p.Stop {
+		return "", "", nil, errors.New("parser stop")
+	}
 	response := ""
 	responseThinking := ""
 	for _, char := range token {
 		// 状态机
-		solveTag := func(tokens string) {
+		solveTag := func(tokens string) error {
 			if p.KeyMode == 1 {
 				responseThinking += tokens
 			} else {
 				if p.jsonParser != nil {
 					p.jsonParser.AddToken(tokens)
 					// TODO: 解析参数
+					p.solveTool()
+					if p.Stop {
+						return errors.New("tool error")
+					}
 				}
 			}
+			return nil
 		}
 		switch p.Mode {
 		case 0: // 标签外
@@ -76,7 +278,7 @@ func (p *Parser) AddToken(token string) (string, string, *[]ToolsResponse, error
 				case "think":
 					p.KeyMode = 1
 				case "tools":
-					p.jsonParser = NewJSONParser()
+					p.jsonParser = json.New()
 					p.KeyMode = 2
 				default:
 					response += "<" + p.TokenCache + ">"
@@ -101,7 +303,10 @@ func (p *Parser) AddToken(token string) (string, string, *[]ToolsResponse, error
 				continue
 			}
 			// 分类处理内容
-			solveTag(string(char))
+			err := solveTag(string(char))
+			if err != nil {
+				return "", "", nil, err
+			}
 		case 3: // 出标签左尖括号
 			if char == '/' {
 				p.Mode = 4
@@ -110,7 +315,10 @@ func (p *Parser) AddToken(token string) (string, string, *[]ToolsResponse, error
 			}
 			p.Mode = 2
 			// 分类处理内容
-			solveTag(string(char))
+			err := solveTag(string(char))
+			if err != nil {
+				return "", "", nil, err
+			}
 		case 4: // 出标签本身
 			if char == '>' {
 				if p.KeyMode == 1 && p.TokenCache == "think" {
@@ -122,7 +330,10 @@ func (p *Parser) AddToken(token string) (string, string, *[]ToolsResponse, error
 						return "", "", nil, err
 					}
 				} else {
-					solveTag("</" + p.TokenCache + ">")
+					err := solveTag("</" + p.TokenCache + ">")
+					if err != nil {
+						return "", "", nil, err
+					}
 					p.TokenCache = ""
 					p.Mode = 2
 					continue
@@ -133,17 +344,20 @@ func (p *Parser) AddToken(token string) (string, string, *[]ToolsResponse, error
 			p.TokenCache += string(char)
 			if len(p.TokenCache) >= maxTagLen {
 				p.Mode = 2
-				solveTag("</" + p.TokenCache)
+				err := solveTag("</" + p.TokenCache)
+				if err != nil {
+					return "", "", nil, err
+				}
 				p.TokenCache = ""
 				continue
 			}
 		}
 	}
-	return response, responseThinking, &p.ToolCallingObject, nil
+	return response, responseThinking, nil, nil
 }
 
 // DoneToken 传入结束 token
-func (p *Parser) DoneToken() (string, string, *[]ToolsResponse, error) {
+func (p *Parser) DoneToken() (string, string, *[]AIToolsResponse, error) {
 	switch p.Mode {
 	case 0: // 标签外
 		// 无需处理

@@ -1,11 +1,11 @@
-package parser
+package json
 
 import (
 	"testing"
 )
 
 func TestJSONParser_SimpleObject(t *testing.T) {
-	parser := NewJSONParser()
+	parser := New()
 	jsonStr := "{\"a\":1}"
 	for _, c := range jsonStr {
 		err := parser.AddToken(string(c))
@@ -40,7 +40,7 @@ func TestJSONParser_SimpleObject(t *testing.T) {
 }
 
 func TestJSONParser_Array(t *testing.T) {
-	parser := NewJSONParser()
+	parser := New()
 	jsonStr := "[1,2,3]"
 	for _, c := range jsonStr {
 		err := parser.AddToken(string(c))
@@ -79,7 +79,7 @@ func TestJSONParser_Array(t *testing.T) {
 }
 
 func TestJSONParser_Incomplete(t *testing.T) {
-	parser := NewJSONParser()
+	parser := New()
 	jsonStr := "{\"a\":1"
 	for _, c := range jsonStr {
 		err := parser.AddToken(string(c))
@@ -94,7 +94,7 @@ func TestJSONParser_Incomplete(t *testing.T) {
 }
 
 func TestJSONParser_EmptyObject(t *testing.T) {
-	parser := NewJSONParser()
+	parser := New()
 	jsonStr := "{}"
 	for _, c := range jsonStr {
 		err := parser.AddToken(string(c))
@@ -121,7 +121,7 @@ func TestJSONParser_EmptyObject(t *testing.T) {
 }
 
 func TestJSONParser_Keywords(t *testing.T) {
-	parser := NewJSONParser()
+	parser := New()
 	jsonStr := "[true,false,null]"
 	for _, c := range jsonStr {
 		err := parser.AddToken(string(c))
@@ -168,7 +168,7 @@ func TestJSONParser_Keywords(t *testing.T) {
 	}
 }
 func TestJSONParser_ErrorKeywords(t *testing.T) {
-	parser := NewJSONParser()
+	parser := New()
 	jsonStr := "[true,falxe]"
 	flag := false
 	for _, c := range jsonStr {
@@ -212,7 +212,7 @@ func TestJSONParser_ErrorKeywords(t *testing.T) {
 }
 
 func TestJSONParser_DynamicString(t *testing.T) {
-	parser := NewJSONParser()
+	parser := New()
 	jsonStr := "{\"a\":\""
 	err := parser.AddToken(string(jsonStr))
 	strCmpTmp := ""
@@ -232,25 +232,25 @@ func TestJSONParser_DynamicString(t *testing.T) {
 			t.Fatalf("FullCallingObject is nil at iteration")
 		}
 		rootAny := *parser.FullCallingObject
-		rootMap, ok := rootAny.(map[string]*any)
+		rootMap, ok := rootAny.(ObjectSlot)
 		if !ok {
-			t.Fatalf("FullCallingObject not a map at iteration")
+			t.Fatalf("FullCallingObject not a slot map at iteration")
 		}
 		valPtr, exists := rootMap["a"]
 		if !exists || valPtr == nil {
 			t.Fatalf("value for key 'a' missing at iteration, exists=%v", exists)
 		}
-		// 值可以是 string 或 StringNotFinishSlot（未完成的字符串占位）
+		// 值可以是 string 或 StringSlot（未完成的字符串占位）
 		if valStr, ok := (*valPtr).(string); ok {
 			if valStr != strCmpTmp {
 				t.Fatalf("expected '%s', got '%s' at iteration", strCmpTmp, valStr)
 			}
-		} else if valTmp, ok := (*valPtr).(StringNotFinishSlot); ok {
+		} else if valTmp, ok := (*valPtr).(StringSlot); ok {
 			if string(valTmp) != strCmpTmp {
-				t.Fatalf("expected '%s', got '%s' at iteration (StringNotFinishSlot)", strCmpTmp, string(valTmp))
+				t.Fatalf("expected '%s', got '%s' at iteration (StringSlot)", strCmpTmp, string(valTmp))
 			}
 		} else {
-			t.Fatalf("value for key 'a' not string or StringNotFinishSlot at iteration")
+			t.Fatalf("value for key 'a' not string or StringSlot at iteration")
 		}
 	}
 	parser.AddToken("\"}")
@@ -261,7 +261,7 @@ func TestJSONParser_DynamicString(t *testing.T) {
 }
 
 func TestJSONParser_NestedStructures(t *testing.T) {
-	parser := NewJSONParser()
+	parser := New()
 	jsonStr := "{\"a\":[1,{\"b\":[2,3]},4],\"c\":{\"d\":5}}"
 	for _, c := range jsonStr {
 		if err := parser.AddToken(string(c)); err != nil {
@@ -325,7 +325,7 @@ func TestJSONParser_NestedStructures(t *testing.T) {
 }
 
 func TestJSONParser_EscapedCharacters(t *testing.T) {
-	parser := NewJSONParser()
+	parser := New()
 	// 使用 raw string 保持 JSON 中的反斜杠序列
 	jsonStr := `{"s":"Line\nTab\tQuote\"Backslash\\"}`
 	for _, c := range jsonStr {
@@ -359,7 +359,7 @@ func TestJSONParser_EscapedCharacters(t *testing.T) {
 }
 
 func TestJSONParser_NumbersAndExponents(t *testing.T) {
-	parser := NewJSONParser()
+	parser := New()
 	jsonStr := "[-1,3.14,1e10,-2E-3]"
 	for _, c := range jsonStr {
 		if err := parser.AddToken(string(c)); err != nil {
@@ -390,7 +390,7 @@ func TestJSONParser_NumbersAndExponents(t *testing.T) {
 
 func TestJSONParser_RootPrimitives(t *testing.T) {
 	// number root
-	parser := NewJSONParser()
+	parser := New()
 	if err := parser.AddToken("123"); err != nil {
 		t.Fatalf("AddToken error: %v", err)
 	}
@@ -405,7 +405,7 @@ func TestJSONParser_RootPrimitives(t *testing.T) {
 	}
 
 	// string root
-	parser = NewJSONParser()
+	parser = New()
 	if err := parser.AddToken("\"hello\""); err != nil {
 		t.Fatalf("AddToken error: %v", err)
 	}
@@ -417,7 +417,7 @@ func TestJSONParser_RootPrimitives(t *testing.T) {
 	}
 
 	// true root
-	parser = NewJSONParser()
+	parser = New()
 	if err := parser.AddToken("true"); err != nil {
 		t.Fatalf("AddToken error: %v", err)
 	}
@@ -429,7 +429,7 @@ func TestJSONParser_RootPrimitives(t *testing.T) {
 	}
 
 	// null root
-	parser = NewJSONParser()
+	parser = New()
 	if err := parser.AddToken("null"); err != nil {
 		t.Fatalf("AddToken error: %v", err)
 	}
@@ -443,7 +443,7 @@ func TestJSONParser_RootPrimitives(t *testing.T) {
 
 func TestJSONParser_TrailingGarbageAndIncompleteNumber(t *testing.T) {
 	// trailing garbage after object
-	parser := NewJSONParser()
+	parser := New()
 	jsonStr := "{\"a\":1}x"
 	err := error(nil)
 	for _, c := range jsonStr {
@@ -457,7 +457,7 @@ func TestJSONParser_TrailingGarbageAndIncompleteNumber(t *testing.T) {
 	}
 
 	// incomplete number at EOF
-	parser = NewJSONParser()
+	parser = New()
 	if err := parser.AddToken("1e"); err != nil {
 		// AddToken itself might not error until DoneToken
 	}
@@ -467,7 +467,7 @@ func TestJSONParser_TrailingGarbageAndIncompleteNumber(t *testing.T) {
 }
 
 func TestJSONParser_TrailingCommaArray(t *testing.T) {
-	parser := NewJSONParser()
+	parser := New()
 	jsonStr := "[1,]"
 	for _, c := range jsonStr {
 		if err := parser.AddToken(string(c)); err != nil {
@@ -488,7 +488,7 @@ func TestJSONParser_TrailingCommaArray(t *testing.T) {
 }
 
 func TestJSONParser_MultiTokenAdd(t *testing.T) {
-	parser := NewJSONParser()
+	parser := New()
 	// 在一次 AddToken 中传入完整 JSON
 	if err := parser.AddToken("[1,2,3]"); err != nil {
 		t.Fatalf("AddToken error: %v", err)
@@ -504,7 +504,7 @@ func TestJSONParser_MultiTokenAdd(t *testing.T) {
 }
 
 func TestJSONParser_UnicodeEscapeBasic(t *testing.T) {
-	parser := NewJSONParser()
+	parser := New()
 	jsonStr := "{\"s\":\"\\u0041\"}"
 	for _, c := range jsonStr {
 		if err := parser.AddToken(string(c)); err != nil {
@@ -532,7 +532,7 @@ func TestJSONParser_UnicodeEscapeBasic(t *testing.T) {
 }
 
 func TestJSONParser_UnicodeSurrogatePair(t *testing.T) {
-	parser := NewJSONParser()
+	parser := New()
 	// 😀 U+1F600 github sequence: \uD83D\uDE00
 	jsonStr := "{\"e\":\"\\uD83D\\uDE00\"}"
 	for _, c := range jsonStr {
@@ -561,7 +561,7 @@ func TestJSONParser_UnicodeSurrogatePair(t *testing.T) {
 }
 
 func TestJSONParser_UnicodeEscapeIncomplete(t *testing.T) {
-	parser := NewJSONParser()
+	parser := New()
 	// incomplete hex digits
 	jsonStr := "{\"s\":\"\\u00" // incomplete
 	for _, c := range jsonStr {
@@ -575,17 +575,17 @@ func TestJSONParser_UnicodeEscapeIncomplete(t *testing.T) {
 }
 
 func TestJSONParser_StringEndFlag(t *testing.T) {
-	parser := NewJSONParser()
-	// 流式传入字符串，检查字符串未完成的占位符 (StringNotFinishSlot)
+	parser := New()
+	// 流式传入字符串，检查字符串未完成的占位符 (StringSlot)
 	arr := []string{"{", "\"a\":\""}
 	for _, s := range arr {
 		if err := parser.AddToken(s); err != nil {
 			t.Fatalf("AddToken error: %v", err)
 		}
-		// 如果存在 currentValuePtr，则它应该被标记为 StringNotFinishSlot
+		// 如果存在 currentValuePtr，则它应该被标记为 StringSlot
 		if parser.currentValuePtr != nil {
-			if _, ok := (*parser.currentValuePtr).(StringNotFinishSlot); !ok {
-				t.Fatalf("current value should be a StringNotFinishSlot while parsing")
+			if _, ok := (*parser.currentValuePtr).(StringSlot); !ok {
+				t.Fatalf("current value should be a StringSlot while parsing")
 			}
 		}
 	}
@@ -593,12 +593,12 @@ func TestJSONParser_StringEndFlag(t *testing.T) {
 	if err := parser.AddToken("hello"); err != nil {
 		t.Fatalf("AddToken error: %v", err)
 	}
-	// 仍然处于字符串解析中，待填写的值应为 StringNotFinishSlot
+	// 仍然处于字符串解析中，待填写的值应为 StringSlot
 	if parser.currentValuePtr == nil {
 		t.Fatalf("currentValuePtr should not be nil while parsing string")
 	}
-	if _, ok := (*parser.currentValuePtr).(StringNotFinishSlot); !ok {
-		t.Fatalf("current value should be a StringNotFinishSlot while parsing")
+	if _, ok := (*parser.currentValuePtr).(StringSlot); !ok {
+		t.Fatalf("current value should be a StringSlot while parsing")
 	}
 	// 结束字符串
 	if err := parser.AddToken("\"}"); err != nil {
@@ -626,3 +626,212 @@ func TestJSONParser_StringEndFlag(t *testing.T) {
 		t.Fatalf("expected 'hello' for 'a', got %v", s)
 	}
 }
+
+// 性能测试 - 简单对象
+func BenchmarkJSONParser_SimpleObject(b *testing.B) {
+	jsonStr := "{\"a\":1,\"b\":2,\"c\":3,\"d\":4,\"e\":5}"
+	b.ResetTimer()
+	for b.Loop() {
+		parser := New()
+		for _, c := range jsonStr {
+			parser.AddToken(string(c))
+		}
+		parser.DoneToken()
+	}
+}
+
+// 性能测试 - 逐个字符添加 vs 一次性添加
+func BenchmarkJSONParser_CharByChar(b *testing.B) {
+	jsonStr := "{\"key\":\"value\",\"number\":123,\"array\":[1,2,3,4,5]}"
+	b.ResetTimer()
+	for b.Loop() {
+		parser := New()
+		for _, c := range jsonStr {
+			parser.AddToken(string(c))
+		}
+		parser.DoneToken()
+	}
+}
+
+// 性能测试 - 一次性添加整个JSON
+func BenchmarkJSONParser_MultiToken(b *testing.B) {
+	jsonStr := "{\"key\":\"value\",\"number\":123,\"array\":[1,2,3,4,5]}"
+	b.ResetTimer()
+	for b.Loop() {
+		parser := New()
+		parser.AddToken(jsonStr)
+		parser.DoneToken()
+	}
+}
+
+// 性能测试 - 大型数组
+func BenchmarkJSONParser_LargeArray(b *testing.B) {
+	// 构造 [1,2,3,...,1000]
+	jsonStr := "["
+	for i := 1; i <= 1000; i++ {
+		if i > 1 {
+			jsonStr += ","
+		}
+		jsonStr += string(rune('0' + (i % 10)))
+	}
+	jsonStr += "]"
+
+	b.ResetTimer()
+	for b.Loop() {
+		parser := New()
+		parser.AddToken(jsonStr)
+		parser.DoneToken()
+	}
+}
+
+// 性能测试 - 深层嵌套
+func BenchmarkJSONParser_DeepNesting(b *testing.B) {
+	// 构造 {"a":{"b":{"c":{"d":{"e":{"f":{"g":{"h":{"i":{"j":1}}}}}}}}}}
+	jsonStr := "{"
+	for i := range 10 {
+		jsonStr += "\"" + string(rune('a'+i)) + "\":{"
+	}
+	jsonStr += "\"val\":1"
+	for range 10 {
+		jsonStr += "}"
+	}
+
+	b.ResetTimer()
+	for b.Loop() {
+		parser := New()
+		parser.AddToken(jsonStr)
+		parser.DoneToken()
+	}
+}
+
+// 性能测试 - 复杂字符串处理
+func BenchmarkJSONParser_LongString(b *testing.B) {
+	longStr := ""
+	for i := 0; i < 100; i++ {
+		longStr += "abcdefghijklmnopqrstuvwxyz"
+	}
+	jsonStr := "{\"text\":\"" + longStr + "\"}"
+
+	b.ResetTimer()
+	for b.Loop() {
+		parser := New()
+		parser.AddToken(jsonStr)
+		parser.DoneToken()
+	}
+}
+
+// 性能测试 - 包含转义字符的字符串
+func BenchmarkJSONParser_EscapedStrings(b *testing.B) {
+	jsonStr := "{\"s1\":\"Line\\nTab\\tQuote\\\"Backslash\\\\\",\"s2\":\"hello world\",\"s3\":\"123\\n456\"}"
+
+	for b.Loop() {
+		parser := New()
+		parser.AddToken(jsonStr)
+		parser.DoneToken()
+	}
+}
+
+// 性能测试 - Unicode 字符
+func BenchmarkJSONParser_UnicodeStrings(b *testing.B) {
+	jsonStr := "{\"emoji\":\"\\uD83D\\uDE00\\uD83D\\uDE01\\uD83D\\uDE02\",\"chinese\":\"你好世界\",\"mixed\":\"hello😀world\"}"
+
+	for b.Loop() {
+		parser := New()
+		parser.AddToken(jsonStr)
+		parser.DoneToken()
+	}
+}
+
+// 性能测试 - 浮点数和科学计数法
+func BenchmarkJSONParser_Numbers(b *testing.B) {
+	jsonStr := "[1,2.5,-3,3.14159,1e10,-2E-3,0.0001,999999,1.23e-10,0]"
+
+	for b.Loop() {
+		parser := New()
+		parser.AddToken(jsonStr)
+		parser.DoneToken()
+	}
+}
+
+// 性能测试 - 混合复杂结构
+func BenchmarkJSONParser_ComplexMixed(b *testing.B) {
+	jsonStr := `{
+		"users":[
+			{"id":1,"name":"alice","email":"alice@example.com","active":true,"score":95.5},
+			{"id":2,"name":"bob","email":"bob@example.com","active":false,"score":87.3},
+			{"id":3,"name":"charlie","email":"charlie@example.com","active":true,"score":92.1}
+		],
+		"metadata":{
+			"total":3,
+			"page":1,
+			"per_page":10,
+			"timestamp":"2025-12-14T10:30:00Z",
+			"version":"1.0.0"
+		},
+		"tags":["important","reviewed","processed"]
+	}`
+
+	for b.Loop() {
+		parser := New()
+		parser.AddToken(jsonStr)
+		parser.DoneToken()
+	}
+}
+
+// 性能测试 - 流式解析逐字符添加（长字符串场景）
+func BenchmarkJSONParser_StreamingLongString(b *testing.B) {
+	longStr := ""
+	for i := 0; i < 50; i++ {
+		longStr += "abcdefghijklmnopqrstuvwxyz"
+	}
+	jsonStr := "{\"text\":\"" + longStr + "\"}"
+
+	for b.Loop() {
+		parser := New()
+		for _, c := range jsonStr {
+			parser.AddToken(string(c))
+		}
+		parser.DoneToken()
+	}
+}
+
+// 性能测试 - 大型对象（多个 key-value）
+func BenchmarkJSONParser_WideObject(b *testing.B) {
+	// 构造 {"key0":"value0","key1":"value1",...,"key99":"value99"}
+	jsonStr := "{"
+	for i := range 100 {
+		if i > 0 {
+			jsonStr += ","
+		}
+		jsonStr += "\"key" + string(rune('0'+(i%10))) + "\":\"value" + string(rune('0'+(i%10))) + "\""
+	}
+	jsonStr += "}"
+
+	for b.Loop() {
+		parser := New()
+		parser.AddToken(jsonStr)
+		parser.DoneToken()
+	}
+}
+
+// 性能测试 - 布尔值和null的混合
+func BenchmarkJSONParser_Keywords(b *testing.B) {
+	jsonStr := "[true,false,null,true,false,null,true,false,null,true,false,null]"
+
+	for b.Loop() {
+		parser := New()
+		parser.AddToken(jsonStr)
+		parser.DoneToken()
+	}
+}
+
+// func TestJSONParser_DynamicObject(t *testing.T) {
+// 	parser := NewJSONParser()
+// 	jsonStr := "{\"a\":{\"b\":1}}"
+// 	for _, c := range jsonStr {
+// 		err := parser.AddToken(string(c))
+// 		if err != nil {
+// 			t.Fatalf("AddToken error: %v", err)
+// 		}
+// 	}
+// }

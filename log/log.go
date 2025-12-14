@@ -20,8 +20,16 @@ var logPath string
 // Logger 日志对象
 var Logger *log.Logger
 
+var loggerInited bool = false
+
+// var logLck sync.Mutex
+
 // Load 加载配置文件
 func Load() {
+	if loggerInited {
+		return
+	}
+	// logLck.Lock()
 	// 读取环境变量
 	if path := os.Getenv(envLogName); path != "" {
 		logPath = path
@@ -55,8 +63,12 @@ func Load() {
 	// 创建logger，输出到文件
 	Logger = log.New(file, "", log.LstdFlags)
 
+	loggerInited = true
+
 	sysObj := New("log")
 	sysObj.Info("log inited")
+
+	// logLck.Unlock()
 
 }
 
@@ -71,12 +83,12 @@ func (l *LogsObj) log(level string, msg string, v ...any) {
 
 // Info 打印日志
 func (l *LogsObj) Info(msg string, v ...any) {
-	l.log("INFO ", msg, v...)
+	l.log("INFO", msg, v...)
 }
 
 // Warn 打印警告
 func (l *LogsObj) Warn(msg string, v ...any) {
-	l.log("WARN ", msg, v...)
+	l.log("WARN", msg, v...)
 }
 
 // Error 打印错误
@@ -84,7 +96,17 @@ func (l *LogsObj) Error(msg string, v ...any) {
 	l.log("ERROR", msg, v...)
 }
 
+// Debug 打印调试
+func (l *LogsObj) Debug(msg string, v ...any) {
+	l.log("DEBUG", msg, v...)
+}
+
 // New 创建日志对象
 func New(moduleName string) *LogsObj {
+	// logLck.Lock()
+	// logLck.Unlock()
+	if !loggerInited {
+		Load()
+	}
 	return &LogsObj{moduleName: moduleName}
 }

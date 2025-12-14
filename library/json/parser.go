@@ -1,59 +1,23 @@
-package parser
+package json
 
 import (
 	"errors"
 	"strconv"
-
-	"github.com/cxykevin/alkaid0/provider/utils/stack"
 )
 
-type jsonMode int
-
-const (
-	jsonModeDefault jsonMode = iota
-	jsonModeInObjectWaitingKey
-	jsonModeInObjectWaitingValue
-	jsonModeInObjectWaitingSep
-	jsonModeInArray
-	jsonModeInString
-	jsonModeInStringSpecialChar
-	jsonModeInStringSpecialCharHex
-	jsonModeInNumber
-	jsonModeInKeyword
-)
-
-type jsonKeywordType string
-
-// StringNotFinishSlot 文本未完成标记
-type StringNotFinishSlot string
-
-const (
-	jsonKeywordNull  jsonKeywordType = "null"
-	jsonKeywordTrue  jsonKeywordType = "true"
-	jsonKeywordFalse jsonKeywordType = "false"
-)
-
-// JSONParser json 流式解析器
-type JSONParser struct {
-	FullCallingObject    *any
-	mode                 jsonMode
-	Stop                 bool
-	typeStack            *stack.Stack
-	StructStack          *stack.Stack
-	stringTmp            string
-	stringHexTmp         string
-	pendingHighSurrogate int
-	// stringIsKey 标识当前进入的字符串是作为对象的 key 还是 value
-	stringIsKey     bool
-	objectKeyTmp    *string
-	numberMinus     bool
-	keywordTmp      jsonKeywordType
-	numTmp          string
-	currentValuePtr *any
+// 初始化容器的占位符值
+func (p *Parser) initContainerSlot(contMode jsonMode) any {
+	switch contMode {
+	case jsonModeInObjectWaitingKey:
+		return ObjectSlot(make(map[string]*any))
+	case jsonModeInArray:
+		return ArraySlot{}
+	default:
+		return nil
+	}
 }
 
-// helper: push a container (map or slice) into structure stack and typestack
-func (p *JSONParser) pushContainer(val any, contMode jsonMode) (*any, error) {
+func (p *Parser) pushContainer(val any, contMode jsonMode) (*any, error) {
 	ptr := new(any)
 	*ptr = val
 
@@ -71,15 +35,19 @@ func (p *JSONParser) pushContainer(val any, contMode jsonMode) (*any, error) {
 	if !ok {
 		return nil, errors.New("invalid json structure")
 	}
+
+	// 初始化容器占位符
+	*ptr = p.initContainerSlot(contMode)
+
 	switch topType.(jsonMode) {
 	case jsonModeInArray:
-		// append to array
+		// 附加到数组
 		topPtrAny, ok := p.StructStack.Top()
 		if !ok {
 			return nil, errors.New("invalid json structure")
 		}
 		topPtr := topPtrAny.(*any)
-		arr := (*topPtr).([]*any)
+		arr := (*topPtr).(ArraySlot)
 		arr = append(arr, ptr)
 		*topPtr = arr
 		p.StructStack.Push(ptr)
@@ -91,14 +59,27 @@ func (p *JSONParser) pushContainer(val any, contMode jsonMode) (*any, error) {
 			return nil, errors.New("invalid json structure")
 		}
 		topPtr := topPtrAny.(*any)
-		obj := (*topPtr).(map[string]*any)
+		// 尝试作为 map 使用，如果不是则转换占位符
 		if p.objectKeyTmp == nil {
 			return nil, errors.New("missing object key")
 		}
-		obj[*p.objectKeyTmp] = ptr
-		p.objectKeyTmp = nil
-		p.StructStack.Push(ptr)
-		p.typeStack.Push(contMode)
+		if realMap, ok := (*topPtr).(map[string]*any); ok {
+			var obj map[string]*any
+			obj = realMap
+			obj[*p.objectKeyTmp] = ptr
+			p.objectKeyTmp = nil
+			p.StructStack.Push(ptr)
+			p.typeStack.Push(contMode)
+		} else {
+			var obj ObjectSlot
+			slot := (*topPtr).(ObjectSlot)
+			obj = slot
+			*topPtr = obj
+			obj[*p.objectKeyTmp] = ptr
+			p.objectKeyTmp = nil
+			p.StructStack.Push(ptr)
+			p.typeStack.Push(contMode)
+		}
 		return ptr, nil
 	default:
 		return nil, errors.New("unexpected parent container type")
@@ -106,7 +87,7 @@ func (p *JSONParser) pushContainer(val any, contMode jsonMode) (*any, error) {
 }
 
 // helper: push a primitive value (string, number, bool, nil) into current container
-func (p *JSONParser) pushValue(val any) error {
+func (p *Parser) pushValue(val any) error {
 	var vptr *any
 	if val != nil {
 		vptr = new(any)
@@ -143,7 +124,7 @@ func (p *JSONParser) pushValue(val any) error {
 			return errors.New("invalid json structure")
 		}
 		arrPtr := arrPtrAny.(*any)
-		arr := (*arrPtr).([]*any)
+		arr := (*arrPtr).(ArraySlot)
 		arr = append(arr, vptr)
 		*arrPtr = arr
 		// 已经是最终值，不再需要实时更新
@@ -155,14 +136,26 @@ func (p *JSONParser) pushValue(val any) error {
 			return errors.New("invalid json structure")
 		}
 		objPtr := objPtrAny.(*any)
-		obj := (*objPtr).(map[string]*any)
 		if p.objectKeyTmp == nil {
 			return errors.New("missing object key")
 		}
-		obj[*p.objectKeyTmp] = vptr
-		p.objectKeyTmp = nil
-		// 已经是最终值，不再需要实时更新
-		p.currentValuePtr = nil
+		// 尝试作为 map 使用，如果不是则转换占位符
+		if realMap, ok := (*objPtr).(map[string]*any); ok {
+			var obj map[string]*any
+			obj = realMap
+			obj[*p.objectKeyTmp] = vptr
+			p.objectKeyTmp = nil
+			p.currentValuePtr = nil
+		} else {
+			// 还是占位符，需要转换
+			var obj ObjectSlot
+			slot := (*objPtr).(ObjectSlot)
+			obj = slot
+			*objPtr = obj
+			obj[*p.objectKeyTmp] = vptr
+			p.objectKeyTmp = nil
+			p.currentValuePtr = nil
+		}
 		// after value assigned, expect next key
 		// switch mode to waiting key
 		_, _ = p.typeStack.Pop()
@@ -174,7 +167,7 @@ func (p *JSONParser) pushValue(val any) error {
 }
 
 // beginValueSlot 创建一个值的占位符，并将它插入到当前容器（或作为根）中，返回指针
-func (p *JSONParser) beginValueSlot(initial any) (*any, error) {
+func (p *Parser) beginValueSlot(initial any) (*any, error) {
 	vptr := new(any)
 	*vptr = initial
 
@@ -198,7 +191,7 @@ func (p *JSONParser) beginValueSlot(initial any) (*any, error) {
 			return nil, errors.New("invalid json structure")
 		}
 		arrPtr := arrPtrAny.(*any)
-		arr := (*arrPtr).([]*any)
+		arr := (*arrPtr).(ArraySlot)
 		arr = append(arr, vptr)
 		*arrPtr = arr
 		p.currentValuePtr = vptr
@@ -209,13 +202,25 @@ func (p *JSONParser) beginValueSlot(initial any) (*any, error) {
 			return nil, errors.New("invalid json structure")
 		}
 		objPtr := objPtrAny.(*any)
-		obj := (*objPtr).(map[string]*any)
 		if p.objectKeyTmp == nil {
 			return nil, errors.New("missing object key")
 		}
-		obj[*p.objectKeyTmp] = vptr
-		p.objectKeyTmp = nil
-		p.currentValuePtr = vptr
+		// 尝试作为 map 使用，如果不是则转换占位符
+		if realMap, ok := (*objPtr).(map[string]*any); ok {
+			var obj map[string]*any
+			obj = realMap
+			obj[*p.objectKeyTmp] = vptr
+			p.objectKeyTmp = nil
+			p.currentValuePtr = vptr
+		} else {
+			slot := (*objPtr).(ObjectSlot)
+			var obj ObjectSlot
+			obj = slot
+			*objPtr = obj
+			obj[*p.objectKeyTmp] = vptr
+			p.objectKeyTmp = nil
+			p.currentValuePtr = vptr
+		}
 		// after value assigned, switch back to waiting key
 		_, _ = p.typeStack.Pop()
 		p.typeStack.Push(jsonModeInObjectWaitingKey)
@@ -226,7 +231,7 @@ func (p *JSONParser) beginValueSlot(initial any) (*any, error) {
 }
 
 // AddToken 流式传入 token
-func (p *JSONParser) AddToken(token string) error {
+func (p *Parser) AddToken(token string) error {
 	if p.Stop {
 		return errors.New("parser stopped but received token")
 	}
@@ -292,7 +297,7 @@ func (p *JSONParser) AddToken(token string) error {
 			// 追加字符串内容
 			p.stringTmp += string(rv)
 			if p.currentValuePtr != nil {
-				*p.currentValuePtr = StringNotFinishSlot(p.stringTmp)
+				*p.currentValuePtr = StringSlot(p.stringTmp)
 			}
 			continue
 		case jsonModeInStringSpecialChar:
@@ -318,7 +323,7 @@ func (p *JSONParser) AddToken(token string) error {
 			}
 			p.mode = jsonModeInString
 			if p.currentValuePtr != nil {
-				*p.currentValuePtr = StringNotFinishSlot(p.stringTmp)
+				*p.currentValuePtr = StringSlot(p.stringTmp)
 			}
 			continue
 		case jsonModeInStringSpecialCharHex:
@@ -360,7 +365,7 @@ func (p *JSONParser) AddToken(token string) error {
 					p.stringHexTmp = ""
 					p.mode = jsonModeInString
 					if p.currentValuePtr != nil {
-						*p.currentValuePtr = StringNotFinishSlot(p.stringTmp)
+						*p.currentValuePtr = StringSlot(p.stringTmp)
 					}
 				}
 				continue
@@ -454,7 +459,7 @@ func (p *JSONParser) AddToken(token string) error {
 			continue
 		case '{':
 			// 创建对象容器并进入对象解析模式
-			obj := make(map[string]*any)
+			obj := make(ObjectSlot)
 			_, err := p.pushContainer(obj, jsonModeInObjectWaitingKey)
 			if err != nil {
 				p.Stop = true
@@ -463,7 +468,7 @@ func (p *JSONParser) AddToken(token string) error {
 			continue
 		case '[':
 			// 创建数组容器并进入数组解析模式
-			arr := make([]*any, 0)
+			arr := ArraySlot{}
 			_, err := p.pushContainer(arr, jsonModeInArray)
 			if err != nil {
 				p.Stop = true
@@ -483,6 +488,12 @@ func (p *JSONParser) AddToken(token string) error {
 					p.currentValuePtr = nil
 				}
 			}
+			// 将占位符转换为完整对象（如果还没转换）
+			if ptr, ok := structTop.(*any); ok {
+				if slot, isSlot := (*ptr).(ObjectSlot); isSlot {
+					*ptr = map[string]*any(slot)
+				}
+			}
 			// 如果括号是对象被当作父对象的值时，需要将父对象状态从 WaitingValue 切换回 WaitingKey
 			parentTop, okParent := p.typeStack.Top()
 			if okParent && parentTop.(jsonMode) == jsonModeInObjectWaitingValue {
@@ -500,6 +511,12 @@ func (p *JSONParser) AddToken(token string) error {
 			if p.currentValuePtr != nil {
 				if ptr, ok := structTop.(*any); ok && ptr == p.currentValuePtr {
 					p.currentValuePtr = nil
+				}
+			}
+			// 将占位符转换为完整数组（如果还没转换）
+			if ptr, ok := structTop.(*any); ok {
+				if slot, isSlot := (*ptr).(ArraySlot); isSlot {
+					*ptr = []*any(slot)
 				}
 			}
 			// 如果数组是对象的一个值，需要将父对象状态从 WaitingValue 切换回 WaitingKey
@@ -529,7 +546,7 @@ func (p *JSONParser) AddToken(token string) error {
 				return err
 			}
 			if p.currentValuePtr != nil {
-				*p.currentValuePtr = StringNotFinishSlot("")
+				*p.currentValuePtr = StringSlot("")
 			}
 			continue
 		case 'n', 't', 'f':
@@ -581,7 +598,7 @@ func (p *JSONParser) AddToken(token string) error {
 }
 
 // DoneToken 传入结束 token
-func (p *JSONParser) DoneToken() error {
+func (p *Parser) DoneToken() error {
 	if p.Stop {
 		return errors.New("parser already stopped")
 	}
@@ -640,18 +657,4 @@ func (p *JSONParser) DoneToken() error {
 	}
 
 	return nil
-}
-
-// NewJSONParser 创建解析器
-func NewJSONParser() *JSONParser {
-
-	stk := stack.New()
-	stkStruct := stack.New()
-	parser := &JSONParser{
-		typeStack:            stk,
-		StructStack:          stkStruct,
-		stringHexTmp:         "",
-		pendingHighSurrogate: 0,
-	}
-	return parser
 }
