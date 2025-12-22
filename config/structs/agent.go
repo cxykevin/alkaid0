@@ -12,7 +12,6 @@ type AgentConfig struct {
 
 // AgentsConfig 代理配置结构
 type AgentsConfig struct {
-	Agents             []AgentConfig
-	DefaultModelConfig ModelConfig
-	GlobalPrompt       string `default:""`
+	Agents       map[string]AgentConfig
+	GlobalPrompt string `default:""`
 }
