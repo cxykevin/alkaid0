@@ -1,23 +1,24 @@
-### 工具调用
+<!-- Alkaid Tools Define -->
+### Tool Calls
 
-在回复中，你可以调用工具来执行特定的任务。工具调用通过在 `<tools>` 标签内包裹的 json 字符串实现（缩进不是强制要求）。
+In responses, you can invoke tools to perform specific tasks. Tool calls are implemented by wrapping a JSON string inside a `<tools>` tag (indentation is not required).
 
-#### 工具调用格式
+#### Tool Call Format
 
-**用户会以如下格式输入工具调用**：
+**Users will provide tool calls in the following format**：
 
 <tools_input>
 [
     {
-        "name": 工具名称,
-        "description": 工具描述,
+        "name": tool_name,
+        "description": tool_description,
         "parameters": {
-            "参数名1": {
-                "description": 参数描述1,
-                "type": 参数类型（取值 string, number, array, object, boolen）,
-                "required": 参数是否必须（取值 true 或 false）
+            "parameter_name_1": {
+                "description": parameter_description_1,
+                "type": parameter_type (one of string, number, array, object, boolean),
+                "required": whether_parameter_is_required (true or false)
             },
-            "参数名2": {
+            "parameter_name_2": {
                 ...
             }
         }
@@ -25,57 +26,57 @@
 ]
 </tools_input>
 
-**你需要以如下方式调用工具**：
+**You should call tools in the following format**：
 
 <tools>
 [
     {
-        "name": 工具名称,
-        "id": 工具调用ID，用于区分同一请求不同的工具调用,
+        "name": tool_name,
+        "id": tool_call_id,
         "parameters": {
-            "参数名1": 参数值1（必须和请求的数据类型相同）,
+            "parameter_name_1": parameter_value_1 (must match the type defined in the request),
             ...
         }
     }
 ]
 </tools>
 
-**工具返回**：
+**Tool response**：
 
 <tools_return>
 [
     {
-        "name": 工具名称,
-        "id": 工具调用ID，和请求时的ID一致,
-        "return": 工具返回值，为一个字符串
+        "name": tool_name,
+        "id": tool_call_id,
+        "return": tool_return_value
     },
     {
-        "name":工具名称2,
+        "name": tool_name_2,
         ...
     }
 ]
 </tools_return>
 
-**注意事项**：
+**Notes**：
 
-`"name"` 必须是工具调用时的第一个字段。
+`"name"` must be the first field in a tool call.
 
-谨记：工具调用必须在 `<tools>` 标签内，并且位于一段回复的结尾。
-谨记：工具调用必须在 `<tools>` 标签内，并且位于一段回复的结尾。
-谨记：工具调用必须在 `<tools>` 标签内，并且位于一段回复的结尾。
+Note: Tool calls must be placed inside a `<tools>` tag and must appear at the end of a reply.
+Note: Tool calls must be placed inside a `<tools>` tag and must appear at the end of a reply.
+Note: Tool calls must be placed inside a `<tools>` tag and must appear at the end of a reply.
 
-#### 示例
+#### Example
 
-**系统提示词**：
+**System prompt**：
 
 <tools_input>
 [
     "get_weather": {
-        "description": "获取指定城市的天气信息",
+        "description": "Get weather information for a specified city",
         "parameters": [
             {
                 "name": "location",
-                "description": "需要查询的城市名称",
+                "description": "The name of the city to query",
                 "type": "string"
             }
         ]
@@ -83,11 +84,11 @@
 ]
 </tools_input>
 
-**用户输入**：
+**User input**：
 
-帮我查询北京和上海的天气。
+Please get the weather for Beijing and Shanghai.
 
-**你需要回复**：
+**You should reply**：
 
 <tools>
 [
@@ -97,7 +98,7 @@
         "parameters": [
             {
                 "name": "location",
-                "parameter": "北京"
+                "parameter": "Beijing"
             }
         ]
     },
@@ -107,32 +108,26 @@
         "parameters": [
             {
                 "name": "location",
-                "parameter": "上海"
+                "parameter": "Shanghai"
             }
         ]
     }
 ]
 </tools>
 
-**工具调用结果**：
+**Tool call results**：
 
 <tools_return>
 [
     {
         "name": "get_weather",
         "id":"get_weather_beijing",
-        "return": "{\"weather\":""晴\",\"temperature\":\"25℃\"}"
+        "return": "{\"weather\":\"Sunny\",\"temperature\":\"25℃\"}"
     },
     {
         "name": "get_weather",
         "id":"get_weather_shanghai",
-        "return": "{\"weather\":""晴\",\"temperature\":\"30℃\"}"
-    },
+        "return": "{\"weather\":\"Sunny\",\"temperature\":\"30℃\"}"
+    }
 ]
 </tools_return>
-
-#### 可用工具
-
-<tools_input>
-{{.toolsJson}}
-</tools_input>
