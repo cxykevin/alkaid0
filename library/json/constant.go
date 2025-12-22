@@ -1,5 +1,6 @@
 package json
 
+// 状态机
 type jsonMode int
 
 const (
@@ -15,7 +16,16 @@ const (
 	jsonModeInKeyword
 )
 
+// 关键字
 type jsonKeywordType string
+
+const (
+	jsonKeywordNull  jsonKeywordType = "null"
+	jsonKeywordTrue  jsonKeywordType = "true"
+	jsonKeywordFalse jsonKeywordType = "false"
+)
+
+// 标记
 
 // StringSlot 未完成标记
 type StringSlot string
@@ -25,9 +35,3 @@ type ObjectSlot map[string]*any
 
 // ArraySlot 未完成标记
 type ArraySlot []*any
-
-const (
-	jsonKeywordNull  jsonKeywordType = "null"
-	jsonKeywordTrue  jsonKeywordType = "true"
-	jsonKeywordFalse jsonKeywordType = "false"
-)
