@@ -1,6 +1,8 @@
 package prompts
 
-import "text/template"
+import (
+	"text/template"
+)
 
 // GlobalTemplate 思考模板
 var GlobalTemplate *template.Template
@@ -14,9 +16,22 @@ var ToolsWrapTemplate *template.Template
 // SummaryWrapTemplate 总结模板
 var SummaryWrapTemplate *template.Template
 
+// UserPromptTemplate 用户消息模板
+var UserPromptTemplate *template.Template
+
 func init() {
-	GlobalTemplate = template.Must(template.New("Global").Parse(Global))
-	ThinkingWrapTemplate = template.Must(template.New("ThinkingWrap").Parse(ThinkingWrap))
-	ToolsWrapTemplate = template.Must(template.New("ToolsWrap").Parse(ToolsWrap))
-	SummaryWrapTemplate = template.Must(template.New("SummaryWrap").Parse(SummaryWrap))
+	// 创建函数映射
+	funcMap := template.FuncMap{
+		"toInt":  toInt,
+		"sub":    sub,
+		"string": toString,
+		"le":     le,
+		"gt":     gt,
+	}
+
+	GlobalTemplate = template.Must(template.New("Global").Funcs(funcMap).Parse(Global))
+	ThinkingWrapTemplate = template.Must(template.New("ThinkingWrap").Funcs(funcMap).Parse(ThinkingWrap))
+	ToolsWrapTemplate = template.Must(template.New("ToolsWrap").Funcs(funcMap).Parse(ToolsWrap))
+	SummaryWrapTemplate = template.Must(template.New("SummaryWrap").Funcs(funcMap).Parse(SummaryWrap))
+	UserPromptTemplate = template.Must(template.New("UserPrompt").Funcs(funcMap).Parse(UserPromptWrap))
 }

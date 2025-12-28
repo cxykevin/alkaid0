@@ -10,8 +10,8 @@ const (
 	MessagesReferTypeFile MessagesReferType = iota
 	MessagesReferTypeText
 	MessagesReferTypeImage
-	MessagesReferTypeAudio
-	MessagesReferTypeVideo
+	// MessagesReferTypeAudio
+	// MessagesReferTypeVideo
 )
 
 // MessagesRole 消息类型
@@ -49,7 +49,6 @@ type Messages struct {
 	ID                      uint64 `gorm:"primaryKey;autoIncrement"`
 	ChatID                  uint32
 	AgentID                 *string
-	OriginalString          string            `gorm:"type:text"`
 	Delta                   string            `gorm:"type:text"`
 	Summary                 string            `gorm:"type:text"`
 	ThinkingDelta           string            `gorm:"type:text"`

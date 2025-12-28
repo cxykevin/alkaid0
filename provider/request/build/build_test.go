@@ -1,6 +1,8 @@
 package build
 
 import (
+	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -41,6 +43,14 @@ func setupTestConfig() {
 					ModelTemperature:  0.7,
 					ModelTopP:         0.9,
 					EnableThinking:    true,
+					EnableToolCalling: true,
+				},
+				2: {
+					ModelName:         "test-model-no-think",
+					ModelID:           "test-model-id-2",
+					ModelTemperature:  0.7,
+					ModelTopP:         0.9,
+					EnableThinking:    false,
 					EnableToolCalling: true,
 				},
 			},
@@ -140,12 +150,56 @@ func TestRequestBody_Basic(t *testing.T) {
 	}
 }
 
-// min 辅助函数
-func min(a, b int) int {
-	if a < b {
-		return a
+// TestRequestBody_Real 测试真实api
+func TestRequestBody_Real(t *testing.T) {
+	setupTestConfig()
+	db := setupTestDB(t)
+
+	// 插入测试消息
+	messages := []structs.Messages{
+		{
+			ChatID: 1,
+			Type:   structs.MessagesRoleUser,
+			Delta:  "Hello, how are you?",
+		},
+		{
+			ChatID: 1,
+			Type:   structs.MessagesRoleAgent,
+			Delta:  "I'm doing well, thank you!",
+		},
 	}
-	return b
+
+	for _, msg := range messages {
+		if err := db.Create(&msg).Error; err != nil {
+			t.Fatalf("Failed to create test message: %v", err)
+		}
+	}
+
+	// 定义测试工具
+	toolsList := []*parser.ToolsDefine{
+		{
+			Name:        "test_tool",
+			Description: "A test tool",
+			Parameters: map[string]parser.ToolParameters{
+				"input": {
+					Type:        parser.ToolTypeString,
+					Description: "Input parameter",
+				},
+			},
+		},
+	}
+
+	// 调用 RequestBody
+	request, err := RequestBody(1, 1, "test-agent", &toolsList, db, "", "")
+	if err != nil {
+		t.Fatalf("RequestBody failed: %v", err)
+	}
+
+	v, err := json.Marshal(request)
+	if err != nil {
+		t.Fatalf("RequestBody json failed: %v", err)
+	}
+	fmt.Println(string(v))
 }
 
 // TestRequestBody_NoAgent 测试没有代理的情况
@@ -409,7 +463,7 @@ func TestRequestBody_ManyMessages(t *testing.T) {
 	db := setupTestDB(t)
 
 	// 插入超过单页数量的消息
-	for i := 0; i < 50; i++ {
+	for i := range 50 {
 		message := structs.Messages{
 			ChatID: 6,
 			Type:   structs.MessagesRoleUser,

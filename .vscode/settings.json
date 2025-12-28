@@ -6,5 +6,9 @@
     },
     "go.testFlags": [
         "-count=1"
-    ]
+    ],
+    "go.diagnostic.vulncheck": "Imports",
+    "markdownlint.config": {
+        "default": false
+    },
 }

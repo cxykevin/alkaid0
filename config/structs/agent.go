@@ -14,4 +14,5 @@ type AgentConfig struct {
 type AgentsConfig struct {
 	Agents       map[string]AgentConfig
 	GlobalPrompt string `default:""`
+	SummaryModel int32
 }

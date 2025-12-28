@@ -31,3 +31,13 @@ var SummaryWrap string
 //
 //go:embed prompts/default_agent.md
 var DefaultAgent string
+
+// Summary 总结提示词
+//
+//go:embed prompts/summary.md
+var Summary string
+
+// UserPromptWrap 用户提示词
+//
+//go:embed prompts/user_wrap.md
+var UserPromptWrap string

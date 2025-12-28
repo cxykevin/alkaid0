@@ -3,6 +3,7 @@ package request
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -20,7 +21,7 @@ func init() {
 }
 
 // SimpleOpenAIRequest 发送 OpenAI ChatCompletion 请求（强制stream=true）
-func SimpleOpenAIRequest(baseURL, apiKey, model string, body structs.ChatCompletionRequest, callback func(structs.ChatCompletionResponse) error) error {
+func SimpleOpenAIRequest(ctx context.Context, baseURL, apiKey, model string, body structs.ChatCompletionRequest, callback func(structs.ChatCompletionResponse) error) error {
 	// 设置模型和流式参数
 	if body.Model == "" {
 		body.Model = model
@@ -37,7 +38,7 @@ func SimpleOpenAIRequest(baseURL, apiKey, model string, body structs.ChatComplet
 	}
 
 	// 创建HTTP请求
-	req, err := http.NewRequest("POST", baseURL+ChatCompletionsEndpoint, bytes.NewBuffer(payload))
+	req, err := http.NewRequestWithContext(ctx, "POST", baseURL+ChatCompletionsEndpoint, bytes.NewBuffer(payload))
 	if err != nil {
 		logger.Error("call openai chat error when create request: %v", err)
 		logger.Debug("error body: %s", string(payload))
@@ -119,7 +120,7 @@ func SimpleOpenAIRequest(baseURL, apiKey, model string, body structs.ChatComplet
 }
 
 // SimpleOpenAIEmbedding 发送 OpenAI Embedding 请求
-func SimpleOpenAIEmbedding(baseURL, apiKey, model string, body structs.EmbeddingRequest) ([][]float32, error) {
+func SimpleOpenAIEmbedding(ctx context.Context, baseURL, apiKey, model string, body structs.EmbeddingRequest) ([][]float32, error) {
 	logger.Info("call openai embedding: %s", baseURL+EmbeddingsEndpoint)
 
 	// 序列化请求体
@@ -130,7 +131,7 @@ func SimpleOpenAIEmbedding(baseURL, apiKey, model string, body structs.Embedding
 	}
 
 	// 创建HTTP请求
-	req, err := http.NewRequest("POST", baseURL+EmbeddingsEndpoint, bytes.NewBuffer(payload))
+	req, err := http.NewRequestWithContext(ctx, "POST", baseURL+EmbeddingsEndpoint, bytes.NewBuffer(payload))
 	if err != nil {
 		logger.Error("call openai embedding error when create request: %v", err)
 		logger.Debug("error body: %s", string(payload))

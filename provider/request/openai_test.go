@@ -1,6 +1,7 @@
 package request
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"testing"
@@ -35,7 +36,7 @@ func TestSimpleOpenAIRequest(t *testing.T) {
 	}
 
 	var responses []structs.ChatCompletionResponse
-	err := SimpleOpenAIRequest(baseURL, apiKey, model, body, func(resp structs.ChatCompletionResponse) error {
+	err := SimpleOpenAIRequest(context.Background(), baseURL, apiKey, model, body, func(resp structs.ChatCompletionResponse) error {
 		responses = append(responses, resp)
 		return nil
 	})
@@ -69,7 +70,7 @@ func TestSimpleOpenAIEmbedding(t *testing.T) {
 		EncodingFormat: "float",
 	}
 
-	embeddings, err := SimpleOpenAIEmbedding(baseURL, apiKey, model, body)
+	embeddings, err := SimpleOpenAIEmbedding(context.Background(), baseURL, apiKey, model, body)
 
 	if err != nil {
 		t.Fatalf("SimpleOpenAIEmbedding failed: %v", err)
@@ -96,7 +97,7 @@ func TestEmptyMessages(t *testing.T) {
 		Temperature: &[]float32{0.7}[0],
 	}
 	var responses []structs.ChatCompletionResponse
-	err := SimpleOpenAIRequest(baseURL, apiKey, model, body, func(resp structs.ChatCompletionResponse) error {
+	err := SimpleOpenAIRequest(context.Background(), baseURL, apiKey, model, body, func(resp structs.ChatCompletionResponse) error {
 		responses = append(responses, resp)
 		return nil
 	})
@@ -115,7 +116,7 @@ func TestInvalidBaseURL(t *testing.T) {
 		Messages:    []structs.Message{{Role: structs.RoleUser, Content: "test"}},
 		Temperature: &[]float32{0.7}[0],
 	}
-	err := SimpleOpenAIRequest(baseURL, apiKey, model, body, func(resp structs.ChatCompletionResponse) error {
+	err := SimpleOpenAIRequest(context.Background(), baseURL, apiKey, model, body, func(resp structs.ChatCompletionResponse) error {
 		return nil
 	})
 	if err == nil {
@@ -132,7 +133,7 @@ func TestCallbackError(t *testing.T) {
 		Messages:    []structs.Message{{Role: structs.RoleUser, Content: "test"}},
 		Temperature: &[]float32{0.7}[0],
 	}
-	err := SimpleOpenAIRequest(baseURL, apiKey, model, body, func(resp structs.ChatCompletionResponse) error {
+	err := SimpleOpenAIRequest(context.Background(), baseURL, apiKey, model, body, func(resp structs.ChatCompletionResponse) error {
 		return fmt.Errorf("callback error")
 	})
 	if err == nil || !strings.Contains(err.Error(), "callback error") {
@@ -150,7 +151,7 @@ func TestEmbeddingEmptyInput(t *testing.T) {
 		Model:          model,
 		EncodingFormat: "float",
 	}
-	embeddings, err := SimpleOpenAIEmbedding(baseURL, apiKey, model, body)
+	embeddings, err := SimpleOpenAIEmbedding(context.Background(), baseURL, apiKey, model, body)
 	if err != nil {
 		t.Fatalf("SimpleOpenAIEmbedding with empty input failed: %v", err)
 	}
@@ -169,7 +170,7 @@ func TestEmbeddingInvalidBaseURL(t *testing.T) {
 		Model:          model,
 		EncodingFormat: "float",
 	}
-	_, err := SimpleOpenAIEmbedding(baseURL, apiKey, model, body)
+	_, err := SimpleOpenAIEmbedding(context.Background(), baseURL, apiKey, model, body)
 	if err == nil {
 		t.Fatal("Expected error for invalid baseURL, got nil")
 	}

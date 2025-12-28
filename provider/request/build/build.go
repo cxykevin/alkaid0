@@ -77,7 +77,15 @@ func RequestBody(chatID uint32, modelID int32, agentID string, toolsList *[]*par
 				}{Summary: v.Summary})
 				exitFlag = true
 			} else {
-				if v.ThinkingDelta != "" {
+				if v.Type == structs.MessagesRoleUser {
+					msg.Content = prompts.Render(prompts.UserPromptTemplate, struct {
+						Prompt string
+						Refers structs.MessagesReferList
+					}{
+						Prompt: v.Delta,
+						Refers: v.Refers,
+					})
+				} else if v.ThinkingDelta != "" {
 					if modelConfig.EnableThinking {
 						thinkingString := v.ThinkingDelta
 						msg.ReasoningContent = &thinkingString
