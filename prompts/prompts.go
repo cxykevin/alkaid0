@@ -41,3 +41,13 @@ var Summary string
 //
 //go:embed prompts/user_wrap.md
 var UserPromptWrap string
+
+// ToolPrehook 工具预调用提示词生成器
+//
+//go:embed prompts/tool_prehook.md
+var ToolPrehook string
+
+// ToolScopes 工具预调用提示词生成器
+//
+//go:embed prompts/tool_scopes.md
+var ToolScopes string

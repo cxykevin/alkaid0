@@ -11,4 +11,5 @@
     "markdownlint.config": {
         "default": false
     },
+    "go.testTimeout": "360s",
 }
