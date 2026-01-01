@@ -6,6 +6,7 @@ import (
 	"sort"
 
 	"github.com/cxykevin/alkaid0/log"
+	"github.com/cxykevin/alkaid0/provider/parser"
 	"github.com/cxykevin/alkaid0/tools/toolobj"
 )
 
@@ -43,7 +44,7 @@ func HookTool(name string, hook *toolobj.Hook) {
 }
 
 // ExecOneToolGetPrompts 执行预调用，获取提示词表
-func ExecOneToolGetPrompts(name string) ([]string, []string) {
+func ExecOneToolGetPrompts(name string) ([]string, []string, map[string]parser.ToolParameters) {
 	// 执行 PreHook
 	unusedHooks := make([]string, 0)
 	for name, prompts := range toolobj.Scopes {
@@ -54,6 +55,7 @@ func ExecOneToolGetPrompts(name string) ([]string, []string) {
 
 	prehooks := make([]string, 0)
 	hookTmp := toolobj.ToolsList[name].Hooks
+	paras := toolobj.ToolsList[name].Parameters
 
 	// 将tmp中的钩子按Priority排序
 	sort.Slice(hookTmp, func(i, j int) bool {
@@ -74,8 +76,10 @@ func ExecOneToolGetPrompts(name string) ([]string, []string) {
 			continue
 		}
 		prehooks = append(prehooks, ret)
+		// 合并map
+		maps.Copy(paras, hook.Parameters)
 	}
-	return unusedHooks, prehooks
+	return unusedHooks, prehooks, paras
 }
 
 // ExecToolOnHook 执行工具

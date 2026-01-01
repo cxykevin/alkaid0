@@ -42,7 +42,7 @@ func Tools() (string, string, *[]parser.ToolsDefine) {
 		}),
 	})
 
-	globalToolsTracesUnused, globalToolsTracesActive := tools.ExecOneToolGetPrompts("")
+	globalToolsTracesUnused, globalToolsTracesActive, _ := tools.ExecOneToolGetPrompts("")
 
 	globalToolTraceStr := prompts.Render(prompts.ToolPrehookTemplate, struct {
 		Unused []string
@@ -61,7 +61,7 @@ func Tools() (string, string, *[]parser.ToolsDefine) {
 		if val, ok := toolobj.EnableScopes[v.Scope]; !ok || !val {
 			continue
 		}
-		unusedPrompt, activePrompt := tools.ExecOneToolGetPrompts(k)
+		unusedPrompt, activePrompt, paras := tools.ExecOneToolGetPrompts(k)
 		toolDefObj := &parser.ToolsDefine{
 			Name: k,
 			Description: prompts.Render(prompts.ToolPrehookTemplate, struct {
@@ -72,6 +72,7 @@ func Tools() (string, string, *[]parser.ToolsDefine) {
 				Active: activePrompt,
 			}),
 		}
+		toolDefObj.Parameters = paras
 		toolsDef = append(toolsDef, *toolDefObj)
 	}
 

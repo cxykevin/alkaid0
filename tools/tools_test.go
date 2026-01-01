@@ -5,6 +5,7 @@ import (
 	"os"
 	"testing"
 
+	"github.com/cxykevin/alkaid0/provider/parser"
 	"github.com/cxykevin/alkaid0/storage"
 	"github.com/cxykevin/alkaid0/tools/toolobj"
 )
@@ -123,7 +124,7 @@ func TestExecToolGetPrompts(t *testing.T) {
 	// Enable only scope1
 	EnableScope("scope1")
 
-	unusedHooks, prehooks := ExecOneToolGetPrompts("tool1")
+	unusedHooks, prehooks, _ := ExecOneToolGetPrompts("tool1")
 
 	// scope2 should be in unused hooks
 	if len(unusedHooks) != 1 {
@@ -163,7 +164,7 @@ func TestExecToolGetPromptsWithInvalidScope(t *testing.T) {
 	AddTool(tool)
 	EnableScope("scope1")
 
-	unusedHooks, prehooks := ExecOneToolGetPrompts("tool1")
+	unusedHooks, prehooks, _ := ExecOneToolGetPrompts("tool1")
 
 	// No unused hooks since scope1 is enabled and no other scopes exist
 	if len(unusedHooks) != 0 {
@@ -391,7 +392,7 @@ func TestMultipleScopes(t *testing.T) {
 	}
 	AddTool(tool)
 
-	unusedHooks, prehooks := ExecOneToolGetPrompts("tool1")
+	unusedHooks, prehooks, _ := ExecOneToolGetPrompts("tool1")
 
 	// scope3 should be in unused (not enabled)
 	if len(unusedHooks) != 1 {
@@ -446,7 +447,7 @@ func TestPreHookPrioritySorting(t *testing.T) {
 	}
 	AddTool(tool)
 
-	_, prehooks := ExecOneToolGetPrompts("tool1")
+	_, prehooks, _ := ExecOneToolGetPrompts("tool1")
 
 	if len(prehooks) != 3 {
 		t.Errorf("TestPreHookPrioritySorting failed: expected 3 prehooks, got %d", len(prehooks))
@@ -558,7 +559,7 @@ func TestZeroPriority(t *testing.T) {
 	}
 	AddTool(tool)
 
-	_, prehooks := ExecOneToolGetPrompts("tool1")
+	_, prehooks, _ := ExecOneToolGetPrompts("tool1")
 
 	if len(prehooks) != 2 {
 		t.Errorf("TestZeroPriority failed: expected 2 prehooks, got %d", len(prehooks))
@@ -570,5 +571,76 @@ func TestZeroPriority(t *testing.T) {
 	}
 	if prehooks[1] != "zero_priority" {
 		t.Errorf("TestZeroPriority failed: expected second prehook to be 'zero_priority', got '%v'", prehooks[1])
+	}
+}
+
+func TestExecToolGetPromptsParameters(t *testing.T) {
+	initTestEnv()
+
+	AddScope("scope1", "Scope 1 prompt")
+	EnableScope("scope1")
+
+	// 工具初始参数
+	baseParams := map[string]parser.ToolParameters{
+		"a": {Type: parser.ToolTypeString, Required: false, Description: "base a"},
+		"b": {Type: parser.ToolTypeInt, Required: true, Description: "base b"},
+	}
+
+	// 钩子参数：覆盖 a，新增 c
+	hookParams := map[string]parser.ToolParameters{
+		"a": {Type: parser.ToolTypeString, Required: true, Description: "hook a override"},
+		"c": {Type: parser.ToolTypeBoolen, Required: false, Description: "hook c"},
+	}
+
+	tool := &toolobj.Tools{
+		Name:            "TestTool",
+		ID:              "tool1",
+		UserDescription: "A test tool",
+		Parameters:      baseParams,
+		Hooks: []toolobj.Hook{
+			{
+				Scope: "scope1",
+				PreHook: toolobj.PreHookFunction{
+					Func: func() (string, error) {
+						return "prehook-param", nil
+					},
+				},
+				Parameters: hookParams,
+			},
+		},
+	}
+	AddTool(tool)
+
+	unusedHooks, prehooks, paras := ExecOneToolGetPrompts("tool1")
+
+	if len(unusedHooks) != 0 {
+		t.Errorf("TestExecToolGetPromptsParameters failed: expected 0 unused hooks, got %d", len(unusedHooks))
+	}
+
+	if len(prehooks) != 1 || prehooks[0] != "prehook-param" {
+		t.Errorf("TestExecToolGetPromptsParameters failed: unexpected prehooks: %v", prehooks)
+	}
+
+	// 参数合并后应该包含 a,b,c 且 a 被钩子覆盖
+	if paras == nil {
+		t.Fatalf("TestExecToolGetPromptsParameters failed: paras is nil")
+	}
+
+	if val, ok := paras["a"]; !ok {
+		t.Errorf("expected parameter 'a' present")
+	} else if val.Description != "hook a override" || val.Required != true {
+		t.Errorf("parameter 'a' was not overridden by hook: %+v", val)
+	}
+
+	if val, ok := paras["b"]; !ok {
+		t.Errorf("expected parameter 'b' present")
+	} else if val.Description != "base b" {
+		t.Errorf("parameter 'b' was modified unexpectedly: %+v", val)
+	}
+
+	if val, ok := paras["c"]; !ok {
+		t.Errorf("expected parameter 'c' present")
+	} else if val.Type != parser.ToolTypeBoolen {
+		t.Errorf("parameter 'c' has wrong type: %+v", val)
 	}
 }
