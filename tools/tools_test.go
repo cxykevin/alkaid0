@@ -7,6 +7,7 @@ import (
 
 	"github.com/cxykevin/alkaid0/provider/parser"
 	"github.com/cxykevin/alkaid0/storage"
+	"github.com/cxykevin/alkaid0/tools/actions"
 	"github.com/cxykevin/alkaid0/tools/toolobj"
 )
 
@@ -22,7 +23,7 @@ func initTestEnv() {
 
 func TestAddScope(t *testing.T) {
 	initTestEnv()
-	AddScope("scope1", "This is scope 1")
+	actions.AddScope("scope1", "This is scope 1")
 	if val, ok := toolobj.Scopes["scope1"]; !ok || val != "This is scope 1" {
 		t.Errorf("AddScope failed: expected 'This is scope 1', got '%v'", val)
 	}
@@ -36,7 +37,7 @@ func TestAddTool(t *testing.T) {
 		UserDescription: "A test tool",
 		Hooks:           []toolobj.Hook{},
 	}
-	AddTool(tool)
+	actions.AddTool(tool)
 	if _, ok := toolobj.ToolsList["tool1"]; !ok {
 		t.Errorf("AddTool failed: tool not found in ToolsList")
 	}
@@ -53,7 +54,7 @@ func TestHookTool(t *testing.T) {
 		UserDescription: "A test tool",
 		Hooks:           []toolobj.Hook{},
 	}
-	AddTool(tool)
+	actions.AddTool(tool)
 
 	hook := &toolobj.Hook{
 		Scope: "scope1",
@@ -63,7 +64,7 @@ func TestHookTool(t *testing.T) {
 			},
 		},
 	}
-	HookTool("tool1", hook)
+	actions.HookTool("tool1", hook)
 
 	if len(toolobj.ToolsList["tool1"].Hooks) != 1 {
 		t.Errorf("HookTool failed: expected 1 hook, got %d", len(toolobj.ToolsList["tool1"].Hooks))
@@ -75,7 +76,7 @@ func TestHookTool(t *testing.T) {
 
 func TestEnableScope(t *testing.T) {
 	initTestEnv()
-	EnableScope("scope1")
+	actions.EnableScope("scope1")
 	if val, ok := toolobj.EnableScopes["scope1"]; !ok || !val {
 		t.Errorf("EnableScope failed: scope1 not enabled")
 	}
@@ -83,8 +84,8 @@ func TestEnableScope(t *testing.T) {
 
 func TestDisableScope(t *testing.T) {
 	initTestEnv()
-	EnableScope("scope1")
-	DisableScope("scope1")
+	actions.EnableScope("scope1")
+	actions.DisableScope("scope1")
 	if val, ok := toolobj.EnableScopes["scope1"]; !ok || val {
 		t.Errorf("DisableScope failed: scope1 should be disabled")
 	}
@@ -93,8 +94,8 @@ func TestDisableScope(t *testing.T) {
 func TestExecToolGetPrompts(t *testing.T) {
 	initTestEnv()
 
-	AddScope("scope1", "Scope 1 prompt")
-	AddScope("scope2", "Scope 2 prompt")
+	actions.AddScope("scope1", "Scope 1 prompt")
+	actions.AddScope("scope2", "Scope 2 prompt")
 
 	tool := &toolobj.Tools{
 		Name:            "TestTool",
@@ -119,10 +120,10 @@ func TestExecToolGetPrompts(t *testing.T) {
 			},
 		},
 	}
-	AddTool(tool)
+	actions.AddTool(tool)
 
 	// Enable only scope1
-	EnableScope("scope1")
+	actions.EnableScope("scope1")
 
 	unusedHooks, prehooks, _ := ExecOneToolGetPrompts("tool1")
 
@@ -144,7 +145,7 @@ func TestExecToolGetPrompts(t *testing.T) {
 func TestExecToolGetPromptsWithInvalidScope(t *testing.T) {
 	initTestEnv()
 
-	AddScope("scope1", "Scope 1 prompt")
+	actions.AddScope("scope1", "Scope 1 prompt")
 
 	tool := &toolobj.Tools{
 		Name:            "TestTool",
@@ -161,8 +162,8 @@ func TestExecToolGetPromptsWithInvalidScope(t *testing.T) {
 			},
 		},
 	}
-	AddTool(tool)
-	EnableScope("scope1")
+	actions.AddTool(tool)
+	actions.EnableScope("scope1")
 
 	unusedHooks, prehooks, _ := ExecOneToolGetPrompts("tool1")
 
@@ -180,7 +181,7 @@ func TestExecToolGetPromptsWithInvalidScope(t *testing.T) {
 func TestExecToolOnHook(t *testing.T) {
 	initTestEnv()
 
-	AddScope("scope1", "Scope 1 prompt")
+	actions.AddScope("scope1", "Scope 1 prompt")
 
 	tool := &toolobj.Tools{
 		Name:            "TestTool",
@@ -197,8 +198,8 @@ func TestExecToolOnHook(t *testing.T) {
 			},
 		},
 	}
-	AddTool(tool)
-	EnableScope("scope1")
+	actions.AddTool(tool)
+	actions.EnableScope("scope1")
 
 	args := map[string]any{"key": "value"}
 	results := ExecToolOnHook("tool1", args)
@@ -215,7 +216,7 @@ func TestExecToolOnHook(t *testing.T) {
 func TestExecToolOnHookWithDisabledScope(t *testing.T) {
 	initTestEnv()
 
-	AddScope("scope1", "Scope 1 prompt")
+	actions.AddScope("scope1", "Scope 1 prompt")
 
 	tool := &toolobj.Tools{
 		Name:            "TestTool",
@@ -232,7 +233,7 @@ func TestExecToolOnHookWithDisabledScope(t *testing.T) {
 			},
 		},
 	}
-	AddTool(tool)
+	actions.AddTool(tool)
 	// scope1 is not enabled
 
 	args := map[string]any{"key": "value"}
@@ -246,7 +247,7 @@ func TestExecToolOnHookWithDisabledScope(t *testing.T) {
 func TestExecToolPostHook(t *testing.T) {
 	initTestEnv()
 
-	AddScope("scope1", "Scope 1 prompt")
+	actions.AddScope("scope1", "Scope 1 prompt")
 
 	tool := &toolobj.Tools{
 		Name:            "TestTool",
@@ -264,8 +265,8 @@ func TestExecToolPostHook(t *testing.T) {
 			},
 		},
 	}
-	AddTool(tool)
-	EnableScope("scope1")
+	actions.AddTool(tool)
+	actions.EnableScope("scope1")
 
 	args := map[string]any{"key": "value"}
 	result, err := ExecToolPostHook("tool1", args)
@@ -282,7 +283,7 @@ func TestExecToolPostHook(t *testing.T) {
 func TestExecToolPostHookAllPass(t *testing.T) {
 	initTestEnv()
 
-	AddScope("scope1", "Scope 1 prompt")
+	actions.AddScope("scope1", "Scope 1 prompt")
 
 	tool := &toolobj.Tools{
 		Name:            "TestTool",
@@ -299,8 +300,8 @@ func TestExecToolPostHookAllPass(t *testing.T) {
 			},
 		},
 	}
-	AddTool(tool)
-	EnableScope("scope1")
+	actions.AddTool(tool)
+	actions.EnableScope("scope1")
 
 	args := map[string]any{"key": "value"}
 	_, err := ExecToolPostHook("tool1", args)
@@ -317,7 +318,7 @@ func TestExecToolPostHookAllPass(t *testing.T) {
 func TestExecToolPostHookError(t *testing.T) {
 	initTestEnv()
 
-	AddScope("scope1", "Scope 1 prompt")
+	actions.AddScope("scope1", "Scope 1 prompt")
 
 	tool := &toolobj.Tools{
 		Name:            "TestTool",
@@ -334,8 +335,8 @@ func TestExecToolPostHookError(t *testing.T) {
 			},
 		},
 	}
-	AddTool(tool)
-	EnableScope("scope1")
+	actions.AddTool(tool)
+	actions.EnableScope("scope1")
 
 	args := map[string]any{"key": "value"}
 	_, err := ExecToolPostHook("tool1", args)
@@ -352,12 +353,12 @@ func TestExecToolPostHookError(t *testing.T) {
 func TestMultipleScopes(t *testing.T) {
 	initTestEnv()
 
-	AddScope("scope1", "Scope 1 prompt")
-	AddScope("scope2", "Scope 2 prompt")
-	AddScope("scope3", "Scope 3 prompt")
+	actions.AddScope("scope1", "Scope 1 prompt")
+	actions.AddScope("scope2", "Scope 2 prompt")
+	actions.AddScope("scope3", "Scope 3 prompt")
 
-	EnableScope("scope1")
-	EnableScope("scope2")
+	actions.EnableScope("scope1")
+	actions.EnableScope("scope2")
 
 	tool := &toolobj.Tools{
 		Name:            "TestTool",
@@ -390,7 +391,7 @@ func TestMultipleScopes(t *testing.T) {
 			},
 		},
 	}
-	AddTool(tool)
+	actions.AddTool(tool)
 
 	unusedHooks, prehooks, _ := ExecOneToolGetPrompts("tool1")
 
@@ -408,8 +409,8 @@ func TestMultipleScopes(t *testing.T) {
 func TestPreHookPrioritySorting(t *testing.T) {
 	initTestEnv()
 
-	AddScope("scope1", "Scope 1 prompt")
-	EnableScope("scope1")
+	actions.AddScope("scope1", "Scope 1 prompt")
+	actions.EnableScope("scope1")
 
 	tool := &toolobj.Tools{
 		Name:            "TestTool",
@@ -445,7 +446,7 @@ func TestPreHookPrioritySorting(t *testing.T) {
 			},
 		},
 	}
-	AddTool(tool)
+	actions.AddTool(tool)
 
 	_, prehooks, _ := ExecOneToolGetPrompts("tool1")
 
@@ -468,8 +469,8 @@ func TestPreHookPrioritySorting(t *testing.T) {
 func TestOnHookPrioritySorting(t *testing.T) {
 	initTestEnv()
 
-	AddScope("scope1", "Scope 1 prompt")
-	EnableScope("scope1")
+	actions.AddScope("scope1", "Scope 1 prompt")
+	actions.EnableScope("scope1")
 
 	tool := &toolobj.Tools{
 		Name:            "TestTool",
@@ -505,7 +506,7 @@ func TestOnHookPrioritySorting(t *testing.T) {
 			},
 		},
 	}
-	AddTool(tool)
+	actions.AddTool(tool)
 
 	args := map[string]any{"key": "value"}
 	results := ExecToolOnHook("tool1", args)
@@ -529,8 +530,8 @@ func TestOnHookPrioritySorting(t *testing.T) {
 func TestZeroPriority(t *testing.T) {
 	initTestEnv()
 
-	AddScope("scope1", "Scope 1 prompt")
-	EnableScope("scope1")
+	actions.AddScope("scope1", "Scope 1 prompt")
+	actions.EnableScope("scope1")
 
 	tool := &toolobj.Tools{
 		Name:            "TestTool",
@@ -557,7 +558,7 @@ func TestZeroPriority(t *testing.T) {
 			},
 		},
 	}
-	AddTool(tool)
+	actions.AddTool(tool)
 
 	_, prehooks, _ := ExecOneToolGetPrompts("tool1")
 
@@ -577,8 +578,8 @@ func TestZeroPriority(t *testing.T) {
 func TestExecToolGetPromptsParameters(t *testing.T) {
 	initTestEnv()
 
-	AddScope("scope1", "Scope 1 prompt")
-	EnableScope("scope1")
+	actions.AddScope("scope1", "Scope 1 prompt")
+	actions.EnableScope("scope1")
 
 	// 工具初始参数
 	baseParams := map[string]parser.ToolParameters{
@@ -605,11 +606,11 @@ func TestExecToolGetPromptsParameters(t *testing.T) {
 						return "prehook-param", nil
 					},
 				},
-				Parameters: hookParams,
+				Parameters: &hookParams,
 			},
 		},
 	}
-	AddTool(tool)
+	actions.AddTool(tool)
 
 	unusedHooks, prehooks, paras := ExecOneToolGetPrompts("tool1")
 

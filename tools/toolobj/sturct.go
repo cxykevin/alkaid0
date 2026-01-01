@@ -23,7 +23,7 @@ type OnHookFunction struct {
 // Hook 钩子对象
 type Hook struct {
 	Scope      string
-	Parameters map[string]parser.ToolParameters
+	Parameters *map[string]parser.ToolParameters
 	// 注入提示词
 	PreHook PreHookFunction
 	// UI 渲染（bool：是否传递）

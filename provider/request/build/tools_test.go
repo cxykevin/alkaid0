@@ -130,7 +130,7 @@ func TestTools(t *testing.T) {
 		setupScopes       func()
 		setupTools        func()
 		setupEnableScopes func()
-		checkResult       func(t *testing.T, scopeStr string, traceStr string, toolsDef *[]parser.ToolsDefine)
+		checkResult       func(t *testing.T, scopeStr string, traceStr string, toolsDef *[]*parser.ToolsDefine)
 	}{
 		{
 			name: "空的工具列表和命名空间",
@@ -150,7 +150,7 @@ func TestTools(t *testing.T) {
 				toolobj.EnableScopes = make(map[string]bool)
 				toolobj.EnableScopes[""] = true
 			},
-			checkResult: func(t *testing.T, scopeStr string, traceStr string, toolsDef *[]parser.ToolsDefine) {
+			checkResult: func(t *testing.T, scopeStr string, traceStr string, toolsDef *[]*parser.ToolsDefine) {
 				if scopeStr == "" {
 					t.Error("期望获得作用域字符串，但为空")
 				}
@@ -195,7 +195,7 @@ func TestTools(t *testing.T) {
 					"test_scope": true,
 				}
 			},
-			checkResult: func(t *testing.T, scopeStr string, traceStr string, toolsDef *[]parser.ToolsDefine) {
+			checkResult: func(t *testing.T, scopeStr string, traceStr string, toolsDef *[]*parser.ToolsDefine) {
 				if scopeStr == "" {
 					t.Error("期望获得作用域字符串，但为空")
 				}
@@ -248,7 +248,7 @@ func TestTools(t *testing.T) {
 					"disabled_scope": false,
 				}
 			},
-			checkResult: func(t *testing.T, scopeStr string, traceStr string, toolsDef *[]parser.ToolsDefine) {
+			checkResult: func(t *testing.T, scopeStr string, traceStr string, toolsDef *[]*parser.ToolsDefine) {
 				if toolsDef == nil {
 					t.Error("期望获得工具定义，但为 nil")
 				}
@@ -326,7 +326,7 @@ func TestTools(t *testing.T) {
 					"scope3": false,
 				}
 			},
-			checkResult: func(t *testing.T, scopeStr string, traceStr string, toolsDef *[]parser.ToolsDefine) {
+			checkResult: func(t *testing.T, scopeStr string, traceStr string, toolsDef *[]*parser.ToolsDefine) {
 				if toolsDef == nil {
 					t.Error("期望获得工具定义，但为 nil")
 				}
@@ -390,7 +390,7 @@ func TestTools(t *testing.T) {
 					"scope2": false,
 				}
 			},
-			checkResult: func(t *testing.T, scopeStr string, traceStr string, toolsDef *[]parser.ToolsDefine) {
+			checkResult: func(t *testing.T, scopeStr string, traceStr string, toolsDef *[]*parser.ToolsDefine) {
 				if toolsDef == nil {
 					t.Error("期望获得工具定义，但为 nil")
 				}
@@ -435,7 +435,7 @@ func TestTools(t *testing.T) {
 					"scope1": true,
 				}
 			},
-			checkResult: func(t *testing.T, scopeStr string, traceStr string, toolsDef *[]parser.ToolsDefine) {
+			checkResult: func(t *testing.T, scopeStr string, traceStr string, toolsDef *[]*parser.ToolsDefine) {
 				if toolsDef == nil {
 					t.Error("期望获得工具定义，但为 nil")
 				}
@@ -492,7 +492,7 @@ func TestTools(t *testing.T) {
 					"scope1": true,
 				}
 			},
-			checkResult: func(t *testing.T, scopeStr string, traceStr string, toolsDef *[]parser.ToolsDefine) {
+			checkResult: func(t *testing.T, scopeStr string, traceStr string, toolsDef *[]*parser.ToolsDefine) {
 				if toolsDef == nil {
 					t.Error("期望获得工具定义，但为 nil")
 				}
@@ -543,7 +543,7 @@ func TestTools(t *testing.T) {
 					"scope1": true,
 				}
 			},
-			checkResult: func(t *testing.T, scopeStr string, traceStr string, toolsDef *[]parser.ToolsDefine) {
+			checkResult: func(t *testing.T, scopeStr string, traceStr string, toolsDef *[]*parser.ToolsDefine) {
 				if toolsDef == nil {
 					t.Error("期望获得工具定义，但为 nil")
 				}

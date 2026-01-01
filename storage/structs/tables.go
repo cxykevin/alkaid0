@@ -7,4 +7,5 @@ var Tables = []any{
 	&SubAgents{},
 	&Terminals{},
 	&Scopes{},
+	&Configs{},
 }

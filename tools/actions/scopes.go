@@ -1,18 +1,31 @@
-package tools
+package actions
 
 import (
+	"maps"
+
 	"github.com/cxykevin/alkaid0/log"
 	"github.com/cxykevin/alkaid0/storage"
 	sstructs "github.com/cxykevin/alkaid0/storage/structs"
+	"github.com/cxykevin/alkaid0/tools/toolobj"
 )
 
-var scopesLogger = log.New("tools:scopes")
+var logger *log.LogsObj
+
+func init() {
+	logger = log.New("tools:actions")
+	// 尝试从数据库加载命名空间启用状态（若 DB 未初始化则忽略）
+	if scs, err := GetAllScopes(); err == nil {
+		maps.Copy(toolobj.EnableScopes, scs)
+	} else {
+		logger.Error("failed to load scopes from storage: %v", err)
+	}
+}
 
 // SetScopeEnabled 设置或更新命名空间启用状态
 func SetScopeEnabled(name string, enabled bool) error {
 	if storage.DB == nil {
 		// 如果 DB 未初始化，记录并返回 nil，不阻塞业务
-		scopesLogger.Info("DB not initialized, skip persist scope %s", name)
+		logger.Info("DB not initialized, skip persist scope %s", name)
 		return nil
 	}
 	s := sstructs.Scopes{Name: name, Enabled: enabled}

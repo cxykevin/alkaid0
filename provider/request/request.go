@@ -9,7 +9,7 @@ import (
 func UserAddMsg(db *gorm.DB, chatID uint32, msg string, refer structs.MessagesReferList) error {
 	var chat structs.Chats
 	db.First(&chat, 1)
-	chat.NowAgent = 0
+	chat.NowAgent = ""
 	err := db.Select("NowAgent").Save(&chat).Error
 	if err != nil {
 		return err

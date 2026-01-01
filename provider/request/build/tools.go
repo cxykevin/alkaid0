@@ -24,8 +24,8 @@ func map2Slice[sliceType any, originMapKeyType comparable, originMapValType any]
 	return lists
 }
 
-// Tools 构建工具（scopes，tool traces, tools）
-func Tools() (string, string, *[]parser.ToolsDefine) {
+// Tools 构建工具(scopes, tool traces, tools)
+func Tools() (string, string, *[]*parser.ToolsDefine) {
 	scopesString := prompts.Render(prompts.ToolScopesTemplate, struct {
 		Scopes []scopeInfo
 	}{
@@ -52,7 +52,7 @@ func Tools() (string, string, *[]parser.ToolsDefine) {
 		Active: globalToolsTracesActive,
 	})
 
-	toolsDef := make([]parser.ToolsDefine, 0)
+	toolsDef := make([]*parser.ToolsDefine, 0)
 	for k, v := range toolobj.ToolsList {
 		// Global 工具不包含在总工具表中，但 hooks 已通过 globalToolTraceStr 处理
 		if k == "" {
@@ -73,7 +73,7 @@ func Tools() (string, string, *[]parser.ToolsDefine) {
 			}),
 		}
 		toolDefObj.Parameters = paras
-		toolsDef = append(toolsDef, *toolDefObj)
+		toolsDef = append(toolsDef, toolDefObj)
 	}
 
 	return scopesString, globalToolTraceStr, &toolsDef

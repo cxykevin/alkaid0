@@ -33,7 +33,7 @@ func InitDB(dbPath string) error {
 	// 使用 gorm 打开连接，注意不要短变量声明遮盖包级的 DB 变量
 	var err error
 	dialect := sqlite.Open(dbPath)
-	DB, err = gorm.Open(dialect, &gorm.Config{ Logger: New() })
+	DB, err = gorm.Open(dialect, &gorm.Config{Logger: New()})
 	if err != nil {
 		return fmt.Errorf("failed to open db %s: %w", dbPath, err)
 	}
@@ -41,5 +41,8 @@ func InitDB(dbPath string) error {
 	if err := DB.AutoMigrate(structs.Tables...); err != nil {
 		return fmt.Errorf("failed to automigrate: %w", err)
 	}
+
+	// 初始化全局配置
+	DB.FirstOrCreate(&structs.Configs{})
 	return nil
 }

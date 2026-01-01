@@ -19,28 +19,7 @@ func init() {
 		Name: "Global",
 		ID:   "",
 	}
-	// 尝试从数据库加载命名空间启用状态（若 DB 未初始化则忽略）
-	if scs, err := GetAllScopes(); err == nil {
-		maps.Copy(toolobj.EnableScopes, scs)
-	} else {
-		logger.Error("failed to load scopes from storage: %v", err)
-	}
 	toolobj.EnableScopes[""] = true
-}
-
-// AddScope 添加工具命名空间
-func AddScope(name string, prompt string) {
-	toolobj.Scopes[name] = prompt
-}
-
-// AddTool 添加工具
-func AddTool(tool *toolobj.Tools) {
-	toolobj.ToolsList[tool.ID] = tool
-}
-
-// HookTool 为工具添加钩子
-func HookTool(name string, hook *toolobj.Hook) {
-	toolobj.ToolsList[name].Hooks = append(toolobj.ToolsList[name].Hooks, *hook)
 }
 
 // ExecOneToolGetPrompts 执行预调用，获取提示词表
@@ -77,7 +56,9 @@ func ExecOneToolGetPrompts(name string) ([]string, []string, map[string]parser.T
 		}
 		prehooks = append(prehooks, ret)
 		// 合并map
-		maps.Copy(paras, hook.Parameters)
+		if hook.Parameters != nil {
+			maps.Copy(paras, *hook.Parameters)
+		}
 	}
 	return unusedHooks, prehooks, paras
 }
@@ -134,26 +115,4 @@ func ExecToolPostHook(name string, args map[string]any) (map[string]any, error) 
 	}
 	logger.Error("all tool passed")
 	return map[string]any{}, errors.New("All tool passed")
-}
-
-// EnableScope 启用命名空间
-func EnableScope(scope string) {
-	if scope == "" {
-		return
-	}
-	toolobj.EnableScopes[scope] = true
-	if err := SetScopeEnabled(scope, true); err != nil {
-		logger.Error("failed to persist enable scope %s: %v", scope, err)
-	}
-}
-
-// DisableScope 禁用命名空间
-func DisableScope(scope string) {
-	if scope == "" {
-		return
-	}
-	toolobj.EnableScopes[scope] = false
-	if err := SetScopeEnabled(scope, false); err != nil {
-		logger.Error("failed to persist disable scope %s: %v", scope, err)
-	}
 }

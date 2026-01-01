@@ -4,5 +4,5 @@ package structs
 type Chats struct {
 	ID          uint32 `gorm:"primaryKey;autoIncrement"`
 	LastModelID uint32
-	NowAgent    uint32
+	NowAgent    string
 }
