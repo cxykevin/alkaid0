@@ -25,6 +25,9 @@ var ToolPrehookTemplate *template.Template
 // ToolScopesTemplate 工具预调用描述模板
 var ToolScopesTemplate *template.Template
 
+// ToolResponseWrapTemplate 工具响应描述模板（更推荐走 trace）
+var ToolResponseWrapTemplate *template.Template
+
 func init() {
 	// 创建函数映射
 	funcMap := template.FuncMap{
@@ -42,4 +45,5 @@ func init() {
 	UserPromptTemplate = template.Must(template.New("UserPrompt").Funcs(funcMap).Parse(UserPromptWrap))
 	ToolPrehookTemplate = template.Must(template.New("ToolPrehook").Funcs(funcMap).Parse(ToolPrehook))
 	ToolScopesTemplate = template.Must(template.New("ToolScopes").Funcs(funcMap).Parse(ToolScopes))
+	ToolResponseWrapTemplate = template.Must(template.New("ToolResponseWrap").Funcs(funcMap).Parse(ToolResponseWrap))
 }

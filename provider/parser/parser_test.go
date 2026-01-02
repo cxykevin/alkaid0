@@ -10,7 +10,7 @@ import (
 type H map[string]any
 
 // 测试工具定义
-var testTools = []parser.ToolsDefine{}
+var testTools = []*parser.ToolsDefine{}
 
 // TestNewParser 测试解析器创建
 func TestNewParser(t *testing.T) {
@@ -751,7 +751,7 @@ func TestParserComplexScenarios(t *testing.T) {
 
 // TestSolveToolBasicStringParameter 测试基础字符串参数工具调用
 func TestSolveToolBasicStringParameter(t *testing.T) {
-	tools := []parser.ToolsDefine{
+	tools := []*parser.ToolsDefine{
 		{
 			Name:        "calculator",
 			Description: "",

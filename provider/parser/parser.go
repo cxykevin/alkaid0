@@ -2,6 +2,7 @@ package parser
 
 import (
 	"errors"
+	"strings"
 
 	"github.com/cxykevin/alkaid0/library/json"
 )
@@ -11,7 +12,7 @@ import (
 // var logger *log.LogsObj
 
 // func init() {
-// 	logger = log.New("storage")
+// 	logger = log.New("parser")
 // }
 
 // ToolsResponse 工具返回类
@@ -60,7 +61,7 @@ const maxTagLen = 6
 
 // Parser 流式解析器
 type Parser struct {
-	Tools             []ToolsDefine
+	Tools             []*ToolsDefine
 	TokenCache        string
 	Mode              int16
 	KeyMode           int16
@@ -245,13 +246,13 @@ func (p *Parser) AddToken(token string) (string, string, *any, error) {
 	if p.Stop {
 		return "", "", nil, errors.New("parser stop")
 	}
-	response := ""
-	responseThinking := ""
+	var response strings.Builder
+	var responseThinking strings.Builder
 	for _, char := range token {
 		// 状态机
 		solveTag := func(tokens string) error {
 			if p.KeyMode == 1 {
-				responseThinking += tokens
+				responseThinking.WriteString(tokens)
 			} else {
 				if p.jsonParser != nil {
 					p.jsonParser.AddToken(tokens)
@@ -271,7 +272,7 @@ func (p *Parser) AddToken(token string) (string, string, *any, error) {
 				p.TokenCache = ""
 				continue
 			}
-			response += string(char)
+			response.WriteString(string(char))
 		case 1: // 入标签本身
 			if char == '>' {
 				switch p.TokenCache {
@@ -281,7 +282,7 @@ func (p *Parser) AddToken(token string) (string, string, *any, error) {
 					p.jsonParser = json.New()
 					p.KeyMode = 2
 				default:
-					response += "<" + p.TokenCache + ">"
+					response.WriteString("<" + p.TokenCache + ">")
 					p.TokenCache = ""
 					p.Mode = 0
 					continue
@@ -293,7 +294,7 @@ func (p *Parser) AddToken(token string) (string, string, *any, error) {
 			p.TokenCache += string(char)
 			if len(p.TokenCache) >= maxTagLen {
 				p.Mode = 0
-				response += "<" + p.TokenCache
+				response.WriteString("<" + p.TokenCache)
 				p.TokenCache = ""
 				continue
 			}
@@ -353,7 +354,7 @@ func (p *Parser) AddToken(token string) (string, string, *any, error) {
 			}
 		}
 	}
-	return response, responseThinking, nil, nil
+	return response.String(), responseThinking.String(), nil, nil
 }
 
 // DoneToken 传入结束 token
@@ -383,6 +384,6 @@ func (p *Parser) DoneToken() (string, string, *[]AIToolsResponse, error) {
 }
 
 // NewParser 创建解析器
-func NewParser(tools []ToolsDefine) *Parser {
+func NewParser(tools []*ToolsDefine) *Parser {
 	return &Parser{Tools: tools}
 }

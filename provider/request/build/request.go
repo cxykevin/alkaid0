@@ -85,6 +85,12 @@ func RequestBody(chatID uint32, modelID int32, agentID string, toolsList *[]*par
 						Prompt: v.Delta,
 						Refers: v.Refers,
 					})
+				} else if v.Type == structs.MessagesRoleTool {
+					msg.Content = prompts.Render(prompts.ToolResponseWrapTemplate, struct {
+						Prompt string
+					}{
+						Prompt: v.Delta,
+					})
 				} else if v.ThinkingDelta != "" {
 					if modelConfig.EnableThinking {
 						thinkingString := v.ThinkingDelta

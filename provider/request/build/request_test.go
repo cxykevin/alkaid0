@@ -517,7 +517,7 @@ func TestRequestBody_ToolMessage(t *testing.T) {
 	// 验证工具消息被映射为用户角色
 	foundToolMsg := false
 	for _, msg := range request.Messages {
-		if msg.Content == "Tool result" && msg.Role == "user" {
+		if strings.Contains(msg.Content, "Tool result") && msg.Role == "user" {
 			foundToolMsg = true
 			break
 		}

@@ -1,7 +1,6 @@
 package tools
 
 import (
-	"errors"
 	"maps"
 	"sort"
 
@@ -64,9 +63,9 @@ func ExecOneToolGetPrompts(name string) ([]string, []string, map[string]parser.T
 }
 
 // ExecToolOnHook 执行工具
-func ExecToolOnHook(name string, args map[string]any) []any {
-	onhooks := make([]any, 0)
-	pass := make([]*any, 0)
+func ExecToolOnHook(name string, args map[string]*any) error {
+	passObjs := make([]*any, 0)
+
 	hookTmp := toolobj.ToolsList[name].Hooks
 
 	// 将tmp中的钩子按Priority排序
@@ -81,21 +80,32 @@ func ExecToolOnHook(name string, args map[string]any) []any {
 		if val, ok := toolobj.EnableScopes[hook.Scope]; !ok || !val {
 			continue
 		}
-		ret, passFunc, err := hook.OnHook.Func(args, pass)
-		pass = passFunc
+		pass, passObj, err := hook.OnHook.Func(args, passObjs)
+		passObjs = passObj
 		if err != nil {
-			logger.Error("hook on hook error: %v", err)
+			logger.Error("hook post hook error: %v", err)
+			return err
+		}
+		if pass {
 			continue
 		}
-		onhooks = append(onhooks, ret)
+		return nil
 	}
-	return onhooks
+	// logger.Error("all tool passed")
+	return nil
 }
 
 // ExecToolPostHook 执行工具
-func ExecToolPostHook(name string, args map[string]any) (map[string]any, error) {
+func ExecToolPostHook(name string, args map[string]*any) (map[string]*any, error) {
 	passObjs := make([]*any, 0)
-	for _, hook := range toolobj.ToolsList[name].Hooks {
+	hookTmp := toolobj.ToolsList[name].Hooks
+
+	// 将tmp中的钩子按Priority排序
+	sort.Slice(hookTmp, func(i, j int) bool {
+		return hookTmp[i].PostHook.Priority > hookTmp[j].PostHook.Priority
+	})
+
+	for _, hook := range hookTmp {
 		if _, ok := toolobj.Scopes[hook.Scope]; !ok {
 			continue
 		}
@@ -106,13 +116,13 @@ func ExecToolPostHook(name string, args map[string]any) (map[string]any, error) 
 		passObjs = passObj
 		if err != nil {
 			logger.Error("hook post hook error: %v", err)
-			return map[string]any{}, err
+			return map[string]*any{}, err
 		}
 		if pass {
 			continue
 		}
 		return ret, nil
 	}
-	logger.Error("all tool passed")
-	return map[string]any{}, errors.New("All tool passed")
+	// logger.Error("all tool passed")
+	return map[string]*any{}, nil
 }

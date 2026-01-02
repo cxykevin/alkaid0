@@ -51,3 +51,8 @@ var ToolPrehook string
 //
 //go:embed prompts/tool_scopes.md
 var ToolScopes string
+
+// ToolResponseWrap 工具返回提示词
+//
+//go:embed prompts/tool_response_wrap.md
+var ToolResponseWrap string

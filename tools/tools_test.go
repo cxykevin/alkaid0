@@ -191,7 +191,7 @@ func TestExecToolOnHook(t *testing.T) {
 			{
 				Scope: "scope1",
 				OnHook: toolobj.OnHookFunction{
-					Func: func(args map[string]any, pass []*any) (bool, []*any, error) {
+					Func: func(args map[string]*any, pass []*any) (bool, []*any, error) {
 						return true, pass, nil
 					},
 				},
@@ -201,15 +201,12 @@ func TestExecToolOnHook(t *testing.T) {
 	actions.AddTool(tool)
 	actions.EnableScope("scope1")
 
-	args := map[string]any{"key": "value"}
-	results := ExecToolOnHook("tool1", args)
+	v := any("value")
+	args := map[string]*any{"key": &v}
+	err := ExecToolOnHook("tool1", args)
 
-	if len(results) != 1 {
-		t.Errorf("ExecToolOnHook failed: expected 1 result, got %d", len(results))
-	}
-
-	if results[0] != true {
-		t.Errorf("ExecToolOnHook failed: expected true, got %v", results[0])
+	if err != nil {
+		t.Errorf("ExecToolOnHook failed: expected no error, got %v", err)
 	}
 }
 
@@ -226,7 +223,7 @@ func TestExecToolOnHookWithDisabledScope(t *testing.T) {
 			{
 				Scope: "scope1",
 				OnHook: toolobj.OnHookFunction{
-					Func: func(args map[string]any, pass []*any) (bool, []*any, error) {
+					Func: func(args map[string]*any, pass []*any) (bool, []*any, error) {
 						return true, pass, nil
 					},
 				},
@@ -236,11 +233,12 @@ func TestExecToolOnHookWithDisabledScope(t *testing.T) {
 	actions.AddTool(tool)
 	// scope1 is not enabled
 
-	args := map[string]any{"key": "value"}
-	results := ExecToolOnHook("tool1", args)
+	v := any("value")
+	args := map[string]*any{"key": &v}
+	err := ExecToolOnHook("tool1", args)
 
-	if len(results) != 0 {
-		t.Errorf("ExecToolOnHook failed: expected 0 results when scope disabled, got %d", len(results))
+	if err != nil {
+		t.Errorf("ExecToolOnHook failed when scope disabled: expected no error, got %v", err)
 	}
 }
 
@@ -257,8 +255,9 @@ func TestExecToolPostHook(t *testing.T) {
 			{
 				Scope: "scope1",
 				PostHook: toolobj.PostHookFunction{
-					Func: func(args map[string]any, passObjs []*any) (bool, []*any, map[string]any, error) {
-						result := map[string]any{"status": "success"}
+					Func: func(args map[string]*any, passObjs []*any) (bool, []*any, map[string]*any, error) {
+						s := any("success")
+						result := map[string]*any{"status": &s}
 						return false, passObjs, result, nil
 					},
 				},
@@ -268,15 +267,20 @@ func TestExecToolPostHook(t *testing.T) {
 	actions.AddTool(tool)
 	actions.EnableScope("scope1")
 
-	args := map[string]any{"key": "value"}
+	v := any("value")
+	args := map[string]*any{"key": &v}
 	result, err := ExecToolPostHook("tool1", args)
 
 	if err != nil {
 		t.Errorf("ExecToolPostHook failed: expected no error, got %v", err)
 	}
 
-	if val, ok := result["status"]; !ok || val != "success" {
-		t.Errorf("ExecToolPostHook failed: expected status 'success', got %v", val)
+	if valPtr, ok := result["status"]; !ok {
+		t.Errorf("ExecToolPostHook failed: expected status present")
+	} else {
+		if str, ok := (*valPtr).(string); !ok || str != "success" {
+			t.Errorf("ExecToolPostHook failed: expected status 'success', got %v", *valPtr)
+		}
 	}
 }
 
@@ -293,7 +297,7 @@ func TestExecToolPostHookAllPass(t *testing.T) {
 			{
 				Scope: "scope1",
 				PostHook: toolobj.PostHookFunction{
-					Func: func(args map[string]any, passObjs []*any) (bool, []*any, map[string]any, error) {
+					Func: func(args map[string]*any, passObjs []*any) (bool, []*any, map[string]*any, error) {
 						return true, passObjs, nil, nil
 					},
 				},
@@ -303,15 +307,16 @@ func TestExecToolPostHookAllPass(t *testing.T) {
 	actions.AddTool(tool)
 	actions.EnableScope("scope1")
 
-	args := map[string]any{"key": "value"}
-	_, err := ExecToolPostHook("tool1", args)
+	v := any("value")
+	args := map[string]*any{"key": &v}
+	res, err := ExecToolPostHook("tool1", args)
 
-	if err == nil {
-		t.Errorf("ExecToolPostHook failed: expected error when all hooks pass")
+	if err != nil {
+		t.Errorf("ExecToolPostHook failed: expected no error when all hooks pass, got %v", err)
 	}
 
-	if err.Error() != "All tool passed" {
-		t.Errorf("ExecToolPostHook failed: expected 'All tool passed' error, got %v", err)
+	if len(res) != 0 {
+		t.Errorf("ExecToolPostHook failed: expected empty result when all hooks pass, got %v", res)
 	}
 }
 
@@ -328,7 +333,7 @@ func TestExecToolPostHookError(t *testing.T) {
 			{
 				Scope: "scope1",
 				PostHook: toolobj.PostHookFunction{
-					Func: func(args map[string]any, passObjs []*any) (bool, []*any, map[string]any, error) {
+					Func: func(args map[string]*any, passObjs []*any) (bool, []*any, map[string]*any, error) {
 						return false, passObjs, nil, errors.New("hook error")
 					},
 				},
@@ -338,7 +343,8 @@ func TestExecToolPostHookError(t *testing.T) {
 	actions.AddTool(tool)
 	actions.EnableScope("scope1")
 
-	args := map[string]any{"key": "value"}
+	v := any("value")
+	args := map[string]*any{"key": &v}
 	_, err := ExecToolPostHook("tool1", args)
 
 	if err == nil {
@@ -472,6 +478,8 @@ func TestOnHookPrioritySorting(t *testing.T) {
 	actions.AddScope("scope1", "Scope 1 prompt")
 	actions.EnableScope("scope1")
 
+	order := make([]string, 0)
+
 	tool := &toolobj.Tools{
 		Name:            "TestTool",
 		ID:              "tool1",
@@ -481,8 +489,9 @@ func TestOnHookPrioritySorting(t *testing.T) {
 				Scope: "scope1",
 				OnHook: toolobj.OnHookFunction{
 					Priority: 1,
-					Func: func(args map[string]any, pass []*any) (bool, []*any, error) {
-						return false, pass, nil
+					Func: func(args map[string]*any, pass []*any) (bool, []*any, error) {
+						order = append(order, "low")
+						return true, pass, nil
 					},
 				},
 			},
@@ -490,7 +499,8 @@ func TestOnHookPrioritySorting(t *testing.T) {
 				Scope: "scope1",
 				OnHook: toolobj.OnHookFunction{
 					Priority: 3,
-					Func: func(args map[string]any, pass []*any) (bool, []*any, error) {
+					Func: func(args map[string]*any, pass []*any) (bool, []*any, error) {
+						order = append(order, "high")
 						return true, pass, nil
 					},
 				},
@@ -499,31 +509,92 @@ func TestOnHookPrioritySorting(t *testing.T) {
 				Scope: "scope1",
 				OnHook: toolobj.OnHookFunction{
 					Priority: 2,
-					Func: func(args map[string]any, pass []*any) (bool, []*any, error) {
-						return false, pass, nil
+					Func: func(args map[string]*any, pass []*any) (bool, []*any, error) {
+						order = append(order, "mid")
+						return true, pass, nil
 					},
 				},
 			},
 		},
 	}
 	actions.AddTool(tool)
+	v := any("value")
+	args := map[string]*any{"key": &v}
+	err := ExecToolOnHook("tool1", args)
 
-	args := map[string]any{"key": "value"}
-	results := ExecToolOnHook("tool1", args)
-
-	if len(results) != 3 {
-		t.Errorf("TestOnHookPrioritySorting failed: expected 3 results, got %d", len(results))
+	if err != nil {
+		t.Fatalf("ExecToolOnHook returned error: %v", err)
 	}
 
-	// 应该按Priority降序排列
-	if results[0] != true {
-		t.Errorf("TestOnHookPrioritySorting failed: expected first result to be true (highest priority), got %v", results[0])
+	if len(order) != 3 {
+		t.Fatalf("TestOnHookPrioritySorting failed: expected 3 hooks executed, got %d", len(order))
 	}
-	if results[1] != false {
-		t.Errorf("TestOnHookPrioritySorting failed: expected second result to be false, got %v", results[1])
+
+	if order[0] != "high" || order[1] != "mid" || order[2] != "low" {
+		t.Errorf("TestOnHookPrioritySorting failed: unexpected order %v", order)
 	}
-	if results[2] != false {
-		t.Errorf("TestOnHookPrioritySorting failed: expected third result to be false, got %v", results[2])
+}
+
+func TestPostHookPrioritySorting(t *testing.T) {
+	initTestEnv()
+
+	actions.AddScope("scope1", "Scope 1 prompt")
+	actions.EnableScope("scope1")
+
+	order := make([]string, 0)
+
+	tool := &toolobj.Tools{
+		Name:            "TestTool",
+		ID:              "tool1",
+		UserDescription: "A test tool",
+		Hooks: []toolobj.Hook{
+			{
+				Scope: "scope1",
+				PostHook: toolobj.PostHookFunction{
+					Priority: 1,
+					Func: func(args map[string]*any, pass []*any) (bool, []*any, map[string]*any, error) {
+						order = append(order, "low")
+						return true, pass, map[string]*any{}, nil
+					},
+				},
+			},
+			{
+				Scope: "scope1",
+				PostHook: toolobj.PostHookFunction{
+					Priority: 3,
+					Func: func(args map[string]*any, pass []*any) (bool, []*any, map[string]*any, error) {
+						order = append(order, "high")
+						return true, pass, map[string]*any{}, nil
+					},
+				},
+			},
+			{
+				Scope: "scope1",
+				PostHook: toolobj.PostHookFunction{
+					Priority: 2,
+					Func: func(args map[string]*any, pass []*any) (bool, []*any, map[string]*any, error) {
+						order = append(order, "mid")
+						return true, pass, map[string]*any{}, nil
+					},
+				},
+			},
+		},
+	}
+	actions.AddTool(tool)
+	v := any("value")
+	args := map[string]*any{"key": &v}
+	_, err := ExecToolPostHook("tool1", args)
+
+	if err != nil {
+		t.Fatalf("ExecToolOnHook returned error: %v", err)
+	}
+
+	if len(order) != 3 {
+		t.Fatalf("TestOnHookPrioritySorting failed: expected 3 hooks executed, got %d", len(order))
+	}
+
+	if order[0] != "high" || order[1] != "mid" || order[2] != "low" {
+		t.Errorf("TestOnHookPrioritySorting failed: unexpected order %v", order)
 	}
 }
 

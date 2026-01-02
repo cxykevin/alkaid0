@@ -78,3 +78,43 @@ func Tools() (string, string, *[]*parser.ToolsDefine) {
 
 	return scopesString, globalToolTraceStr, &toolsDef
 }
+
+// ToolsSolver 构建工具处理器
+func ToolsSolver(callback func(string, string, map[string]*any) error) *[]*parser.ToolsDefine {
+
+	toolsDef := make([]*parser.ToolsDefine, 0)
+	for k, v := range toolobj.ToolsList {
+		toolDefObj := &parser.ToolsDefine{
+			Name: k,
+			Func: func(ID string, arg map[string]*any, ok bool) error {
+				if !ok {
+					err := tools.ExecToolOnHook(k, arg)
+					if err != nil {
+						return err
+					}
+					return nil
+				}
+				ret, err := tools.ExecToolPostHook(k, arg)
+				if err != nil {
+					return err
+				}
+				err = callback(k, ID, ret)
+				if err != nil {
+					return err
+				}
+				return nil
+			},
+		}
+		if k == "" {
+			continue
+		}
+		if val, ok := toolobj.EnableScopes[v.Scope]; !ok || !val {
+			continue
+		}
+		_, _, paras := tools.ExecOneToolGetPrompts(k)
+		toolDefObj.Parameters = paras
+		toolsDef = append(toolsDef, toolDefObj)
+	}
+
+	return &toolsDef
+}
