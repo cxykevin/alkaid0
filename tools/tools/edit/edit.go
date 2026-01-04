@@ -2,6 +2,8 @@ package edit
 
 import (
 	_ "embed" // embed
+	"encoding/json"
+	"fmt"
 
 	"github.com/cxykevin/alkaid0/provider/parser"
 	"github.com/cxykevin/alkaid0/tools/actions"
@@ -10,6 +12,13 @@ import (
 )
 
 const toolName = "edit"
+
+func unwrap[T any](args T, err error) T {
+	if err != nil {
+		panic(err)
+	}
+	return args
+}
 
 //go:embed prompt.md
 var prompt string
@@ -35,6 +44,18 @@ var paras = map[string]parser.ToolParameters{
 func buildPrompt() (string, error) {
 	return prompt, nil
 }
+func updateInfo(mp map[string]*any, cross []*any) (bool, []*any, error) {
+	fmt.Printf("Edit Info: %v\n", string(unwrap(json.Marshal(mp))))
+	return true, cross, nil
+}
+func writeFile(mp map[string]*any, push []*any) (bool, []*any, map[string]*any, error) {
+	fmt.Printf("Edit File: %v\n", string(unwrap(json.Marshal(mp))))
+	boolx := true
+	success := any(boolx)
+	return false, push, map[string]*any{
+		"success": &success,
+	}, nil
+}
 
 func load() string {
 	actions.AddTool(&toolobj.Tools{
@@ -49,6 +70,14 @@ func load() string {
 		PreHook: toolobj.PreHookFunction{
 			Priority: 100,
 			Func:     buildPrompt,
+		},
+		OnHook: toolobj.OnHookFunction{
+			Priority: 100,
+			Func:     updateInfo,
+		},
+		PostHook: toolobj.PostHookFunction{
+			Priority: 100,
+			Func:     writeFile,
 		},
 	})
 	return toolName

@@ -4,7 +4,9 @@ import (
 	"os"
 
 	"github.com/cxykevin/alkaid0/config"
+	"github.com/cxykevin/alkaid0/demo/loop"
 	"github.com/cxykevin/alkaid0/log"
+	"github.com/cxykevin/alkaid0/storage"
 )
 
 func main() {
@@ -15,4 +17,8 @@ func main() {
 		// 设置工作目录
 		os.Chdir(workdir)
 	}
+	storage.InitStorage()
+
+	// 启动 Demo Loop
+	loop.Start()
 }

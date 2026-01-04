@@ -13,7 +13,7 @@ type ModelConfig struct {
 	ProviderURL       string  `default:"https://openrouter.com/api/v1"` // 覆写模型提供者URL
 	ProviderKey       string  `default:"sk-or-xxx"`                     // 复写模型提供者Key
 	EnableThinking    bool    `default:"false"`                         // 是否启用思考（只影响 delta 拼接）
-	EnableToolCalling bool    `default:"true"`                          // 是否启用工具调用（只影响 delta 拼接）
+	EnableToolCalling bool    `default:"false"`                         // 是否启用工具调用（只影响 delta 拼接）
 }
 
 // ModelsConfig 模型配置结构

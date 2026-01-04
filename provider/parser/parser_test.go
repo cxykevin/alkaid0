@@ -28,7 +28,7 @@ func TestAddTokenNormalText(t *testing.T) {
 	p := parser.NewParser(testTools)
 
 	// 测试普通文本
-	response, thinking, _, err := p.AddToken("Hello World")
+	response, thinking, _, err := p.AddToken("Hello World", "")
 	if err != nil {
 		t.Fatalf("解析失败: %v", err)
 	}
@@ -54,7 +54,7 @@ func TestAddTokenThinkTag(t *testing.T) {
 
 	// 测试 think 标签
 	token := "<think>这是思考内容</think>"
-	response, thinking, _, err := p.AddToken(token)
+	response, thinking, _, err := p.AddToken(token, "")
 	if err != nil {
 		t.Fatalf("解析失败: %v", err)
 	}
@@ -80,7 +80,7 @@ func TestAddTokenThinkTag(t *testing.T) {
 
 // 	// 测试 tools 标签
 // 	token := "<tools>\n{\n  \"name\": \"calculator\",\n  \"parameters\": {\n    \"expression\": \"2+2\"\n  }\n}\n</tools>"
-// 	response, thinking, tools, err := p.AddToken(token)
+// 	response, thinking, tools, err := p.AddToken(token,"")
 // 	if err != nil {
 // 		t.Fatalf("解析失败: %v", err)
 // 	}
@@ -102,7 +102,7 @@ func TestAddTokenMixedContent(t *testing.T) {
 
 	// 测试混合内容
 	token := "普通文本<think>思考内容</think>更多文本结尾文本"
-	response, thinking, _, err := p.AddToken(token)
+	response, thinking, _, err := p.AddToken(token, "")
 	if err != nil {
 		t.Fatalf("解析失败: %v", err)
 	}
@@ -189,7 +189,7 @@ func TestParserEdgeCases(t *testing.T) {
 
 	// 测试超长标签
 	longTag := "<" + string(make([]byte, 10)) + ">" // 超过 maxTagLen
-	response, _, _, err := p.AddToken(longTag)
+	response, _, _, err := p.AddToken(longTag, "")
 	if err != nil {
 		t.Fatalf("解析失败: %v", err)
 	}
@@ -202,7 +202,7 @@ func TestParserEdgeCases(t *testing.T) {
 
 	// 测试嵌套标签（应该按普通文本处理）
 	nestedTag := "<outer><inner>内容</inner></outer>"
-	response, _, _, err = p.AddToken(nestedTag)
+	response, _, _, err = p.AddToken(nestedTag, "")
 	if err != nil {
 		t.Fatalf("解析失败: %v", err)
 	}
@@ -219,7 +219,7 @@ func BenchmarkParserAddToken(b *testing.B) {
 	testToken := "这是一个测试token<think>思考内容</think>更多内容"
 
 	for b.Loop() {
-		p.AddToken(testToken)
+		p.AddToken(testToken, "")
 	}
 }
 
@@ -238,7 +238,7 @@ func TestParserThinkNotFull(t *testing.T) {
 
 	// 测试嵌套标签（应该按普通文本处理）
 	nestedTag := "aaaa<think>内容</inner></outer>"
-	response, thinking, _, err := p.AddToken(nestedTag)
+	response, thinking, _, err := p.AddToken(nestedTag, "")
 	if err != nil {
 		t.Fatalf("解析失败: %v", err)
 	}
@@ -255,7 +255,7 @@ func TestParserThinkNotFull(t *testing.T) {
 	p = parser.NewParser(testTools)
 	// 测试嵌套标签（应该按普通文本处理）
 	nestedTag = "aaaa<think>内容</inner></outer></aaaaaaaa"
-	response, thinking, _, err = p.AddToken(nestedTag)
+	response, thinking, _, err = p.AddToken(nestedTag, "")
 	if err != nil {
 		t.Fatalf("解析失败: %v", err)
 	}
@@ -278,7 +278,7 @@ func TestParserThinkNotFull(t *testing.T) {
 	p = parser.NewParser(testTools)
 	// 测试嵌套标签（应该按普通文本处理）
 	nestedTag = "aaaa<think>内容</inner></outer></think"
-	response, thinking, _, err = p.AddToken(nestedTag)
+	response, thinking, _, err = p.AddToken(nestedTag, "")
 	if err != nil {
 		t.Fatalf("解析失败: %v", err)
 	}
@@ -311,7 +311,7 @@ func TestParserThinkNotFull(t *testing.T) {
 // 		}
 // 	}`
 // 	token := "<tools>\n" + toolsContent + "\n</tools>"
-// 	response, thinking, tools, err := p.AddToken(token)
+// 	response, thinking, tools, err := p.AddToken(token,"")
 // 	if err != nil {
 // 		t.Fatalf("解析失败: %v", err)
 // 	}
@@ -347,7 +347,7 @@ func TestParserUnmatchedTags(t *testing.T) {
 
 	// 测试不匹配标签：只有开始标签
 	token := "<think>内容没有结束标签"
-	response, thinking, _, err := p.AddToken(token)
+	response, thinking, _, err := p.AddToken(token, "")
 
 	if err != nil {
 		t.Fatalf("解析失败: %v", err)
@@ -370,7 +370,7 @@ func TestParserUnmatchedTags(t *testing.T) {
 	// 测试不匹配标签：结束标签没有开始
 	p = parser.NewParser(testTools)
 	token = "内容没有开始标签</think>"
-	response, thinking, _, err = p.AddToken(token)
+	response, thinking, _, err = p.AddToken(token, "")
 	if err != nil {
 		t.Fatalf("解析失败: %v", err)
 	}
@@ -386,7 +386,7 @@ func TestParserUnmatchedTags(t *testing.T) {
 	// 测试错位标签
 	p = parser.NewParser(testTools)
 	token = "前缀<think>思考内容</tools>后缀"
-	response, thinking, _, err = p.AddToken(token)
+	response, thinking, _, err = p.AddToken(token, "")
 	if err != nil {
 		t.Fatalf("解析失败: %v", err)
 	}
@@ -414,7 +414,7 @@ func TestParserEmptyTags(t *testing.T) {
 
 	// 测试空 think 标签
 	token := "<think></think>"
-	response, thinking, _, err := p.AddToken(token)
+	response, thinking, _, err := p.AddToken(token, "")
 	if err != nil {
 		t.Fatalf("解析失败: %v", err)
 	}
@@ -428,7 +428,7 @@ func TestParserEmptyTags(t *testing.T) {
 
 	// 测试空 tools 标签
 	token = "<tools></tools>"
-	response, thinking, _, err = p.AddToken(token)
+	response, thinking, _, err = p.AddToken(token, "")
 	if err != nil {
 		t.Fatalf("解析失败: %v", err)
 	}
@@ -442,7 +442,7 @@ func TestParserEmptyTags(t *testing.T) {
 
 	// 测试空字符串标签
 	token = "<>"
-	response, thinking, _, err = p.AddToken(token)
+	response, thinking, _, err = p.AddToken(token, "")
 	if err != nil {
 		t.Fatalf("解析失败: %v", err)
 	}
@@ -461,7 +461,7 @@ func TestParserSpecialCharacters(t *testing.T) {
 
 	// 测试换行符
 	token := "第一行\n第二行<think>思考包含\n换行符</think>"
-	response, thinking, _, err := p.AddToken(token)
+	response, thinking, _, err := p.AddToken(token, "")
 	if err != nil {
 		t.Fatalf("解析失败: %v", err)
 	}
@@ -478,7 +478,7 @@ func TestParserSpecialCharacters(t *testing.T) {
 	// 测试制表符
 	p = parser.NewParser(testTools)
 	token = "文本\t制表符<think>思考\t制表符</think>"
-	response, thinking, _, err = p.AddToken(token)
+	response, thinking, _, err = p.AddToken(token, "")
 	if err != nil {
 		t.Fatalf("解析失败: %v", err)
 	}
@@ -495,7 +495,7 @@ func TestParserSpecialCharacters(t *testing.T) {
 	// 测试转义字符
 	p = parser.NewParser(testTools)
 	token = "文本\n\t\\<开始标签"
-	response, thinking, _, err = p.AddToken(token)
+	response, thinking, _, err = p.AddToken(token, "")
 	if err != nil {
 		t.Fatalf("解析失败: %v", err)
 	}
@@ -515,7 +515,7 @@ func TestParserChineseCharacters(t *testing.T) {
 
 	// 测试包含中文的普通文本
 	token := "这是一个中文测试文本<think>这是中文思考内容</think>继续中文文本"
-	response, thinking, _, err := p.AddToken(token)
+	response, thinking, _, err := p.AddToken(token, "")
 	if err != nil {
 		t.Fatalf("解析失败: %v", err)
 	}
@@ -532,7 +532,7 @@ func TestParserChineseCharacters(t *testing.T) {
 	// 测试纯中文标签（应该作为普通文本处理）
 	p = parser.NewParser(testTools)
 	token = "<中文标签>内容</中文标签>"
-	response, thinking, _, err = p.AddToken(token)
+	response, thinking, _, err = p.AddToken(token, "")
 	if err != nil {
 		t.Fatalf("解析失败: %v", err)
 	}
@@ -555,7 +555,7 @@ func TestParserMultipleAddTokens(t *testing.T) {
 
 	// 第一批
 	token1 := "第一段文本开始"
-	response, thinking, _, err := p.AddToken(token1)
+	response, thinking, _, err := p.AddToken(token1, "")
 	if err != nil {
 		t.Fatalf("解析失败: %v", err)
 	}
@@ -564,7 +564,7 @@ func TestParserMultipleAddTokens(t *testing.T) {
 
 	// 第二批
 	token2 := " 开始思考部分<think>思考内容"
-	response, thinking, _, err = p.AddToken(token2)
+	response, thinking, _, err = p.AddToken(token2, "")
 	if err != nil {
 		t.Fatalf("解析失败: %v", err)
 	}
@@ -573,7 +573,7 @@ func TestParserMultipleAddTokens(t *testing.T) {
 
 	// 第三批
 	token3 := " 结束思考部分</think>继续文本"
-	response, thinking, _, err = p.AddToken(token3)
+	response, thinking, _, err = p.AddToken(token3, "")
 	if err != nil {
 		t.Fatalf("解析失败: %v", err)
 	}
@@ -630,7 +630,7 @@ func TestParserExtremeLength(t *testing.T) {
 	for range 10000 {
 		longText += "a"
 	}
-	response, thinking, _, err := p.AddToken(longText)
+	response, thinking, _, err := p.AddToken(longText, "")
 	if err != nil {
 		t.Fatalf("解析失败: %v", err)
 	}
@@ -649,7 +649,7 @@ func TestParserExtremeLength(t *testing.T) {
 		longThinkText += "思"
 	}
 	token := "<think>" + longThinkText + "</think>"
-	response, thinking, _, err = p.AddToken(token)
+	response, thinking, _, err = p.AddToken(token, "")
 	if err != nil {
 		t.Fatalf("解析失败: %v", err)
 	}
@@ -668,7 +668,7 @@ func TestParserMaxTagLength(t *testing.T) {
 
 	// 测试正好 maxTagLen 长度的标签
 	fiveCharTag := "<think" // 正好 5 个字符 (<think)
-	response, thinking, _, err := p.AddToken(fiveCharTag)
+	response, thinking, _, err := p.AddToken(fiveCharTag, "")
 	if err != nil {
 		t.Fatalf("解析失败: %v", err)
 	}
@@ -688,7 +688,7 @@ func TestParserMaxTagLength(t *testing.T) {
 	// 测试超过 maxTagLen 长度的标签
 	sixCharTag := "<thinks" // 超过 5 个字符
 	response = ""
-	response, thinking, _, err = p.AddToken(sixCharTag)
+	response, thinking, _, err = p.AddToken(sixCharTag, "")
 	if err != nil {
 		t.Fatalf("解析失败: %v", err)
 	}
@@ -715,7 +715,7 @@ func TestParserComplexScenarios(t *testing.T) {
 	complexContent := "文本1<think>思考1</think>文本2\n换行内容<think>思考2\n多行内容</think><tools>[]</tools>\n后续文本"
 
 	p := parser.NewParser(testTools)
-	response, thinking, _, err := p.AddToken(complexContent)
+	response, thinking, _, err := p.AddToken(complexContent, "")
 	if err != nil {
 		t.Fatalf("解析失败: %v", err)
 	}
@@ -732,7 +732,7 @@ func TestParserComplexScenarios(t *testing.T) {
 	// 测试标签在行末的情况
 	p = parser.NewParser(testTools)
 	lineEndTag := "行末标签<think>行末思考</think>"
-	response, thinking, _, err = p.AddToken(lineEndTag)
+	response, thinking, _, err = p.AddToken(lineEndTag, "")
 	if err != nil {
 		t.Fatalf("解析失败: %v", err)
 	}
@@ -787,7 +787,7 @@ func TestSolveToolBasicStringParameter(t *testing.T) {
 	}
 	// json 序列化
 	callString, _ := json.Marshal(toolcallObj)
-	response, thinking, _, err := p.AddToken("<tools>" + string(callString) + "</tools>")
+	response, thinking, _, err := p.AddToken("<tools>"+string(callString)+"</tools>", "")
 	if err != nil {
 		t.Fatalf("解析失败: %v", err)
 	}

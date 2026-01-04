@@ -1,5 +1,9 @@
-debug_config/
+debug_config
 
 __debug_*
 
 .config/
+
+~
+
+.alkaid0

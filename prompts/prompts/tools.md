@@ -61,9 +61,9 @@ In responses, you can invoke tools to perform specific tasks. Tool calls are imp
 
 `"name"` must be the first field in a tool call.
 
-Note: Tool calls must be placed inside a `<tools>` tag and must appear at the end of a reply.
-Note: Tool calls must be placed inside a `<tools>` tag and must appear at the end of a reply.
-Note: Tool calls must be placed inside a `<tools>` tag and must appear at the end of a reply.
+Note: Tool calls must be placed inside a `<tools>` tag and must appear at the end of a reply. DO NOT PUT ANYTHING AFTER THE `<tools>` TAG.
+Note: Tool calls must be placed inside a `<tools>` tag and must appear at the end of a reply. DO NOT PUT ANYTHING AFTER THE `<tools>` TAG.
+Note: Tool calls must be placed inside a `<tools>` tag and must appear at the end of a reply. DO NOT PUT ANYTHING AFTER THE `<tools>` TAG.
 
 #### Example
 

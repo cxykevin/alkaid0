@@ -70,6 +70,7 @@ type Parser struct {
 	jsonParser        *json.Parser
 	toolSolveTmp      toolSolveTmp
 	ToolResponse      map[string]string
+	CalledTools       bool
 }
 
 type toolSolveTmp struct {
@@ -242,12 +243,13 @@ func (p *Parser) solveTool() {
 }
 
 // AddToken 流式传入 token
-func (p *Parser) AddToken(token string) (string, string, *any, error) {
+func (p *Parser) AddToken(token string, tokenThinking string) (string, string, *any, error) {
 	if p.Stop {
 		return "", "", nil, errors.New("parser stop")
 	}
 	var response strings.Builder
 	var responseThinking strings.Builder
+	responseThinking.WriteString(tokenThinking)
 	for _, char := range token {
 		// 状态机
 		solveTag := func(tokens string) error {
@@ -316,7 +318,7 @@ func (p *Parser) AddToken(token string) (string, string, *any, error) {
 			}
 			p.Mode = 2
 			// 分类处理内容
-			err := solveTag(string(char))
+			err := solveTag("<" + string(char))
 			if err != nil {
 				return "", "", nil, err
 			}
@@ -330,6 +332,7 @@ func (p *Parser) AddToken(token string) (string, string, *any, error) {
 					if err != nil {
 						return "", "", nil, err
 					}
+					p.CalledTools = true
 				} else {
 					err := solveTag("</" + p.TokenCache + ">")
 					if err != nil {

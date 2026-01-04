@@ -38,7 +38,7 @@ type ChatCompletionResponse struct {
 // Choice 选择项
 type Choice struct {
 	Index        int     `json:"index"`
-	Message      Message `json:"message"`
+	Delta        Message `json:"delta"`
 	FinishReason string  `json:"finish_reason"`
 }
 

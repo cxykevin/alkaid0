@@ -30,11 +30,11 @@ func TestSolver_AddToken(t *testing.T) {
 	s := response.NewSolver(chatID)
 
 	// 测试普通文本
-	resp, thinking, err := s.AddToken("Hello World")
+	resp, thinking, err := s.AddToken("Hello World", "")
 	if err != nil {
 		t.Fatalf("AddToken error: %v", err)
 	}
-	r2, t2, err := s.DoneToken()
+	_, r2, t2, err := s.DoneToken()
 	if err != nil {
 		t.Fatalf("DoneToken error: %v", err)
 	}
@@ -50,11 +50,11 @@ func TestSolver_AddToken(t *testing.T) {
 
 	// 测试 think 标签
 	s = response.NewSolver(chatID)
-	resp, thinking, err = s.AddToken("<think>思考内容</think>")
+	resp, thinking, err = s.AddToken("<think>思考内容</think>", "")
 	if err != nil {
 		t.Fatalf("AddToken error: %v", err)
 	}
-	r2, t2, err = s.DoneToken()
+	_, r2, t2, err = s.DoneToken()
 	if err != nil {
 		t.Fatalf("DoneToken error: %v", err)
 	}
@@ -76,7 +76,7 @@ func TestSolver_DoneToken_Persist(t *testing.T) {
 	chatID := uint32(2002)
 	s := response.NewSolver(chatID)
 
-	_, _, err := s.DoneToken()
+	_, _, _, err := s.DoneToken()
 	if err != nil {
 		t.Fatalf("DoneToken error: %v", err)
 	}
@@ -157,13 +157,13 @@ func TestSolver_ToolCalling_SingleTool(t *testing.T) {
 	toolCallJSON := `[{"name": "test_calculator", "id": "call_123", "parameters": {"expression": "1+1"}}]`
 
 	// 添加工具调用token
-	resp, thinking, err := s.AddToken("<tools>" + toolCallJSON + "</tools>")
+	resp, thinking, err := s.AddToken("<tools>"+toolCallJSON+"</tools>", "")
 	if err != nil {
 		t.Fatalf("AddToken error: %v", err)
 	}
 
 	// 完成token处理
-	r2, t2, err := s.DoneToken()
+	_, r2, t2, err := s.DoneToken()
 	if err != nil {
 		t.Fatalf("DoneToken error: %v", err)
 	}
@@ -334,13 +334,13 @@ func TestSolver_ToolCalling_MultipleTools(t *testing.T) {
 		`]`
 
 	// 添加工具调用token
-	_, _, err := s.AddToken("<tools>" + toolCallJSON + "</tools>")
+	_, _, err := s.AddToken("<tools>"+toolCallJSON+"</tools>", "")
 	if err != nil {
 		t.Fatalf("AddToken error: %v", err)
 	}
 
 	// 完成token处理
-	_, _, err = s.DoneToken()
+	_, _, _, err = s.DoneToken()
 	if err != nil {
 		t.Fatalf("DoneToken error: %v", err)
 	}

@@ -40,16 +40,16 @@ func (p *Solver) saveToolResponse(toolName string, toolID string, response map[s
 }
 
 // AddToken 添加token
-func (p *Solver) AddToken(token string) (string, string, error) {
-	delta, reasoningDelta, _, err := p.parser.AddToken(token)
+func (p *Solver) AddToken(token string, thinkingToken string) (string, string, error) {
+	delta, reasoningDelta, _, err := p.parser.AddToken(token, thinkingToken)
 	return delta, reasoningDelta, err
 }
 
 // DoneToken 完成
-func (p *Solver) DoneToken() (string, string, error) {
+func (p *Solver) DoneToken() (bool, string, string, error) {
 	delta, reasoningDelta, _, err := p.parser.DoneToken()
 	if err != nil {
-		return delta, reasoningDelta, err
+		return true, delta, reasoningDelta, err
 	}
 	var buf bytes.Buffer
 	encoder := json.NewEncoder(&buf)
@@ -57,14 +57,17 @@ func (p *Solver) DoneToken() (string, string, error) {
 	encoder.SetEscapeHTML(false)
 	err = encoder.Encode(p.toolResponses)
 	if err != nil {
-		return delta, reasoningDelta, err
+		return true, delta, reasoningDelta, err
 	}
 	err = storage.DB.Create(&storageStructs.Messages{
 		ChatID: p.chatID,
 		Delta:  buf.String(),
 		Type:   storageStructs.MessagesRoleTool,
 	}).Error
-	return delta, reasoningDelta, err
+	if err != nil {
+		return true, delta, reasoningDelta, err
+	}
+	return !p.parser.CalledTools, delta, reasoningDelta, err
 }
 
 // NewSolver 创建解析器
