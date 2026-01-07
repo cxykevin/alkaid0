@@ -6,7 +6,7 @@ Edit or create file or virtual objects.
 - `@all`: Replace the entire file content (creates the file if it does not exist).
 - `@ln:{line}`: Insert text below line {line}.
 - `@ln:{from}-{to}`: Replace the content from line {from} to line {to} (inclusive).
-- `/{regex}/{flags}`: Replace text matching the regex.
+- `@regex:/{pattern}/{flag}`: Replace {pattern} matching the regex.
     - Flags: `g` (replace all occurrences), `i` (case insensitive).
 - A specific substring: Replace the first occurrence of this substring.
 
