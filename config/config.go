@@ -17,6 +17,19 @@ const envConfigName = "ALKAID0_CONFIG_PATH"
 
 var configPath string
 
+// ExpandPath 展开路径中的 ~ 和环境变量
+func ExpandPath(path string) string {
+	if len(path) > 0 && path[0] == '~' {
+		// 获取用户家目录
+		homeDir, err := os.UserHomeDir()
+		if err == nil {
+			path = homeDir + path[1:]
+		}
+	}
+	// 展开环境变量
+	return os.ExpandEnv(path)
+}
+
 // Load 加载配置文件
 func Load() {
 	// 默认配置
@@ -35,7 +48,7 @@ func Load() {
 	}
 
 	// 展开用户目录路径
-	expandedPath := os.ExpandEnv(configPath)
+	expandedPath := ExpandPath(configPath)
 
 	// 确保目录存在
 	dir := filepath.Dir(expandedPath)
@@ -80,7 +93,7 @@ func Save() {
 	}
 
 	// 展开用户目录路径
-	expandedPath := os.ExpandEnv(configPath)
+	expandedPath := ExpandPath(configPath)
 
 	// 确保目录存在
 	dir := filepath.Dir(expandedPath)
