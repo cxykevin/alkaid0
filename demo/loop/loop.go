@@ -55,8 +55,8 @@ func Start() {
 	for flag {
 		fmt.Printf("DO> ")
 		input = unwrap(reader.ReadString('\n'))
-		// 去掉\n
-		input = input[:len(input)-1]
+		// 去掉换行符（兼容Windows的\r\n和Linux的\n）
+		input = strings.TrimSpace(input)
 		inputNum, err := strconv.Atoi(input)
 		if err != nil {
 			fmt.Println("input error")
@@ -118,7 +118,7 @@ func Start() {
 		var input string
 		fmt.Print("> ")
 		input = unwrap(reader.ReadString('\n'))
-		input = input[:len(input)-1]
+		input = strings.TrimSpace(input)
 		if input == "" {
 			continue
 		}
