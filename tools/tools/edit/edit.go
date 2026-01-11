@@ -6,6 +6,7 @@ import (
 	_ "embed" // embed
 	"fmt"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -14,6 +15,7 @@ import (
 	"github.com/cxykevin/alkaid0/tools/actions"
 	"github.com/cxykevin/alkaid0/tools/index"
 	"github.com/cxykevin/alkaid0/tools/toolobj"
+	"github.com/cxykevin/alkaid0/tools/values"
 )
 
 const toolName = "edit"
@@ -25,7 +27,7 @@ var paras = map[string]parser.ToolParameters{
 	"path": {
 		Type:        parser.ToolTypeString,
 		Required:    true,
-		Description: "The path of the file or virtual object to be edited. A new file will be created if it does not exist. **must be a RELATIVE path**. Must Be First Parameter",
+		Description: "The path of the file or virtual object to be edited. A new file will be created if it does not exist. **must be a RELATIVE path**. '..' is not allowed. Must Be First Parameter",
 	},
 	"target": {
 		Type:        parser.ToolTypeString,
@@ -90,7 +92,39 @@ func writeFile(mp map[string]*any, push []*any) (bool, []*any, map[string]*any, 
 			"error":   &errMsg,
 		}, nil
 	}
-	
+
+	// 检查path
+	if strings.Contains(path, "..") {
+		boolx := false
+		success := any(boolx)
+		errMsg := any("path cannot contains '..'")
+		return false, push, map[string]*any{
+			"success": &success,
+			"error":   &errMsg,
+		}, nil
+	}
+	if strings.HasPrefix(path, "/") ||
+		strings.HasPrefix(path, "\\") ||
+		strings.HasPrefix(path, "~") ||
+		strings.Contains(path, ":") ||
+		strings.Contains(path, "*") ||
+		strings.Contains(path, "?") ||
+		strings.Contains(path, "\"") ||
+		strings.Contains(path, "<") ||
+		strings.Contains(path, ">") ||
+		strings.Contains(path, "|") ||
+		strings.Contains(path, "\n") ||
+		strings.Contains(path, "\r") ||
+		strings.Contains(path, "\t") {
+		boolx := false
+		success := any(boolx)
+		errMsg := any("path must be a correct and relative path")
+		return false, push, map[string]*any{
+			"success": &success,
+			"error":   &errMsg,
+		}, nil
+	}
+
 	// 检查并获取target参数
 	targetPtr, ok := mp["target"]
 	if !ok || targetPtr == nil {
@@ -112,7 +146,7 @@ func writeFile(mp map[string]*any, push []*any) (bool, []*any, map[string]*any, 
 			"error":   &errMsg,
 		}, nil
 	}
-	
+
 	// 检查并获取text参数
 	textPtr, ok := mp["text"]
 	if !ok || textPtr == nil {
@@ -134,12 +168,14 @@ func writeFile(mp map[string]*any, push []*any) (bool, []*any, map[string]*any, 
 			"error":   &errMsg,
 		}, nil
 	}
-	
+
+	path = filepath.Join(values.CurrentActivatePath, path)
+
 	// 读取文件内容
 	var content string
 	lines := []string{}
 	fileExists := true
-	
+
 	file, err := os.Open(path)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -155,7 +191,7 @@ func writeFile(mp map[string]*any, push []*any) (bool, []*any, map[string]*any, 
 		}
 	} else {
 		defer file.Close()
-		
+
 		scanner := bufio.NewScanner(file)
 		for scanner.Scan() {
 			lines = append(lines, scanner.Text())
@@ -171,9 +207,9 @@ func writeFile(mp map[string]*any, push []*any) (bool, []*any, map[string]*any, 
 		}
 		content = strings.Join(lines, "\n")
 	}
-	
+
 	var newContent string
-	
+
 	// 根据target执行不同的编辑操作
 	switch {
 	case target == "":
@@ -187,11 +223,11 @@ func writeFile(mp map[string]*any, push []*any) (bool, []*any, map[string]*any, 
 		} else {
 			newContent = text + "\n"
 		}
-		
+
 	case target == "@all":
 		// 替换整个文件
 		newContent = text + "\n"
-		
+
 	case strings.HasPrefix(target, "@ln:"):
 		newContent, err = handleLineEdit(lines, target, text)
 		if err != nil {
@@ -203,7 +239,7 @@ func writeFile(mp map[string]*any, push []*any) (bool, []*any, map[string]*any, 
 				"error":   &errMsg,
 			}, nil
 		}
-		
+
 	case strings.HasPrefix(target, "@regex:"):
 		newContent, err = handleRegexEdit(content, target, text)
 		if err != nil {
@@ -215,7 +251,7 @@ func writeFile(mp map[string]*any, push []*any) (bool, []*any, map[string]*any, 
 				"error":   &errMsg,
 			}, nil
 		}
-		
+
 	default:
 		// 替换第一个匹配的子字符串
 		if !fileExists {
@@ -238,7 +274,7 @@ func writeFile(mp map[string]*any, push []*any) (bool, []*any, map[string]*any, 
 		}
 		newContent = strings.Replace(content, target, text, 1)
 	}
-	
+
 	// 写入文件
 	err = os.WriteFile(path, []byte(newContent), 0644)
 	if err != nil {
@@ -250,7 +286,7 @@ func writeFile(mp map[string]*any, push []*any) (bool, []*any, map[string]*any, 
 			"error":   &errMsg,
 		}, nil
 	}
-	
+
 	boolx := true
 	success := any(boolx)
 	return false, push, map[string]*any{
@@ -260,20 +296,20 @@ func writeFile(mp map[string]*any, push []*any) (bool, []*any, map[string]*any, 
 
 func handleLineEdit(lines []string, target, text string) (string, error) {
 	parts := strings.TrimPrefix(target, "@ln:")
-	
+
 	if strings.Contains(parts, "-") {
 		// @ln:{from}-{to} 替换行范围
 		rangeParts := strings.Split(parts, "-")
 		from, _ := strconv.Atoi(rangeParts[0])
 		to, _ := strconv.Atoi(rangeParts[1])
-		
+
 		if from > len(lines) {
 			return "", fmt.Errorf("from line %d exceeds file length %d", from, len(lines))
 		}
 		if to > len(lines) {
 			return "", fmt.Errorf("to line %d exceeds file length %d", to, len(lines))
 		}
-		
+
 		// 构建新内容
 		var buf bytes.Buffer
 		for i := 0; i < from-1; i++ {
@@ -283,87 +319,86 @@ func handleLineEdit(lines []string, target, text string) (string, error) {
 		for i := to; i < len(lines); i++ {
 			buf.WriteString(lines[i] + "\n")
 		}
-		
-		return buf.String(), nil
-	} else {
-		// @ln:{line} 在指定行后插入
-		lineNum, _ := strconv.Atoi(parts)
-		
-		if lineNum > len(lines) {
-			return "", fmt.Errorf("line %d exceeds file length %d", lineNum, len(lines))
-		}
-		
-		// 构建新内容
-		var buf bytes.Buffer
-		for i := 0; i < lineNum; i++ {
-			buf.WriteString(lines[i] + "\n")
-		}
-		buf.WriteString(text + "\n")
-		for i := lineNum; i < len(lines); i++ {
-			buf.WriteString(lines[i] + "\n")
-		}
-		
+
 		return buf.String(), nil
 	}
+	// @ln:{line} 在指定行后插入
+	lineNum, _ := strconv.Atoi(parts)
+
+	if lineNum > len(lines) {
+		return "", fmt.Errorf("line %d exceeds file length %d", lineNum, len(lines))
+	}
+
+	// 构建新内容
+	var buf bytes.Buffer
+	for i := range lineNum {
+		buf.WriteString(lines[i] + "\n")
+	}
+	buf.WriteString(text + "\n")
+	for i := lineNum; i < len(lines); i++ {
+		buf.WriteString(lines[i] + "\n")
+	}
+
+	return buf.String(), nil
+
 }
 
 func handleRegexEdit(content, target, text string) (string, error) {
 	// 解析新格式: @regex:/pattern/flags
 	patternPart := strings.TrimPrefix(target, "@regex:")
-	
+
 	if len(patternPart) < 3 || patternPart[0] != '/' {
 		return "", fmt.Errorf("invalid regex format, expected @regex:/pattern/flags")
 	}
-	
+
 	// 去掉开头的'/'
 	patternPart = patternPart[1:]
-	
+
 	// 找到最后一个/来分隔pattern和flags
 	lastSlash := strings.LastIndex(patternPart, "/")
 	if lastSlash < 0 {
 		return "", fmt.Errorf("invalid regex format, missing closing /")
 	}
-	
+
 	pattern := patternPart[:lastSlash]
 	flags := ""
 	if lastSlash+1 < len(patternPart) {
 		flags = patternPart[lastSlash+1:]
 	}
-	
+
 	if pattern == "" {
 		return "", fmt.Errorf("empty regex pattern")
 	}
-	
+
 	// 检查是否找到匹配
 	var re *regexp.Regexp
 	var err error
-	
+
 	if strings.Contains(flags, "i") {
 		re, err = regexp.Compile("(?i)" + pattern)
 	} else {
 		re, err = regexp.Compile(pattern)
 	}
-	
+
 	if err != nil {
 		return "", fmt.Errorf("invalid regex pattern '%s': %v", pattern, err)
 	}
-	
+
 	// 检查是否有匹配
 	matches := re.FindAllString(content, -1)
 	if len(matches) == 0 {
 		return "", fmt.Errorf("regex pattern '%s' not found in file", pattern)
 	}
-	
+
 	// 执行替换
 	global := strings.Contains(flags, "g")
-	
+
 	if global {
 		newContent := re.ReplaceAllString(content, text)
 		return newContent, nil
-	} else {
-		newContent := re.ReplaceAllString(content, text)
-		return newContent, nil
 	}
+	newContent := re.ReplaceAllString(content, text)
+	return newContent, nil
 }
 
 func load() string {

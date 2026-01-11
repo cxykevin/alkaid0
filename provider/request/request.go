@@ -61,11 +61,20 @@ func SendRequest(ctx context.Context, chatID uint32, callback func(string, strin
 	if !ok {
 		return true, errors.New("model not found")
 	}
-	obj, err := build.Build()
+	obj, err := build.Build(chatID)
 	if err != nil {
 		return true, err
 	}
-	solver := response.NewSolver(chatID)
+
+	// var agentConfig *cfgStruct.AgentConfig = nil
+	// if agentID != "" {
+	// 	agentConfig, err = getAgentConfig(agentID)
+	// 	if err != nil {
+	// 		return nil, err
+	// 	}
+	// }
+
+	solver := response.NewSolver(chatID, chat.NowAgent)
 	// 写库
 	reqObj := structs.Messages{
 		ChatID:        chatID,
@@ -73,6 +82,8 @@ func SendRequest(ctx context.Context, chatID uint32, callback func(string, strin
 		Delta:         "",
 		ThinkingDelta: "",
 		Type:          structs.MessagesRoleAgent,
+		ModelID:       chat.LastModelID,
+		ModelName:     modelCfg.ModelName,
 	}
 	tx := storage.DB.Create(&reqObj)
 	// 取主键

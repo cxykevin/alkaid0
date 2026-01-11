@@ -37,7 +37,7 @@ func TestSummary_Basic(t *testing.T) {
 	}
 
 	// 调用 Summary
-	request, err := Summary(1, db)
+	_, request, err := Summary(1, "", db)
 	if err != nil {
 		t.Fatalf("Summary failed: %v", err)
 	}
@@ -113,7 +113,7 @@ func TestSummary_WithThinking(t *testing.T) {
 	}
 
 	// 调用 Summary
-	request, err := Summary(1, db)
+	_, request, err := Summary(1, "", db)
 	if err != nil {
 		t.Fatalf("Summary failed: %v", err)
 	}
@@ -172,7 +172,7 @@ func TestSummary_WithSummary(t *testing.T) {
 	}
 
 	// 调用 Summary
-	request, err := Summary(1, db)
+	_, request, err := Summary(1, "", db)
 	if err != nil {
 		t.Fatalf("Summary failed: %v", err)
 	}
@@ -207,7 +207,7 @@ func TestSummary_EmptyMessages(t *testing.T) {
 	// 不插入任何消息，直接调用 Summary
 
 	// 调用 Summary
-	request, err := Summary(1, db)
+	_, request, err := Summary(1, "", db)
 	if err != nil {
 		t.Fatalf("Summary failed: %v", err)
 	}
@@ -237,7 +237,7 @@ func TestSummary_EmptyMessages(t *testing.T) {
 // 	config.GlobalConfig.Agent.SummaryModel = 999
 
 // 	// 调用 Summary
-// 	_, err := Summary(1, db)
+// 	_, err := Summary(1, "", db)
 // 	if err == nil {
 // 		t.Error("Expected error for invalid model, got nil")
 // 	}
@@ -270,7 +270,7 @@ func TestSummary_ManyMessages(t *testing.T) {
 	}
 
 	// 调用 Summary
-	request, err := Summary(1, db)
+	_, request, err := Summary(1, "", db)
 	if err != nil {
 		t.Fatalf("Summary failed: %v", err)
 	}
@@ -327,7 +327,7 @@ func TestSummary_BasicFunctionality(t *testing.T) {
 	}
 
 	// 调用Summary函数
-	request, err := Summary(1, db)
+	_, request, err := Summary(1, "", db)
 	if err != nil {
 		t.Fatalf("Summary failed: %v", err)
 	}
@@ -422,7 +422,7 @@ func TestSummary_WithSummaryContent(t *testing.T) {
 	}
 
 	// 调用Summary函数
-	request, err := Summary(1, db)
+	_, request, err := Summary(1, "", db)
 	if err != nil {
 		t.Fatalf("Summary with summary content failed: %v", err)
 	}
@@ -465,7 +465,7 @@ func TestSummary_WithSummaryContentNotEnough(t *testing.T) {
 	}
 
 	// 调用Summary函数
-	request, err := Summary(1, db)
+	_, request, err := Summary(1, "", db)
 	if err != nil {
 		t.Fatalf("Summary with summary content failed: %v", err)
 	}
@@ -545,7 +545,7 @@ func TestSummary_WithThinkingContent(t *testing.T) {
 	}
 
 	// 调用Summary函数
-	request, err := Summary(1, db)
+	_, request, err := Summary(1, "", db)
 	if err != nil {
 		t.Fatalf("Summary with thinking content failed: %v", err)
 	}
@@ -568,7 +568,7 @@ func TestSummary_WithThinkingContent(t *testing.T) {
 
 	config.GlobalConfig.Agent.SummaryModel = 2
 	// 调用Summary函数
-	request, err = Summary(1, db)
+	_, request, err = Summary(1, "", db)
 	if err != nil {
 		t.Fatalf("Summary with thinking content failed: %v", err)
 	}
@@ -598,7 +598,7 @@ func TestSummary_EmptyChat(t *testing.T) {
 	db := setupTestDB(t)
 
 	// 调用Summary函数，无任何消息
-	request, err := Summary(999, db)
+	_, request, err := Summary(999, "", db)
 	if err != nil {
 		t.Fatalf("Summary with empty chat failed: %v", err)
 	}
@@ -630,7 +630,7 @@ func TestSummary_ModelConfiguration(t *testing.T) {
 	}
 
 	// 调用Summary函数
-	request, err := Summary(1, db)
+	_, request, err := Summary(1, "", db)
 	if err != nil {
 		t.Fatalf("Summary failed: %v", err)
 	}
@@ -686,7 +686,7 @@ func TestSummary_MessageOrdering(t *testing.T) {
 	}
 
 	// 调用Summary函数
-	request, err := Summary(1, db)
+	_, request, err := Summary(1, "", db)
 	if err != nil {
 		t.Fatalf("Summary failed: %v", err)
 	}

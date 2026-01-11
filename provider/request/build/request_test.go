@@ -109,7 +109,7 @@ func TestRequestBody_Basic(t *testing.T) {
 	}
 
 	// 调用 RequestBody
-	request, err := RequestBody(1, 1, "test-agent", &toolsList, db, "", "")
+	request, err := RequestBody(1, 1, "", &toolsList, db, "", "")
 	if err != nil {
 		t.Fatalf("RequestBody failed: %v", err)
 	}
@@ -259,7 +259,7 @@ func TestRequestBody_WithThinking(t *testing.T) {
 
 	toolsList := []*parser.ToolsDefine{}
 
-	request, err := RequestBody(3, 1, "test-agent", &toolsList, db, "", "")
+	request, err := RequestBody(3, 1, "", &toolsList, db, "", "")
 	if err != nil {
 		t.Fatalf("RequestBody failed: %v", err)
 	}
@@ -311,7 +311,7 @@ func TestRequestBody_WithSummary(t *testing.T) {
 
 	toolsList := []*parser.ToolsDefine{}
 
-	request, err := RequestBody(4, 1, "test-agent", &toolsList, db, "", "")
+	request, err := RequestBody(4, 1, "", &toolsList, db, "", "")
 	if err != nil {
 		t.Fatalf("RequestBody failed: %v", err)
 	}
@@ -509,7 +509,7 @@ func TestRequestBody_ToolMessage(t *testing.T) {
 
 	toolsList := []*parser.ToolsDefine{}
 
-	request, err := RequestBody(7, 1, "test-agent", &toolsList, db, "", "")
+	request, err := RequestBody(7, 1, "", &toolsList, db, "", "")
 	if err != nil {
 		t.Fatalf("RequestBody failed: %v", err)
 	}

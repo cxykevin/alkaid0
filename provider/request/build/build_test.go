@@ -66,7 +66,7 @@ func TestBuildSuccess(t *testing.T) {
 	storage.GlobalConfig.CurrentChatID = 1
 
 	// 调用 Build 函数
-	result, err := Build()
+	result, err := Build(1)
 
 	// 验证结果
 	if err != nil {
@@ -101,7 +101,7 @@ func TestBuildReal(t *testing.T) {
 	storage.GlobalConfig.CurrentChatID = 1
 
 	// 调用 Build 函数
-	result, err := Build()
+	result, err := Build(1)
 
 	// 验证结果
 	if err != nil {
@@ -127,26 +127,6 @@ func TestBuildReal(t *testing.T) {
 	fmt.Printf("\n%s\n", buf.String())
 }
 
-// TestBuildNoChatID 测试没有聊天 ID 的情况
-func TestBuildNoChatID(t *testing.T) {
-	_ = setupBuildTest(t)
-
-	// 不设置 CurrentChatID，保持默认值 0
-	storage.GlobalConfig.CurrentChatID = 0
-
-	// 调用 Build 函数
-	result, err := Build()
-
-	// 应该返回错误
-	if err == nil {
-		t.Errorf("Build() should return error when no chat id is set")
-	}
-
-	if result != nil {
-		t.Errorf("Build() should return nil when error occurs")
-	}
-}
-
 // TestBuildChatNotFound 测试聊天不存在的情况
 func TestBuildChatNotFound(t *testing.T) {
 	db := setupBuildTest(t)
@@ -156,7 +136,7 @@ func TestBuildChatNotFound(t *testing.T) {
 
 	// 不创建任何聊天，所以查询会失败
 	// 调用 Build 函数
-	result, err := Build()
+	result, err := Build(999)
 
 	// 当数据库查询失败时，应该返回 nil 或错误
 	// 根据 Build() 的实现，会在查询后处理错误
@@ -209,7 +189,7 @@ func TestBuildWithMessages(t *testing.T) {
 	storage.GlobalConfig.CurrentChatID = 100
 
 	// 调用 Build 函数
-	result, err := Build()
+	result, err := Build(100)
 
 	// 验证结果
 	if err != nil {
@@ -253,7 +233,7 @@ func TestBuildWithMultipleModels(t *testing.T) {
 	storage.GlobalConfig.CurrentChatID = 101
 
 	// 调用 Build 函数
-	result, err := Build()
+	result, err := Build(101)
 
 	// 验证结果
 	if err != nil {
@@ -291,7 +271,7 @@ func TestBuildWithAgent(t *testing.T) {
 	storage.GlobalConfig.CurrentChatID = 102
 
 	// 调用 Build 函数
-	result, err := Build()
+	result, err := Build(102)
 
 	// 验证结果
 	if err != nil {
@@ -321,7 +301,7 @@ func TestBuildModelTemperatureAndTopP(t *testing.T) {
 	storage.GlobalConfig.CurrentChatID = 103
 
 	// 调用 Build 函数
-	result, err := Build()
+	result, err := Build(103)
 
 	// 验证结果
 	if err != nil {
@@ -373,7 +353,7 @@ func TestBuildStream(t *testing.T) {
 	storage.GlobalConfig.CurrentChatID = 104
 
 	// 调用 Build 函数
-	result, err := Build()
+	result, err := Build(104)
 
 	// 验证结果
 	if err != nil {
@@ -411,7 +391,7 @@ func TestBuildMultipleCalls(t *testing.T) {
 	for i := 105; i <= 107; i++ {
 		storage.GlobalConfig.CurrentChatID = uint32(i)
 
-		result, err := Build()
+		result, err := Build(uint32(i))
 
 		if err != nil {
 			t.Errorf("Build() for chat %d returned error: %v", i, err)
@@ -459,7 +439,7 @@ func TestBuildWithSummary(t *testing.T) {
 	storage.GlobalConfig.CurrentChatID = 108
 
 	// 调用 Build 函数
-	result, err := Build()
+	result, err := Build(108)
 
 	// 验证结果
 	if err != nil {

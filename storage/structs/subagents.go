@@ -4,7 +4,7 @@ package structs
 type SubAgents struct {
 	ID string `gorm:"primaryKey"`
 	// ChatID      uint32
-	AgentID     uint32
+	AgentID     string
 	BindPath    string
 	Deleted     bool
 	LastSummary string

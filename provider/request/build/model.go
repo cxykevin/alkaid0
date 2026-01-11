@@ -7,7 +7,8 @@ import (
 	"github.com/cxykevin/alkaid0/config/structs"
 )
 
-func getModelConfig(modelID int32) (*structs.ModelConfig, error) {
+// GetModelConfig 获取模型配置
+func GetModelConfig(modelID int32) (*structs.ModelConfig, error) {
 	modelConfig, ok := config.GlobalConfig.Model.Models[modelID]
 	if !ok {
 		modelConfig, ok = config.GlobalConfig.Model.Models[config.GlobalConfig.Model.DefaultModelID]

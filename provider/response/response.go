@@ -24,6 +24,10 @@ type Solver struct {
 }
 
 func (p *Solver) saveToolResponse(toolName string, toolID string, response map[string]*any) error {
+	// 判断map是否为空
+	if len(response) == 0 {
+		return nil
+	}
 	var buf bytes.Buffer
 	encoder := json.NewEncoder(&buf)
 	encoder.SetEscapeHTML(false)
@@ -51,6 +55,9 @@ func (p *Solver) DoneToken() (bool, string, string, error) {
 	if err != nil {
 		return true, delta, reasoningDelta, err
 	}
+	if len(p.toolResponses) == 0 {
+		return true, delta, reasoningDelta, nil
+	}
 	var buf bytes.Buffer
 	encoder := json.NewEncoder(&buf)
 	encoder.SetIndent("", "    ")
@@ -67,11 +74,12 @@ func (p *Solver) DoneToken() (bool, string, string, error) {
 	if err != nil {
 		return true, delta, reasoningDelta, err
 	}
+
 	return !p.parser.CalledTools, delta, reasoningDelta, err
 }
 
 // NewSolver 创建解析器
-func NewSolver(chatID uint32) *Solver {
+func NewSolver(chatID uint32, agentID string) *Solver {
 	obj := &Solver{chatID: chatID}
 	obj.parser = parser.NewParser(*build.ToolsSolver(obj.saveToolResponse))
 	return obj

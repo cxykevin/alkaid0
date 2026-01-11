@@ -30,7 +30,7 @@ func RequestBody(chatID uint32, modelID int32, agentID string, toolsList *[]*par
 		return nil, err
 	}
 
-	modelConfig, err := getModelConfig(modelID)
+	modelConfig, err := GetModelConfig(modelID)
 	if err != nil {
 		return nil, err
 	}
@@ -62,7 +62,11 @@ func RequestBody(chatID uint32, modelID int32, agentID string, toolsList *[]*par
 	exitFlag := false
 	for offsetPage := range maxPage {
 		var obj []structs.Messages
-		db.Where("`chat_id` = ?", chatID).Order("id DESC").Offset(offsetPage * readPageSize).Limit(readPageSize).Find(&obj)
+		if agentID == "" {
+			db.Where("`chat_id` = ? AND (`agent_id` = \"\" OR `agent_id` IS NULL)", chatID).Order("id DESC").Offset(offsetPage * readPageSize).Limit(readPageSize).Find(&obj)
+		} else {
+			db.Where("`chat_id` = ? AND `agent_id` = ?", chatID, agentID).Order("id DESC").Offset(offsetPage * readPageSize).Limit(readPageSize).Find(&obj)
+		}
 		if len(obj) == 0 {
 			break
 		}

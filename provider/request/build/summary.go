@@ -13,11 +13,20 @@ import (
 const summaryKeepNumber = 6
 
 // Summary 请求总结
-func Summary(chatID uint32, db *gorm.DB) (*reqStruct.ChatCompletionRequest, error) {
+func Summary(chatID uint32, agentID string, db *gorm.DB) (uint64, *reqStruct.ChatCompletionRequest, error) {
+	keepNum := summaryKeepNumber
+	if agentID != "" {
+		keepNum = 0
+	}
+	return SummaryWithKeepNumber(chatID, agentID, db, keepNum)
+}
 
-	modelConfig, err := getModelConfig(config.GlobalConfig.Agent.SummaryModel)
+// SummaryWithKeepNumber 请求总结(指定保留条数)
+func SummaryWithKeepNumber(chatID uint32, agentID string, db *gorm.DB, keepNum int) (uint64, *reqStruct.ChatCompletionRequest, error) {
+
+	modelConfig, err := GetModelConfig(config.GlobalConfig.Agent.SummaryModel)
 	if err != nil {
-		return nil, err
+		return 0, nil, err
 	}
 
 	response := &reqStruct.ChatCompletionRequest{}
@@ -37,15 +46,23 @@ func Summary(chatID uint32, db *gorm.DB) (*reqStruct.ChatCompletionRequest, erro
 	// 生成 messages
 	responseDeltaList := list.New()
 	exitFlag := false
+	var lastMsgID uint64
 	for offsetPage := range maxPage {
 		var obj []structs.Messages
-		db.Where("`chat_id` = ?", chatID).Order("id DESC").Offset(offsetPage * readPageSize).Limit(readPageSize).Find(&obj)
+		if agentID == "" {
+			db.Where("`chat_id` = ? AND (`agent_id` = \"\" OR `agent_id` IS NULL)", chatID).Order("id DESC").Offset(offsetPage * readPageSize).Limit(readPageSize).Find(&obj)
+		} else {
+			db.Where("`chat_id` = ? AND `agent_id` = ?", chatID, agentID).Order("id DESC").Offset(offsetPage * readPageSize).Limit(readPageSize).Find(&obj)
+		}
 		if len(obj) == 0 {
 			break
 		}
 		for idx, v := range obj {
-			if offsetPage == 0 && len(obj)-idx < summaryKeepNumber {
+			if offsetPage == 0 && idx < keepNum {
 				continue
+			}
+			if lastMsgID == 0 {
+				lastMsgID = v.ID
 			}
 			msg := reqStruct.Message{
 				Role:    msgRole[v.Type],
@@ -92,5 +109,5 @@ func Summary(chatID uint32, db *gorm.DB) (*reqStruct.ChatCompletionRequest, erro
 	for i, j := 0, responseDeltaList.Front(); j != nil; i, j = i+1, j.Next() {
 		response.Messages[i] = j.Value.(reqStruct.Message)
 	}
-	return response, nil
+	return lastMsgID, response, nil
 }
