@@ -16,8 +16,7 @@ func initTestEnv() {
 	toolobj.Scopes = make(map[string]string)
 	toolobj.EnableScopes = make(map[string]bool)
 
-	os.Setenv("ALKAID_DEBUG_PROJECTPATH", "../debug_config/dot_alkaid")
-	os.Remove("../debug_config/dot_alkaid/db.sqlite")
+	os.Setenv("ALKAID_DEBUG_SQLITEFILE", ":memory:")
 	storage.InitStorage()
 }
 
