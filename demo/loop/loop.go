@@ -11,6 +11,7 @@ import (
 	"github.com/cxykevin/alkaid0/config"
 	"github.com/cxykevin/alkaid0/log"
 	"github.com/cxykevin/alkaid0/provider/request"
+	"github.com/cxykevin/alkaid0/provider/request/agents"
 	"github.com/cxykevin/alkaid0/storage"
 	"github.com/cxykevin/alkaid0/storage/structs"
 	"github.com/cxykevin/alkaid0/tools/index"
@@ -187,16 +188,44 @@ func Start() {
 				}
 			case "/agent":
 				if len(args) < 2 {
-					fmt.Println("] TODO:")
+					// fmt.Println("] TODO:")
 					fmt.Println("] /agent list: show agents")
+					fmt.Println("] /agent used: show used agents")
+					fmt.Println("] /agent add [name] [id] [path]: add agents to project")
+					fmt.Println("] /agent activate [name] [prompt]: activate agent")
+					fmt.Println("] /agent deactive: deactivate agent")
 					continue
 				}
 				switch args[1] {
 				case "list":
-					// db.
-					// for k, v := range config.GlobalConfig.Model.Models {
-					// 	fmt.Printf("- [ID:%d] %v(%v)\n", k, v.ModelName, v.ModelID)
-					// }
+					for k, v := range config.GlobalConfig.Agent.Agents {
+						modelName := "unknown"
+
+						if modelInfo, ok := config.GlobalConfig.Model.Models[int32(v.AgentModel)]; ok {
+							modelName = modelInfo.ModelName
+						}
+						fmt.Printf("- [ID:%s] %v(model: [%d](%v))\nDescription: %v\nPrompt: %v\n", k, v.AgentName, v.AgentModel, modelName, v.AgentDescription, v.AgentPrompt)
+					}
+
+				case "used":
+					agents := unwrap(agents.ListAgents())
+					for _, v := range agents {
+						fmt.Printf("- [ID:%s] Model: %s, Path: %s\n", v.ID, v.AgentID, v.BindPath)
+					}
+				case "add":
+					if len(args) < 5 {
+						fmt.Println("input error(args not enough)")
+						continue
+					}
+					agents.AddAgent(args[2], args[3], args[4])
+				case "activate":
+					if len(args) < 4 {
+						fmt.Println("input error(args not enough)")
+						continue
+					}
+					agents.ActivateAgent(chats[chatNum].ID, args[2], args[3])
+				case "deactivate":
+					agents.DeactivateAgent(chats[chatNum].ID)
 				}
 			}
 			continue

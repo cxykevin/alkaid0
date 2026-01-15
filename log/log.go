@@ -5,6 +5,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/cxykevin/alkaid0/config/structs"
 )
@@ -91,7 +92,14 @@ type LogsObj struct {
 }
 
 func (l *LogsObj) log(level string, msg string, v ...any) {
-	Logger.Printf("[%s][%s] %s", level, l.moduleName, fmt.Sprintf(msg, v...))
+	str := fmt.Sprintf(msg, v...)
+	str = strings.ReplaceAll(strings.ReplaceAll(strings.ReplaceAll(strings.ReplaceAll(
+		str,
+		"\\", "\\\\"),
+		"\n", "\\n"),
+		"\r", "\\r"),
+		"\t", "\\t")
+	Logger.Printf("[%s][%s] %s", level, l.moduleName, str)
 }
 
 // Info 打印日志
