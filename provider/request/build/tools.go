@@ -3,6 +3,7 @@ package build
 import (
 	"github.com/cxykevin/alkaid0/prompts"
 	"github.com/cxykevin/alkaid0/provider/parser"
+	"github.com/cxykevin/alkaid0/storage/structs"
 	"github.com/cxykevin/alkaid0/tools"
 	"github.com/cxykevin/alkaid0/tools/toolobj"
 )
@@ -25,13 +26,13 @@ func map2Slice[sliceType any, originMapKeyType comparable, originMapValType any]
 }
 
 // Tools 构建工具(scopes, tool traces, tools)
-func Tools() (string, string, *[]*parser.ToolsDefine) {
+func Tools(session *structs.Chats) (string, string, *[]*parser.ToolsDefine) {
 	scopesString := prompts.Render(prompts.ToolScopesTemplate, struct {
 		Scopes []scopeInfo
 	}{
 		Scopes: map2Slice(toolobj.Scopes, func(k string, v string) *scopeInfo {
 			enabled := false
-			if val, ok := toolobj.EnableScopes[k]; ok {
+			if val, ok := session.EnableScopes[k]; ok {
 				enabled = val
 			}
 			return &scopeInfo{
@@ -42,7 +43,7 @@ func Tools() (string, string, *[]*parser.ToolsDefine) {
 		}),
 	})
 
-	globalToolsTracesUnused, globalToolsTracesActive, _ := tools.ExecOneToolGetPrompts("")
+	globalToolsTracesUnused, globalToolsTracesActive, _ := tools.ExecOneToolGetPrompts(session, "")
 
 	globalToolTraceStr := prompts.Render(prompts.ToolPrehookTemplate, struct {
 		Unused []string
@@ -58,10 +59,10 @@ func Tools() (string, string, *[]*parser.ToolsDefine) {
 		if k == "" {
 			continue
 		}
-		if val, ok := toolobj.EnableScopes[v.Scope]; !ok || !val {
+		if val, ok := session.EnableScopes[v.Scope]; !ok || !val {
 			continue
 		}
-		unusedPrompt, activePrompt, paras := tools.ExecOneToolGetPrompts(k)
+		unusedPrompt, activePrompt, paras := tools.ExecOneToolGetPrompts(session, k)
 		toolDefObj := &parser.ToolsDefine{
 			Name: k,
 			Description: prompts.Render(prompts.ToolPrehookTemplate, struct {
@@ -80,7 +81,7 @@ func Tools() (string, string, *[]*parser.ToolsDefine) {
 }
 
 // ToolsSolver 构建工具处理器
-func ToolsSolver(callback func(string, string, map[string]*any) error) *[]*parser.ToolsDefine {
+func ToolsSolver(session *structs.Chats, callback func(string, string, map[string]*any) error) *[]*parser.ToolsDefine {
 
 	toolsDef := make([]*parser.ToolsDefine, 0)
 	for k, v := range toolobj.ToolsList {
@@ -88,13 +89,13 @@ func ToolsSolver(callback func(string, string, map[string]*any) error) *[]*parse
 			Name: k,
 			Func: func(ID string, arg map[string]*any, ok bool) error {
 				if !ok {
-					err := tools.ExecToolOnHook(k, arg)
+					err := tools.ExecToolOnHook(session, k, arg)
 					if err != nil {
 						return err
 					}
 					return nil
 				}
-				ret, err := tools.ExecToolPostHook(k, arg)
+				ret, err := tools.ExecToolPostHook(session, k, arg)
 				if err != nil {
 					return err
 				}
@@ -108,10 +109,10 @@ func ToolsSolver(callback func(string, string, map[string]*any) error) *[]*parse
 		if k == "" {
 			continue
 		}
-		if val, ok := toolobj.EnableScopes[v.Scope]; !ok || !val {
+		if val, ok := session.EnableScopes[v.Scope]; !ok || !val {
 			continue
 		}
-		_, _, paras := tools.ExecOneToolGetPrompts(k)
+		_, _, paras := tools.ExecOneToolGetPrompts(session, k)
 		toolDefObj.Parameters = paras
 		toolsDef = append(toolsDef, toolDefObj)
 	}

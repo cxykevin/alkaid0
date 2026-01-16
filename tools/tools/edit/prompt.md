@@ -4,7 +4,7 @@ Edit or create file or virtual objects.
 
 - `""` (Empty string): Append text to the end of the file.
 - `@all`: Replace the entire file content (creates the file if it does not exist).
-- `@ln:{line}`: Insert text below line {line}.
+- `@ln:{line}`: Insert text above line {line}.
 - `@ln:{from}-{to}`: Replace the content from line {from} to line {to} (inclusive).
 - `@regex:/{pattern}/{flag}`: Replace {pattern} matching the regex.
     - Flags: `g` (replace all occurrences), `i` (case insensitive).

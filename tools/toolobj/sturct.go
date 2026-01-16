@@ -1,22 +1,25 @@
 package toolobj
 
-import "github.com/cxykevin/alkaid0/provider/parser"
+import (
+	"github.com/cxykevin/alkaid0/provider/parser"
+	"github.com/cxykevin/alkaid0/storage/structs"
+)
 
 // PreHookFunction 钩子函数
 type PreHookFunction struct {
-	Func     func() (string, error)
+	Func     func(*structs.Chats) (string, error)
 	Priority int32
 }
 
 // PostHookFunction 钩子函数
 type PostHookFunction struct {
-	Func     func(map[string]*any, []*any) (bool, []*any, map[string]*any, error)
+	Func     func(*structs.Chats, map[string]*any, []*any) (bool, []*any, map[string]*any, error)
 	Priority int32
 }
 
 // OnHookFunction 钩子函数
 type OnHookFunction struct {
-	Func     func(map[string]*any, []*any) (bool, []*any, error)
+	Func     func(*structs.Chats, map[string]*any, []*any) (bool, []*any, error)
 	Priority int32
 }
 

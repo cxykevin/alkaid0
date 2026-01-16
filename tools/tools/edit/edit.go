@@ -12,10 +12,10 @@ import (
 	"strings"
 
 	"github.com/cxykevin/alkaid0/provider/parser"
+	"github.com/cxykevin/alkaid0/storage/structs"
 	"github.com/cxykevin/alkaid0/tools/actions"
 	"github.com/cxykevin/alkaid0/tools/index"
 	"github.com/cxykevin/alkaid0/tools/toolobj"
-	"github.com/cxykevin/alkaid0/tools/values"
 )
 
 const toolName = "edit"
@@ -41,11 +41,11 @@ var paras = map[string]parser.ToolParameters{
 	},
 }
 
-func buildPrompt() (string, error) {
+func buildPrompt(session *structs.Chats) (string, error) {
 	return prompt, nil
 }
 
-func updateInfo(mp map[string]*any, cross []*any) (bool, []*any, error) {
+func updateInfo(session *structs.Chats, mp map[string]*any, cross []*any) (bool, []*any, error) {
 	// 只在参数存在时输出，支持流式更新
 	if pathPtr, ok := mp["path"]; ok && pathPtr != nil {
 		if path, ok := (*pathPtr).(string); ok {
@@ -70,7 +70,7 @@ func updateInfo(mp map[string]*any, cross []*any) (bool, []*any, error) {
 	return true, cross, nil
 }
 
-func writeFile(mp map[string]*any, push []*any) (bool, []*any, map[string]*any, error) {
+func writeFile(session *structs.Chats, mp map[string]*any, push []*any) (bool, []*any, map[string]*any, error) {
 	// 检查并获取path参数
 	pathPtr, ok := mp["path"]
 	if !ok || pathPtr == nil {
@@ -169,7 +169,7 @@ func writeFile(mp map[string]*any, push []*any) (bool, []*any, map[string]*any, 
 		}, nil
 	}
 
-	path = filepath.Join(values.CurrentActivatePath, path)
+	path = filepath.Join(session.CurrentActivatePath, path)
 
 	// 读取文件内容
 	var content string
@@ -322,7 +322,7 @@ func handleLineEdit(lines []string, target, text string) (string, error) {
 
 		return buf.String(), nil
 	}
-	// @ln:{line} 在指定行后插入
+	// @ln:{line} 在指定行前插入
 	lineNum, _ := strconv.Atoi(parts)
 
 	if lineNum > len(lines) {
@@ -331,11 +331,11 @@ func handleLineEdit(lines []string, target, text string) (string, error) {
 
 	// 构建新内容
 	var buf bytes.Buffer
-	for i := range lineNum {
+	for i := range lineNum - 1 {
 		buf.WriteString(lines[i] + "\n")
 	}
 	buf.WriteString(text + "\n")
-	for i := lineNum; i < len(lines); i++ {
+	for i := lineNum - 1; i < len(lines); i++ {
 		buf.WriteString(lines[i] + "\n")
 	}
 

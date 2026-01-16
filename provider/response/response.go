@@ -6,8 +6,9 @@ import (
 
 	"github.com/cxykevin/alkaid0/provider/parser"
 	"github.com/cxykevin/alkaid0/provider/request/build"
-	"github.com/cxykevin/alkaid0/storage"
+	"github.com/cxykevin/alkaid0/storage/structs"
 	storageStructs "github.com/cxykevin/alkaid0/storage/structs"
+	"gorm.io/gorm"
 )
 
 type toolSaveStruct struct {
@@ -21,6 +22,7 @@ type Solver struct {
 	parser        *parser.Parser
 	toolResponses []toolSaveStruct
 	chatID        uint32
+	db            *gorm.DB
 }
 
 func (p *Solver) saveToolResponse(toolName string, toolID string, response map[string]*any) error {
@@ -66,7 +68,7 @@ func (p *Solver) DoneToken() (bool, string, string, error) {
 	if err != nil {
 		return true, delta, reasoningDelta, err
 	}
-	err = storage.DB.Create(&storageStructs.Messages{
+	err = p.db.Create(&storageStructs.Messages{
 		ChatID: p.chatID,
 		Delta:  buf.String(),
 		Type:   storageStructs.MessagesRoleTool,
@@ -79,8 +81,8 @@ func (p *Solver) DoneToken() (bool, string, string, error) {
 }
 
 // NewSolver 创建解析器
-func NewSolver(chatID uint32, agentID string) *Solver {
-	obj := &Solver{chatID: chatID}
-	obj.parser = parser.NewParser(*build.ToolsSolver(obj.saveToolResponse))
+func NewSolver(db *gorm.DB, session *structs.Chats) *Solver {
+	obj := &Solver{chatID: session.ID, db: db}
+	obj.parser = parser.NewParser(*build.ToolsSolver(session, obj.saveToolResponse))
 	return obj
 }

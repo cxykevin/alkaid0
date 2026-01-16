@@ -40,11 +40,11 @@ func setupBuildTest(_ *testing.T) *gorm.DB {
 	dbPath := "../../debug_config/dot_alkaid/db.sqlite"
 	os.Remove(dbPath)
 
-	storage.InitStorage()
+	db := storage.InitStorage("", "")
 
 	index.Load()
 
-	return storage.DB
+	return db
 }
 
 // TestBuildSuccess 测试成功构建请求
@@ -62,11 +62,8 @@ func TestBuildSuccess(t *testing.T) {
 		t.Fatalf("Failed to create test chat: %v", err)
 	}
 
-	// 设置当前聊天 ID
-	storage.GlobalConfig.CurrentChatID = 1
-
 	// 调用 Build 函数
-	result, err := Build(1)
+	result, err := Build(db, &chat)
 
 	// 验证结果
 	if err != nil {
@@ -97,11 +94,8 @@ func TestBuildReal(t *testing.T) {
 		t.Fatalf("Failed to create test chat: %v", err)
 	}
 
-	// 设置当前聊天 ID
-	storage.GlobalConfig.CurrentChatID = 1
-
 	// 调用 Build 函数
-	result, err := Build(1)
+	result, err := Build(db, &chat)
 
 	// 验证结果
 	if err != nil {
@@ -131,12 +125,15 @@ func TestBuildReal(t *testing.T) {
 func TestBuildChatNotFound(t *testing.T) {
 	db := setupBuildTest(t)
 
-	// 设置一个不存在的聊天 ID
-	storage.GlobalConfig.CurrentChatID = 999
+	// 设置一个不存在的聊天
+	chat := structs.Chats{
+		ID:          999,
+		LastModelID: 1,
+		NowAgent:    "",
+	}
 
-	// 不创建任何聊天，所以查询会失败
 	// 调用 Build 函数
-	result, err := Build(999)
+	result, err := Build(db, &chat)
 
 	// 当数据库查询失败时，应该返回 nil 或错误
 	// 根据 Build() 的实现，会在查询后处理错误
@@ -186,10 +183,8 @@ func TestBuildWithMessages(t *testing.T) {
 		}
 	}
 
-	storage.GlobalConfig.CurrentChatID = 100
-
 	// 调用 Build 函数
-	result, err := Build(100)
+	result, err := Build(db, &chat)
 
 	// 验证结果
 	if err != nil {
@@ -230,10 +225,8 @@ func TestBuildWithMultipleModels(t *testing.T) {
 		t.Fatalf("Failed to create test chat: %v", err)
 	}
 
-	storage.GlobalConfig.CurrentChatID = 101
-
 	// 调用 Build 函数
-	result, err := Build(101)
+	result, err := Build(db, &chat)
 
 	// 验证结果
 	if err != nil {
@@ -268,10 +261,8 @@ func TestBuildWithAgent(t *testing.T) {
 		t.Fatalf("Failed to create test chat: %v", err)
 	}
 
-	storage.GlobalConfig.CurrentChatID = 102
-
 	// 调用 Build 函数
-	result, err := Build(102)
+	result, err := Build(db, &chat)
 
 	// 验证结果
 	if err != nil {
@@ -298,10 +289,8 @@ func TestBuildModelTemperatureAndTopP(t *testing.T) {
 		t.Fatalf("Failed to create test chat: %v", err)
 	}
 
-	storage.GlobalConfig.CurrentChatID = 103
-
 	// 调用 Build 函数
-	result, err := Build(103)
+	result, err := Build(db, &chat)
 
 	// 验证结果
 	if err != nil {
@@ -350,10 +339,8 @@ func TestBuildStream(t *testing.T) {
 		t.Fatalf("Failed to create test chat: %v", err)
 	}
 
-	storage.GlobalConfig.CurrentChatID = 104
-
 	// 调用 Build 函数
-	result, err := Build(104)
+	result, err := Build(db, &chat)
 
 	// 验证结果
 	if err != nil {
@@ -389,9 +376,13 @@ func TestBuildMultipleCalls(t *testing.T) {
 
 	// 多次调用Build，验证每次都返回不同的结果
 	for i := 105; i <= 107; i++ {
-		storage.GlobalConfig.CurrentChatID = uint32(i)
+		chat := structs.Chats{
+			ID:          uint32(i),
+			LastModelID: 1,
+			NowAgent:    "",
+		}
 
-		result, err := Build(uint32(i))
+		result, err := Build(db, &chat)
 
 		if err != nil {
 			t.Errorf("Build() for chat %d returned error: %v", i, err)
@@ -436,10 +427,8 @@ func TestBuildWithSummary(t *testing.T) {
 		t.Fatalf("Failed to create test message: %v", err)
 	}
 
-	storage.GlobalConfig.CurrentChatID = 108
-
 	// 调用 Build 函数
-	result, err := Build(108)
+	result, err := Build(db, &chat)
 
 	// 验证结果
 	if err != nil {

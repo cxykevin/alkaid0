@@ -4,15 +4,15 @@ import (
 	"errors"
 
 	"github.com/cxykevin/alkaid0/config"
-	"github.com/cxykevin/alkaid0/storage"
+	"github.com/cxykevin/alkaid0/storage/structs"
 	storageStructs "github.com/cxykevin/alkaid0/storage/structs"
-	"github.com/cxykevin/alkaid0/tools/values"
+	"gorm.io/gorm"
 )
 
 // LoadAgent 加载 Agent
-func LoadAgent(agentCode string) error { // 从DB拿到AgentID
+func LoadAgent(db *gorm.DB, session *structs.Chats, agentCode string) error { // 从DB拿到AgentID
 	subagentObj := storageStructs.SubAgents{}
-	err := storage.DB.Where("id = ?", agentCode).First(&agentCode).Error
+	err := db.Where("id = ?", agentCode).First(&agentCode).Error
 	if err != nil {
 		return err
 	}
@@ -20,8 +20,8 @@ func LoadAgent(agentCode string) error { // 从DB拿到AgentID
 	if !ok {
 		return errors.New("Agent not found")
 	}
-	CurrentAgentID = subagentObj.AgentID
-	CurrentAgentConfig = agentConfig
-	values.CurrentActivatePath = subagentObj.BindPath
+	session.CurrentAgentID = subagentObj.AgentID
+	session.CurrentAgentConfig = agentConfig
+	session.CurrentActivatePath = subagentObj.BindPath
 	return nil
 }

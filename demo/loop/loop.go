@@ -14,7 +14,8 @@ import (
 	"github.com/cxykevin/alkaid0/provider/request/agents"
 	"github.com/cxykevin/alkaid0/storage"
 	"github.com/cxykevin/alkaid0/storage/structs"
-	"github.com/cxykevin/alkaid0/tools/index"
+	"github.com/cxykevin/alkaid0/tools/actions"
+	"gorm.io/gorm"
 )
 
 var logger *log.LogsObj
@@ -43,14 +44,12 @@ func stringDefault(str *string) string {
 }
 
 // Start 启动 Demo Loop
-func Start() {
+func Start(db *gorm.DB) {
+	fmt.Println("\033[2J")
 	logger.Info("loop initing")
 	reader := bufio.NewReader(os.Stdin)
 	chats := []structs.Chats{}
-	assert(storage.DB.Find(&chats).Error)
-	fmt.Println("Init tools..")
-	index.Load()
-	fmt.Println("\033[2J")
+	assert(db.Find(&chats).Error)
 	fmt.Println("===== Chats =====")
 	for idx, v := range chats {
 		fmt.Printf("- [%d] ID: %v\n", idx+1, v.ID)
@@ -80,8 +79,8 @@ func Start() {
 				continue
 			}
 			logger.Info("delete chat %d", inputNum)
-			assert(storage.DB.Delete(&structs.Chats{}, chats[-inputNum].ID).Error)
-			assert(storage.DB.Find(&chats).Error)
+			assert(db.Delete(&structs.Chats{}, chats[-inputNum].ID).Error)
+			assert(db.Find(&chats).Error)
 			fmt.Println("===== Chats =====")
 			for idx, v := range chats {
 				fmt.Printf("- [%d] ID: %v\n", idx+1, v.ID)
@@ -91,8 +90,8 @@ func Start() {
 			// 创建
 			if inputNum == 0 {
 				logger.Info("create chat")
-				assert(storage.DB.Create(&structs.Chats{}).Error)
-				assert(storage.DB.Find(&chats).Error)
+				assert(db.Create(&structs.Chats{}).Error)
+				assert(db.Find(&chats).Error)
 				inputNum = len(chats)
 			}
 			if inputNum > len(chats) {
@@ -104,16 +103,19 @@ func Start() {
 			}
 		}
 	}
+	sessionObj := chats[chatNum]
+	sessionObj.DB = db
+	actions.Load(&sessionObj)
 	fmt.Println("===== Info =====")
-	fmt.Printf("ID: %v\n", chats[chatNum].ID)
-	fmt.Printf("Agent: %v\n", chats[chatNum].NowAgent)
-	fmt.Printf("Model: %v\n", chats[chatNum].LastModelID)
-	storage.GlobalConfig.CurrentChatID = chats[chatNum].ID
-	logger.Debug("use chat ID:%v|Agent:%v|Model:%v", chats[chatNum].ID, chats[chatNum].NowAgent, chats[chatNum].LastModelID)
+	fmt.Printf("ID: %v\n", sessionObj.ID)
+	fmt.Printf("Agent: %v\n", sessionObj.NowAgent)
+	fmt.Printf("Model: %v\n", sessionObj.LastModelID)
+	storage.GlobalConfig.LastChatID = sessionObj.ID
+	logger.Debug("use chat ID:%v|Agent:%v|Model:%v", sessionObj.ID, sessionObj.NowAgent, sessionObj.LastModelID)
 	// 显示历史
 	fmt.Println("===== History =====")
 	chatMsgs := []structs.Messages{}
-	assert(storage.DB.Where("chat_id = ?", chats[chatNum].ID).Find(&chatMsgs).Error)
+	assert(db.Where("chat_id = ?", sessionObj.ID).Find(&chatMsgs).Error)
 	for _, v := range chatMsgs {
 		logger.Debug("(history)discover history %v", strings.ReplaceAll(fmt.Sprintf("%v", v), "\n", "\\n"))
 		fmt.Print("--- ")
@@ -175,13 +177,13 @@ func Start() {
 					fmt.Println("input error(model not found)")
 					continue
 				}
-				chats[chatNum].LastModelID = uint32(modelID)
+				sessionObj.LastModelID = uint32(modelID)
 				// 写数据库
-				assert(storage.DB.Save(&chats[chatNum]).Error)
+				assert(db.Save(&sessionObj).Error)
 				fmt.Printf("- model changed to %v(%v)\n", modelInfo.ModelName, modelInfo.ModelID)
 			case "/summary":
 				fmt.Printf("summarying...\n")
-				ret, err := request.Summary(context.Background(), chats[chatNum].ID, "")
+				ret, err := request.SummarySession(context.Background(), &sessionObj)
 				fmt.Printf("summary finished!\n%s\n", ret)
 				if err != nil {
 					fmt.Printf("Err!\n%v\n", err)
@@ -208,7 +210,7 @@ func Start() {
 					}
 
 				case "used":
-					agents := unwrap(agents.ListAgents())
+					agents := unwrap(agents.ListAgents(db))
 					for _, v := range agents {
 						fmt.Printf("- [ID:%s] Model: %s, Path: %s\n", v.ID, v.AgentID, v.BindPath)
 					}
@@ -217,27 +219,27 @@ func Start() {
 						fmt.Println("input error(args not enough)")
 						continue
 					}
-					agents.AddAgent(args[2], args[3], args[4])
+					agents.AddAgent(&sessionObj, args[2], args[3], args[4])
 				case "activate":
 					if len(args) < 4 {
 						fmt.Println("input error(args not enough)")
 						continue
 					}
-					agents.ActivateAgent(chats[chatNum].ID, args[2], args[3])
+					agents.ActivateAgent(&sessionObj, args[2], args[3])
 				case "deactivate":
-					agents.DeactivateAgent(chats[chatNum].ID)
+					agents.DeactivateAgent(&sessionObj)
 				}
 			}
 			continue
 		}
 		if input != "!" {
-			request.UserAddMsg(storage.DB, chats[chatNum].ID, input, nil)
+			request.UserAddMsg(&sessionObj, input, nil)
 		}
 		// 启动 loop
 		for {
 			fmt.Println("--- AI")
 			thinkingFlag := false
-			finish, err := request.SendRequest(context.Background(), chats[chatNum].ID, func(delta string, thinkingDelta string) error {
+			finish, err := request.SendRequest(context.Background(), &sessionObj, func(delta string, thinkingDelta string) error {
 				if thinkingDelta != "" {
 					if !thinkingFlag {
 						fmt.Print("[Think]")

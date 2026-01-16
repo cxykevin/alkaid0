@@ -22,12 +22,14 @@ func unwrap[T any](args T, err error) T {
 // TestSolver_AddToken 测试 Solver 的 AddToken 方法
 func TestSolver_AddToken(t *testing.T) {
 	// 初始化内存数据库，便于 DoneToken 写入时不报错
-	if err := storage.InitDB(":memory:"); err != nil {
+	db, err := storage.InitDB(":memory:")
+	if err != nil {
 		t.Fatalf("InitDB failed: %v", err)
 	}
 
 	chatID := uint32(1001)
-	s := response.NewSolver(chatID, "")
+	testChat := &storageStructs.Chats{ID: chatID}
+	s := response.NewSolver(db, testChat)
 
 	// 测试普通文本
 	resp, thinking, err := s.AddToken("Hello World", "")
@@ -49,7 +51,7 @@ func TestSolver_AddToken(t *testing.T) {
 	}
 
 	// 测试 think 标签
-	s = response.NewSolver(chatID, "")
+	s = response.NewSolver(db, testChat)
 	resp, thinking, err = s.AddToken("<think>思考内容</think>", "")
 	if err != nil {
 		t.Fatalf("AddToken error: %v", err)
@@ -82,7 +84,7 @@ func TestSolver_AddToken(t *testing.T) {
 // 	}
 
 // 	var msg storageStructs.Messages
-// 	if err := storage.DB.Where("chat_id = ?", chatID).First(&msg).Error; err != nil {
+// 	if err := db.Where("chat_id = ?", chatID).First(&msg).Error; err != nil {
 // 		t.Fatalf("failed to find message record: %v", err)
 // 	}
 // 	// 空的 toolResponses 可能为 nil 或 空切片，允许为 "null\n" 或 "[]\n"
@@ -96,18 +98,17 @@ func TestSolver_AddToken(t *testing.T) {
 
 // TestSolver_ToolCalling_SingleTool 测试单个工具调用的完整流程
 func TestSolver_ToolCalling_SingleTool(t *testing.T) {
-	if err := storage.InitDB(":memory:"); err != nil {
+	db, err := storage.InitDB(":memory:")
+	if err != nil {
 		t.Fatalf("InitDB failed: %v", err)
 	}
 
 	// 初始化工具系统
 	toolobj.ToolsList = make(map[string]*toolobj.Tools)
 	toolobj.Scopes = make(map[string]string)
-	toolobj.EnableScopes = make(map[string]bool)
 
 	// 添加scope
 	toolobj.Scopes["test_scope"] = "Test Scope"
-	toolobj.EnableScopes["test_scope"] = true
 
 	// 创建测试工具
 	testTool := &toolobj.Tools{
@@ -125,18 +126,18 @@ func TestSolver_ToolCalling_SingleTool(t *testing.T) {
 			{
 				Scope: "test_scope",
 				PreHook: toolobj.PreHookFunction{
-					Func: func() (string, error) {
+					Func: func(chat *storageStructs.Chats) (string, error) {
 						return "", nil
 					},
 				},
 				OnHook: toolobj.OnHookFunction{
-					Func: func(args map[string]*any, passObjs []*any) (bool, []*any, error) {
+					Func: func(chat *storageStructs.Chats, args map[string]*any, passObjs []*any) (bool, []*any, error) {
 						fmt.Printf("Obj: %v\n", string(unwrap(json.Marshal(args))))
 						return false, passObjs, nil
 					},
 				},
 				PostHook: toolobj.PostHookFunction{
-					Func: func(args map[string]*any, passObjs []*any) (bool, []*any, map[string]*any, error) {
+					Func: func(chat *storageStructs.Chats, args map[string]*any, passObjs []*any) (bool, []*any, map[string]*any, error) {
 						// 模拟工具执行结果
 						result := map[string]*any{
 							"result": newAny("2"),
@@ -151,7 +152,11 @@ func TestSolver_ToolCalling_SingleTool(t *testing.T) {
 	toolobj.ToolsList["test_calculator"] = testTool
 
 	chatID := uint32(3003)
-	s := response.NewSolver(chatID, "")
+	testChat := &storageStructs.Chats{
+		ID:           chatID,
+		EnableScopes: map[string]bool{"test_scope": true},
+	}
+	s := response.NewSolver(db, testChat)
 
 	// 模拟AI返回的工具调用JSON
 	toolCallJSON := `[{"name": "test_calculator", "id": "call_123", "parameters": {"expression": "1+1"}}]`
@@ -180,7 +185,7 @@ func TestSolver_ToolCalling_SingleTool(t *testing.T) {
 
 	// 验证数据库中保存的toolResponses
 	var msg storageStructs.Messages
-	if err := storage.DB.Where("chat_id = ?", chatID).First(&msg).Error; err != nil {
+	if err := db.Where("chat_id = ?", chatID).First(&msg).Error; err != nil {
 		t.Fatalf("failed to find message record: %v", err)
 	}
 
@@ -224,18 +229,17 @@ func TestSolver_ToolCalling_SingleTool(t *testing.T) {
 
 // TestSolver_ToolCalling_MultipleTools 测试多个工具调用的完整流程
 func TestSolver_ToolCalling_MultipleTools(t *testing.T) {
-	if err := storage.InitDB(":memory:"); err != nil {
+	db, err := storage.InitDB(":memory:")
+	if err != nil {
 		t.Fatalf("InitDB failed: %v", err)
 	}
 
 	// 初始化工具系统
 	toolobj.ToolsList = make(map[string]*toolobj.Tools)
 	toolobj.Scopes = make(map[string]string)
-	toolobj.EnableScopes = make(map[string]bool)
 
 	// 添加scope
 	toolobj.Scopes["test_scope"] = "Test Scope"
-	toolobj.EnableScopes["test_scope"] = true
 
 	// 创建第一个测试工具
 	testTool1 := &toolobj.Tools{
@@ -253,18 +257,18 @@ func TestSolver_ToolCalling_MultipleTools(t *testing.T) {
 			{
 				Scope: "test_scope",
 				PreHook: toolobj.PreHookFunction{
-					Func: func() (string, error) {
+					Func: func(chat *storageStructs.Chats) (string, error) {
 						return "", nil
 					},
 				},
 				OnHook: toolobj.OnHookFunction{
-					Func: func(args map[string]*any, passObjs []*any) (bool, []*any, error) {
+					Func: func(chat *storageStructs.Chats, args map[string]*any, passObjs []*any) (bool, []*any, error) {
 						fmt.Printf("Obj: %v\n", string(unwrap(json.Marshal(args))))
 						return false, passObjs, nil
 					},
 				},
 				PostHook: toolobj.PostHookFunction{
-					Func: func(args map[string]*any, passObjs []*any) (bool, []*any, map[string]*any, error) {
+					Func: func(chat *storageStructs.Chats, args map[string]*any, passObjs []*any) (bool, []*any, map[string]*any, error) {
 						result := map[string]*any{
 							"result": newAny("2"),
 							"status": newAny("success"),
@@ -293,18 +297,18 @@ func TestSolver_ToolCalling_MultipleTools(t *testing.T) {
 			{
 				Scope: "test_scope",
 				PreHook: toolobj.PreHookFunction{
-					Func: func() (string, error) {
+					Func: func(chat *storageStructs.Chats) (string, error) {
 						return "", nil
 					},
 				},
 				OnHook: toolobj.OnHookFunction{
-					Func: func(args map[string]*any, passObjs []*any) (bool, []*any, error) {
+					Func: func(chat *storageStructs.Chats, args map[string]*any, passObjs []*any) (bool, []*any, error) {
 						fmt.Printf("Obj: %v\n", string(unwrap(json.Marshal(args))))
 						return false, passObjs, nil
 					},
 				},
 				PostHook: toolobj.PostHookFunction{
-					Func: func(args map[string]*any, passObjs []*any) (bool, []*any, map[string]*any, error) {
+					Func: func(chat *storageStructs.Chats, args map[string]*any, passObjs []*any) (bool, []*any, map[string]*any, error) {
 						// 获取参数
 						msg := ""
 						if msgPtr, ok := args["message"]; ok && msgPtr != nil {
@@ -325,7 +329,11 @@ func TestSolver_ToolCalling_MultipleTools(t *testing.T) {
 	toolobj.ToolsList["test_echo"] = testTool2
 
 	chatID := uint32(4004)
-	s := response.NewSolver(chatID, "")
+	testChat := &storageStructs.Chats{
+		ID:           chatID,
+		EnableScopes: map[string]bool{"test_scope": true},
+	}
+	s := response.NewSolver(db, testChat)
 
 	// 模拟AI返回的多个工具调用JSON
 	toolCallJSON := `[` +
@@ -334,7 +342,7 @@ func TestSolver_ToolCalling_MultipleTools(t *testing.T) {
 		`]`
 
 	// 添加工具调用token
-	_, _, err := s.AddToken("<tools>"+toolCallJSON+"</tools>", "")
+	_, _, err = s.AddToken("<tools>"+toolCallJSON+"</tools>", "")
 	if err != nil {
 		t.Fatalf("AddToken error: %v", err)
 	}
@@ -347,7 +355,7 @@ func TestSolver_ToolCalling_MultipleTools(t *testing.T) {
 
 	// 验证数据库中保存的toolResponses
 	var msg storageStructs.Messages
-	if err := storage.DB.Where("chat_id = ?", chatID).First(&msg).Error; err != nil {
+	if err := db.Where("chat_id = ?", chatID).First(&msg).Error; err != nil {
 		t.Fatalf("failed to find message record: %v", err)
 	}
 

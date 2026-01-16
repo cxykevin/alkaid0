@@ -6,16 +6,14 @@ import (
 
 	"github.com/cxykevin/alkaid0/config"
 	"github.com/cxykevin/alkaid0/provider/request"
-	"github.com/cxykevin/alkaid0/storage"
 	"github.com/cxykevin/alkaid0/storage/structs"
-	"github.com/cxykevin/alkaid0/tools/values"
 )
 
 // ActivateAgent 激活Agent
-func ActivateAgent(chatID uint32, agentCode string, prompt string) error {
+func ActivateAgent(session *structs.Chats, agentCode string, prompt string) error {
 	// 取agent表
 	obj := structs.SubAgents{}
-	err := storage.DB.Where("id = ?", agentCode).First(obj).Error
+	err := session.DB.Where("id = ?", agentCode).First(obj).Error
 	if err != nil {
 		return err
 	}
@@ -27,13 +25,13 @@ func ActivateAgent(chatID uint32, agentCode string, prompt string) error {
 	}
 
 	// 更新当前Agent
-	err = storage.DB.Model(&structs.Chats{}).Where("id = ?", chatID).Update("now_agent", agentCode).Error
+	err = session.DB.Model(&structs.Chats{}).Where("id = ?", session.ID).Update("now_agent", agentCode).Error
 	if err != nil {
 		return err
 	}
 	// 提示词写入
-	err = storage.DB.Create(&structs.Messages{
-		ChatID:  chatID,
+	err = session.DB.Create(&structs.Messages{
+		ChatID:  session.ID,
 		Delta:   prompt,
 		AgentID: &agentCode,
 		Type:    structs.MessagesRoleUser,
@@ -43,22 +41,29 @@ func ActivateAgent(chatID uint32, agentCode string, prompt string) error {
 	}
 
 	// 设置值
-	values.CurrentActivatePath = obj.BindPath
-	CurrentAgentCode = agentCode
-	CurrentAgentID = obj.ID
-	CurrentAgentConfig = agentConfig
+	session.CurrentActivatePath = obj.BindPath
+	session.NowAgent = agentCode
+	session.CurrentAgentID = obj.ID
+	session.CurrentAgentConfig = agentConfig
+
+	// 写DB
+	err = session.DB.Save(session).Error
+	if err != nil {
+		return err
+	}
 	return nil
 }
 
 // DeactivateAgent 取消激活Agent
-func DeactivateAgent(chatID uint32) error {
-	oldAgent := CurrentAgentCode
+func DeactivateAgent(session *structs.Chats) error {
+	oldAgent := session.NowAgent
 	// 更新当前Agent
-	err := storage.DB.Model(&structs.Chats{}).Where("id = ?", chatID).Update("now_agent", "").Error
+	err := session.DB.Model(&structs.Chats{}).Where("id = ?", session.ID).Update("now_agent", "").Error
 	if err != nil {
 		return err
 	}
 	// 计算summary
-	go request.Summary(context.Background(), chatID, oldAgent)
+	session.NowAgent = ""
+	go request.Summary(context.Background(), session.DB, session.ID, oldAgent)
 	return nil
 }

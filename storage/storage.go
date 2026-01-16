@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 
 	"github.com/cxykevin/alkaid0/log"
+	"gorm.io/gorm"
 )
 
 const projectDataPath = ".alkaid0"
@@ -18,16 +19,20 @@ func init() {
 }
 
 // InitStorage 初始化 db
-func InitStorage() {
-	// 读取环境变量：ALKAID_DEBUG_PROJECTPATH 和 ALKAID0_DEBUG_SQLITEFILE
-	dataPath := projectDataPath
-	if v := os.Getenv("ALKAID_DEBUG_PROJECTPATH"); v != "" {
-		dataPath = v
+func InitStorage(dataPath string, dbFile string) *gorm.DB {
+	if dataPath == "" {
+		// 读取环境变量：ALKAID_DEBUG_PROJECTPATH 和 ALKAID0_DEBUG_SQLITEFILE
+		dataPath = projectDataPath
+		if v := os.Getenv("ALKAID_DEBUG_PROJECTPATH"); v != "" {
+			dataPath = v
+		}
 	}
 
-	dbFile := sqliteFileName
-	if v := os.Getenv("ALKAID_DEBUG_SQLITEFILE"); v != "" {
-		dbFile = v
+	if dbFile == "" {
+		dbFile = sqliteFileName
+		if v := os.Getenv("ALKAID_DEBUG_SQLITEFILE"); v != "" {
+			dbFile = v
+		}
 	}
 
 	logger.Info("storage init in %s/%s", dataPath, dbFile)
@@ -39,8 +44,11 @@ func InitStorage() {
 	}
 
 	dbPath := filepath.Join(dataPath, dbFile)
-	if err := InitDB(dbPath); err != nil {
+	var db *gorm.DB
+	var err error
+	if db, err = InitDB(dbPath); err != nil {
 		logger.Error("failed to init db %s: %v", dataPath, err)
 		panic(err)
 	}
+	return db
 }

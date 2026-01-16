@@ -6,13 +6,14 @@ import (
 
 	"github.com/cxykevin/alkaid0/provider/parser"
 	"github.com/cxykevin/alkaid0/storage"
+	"github.com/cxykevin/alkaid0/storage/structs"
 	"github.com/cxykevin/alkaid0/tools/toolobj"
 )
 
 func initTestEnv() {
 	os.Setenv("ALKAID_DEBUG_PROJECTPATH", "../../debug_config/dot_alkaid")
 	os.Remove("../../debug_config/dot_alkaid/db.sqlite")
-	storage.InitStorage()
+	storage.InitStorage("", "")
 }
 
 // TestMap2Slice 测试 map 转 slice 的泛型函数
@@ -117,19 +118,17 @@ func TestTools(t *testing.T) {
 	// 保存原始值
 	originalScopes := toolobj.Scopes
 	originalToolsList := toolobj.ToolsList
-	originalEnableScopes := toolobj.EnableScopes
 
 	defer func() {
 		toolobj.Scopes = originalScopes
 		toolobj.ToolsList = originalToolsList
-		toolobj.EnableScopes = originalEnableScopes
 	}()
 
 	tests := []struct {
 		name              string
 		setupScopes       func()
 		setupTools        func()
-		setupEnableScopes func()
+		setupEnableScopes func(*structs.Chats)
 		checkResult       func(t *testing.T, scopeStr string, traceStr string, toolsDef *[]*parser.ToolsDefine)
 	}{
 		{
@@ -146,9 +145,9 @@ func TestTools(t *testing.T) {
 					Hooks: make([]toolobj.Hook, 0),
 				}
 			},
-			setupEnableScopes: func() {
-				toolobj.EnableScopes = make(map[string]bool)
-				toolobj.EnableScopes[""] = true
+			setupEnableScopes: func(session *structs.Chats) {
+				session.EnableScopes = make(map[string]bool)
+				session.EnableScopes[""] = true
 			},
 			checkResult: func(t *testing.T, scopeStr string, traceStr string, toolsDef *[]*parser.ToolsDefine) {
 				if scopeStr == "" {
@@ -189,8 +188,8 @@ func TestTools(t *testing.T) {
 					},
 				}
 			},
-			setupEnableScopes: func() {
-				toolobj.EnableScopes = map[string]bool{
+			setupEnableScopes: func(session *structs.Chats) {
+				session.EnableScopes = map[string]bool{
 					"":           true,
 					"test_scope": true,
 				}
@@ -241,8 +240,8 @@ func TestTools(t *testing.T) {
 					},
 				}
 			},
-			setupEnableScopes: func() {
-				toolobj.EnableScopes = map[string]bool{
+			setupEnableScopes: func(session *structs.Chats) {
+				session.EnableScopes = map[string]bool{
 					"":               true,
 					"enabled_scope":  true,
 					"disabled_scope": false,
@@ -318,8 +317,8 @@ func TestTools(t *testing.T) {
 					},
 				}
 			},
-			setupEnableScopes: func() {
-				toolobj.EnableScopes = map[string]bool{
+			setupEnableScopes: func(session *structs.Chats) {
+				session.EnableScopes = map[string]bool{
 					"":       true,
 					"scope1": true,
 					"scope2": true,
@@ -383,8 +382,8 @@ func TestTools(t *testing.T) {
 					},
 				}
 			},
-			setupEnableScopes: func() {
-				toolobj.EnableScopes = map[string]bool{
+			setupEnableScopes: func(session *structs.Chats) {
+				session.EnableScopes = map[string]bool{
 					"":       true,
 					"scope1": false,
 					"scope2": false,
@@ -429,8 +428,8 @@ func TestTools(t *testing.T) {
 					},
 				}
 			},
-			setupEnableScopes: func() {
-				toolobj.EnableScopes = map[string]bool{
+			setupEnableScopes: func(session *structs.Chats) {
+				session.EnableScopes = map[string]bool{
 					"":       true,
 					"scope1": true,
 				}
@@ -486,8 +485,8 @@ func TestTools(t *testing.T) {
 				}
 				toolobj.ToolsList = tools
 			},
-			setupEnableScopes: func() {
-				toolobj.EnableScopes = map[string]bool{
+			setupEnableScopes: func(session *structs.Chats) {
+				session.EnableScopes = map[string]bool{
 					"":       true,
 					"scope1": true,
 				}
@@ -537,8 +536,8 @@ func TestTools(t *testing.T) {
 					},
 				}
 			},
-			setupEnableScopes: func() {
-				toolobj.EnableScopes = map[string]bool{
+			setupEnableScopes: func(session *structs.Chats) {
+				session.EnableScopes = map[string]bool{
 					"":       true,
 					"scope1": true,
 				}
@@ -577,10 +576,12 @@ func TestTools(t *testing.T) {
 			// 初始化测试数据
 			tt.setupScopes()
 			tt.setupTools()
-			tt.setupEnableScopes()
 
 			// 执行被测试函数
-			scopeStr, traceStr, toolsDef := Tools()
+			// 创建一个临时的Chats对象用于测试
+			testChat := &structs.Chats{ID: 1, LastModelID: 1}
+			tt.setupEnableScopes(testChat)
+			scopeStr, traceStr, toolsDef := Tools(testChat)
 
 			// 验证结果
 			if scopeStr == "" {
@@ -628,12 +629,10 @@ func BenchmarkTools(b *testing.B) {
 	// 保存原始值
 	originalScopes := toolobj.Scopes
 	originalToolsList := toolobj.ToolsList
-	originalEnableScopes := toolobj.EnableScopes
 
 	defer func() {
 		toolobj.Scopes = originalScopes
 		toolobj.ToolsList = originalToolsList
-		toolobj.EnableScopes = originalEnableScopes
 	}()
 
 	// 设置测试数据
@@ -663,14 +662,18 @@ func BenchmarkTools(b *testing.B) {
 		}
 	}
 
-	toolobj.EnableScopes = map[string]bool{
-		"":       true,
-		"scope1": true,
-		"scope2": true,
-		"scope3": false,
-	}
-
 	for b.Loop() {
-		Tools()
+		// 创建一个临时的Chats对象用于测试
+		testChat := &structs.Chats{
+			ID:          1,
+			LastModelID: 1,
+			EnableScopes: map[string]bool{
+				"":       true,
+				"scope1": true,
+				"scope2": true,
+				"scope3": false,
+			},
+		}
+		Tools(testChat)
 	}
 }

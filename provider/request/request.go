@@ -9,13 +9,13 @@ import (
 	"github.com/cxykevin/alkaid0/provider/request/build"
 	reqStruct "github.com/cxykevin/alkaid0/provider/request/structs"
 	"github.com/cxykevin/alkaid0/provider/response"
-	"github.com/cxykevin/alkaid0/storage"
 	"github.com/cxykevin/alkaid0/storage/structs"
-	"gorm.io/gorm"
 )
 
 // UserAddMsg 用户发送消息
-func UserAddMsg(db *gorm.DB, chatID uint32, msg string, refers *structs.MessagesReferList) error {
+func UserAddMsg(session *structs.Chats, msg string, refers *structs.MessagesReferList) error {
+	db := session.DB
+	chatID := session.ID
 	var refer structs.MessagesReferList
 	if refers == nil {
 		refer = structs.MessagesReferList{}
@@ -50,10 +50,12 @@ func stringDefault(str *string) string {
 }
 
 // SendRequest 发送请求
-func SendRequest(ctx context.Context, chatID uint32, callback func(string, string) error) (bool, error) {
+func SendRequest(ctx context.Context, session *structs.Chats, callback func(string, string) error) (bool, error) {
+	db := session.DB
+	chatID := session.ID
 	// 取模型ID
 	var chat structs.Chats
-	err := storage.DB.First(&chat, chatID).Error
+	err := db.First(&chat, chatID).Error
 	if err != nil {
 		return true, err
 	}
@@ -61,7 +63,7 @@ func SendRequest(ctx context.Context, chatID uint32, callback func(string, strin
 	if !ok {
 		return true, errors.New("model not found")
 	}
-	obj, err := build.Build(chatID)
+	obj, err := build.Build(db, session)
 	if err != nil {
 		return true, err
 	}
@@ -74,7 +76,7 @@ func SendRequest(ctx context.Context, chatID uint32, callback func(string, strin
 	// 	}
 	// }
 
-	solver := response.NewSolver(chatID, chat.NowAgent)
+	solver := response.NewSolver(db, session)
 	// 写库
 	reqObj := structs.Messages{
 		ChatID:        chatID,
@@ -85,7 +87,7 @@ func SendRequest(ctx context.Context, chatID uint32, callback func(string, strin
 		ModelID:       chat.LastModelID,
 		ModelName:     modelCfg.ModelName,
 	}
-	tx := storage.DB.Create(&reqObj)
+	tx := db.Create(&reqObj)
 	// 取主键
 	if tx.Error != nil {
 		return true, err
@@ -105,7 +107,7 @@ func SendRequest(ctx context.Context, chatID uint32, callback func(string, strin
 		}
 		gstring := gDelta.String()
 		gtstring := gThinkingDelta.String()
-		err = storage.DB.Model(&structs.Messages{}).Where("id = ?", msgID).Updates(structs.Messages{
+		err = db.Model(&structs.Messages{}).Where("id = ?", msgID).Updates(structs.Messages{
 			Delta:         gstring,
 			ThinkingDelta: gtstring,
 		}).Error
@@ -127,9 +129,9 @@ func SendRequest(ctx context.Context, chatID uint32, callback func(string, strin
 	gThinkingDelta.WriteString(thinkingDelta)
 	if gDelta.String() == "" && gThinkingDelta.String() == "" {
 		// 删除
-		err = storage.DB.Delete(&structs.Messages{}, msgID).Error
+		err = db.Delete(&structs.Messages{}, msgID).Error
 	} else {
-		err = storage.DB.Model(&structs.Messages{}).Where("id = ?", msgID).Updates(structs.Messages{
+		err = db.Model(&structs.Messages{}).Where("id = ?", msgID).Updates(structs.Messages{
 			Delta:         gDelta.String(),
 			ThinkingDelta: gThinkingDelta.String(),
 		}).Error

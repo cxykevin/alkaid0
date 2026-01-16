@@ -7,17 +7,19 @@ import (
 
 	"github.com/cxykevin/alkaid0/provider/parser"
 	"github.com/cxykevin/alkaid0/storage"
+	storageStructs "github.com/cxykevin/alkaid0/storage/structs"
 	"github.com/cxykevin/alkaid0/tools/actions"
 	"github.com/cxykevin/alkaid0/tools/toolobj"
+	"gorm.io/gorm"
 )
 
-func initTestEnv() {
+func initTestEnv() *gorm.DB {
 	toolobj.ToolsList = make(map[string]*toolobj.Tools)
 	toolobj.Scopes = make(map[string]string)
-	toolobj.EnableScopes = make(map[string]bool)
 
 	os.Setenv("ALKAID_DEBUG_SQLITEFILE", ":memory:")
-	storage.InitStorage()
+	db := storage.InitStorage("", "")
+	return db
 }
 
 func TestAddScope(t *testing.T) {
@@ -58,7 +60,7 @@ func TestHookTool(t *testing.T) {
 	hook := &toolobj.Hook{
 		Scope: "scope1",
 		PreHook: toolobj.PreHookFunction{
-			Func: func() (string, error) {
+			Func: func(chat *storageStructs.Chats) (string, error) {
 				return "preHook result", nil
 			},
 		},
@@ -74,24 +76,27 @@ func TestHookTool(t *testing.T) {
 }
 
 func TestEnableScope(t *testing.T) {
-	initTestEnv()
-	actions.EnableScope("scope1")
-	if val, ok := toolobj.EnableScopes["scope1"]; !ok || !val {
-		t.Errorf("EnableScope failed: scope1 not enabled")
+	db := initTestEnv()
+	testChat := &storageStructs.Chats{ID: 1, DB: db, EnableScopes: make(map[string]bool)}
+	actions.EnableScope(testChat, "scope1")
+	if val, ok := testChat.EnableScopes["scope1"]; !ok || !val {
+		t.Errorf("EnableScope failed: scope1 not enabled in session")
 	}
 }
 
 func TestDisableScope(t *testing.T) {
-	initTestEnv()
-	actions.EnableScope("scope1")
-	actions.DisableScope("scope1")
-	if val, ok := toolobj.EnableScopes["scope1"]; !ok || val {
-		t.Errorf("DisableScope failed: scope1 should be disabled")
+	db := initTestEnv()
+	testChat := &storageStructs.Chats{ID: 1, DB: db, EnableScopes: make(map[string]bool)}
+	actions.EnableScope(testChat, "scope1")
+	actions.DisableScope(testChat, "scope1")
+	if val, ok := testChat.EnableScopes["scope1"]; !ok || val {
+		t.Errorf("DisableScope failed: scope1 should be disabled in session")
 	}
 }
 
 func TestExecToolGetPrompts(t *testing.T) {
-	initTestEnv()
+	db := initTestEnv()
+	// actions.Load(db)
 
 	actions.AddScope("scope1", "Scope 1 prompt")
 	actions.AddScope("scope2", "Scope 2 prompt")
@@ -104,7 +109,7 @@ func TestExecToolGetPrompts(t *testing.T) {
 			{
 				Scope: "scope1",
 				PreHook: toolobj.PreHookFunction{
-					Func: func() (string, error) {
+					Func: func(chat *storageStructs.Chats) (string, error) {
 						return "prehook1", nil
 					},
 				},
@@ -112,7 +117,7 @@ func TestExecToolGetPrompts(t *testing.T) {
 			{
 				Scope: "scope2",
 				PreHook: toolobj.PreHookFunction{
-					Func: func() (string, error) {
+					Func: func(chat *storageStructs.Chats) (string, error) {
 						return "prehook2", nil
 					},
 				},
@@ -121,10 +126,10 @@ func TestExecToolGetPrompts(t *testing.T) {
 	}
 	actions.AddTool(tool)
 
-	// Enable only scope1
-	actions.EnableScope("scope1")
+	testChat := &storageStructs.Chats{ID: 1, DB: db, EnableScopes: make(map[string]bool)}
+	actions.EnableScope(testChat, "scope1")
 
-	unusedHooks, prehooks, _ := ExecOneToolGetPrompts("tool1")
+	unusedHooks, prehooks, _ := ExecOneToolGetPrompts(testChat, "tool1")
 
 	// scope2 should be in unused hooks
 	if len(unusedHooks) != 1 {
@@ -154,7 +159,7 @@ func TestExecToolGetPromptsWithInvalidScope(t *testing.T) {
 			{
 				Scope: "invalidScope",
 				PreHook: toolobj.PreHookFunction{
-					Func: func() (string, error) {
+					Func: func(chat *storageStructs.Chats) (string, error) {
 						return "should not execute", nil
 					},
 				},
@@ -162,9 +167,11 @@ func TestExecToolGetPromptsWithInvalidScope(t *testing.T) {
 		},
 	}
 	actions.AddTool(tool)
-	actions.EnableScope("scope1")
+	db := initTestEnv()
+	testChat := &storageStructs.Chats{ID: 1, DB: db, EnableScopes: make(map[string]bool)}
+	actions.EnableScope(testChat, "scope1")
 
-	unusedHooks, prehooks, _ := ExecOneToolGetPrompts("tool1")
+	unusedHooks, prehooks, _ := ExecOneToolGetPrompts(testChat, "tool1")
 
 	// No unused hooks since scope1 is enabled and no other scopes exist
 	if len(unusedHooks) != 0 {
@@ -190,7 +197,7 @@ func TestExecToolOnHook(t *testing.T) {
 			{
 				Scope: "scope1",
 				OnHook: toolobj.OnHookFunction{
-					Func: func(args map[string]*any, pass []*any) (bool, []*any, error) {
+					Func: func(chat *storageStructs.Chats, args map[string]*any, pass []*any) (bool, []*any, error) {
 						return true, pass, nil
 					},
 				},
@@ -198,11 +205,13 @@ func TestExecToolOnHook(t *testing.T) {
 		},
 	}
 	actions.AddTool(tool)
-	actions.EnableScope("scope1")
+	db := initTestEnv()
+	testChat := &storageStructs.Chats{ID: 1, DB: db, EnableScopes: make(map[string]bool)}
+	actions.EnableScope(testChat, "scope1")
 
 	v := any("value")
 	args := map[string]*any{"key": &v}
-	err := ExecToolOnHook("tool1", args)
+	err := ExecToolOnHook(testChat, "tool1", args)
 
 	if err != nil {
 		t.Errorf("ExecToolOnHook failed: expected no error, got %v", err)
@@ -211,6 +220,7 @@ func TestExecToolOnHook(t *testing.T) {
 
 func TestExecToolOnHookWithDisabledScope(t *testing.T) {
 	initTestEnv()
+	testChat := &storageStructs.Chats{ID: 1, LastModelID: 1}
 
 	actions.AddScope("scope1", "Scope 1 prompt")
 
@@ -222,7 +232,7 @@ func TestExecToolOnHookWithDisabledScope(t *testing.T) {
 			{
 				Scope: "scope1",
 				OnHook: toolobj.OnHookFunction{
-					Func: func(args map[string]*any, pass []*any) (bool, []*any, error) {
+					Func: func(chat *storageStructs.Chats, args map[string]*any, pass []*any) (bool, []*any, error) {
 						return true, pass, nil
 					},
 				},
@@ -234,7 +244,7 @@ func TestExecToolOnHookWithDisabledScope(t *testing.T) {
 
 	v := any("value")
 	args := map[string]*any{"key": &v}
-	err := ExecToolOnHook("tool1", args)
+	err := ExecToolOnHook(testChat, "tool1", args)
 
 	if err != nil {
 		t.Errorf("ExecToolOnHook failed when scope disabled: expected no error, got %v", err)
@@ -242,7 +252,7 @@ func TestExecToolOnHookWithDisabledScope(t *testing.T) {
 }
 
 func TestExecToolPostHook(t *testing.T) {
-	initTestEnv()
+	db := initTestEnv()
 
 	actions.AddScope("scope1", "Scope 1 prompt")
 
@@ -254,7 +264,7 @@ func TestExecToolPostHook(t *testing.T) {
 			{
 				Scope: "scope1",
 				PostHook: toolobj.PostHookFunction{
-					Func: func(args map[string]*any, passObjs []*any) (bool, []*any, map[string]*any, error) {
+					Func: func(chat *storageStructs.Chats, args map[string]*any, passObjs []*any) (bool, []*any, map[string]*any, error) {
 						s := any("success")
 						result := map[string]*any{"status": &s}
 						return false, passObjs, result, nil
@@ -264,11 +274,12 @@ func TestExecToolPostHook(t *testing.T) {
 		},
 	}
 	actions.AddTool(tool)
-	actions.EnableScope("scope1")
+	testChat := &storageStructs.Chats{ID: 1, DB: db, EnableScopes: make(map[string]bool)}
+	actions.EnableScope(testChat, "scope1")
 
 	v := any("value")
 	args := map[string]*any{"key": &v}
-	result, err := ExecToolPostHook("tool1", args)
+	result, err := ExecToolPostHook(testChat, "tool1", args)
 
 	if err != nil {
 		t.Errorf("ExecToolPostHook failed: expected no error, got %v", err)
@@ -284,7 +295,7 @@ func TestExecToolPostHook(t *testing.T) {
 }
 
 func TestExecToolPostHookAllPass(t *testing.T) {
-	initTestEnv()
+	db := initTestEnv()
 
 	actions.AddScope("scope1", "Scope 1 prompt")
 
@@ -296,7 +307,7 @@ func TestExecToolPostHookAllPass(t *testing.T) {
 			{
 				Scope: "scope1",
 				PostHook: toolobj.PostHookFunction{
-					Func: func(args map[string]*any, passObjs []*any) (bool, []*any, map[string]*any, error) {
+					Func: func(chat *storageStructs.Chats, args map[string]*any, passObjs []*any) (bool, []*any, map[string]*any, error) {
 						return true, passObjs, nil, nil
 					},
 				},
@@ -304,11 +315,12 @@ func TestExecToolPostHookAllPass(t *testing.T) {
 		},
 	}
 	actions.AddTool(tool)
-	actions.EnableScope("scope1")
+	testChat := &storageStructs.Chats{ID: 1, DB: db, EnableScopes: make(map[string]bool)}
+	actions.EnableScope(testChat, "scope1")
 
 	v := any("value")
 	args := map[string]*any{"key": &v}
-	res, err := ExecToolPostHook("tool1", args)
+	res, err := ExecToolPostHook(testChat, "tool1", args)
 
 	if err != nil {
 		t.Errorf("ExecToolPostHook failed: expected no error when all hooks pass, got %v", err)
@@ -320,7 +332,7 @@ func TestExecToolPostHookAllPass(t *testing.T) {
 }
 
 func TestExecToolPostHookError(t *testing.T) {
-	initTestEnv()
+	db := initTestEnv()
 
 	actions.AddScope("scope1", "Scope 1 prompt")
 
@@ -332,7 +344,7 @@ func TestExecToolPostHookError(t *testing.T) {
 			{
 				Scope: "scope1",
 				PostHook: toolobj.PostHookFunction{
-					Func: func(args map[string]*any, passObjs []*any) (bool, []*any, map[string]*any, error) {
+					Func: func(chat *storageStructs.Chats, args map[string]*any, passObjs []*any) (bool, []*any, map[string]*any, error) {
 						return false, passObjs, nil, errors.New("hook error")
 					},
 				},
@@ -340,11 +352,12 @@ func TestExecToolPostHookError(t *testing.T) {
 		},
 	}
 	actions.AddTool(tool)
-	actions.EnableScope("scope1")
+	testChat := &storageStructs.Chats{ID: 1, DB: db, EnableScopes: make(map[string]bool)}
+	actions.EnableScope(testChat, "scope1")
 
 	v := any("value")
 	args := map[string]*any{"key": &v}
-	_, err := ExecToolPostHook("tool1", args)
+	_, err := ExecToolPostHook(testChat, "tool1", args)
 
 	if err == nil {
 		t.Errorf("ExecToolPostHook failed: expected error from hook")
@@ -356,14 +369,15 @@ func TestExecToolPostHookError(t *testing.T) {
 }
 
 func TestMultipleScopes(t *testing.T) {
-	initTestEnv()
+	db := initTestEnv()
 
 	actions.AddScope("scope1", "Scope 1 prompt")
 	actions.AddScope("scope2", "Scope 2 prompt")
 	actions.AddScope("scope3", "Scope 3 prompt")
 
-	actions.EnableScope("scope1")
-	actions.EnableScope("scope2")
+	testChat := &storageStructs.Chats{ID: 1, DB: db, EnableScopes: make(map[string]bool)}
+	actions.EnableScope(testChat, "scope1")
+	actions.EnableScope(testChat, "scope2")
 
 	tool := &toolobj.Tools{
 		Name:            "TestTool",
@@ -373,7 +387,7 @@ func TestMultipleScopes(t *testing.T) {
 			{
 				Scope: "scope1",
 				PreHook: toolobj.PreHookFunction{
-					Func: func() (string, error) {
+					Func: func(chat *storageStructs.Chats) (string, error) {
 						return "prehook1", nil
 					},
 				},
@@ -381,7 +395,7 @@ func TestMultipleScopes(t *testing.T) {
 			{
 				Scope: "scope2",
 				PreHook: toolobj.PreHookFunction{
-					Func: func() (string, error) {
+					Func: func(chat *storageStructs.Chats) (string, error) {
 						return "prehook2", nil
 					},
 				},
@@ -389,7 +403,7 @@ func TestMultipleScopes(t *testing.T) {
 			{
 				Scope: "scope3",
 				PreHook: toolobj.PreHookFunction{
-					Func: func() (string, error) {
+					Func: func(chat *storageStructs.Chats) (string, error) {
 						return "prehook3", nil
 					},
 				},
@@ -398,11 +412,12 @@ func TestMultipleScopes(t *testing.T) {
 	}
 	actions.AddTool(tool)
 
-	unusedHooks, prehooks, _ := ExecOneToolGetPrompts("tool1")
+	unusedHooks, prehooks, _ := ExecOneToolGetPrompts(testChat, "tool1")
 
 	// scope3 should be in unused (not enabled)
+	// Global scope is always enabled, so it's not in unusedHooks
 	if len(unusedHooks) != 1 {
-		t.Errorf("TestMultipleScopes failed: expected 1 unused hook, got %d", len(unusedHooks))
+		t.Errorf("TestMultipleScopes failed: expected 1 unused hook (scope3), got %d: %v", len(unusedHooks), unusedHooks)
 	}
 
 	// scope1 and scope2 should execute
@@ -412,10 +427,11 @@ func TestMultipleScopes(t *testing.T) {
 }
 
 func TestPreHookPrioritySorting(t *testing.T) {
-	initTestEnv()
+	db := initTestEnv()
 
 	actions.AddScope("scope1", "Scope 1 prompt")
-	actions.EnableScope("scope1")
+	testChat := &storageStructs.Chats{ID: 1, DB: db, EnableScopes: make(map[string]bool)}
+	actions.EnableScope(testChat, "scope1")
 
 	tool := &toolobj.Tools{
 		Name:            "TestTool",
@@ -426,7 +442,7 @@ func TestPreHookPrioritySorting(t *testing.T) {
 				Scope: "scope1",
 				PreHook: toolobj.PreHookFunction{
 					Priority: 1,
-					Func: func() (string, error) {
+					Func: func(chat *storageStructs.Chats) (string, error) {
 						return "low_priority", nil
 					},
 				},
@@ -435,7 +451,7 @@ func TestPreHookPrioritySorting(t *testing.T) {
 				Scope: "scope1",
 				PreHook: toolobj.PreHookFunction{
 					Priority: 3,
-					Func: func() (string, error) {
+					Func: func(chat *storageStructs.Chats) (string, error) {
 						return "highest_priority", nil
 					},
 				},
@@ -444,7 +460,7 @@ func TestPreHookPrioritySorting(t *testing.T) {
 				Scope: "scope1",
 				PreHook: toolobj.PreHookFunction{
 					Priority: 2,
-					Func: func() (string, error) {
+					Func: func(chat *storageStructs.Chats) (string, error) {
 						return "medium_priority", nil
 					},
 				},
@@ -453,7 +469,7 @@ func TestPreHookPrioritySorting(t *testing.T) {
 	}
 	actions.AddTool(tool)
 
-	_, prehooks, _ := ExecOneToolGetPrompts("tool1")
+	_, prehooks, _ := ExecOneToolGetPrompts(testChat, "tool1")
 
 	if len(prehooks) != 3 {
 		t.Errorf("TestPreHookPrioritySorting failed: expected 3 prehooks, got %d", len(prehooks))
@@ -472,10 +488,11 @@ func TestPreHookPrioritySorting(t *testing.T) {
 }
 
 func TestOnHookPrioritySorting(t *testing.T) {
-	initTestEnv()
+	db := initTestEnv()
 
 	actions.AddScope("scope1", "Scope 1 prompt")
-	actions.EnableScope("scope1")
+	testChat := &storageStructs.Chats{ID: 1, DB: db, EnableScopes: make(map[string]bool)}
+	actions.EnableScope(testChat, "scope1")
 
 	order := make([]string, 0)
 
@@ -488,7 +505,7 @@ func TestOnHookPrioritySorting(t *testing.T) {
 				Scope: "scope1",
 				OnHook: toolobj.OnHookFunction{
 					Priority: 1,
-					Func: func(args map[string]*any, pass []*any) (bool, []*any, error) {
+					Func: func(chat *storageStructs.Chats, args map[string]*any, pass []*any) (bool, []*any, error) {
 						order = append(order, "low")
 						return true, pass, nil
 					},
@@ -498,7 +515,7 @@ func TestOnHookPrioritySorting(t *testing.T) {
 				Scope: "scope1",
 				OnHook: toolobj.OnHookFunction{
 					Priority: 3,
-					Func: func(args map[string]*any, pass []*any) (bool, []*any, error) {
+					Func: func(chat *storageStructs.Chats, args map[string]*any, pass []*any) (bool, []*any, error) {
 						order = append(order, "high")
 						return true, pass, nil
 					},
@@ -508,7 +525,7 @@ func TestOnHookPrioritySorting(t *testing.T) {
 				Scope: "scope1",
 				OnHook: toolobj.OnHookFunction{
 					Priority: 2,
-					Func: func(args map[string]*any, pass []*any) (bool, []*any, error) {
+					Func: func(chat *storageStructs.Chats, args map[string]*any, pass []*any) (bool, []*any, error) {
 						order = append(order, "mid")
 						return true, pass, nil
 					},
@@ -519,7 +536,7 @@ func TestOnHookPrioritySorting(t *testing.T) {
 	actions.AddTool(tool)
 	v := any("value")
 	args := map[string]*any{"key": &v}
-	err := ExecToolOnHook("tool1", args)
+	err := ExecToolOnHook(testChat, "tool1", args)
 
 	if err != nil {
 		t.Fatalf("ExecToolOnHook returned error: %v", err)
@@ -535,10 +552,11 @@ func TestOnHookPrioritySorting(t *testing.T) {
 }
 
 func TestPostHookPrioritySorting(t *testing.T) {
-	initTestEnv()
+	db := initTestEnv()
 
 	actions.AddScope("scope1", "Scope 1 prompt")
-	actions.EnableScope("scope1")
+	testChat := &storageStructs.Chats{ID: 1, DB: db, EnableScopes: make(map[string]bool)}
+	actions.EnableScope(testChat, "scope1")
 
 	order := make([]string, 0)
 
@@ -551,7 +569,7 @@ func TestPostHookPrioritySorting(t *testing.T) {
 				Scope: "scope1",
 				PostHook: toolobj.PostHookFunction{
 					Priority: 1,
-					Func: func(args map[string]*any, pass []*any) (bool, []*any, map[string]*any, error) {
+					Func: func(chat *storageStructs.Chats, args map[string]*any, pass []*any) (bool, []*any, map[string]*any, error) {
 						order = append(order, "low")
 						return true, pass, map[string]*any{}, nil
 					},
@@ -561,7 +579,7 @@ func TestPostHookPrioritySorting(t *testing.T) {
 				Scope: "scope1",
 				PostHook: toolobj.PostHookFunction{
 					Priority: 3,
-					Func: func(args map[string]*any, pass []*any) (bool, []*any, map[string]*any, error) {
+					Func: func(chat *storageStructs.Chats, args map[string]*any, pass []*any) (bool, []*any, map[string]*any, error) {
 						order = append(order, "high")
 						return true, pass, map[string]*any{}, nil
 					},
@@ -571,7 +589,7 @@ func TestPostHookPrioritySorting(t *testing.T) {
 				Scope: "scope1",
 				PostHook: toolobj.PostHookFunction{
 					Priority: 2,
-					Func: func(args map[string]*any, pass []*any) (bool, []*any, map[string]*any, error) {
+					Func: func(chat *storageStructs.Chats, args map[string]*any, pass []*any) (bool, []*any, map[string]*any, error) {
 						order = append(order, "mid")
 						return true, pass, map[string]*any{}, nil
 					},
@@ -582,7 +600,7 @@ func TestPostHookPrioritySorting(t *testing.T) {
 	actions.AddTool(tool)
 	v := any("value")
 	args := map[string]*any{"key": &v}
-	_, err := ExecToolPostHook("tool1", args)
+	_, err := ExecToolPostHook(testChat, "tool1", args)
 
 	if err != nil {
 		t.Fatalf("ExecToolOnHook returned error: %v", err)
@@ -598,10 +616,11 @@ func TestPostHookPrioritySorting(t *testing.T) {
 }
 
 func TestZeroPriority(t *testing.T) {
-	initTestEnv()
+	db := initTestEnv()
 
 	actions.AddScope("scope1", "Scope 1 prompt")
-	actions.EnableScope("scope1")
+	testChat := &storageStructs.Chats{ID: 1, DB: db, EnableScopes: make(map[string]bool)}
+	actions.EnableScope(testChat, "scope1")
 
 	tool := &toolobj.Tools{
 		Name:            "TestTool",
@@ -612,7 +631,7 @@ func TestZeroPriority(t *testing.T) {
 				Scope: "scope1",
 				PreHook: toolobj.PreHookFunction{
 					Priority: 0,
-					Func: func() (string, error) {
+					Func: func(chat *storageStructs.Chats) (string, error) {
 						return "zero_priority", nil
 					},
 				},
@@ -621,7 +640,7 @@ func TestZeroPriority(t *testing.T) {
 				Scope: "scope1",
 				PreHook: toolobj.PreHookFunction{
 					Priority: 1,
-					Func: func() (string, error) {
+					Func: func(chat *storageStructs.Chats) (string, error) {
 						return "one_priority", nil
 					},
 				},
@@ -630,7 +649,7 @@ func TestZeroPriority(t *testing.T) {
 	}
 	actions.AddTool(tool)
 
-	_, prehooks, _ := ExecOneToolGetPrompts("tool1")
+	_, prehooks, _ := ExecOneToolGetPrompts(testChat, "tool1")
 
 	if len(prehooks) != 2 {
 		t.Errorf("TestZeroPriority failed: expected 2 prehooks, got %d", len(prehooks))
@@ -646,10 +665,11 @@ func TestZeroPriority(t *testing.T) {
 }
 
 func TestExecToolGetPromptsParameters(t *testing.T) {
-	initTestEnv()
+	db := initTestEnv()
 
 	actions.AddScope("scope1", "Scope 1 prompt")
-	actions.EnableScope("scope1")
+	testChat := &storageStructs.Chats{ID: 1, DB: db, EnableScopes: make(map[string]bool)}
+	actions.EnableScope(testChat, "scope1")
 
 	// 工具初始参数
 	baseParams := map[string]parser.ToolParameters{
@@ -672,7 +692,7 @@ func TestExecToolGetPromptsParameters(t *testing.T) {
 			{
 				Scope: "scope1",
 				PreHook: toolobj.PreHookFunction{
-					Func: func() (string, error) {
+					Func: func(chat *storageStructs.Chats) (string, error) {
 						return "prehook-param", nil
 					},
 				},
@@ -682,7 +702,7 @@ func TestExecToolGetPromptsParameters(t *testing.T) {
 	}
 	actions.AddTool(tool)
 
-	unusedHooks, prehooks, paras := ExecOneToolGetPrompts("tool1")
+	unusedHooks, prehooks, paras := ExecOneToolGetPrompts(testChat, "tool1")
 
 	if len(unusedHooks) != 0 {
 		t.Errorf("TestExecToolGetPromptsParameters failed: expected 0 unused hooks, got %d", len(unusedHooks))

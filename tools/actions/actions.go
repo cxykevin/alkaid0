@@ -1,6 +1,7 @@
 package actions
 
 import (
+	"github.com/cxykevin/alkaid0/storage/structs"
 	"github.com/cxykevin/alkaid0/tools/toolobj"
 )
 
@@ -20,23 +21,23 @@ func HookTool(name string, hook *toolobj.Hook) {
 }
 
 // EnableScope 启用命名空间
-func EnableScope(scope string) {
+func EnableScope(session *structs.Chats, scope string) {
 	if scope == "" {
 		return
 	}
-	toolobj.EnableScopes[scope] = true
-	if err := SetScopeEnabled(scope, true); err != nil {
+	session.EnableScopes[scope] = true
+	if err := SetScopeEnabled(session.DB, scope, true); err != nil {
 		logger.Error("failed to persist enable scope %s: %v", scope, err)
 	}
 }
 
 // DisableScope 禁用命名空间
-func DisableScope(scope string) {
+func DisableScope(session *structs.Chats, scope string) {
 	if scope == "" {
 		return
 	}
-	toolobj.EnableScopes[scope] = false
-	if err := SetScopeEnabled(scope, false); err != nil {
+	session.EnableScopes[scope] = false
+	if err := SetScopeEnabled(session.DB, scope, false); err != nil {
 		logger.Error("failed to persist disable scope %s: %v", scope, err)
 	}
 }

@@ -6,11 +6,12 @@ import (
 	"time"
 
 	"github.com/cxykevin/alkaid0/config"
+	"gorm.io/gorm"
+
 	// "github.com/cxykevin/alkaid0/provider/request"
 
 	"github.com/cxykevin/alkaid0/provider/request/build"
 	"github.com/cxykevin/alkaid0/provider/request/structs"
-	"github.com/cxykevin/alkaid0/storage"
 	storageStructs "github.com/cxykevin/alkaid0/storage/structs"
 )
 
@@ -18,8 +19,8 @@ import (
 const SummaryTimeout = 120 * time.Second
 
 // Summary 获取总结
-func Summary(ctx context.Context, chatID uint32, agentID string) (string, error) {
-	msgID, obj, err := build.Summary(chatID, agentID, storage.DB)
+func Summary(ctx context.Context, db *gorm.DB, chatID uint32, agentID string) (string, error) {
+	msgID, obj, err := build.Summary(chatID, agentID, db)
 	if err != nil {
 		return "", err
 	}
@@ -50,7 +51,7 @@ func Summary(ctx context.Context, chatID uint32, agentID string) (string, error)
 	respStr := resp.String()
 
 	// 写db
-	err = storage.DB.
+	err = db.
 		Model(&storageStructs.Messages{}).
 		Where("id = ?", msgID).
 		Select("summary").
@@ -63,4 +64,12 @@ func Summary(ctx context.Context, chatID uint32, agentID string) (string, error)
 
 	return respStr, nil
 
+}
+
+// SummarySession 获取总结
+func SummarySession(ctx context.Context, session *storageStructs.Chats) (string, error) {
+	db := session.DB
+	chatID := session.ID
+	agentID := session.CurrentAgentID
+	return Summary(ctx, db, chatID, agentID)
 }
