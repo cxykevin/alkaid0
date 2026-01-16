@@ -26,7 +26,7 @@ func EnableScope(session *structs.Chats, scope string) {
 		return
 	}
 	session.EnableScopes[scope] = true
-	if err := SetScopeEnabled(session.DB, scope, true); err != nil {
+	if err := SetScopeEnabled(session.DB, session.ID, scope, true); err != nil {
 		logger.Error("failed to persist enable scope %s: %v", scope, err)
 	}
 }
@@ -37,7 +37,7 @@ func DisableScope(session *structs.Chats, scope string) {
 		return
 	}
 	session.EnableScopes[scope] = false
-	if err := SetScopeEnabled(session.DB, scope, false); err != nil {
+	if err := SetScopeEnabled(session.DB, session.ID, scope, false); err != nil {
 		logger.Error("failed to persist disable scope %s: %v", scope, err)
 	}
 }

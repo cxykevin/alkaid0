@@ -4,6 +4,6 @@ package structs
 type Scopes struct {
 	Name    string `gorm:"primaryKey"`
 	Enabled bool
-	ChatID  uint32
-	Chats   Chats `gorm:"foreignKey:ChatID"`
+	ChatID  uint32 `gorm:"primaryKey"`
+	Chats   Chats  `gorm:"foreignKey:ChatID"`
 }

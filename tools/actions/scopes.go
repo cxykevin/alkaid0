@@ -16,8 +16,11 @@ func init() {
 
 // Load 从数据库加载命名空间启用状态
 func Load(session *structs.Chats) {
+	if session.EnableScopes == nil {
+		session.EnableScopes = make(map[string]bool)
+	}
 	// 尝试从数据库加载命名空间启用状态（若 DB 未初始化则忽略）
-	if scs, err := GetAllScopes(session, session.DB); err == nil {
+	if scs, err := getAllScopes(session, session.DB); err == nil {
 		maps.Copy(session.EnableScopes, scs)
 	} else {
 		logger.Error("failed to load scopes from storage: %v", err)
@@ -25,18 +28,18 @@ func Load(session *structs.Chats) {
 }
 
 // SetScopeEnabled 设置或更新命名空间启用状态
-func SetScopeEnabled(db *gorm.DB, name string, enabled bool) error {
+func SetScopeEnabled(db *gorm.DB, chatID uint32, name string, enabled bool) error {
 	if db == nil {
 		// 如果 DB 未初始化，记录并返回 nil，不阻塞业务
 		logger.Info("DB not initialized, skip persist scope %s", name)
 		return nil
 	}
-	s := structs.Scopes{Name: name, Enabled: enabled}
+	s := structs.Scopes{Name: name, Enabled: enabled, ChatID: chatID}
 	return db.Save(&s).Error
 }
 
-// GetAllScopes 返回数据库中所有命名空间的启用状态
-func GetAllScopes(session *structs.Chats, db *gorm.DB) (map[string]bool, error) {
+// getAllScopes 返回数据库中所有命名空间的启用状态
+func getAllScopes(session *structs.Chats, db *gorm.DB) (map[string]bool, error) {
 	result := make(map[string]bool)
 	if db == nil {
 		return result, nil

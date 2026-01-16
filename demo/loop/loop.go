@@ -15,6 +15,7 @@ import (
 	"github.com/cxykevin/alkaid0/storage"
 	"github.com/cxykevin/alkaid0/storage/structs"
 	"github.com/cxykevin/alkaid0/tools/actions"
+	"github.com/cxykevin/alkaid0/tools/toolobj"
 	"gorm.io/gorm"
 )
 
@@ -103,19 +104,19 @@ func Start(db *gorm.DB) {
 			}
 		}
 	}
-	sessionObj := chats[chatNum]
-	sessionObj.DB = db
-	actions.Load(&sessionObj)
+	session := chats[chatNum]
+	session.DB = db
+	actions.Load(&session)
 	fmt.Println("===== Info =====")
-	fmt.Printf("ID: %v\n", sessionObj.ID)
-	fmt.Printf("Agent: %v\n", sessionObj.NowAgent)
-	fmt.Printf("Model: %v\n", sessionObj.LastModelID)
-	storage.GlobalConfig.LastChatID = sessionObj.ID
-	logger.Debug("use chat ID:%v|Agent:%v|Model:%v", sessionObj.ID, sessionObj.NowAgent, sessionObj.LastModelID)
+	fmt.Printf("ID: %v\n", session.ID)
+	fmt.Printf("Agent: %v\n", session.NowAgent)
+	fmt.Printf("Model: %v\n", session.LastModelID)
+	storage.GlobalConfig.LastChatID = session.ID
+	logger.Debug("use chat ID:%v|Agent:%v|Model:%v", session.ID, session.NowAgent, session.LastModelID)
 	// 显示历史
 	fmt.Println("===== History =====")
 	chatMsgs := []structs.Messages{}
-	assert(db.Where("chat_id = ?", sessionObj.ID).Find(&chatMsgs).Error)
+	assert(db.Where("chat_id = ?", session.ID).Find(&chatMsgs).Error)
 	for _, v := range chatMsgs {
 		logger.Debug("(history)discover history %v", strings.ReplaceAll(fmt.Sprintf("%v", v), "\n", "\\n"))
 		fmt.Print("--- ")
@@ -155,7 +156,9 @@ func Start(db *gorm.DB) {
 				fmt.Println("] /model [id]: set model")
 				fmt.Println("] /models: get models list")
 				fmt.Println("] /summary: summary the history")
-				fmt.Println("] /agent: manage agents (only for test)")
+				fmt.Println("] ===== test command =====")
+				fmt.Println("] /agent: manage agents")
+				fmt.Println("] /scope: manage scopes")
 			case "/exit":
 				os.Exit(0)
 			case "/models":
@@ -177,13 +180,13 @@ func Start(db *gorm.DB) {
 					fmt.Println("input error(model not found)")
 					continue
 				}
-				sessionObj.LastModelID = uint32(modelID)
+				session.LastModelID = uint32(modelID)
 				// 写数据库
-				assert(db.Save(&sessionObj).Error)
+				assert(db.Save(&session).Error)
 				fmt.Printf("- model changed to %v(%v)\n", modelInfo.ModelName, modelInfo.ModelID)
 			case "/summary":
 				fmt.Printf("summarying...\n")
-				ret, err := request.SummarySession(context.Background(), &sessionObj)
+				ret, err := request.SummarySession(context.Background(), &session)
 				fmt.Printf("summary finished!\n%s\n", ret)
 				if err != nil {
 					fmt.Printf("Err!\n%v\n", err)
@@ -219,27 +222,63 @@ func Start(db *gorm.DB) {
 						fmt.Println("input error(args not enough)")
 						continue
 					}
-					agents.AddAgent(&sessionObj, args[2], args[3], args[4])
+					agents.AddAgent(&session, args[2], args[3], args[4])
 				case "activate":
 					if len(args) < 4 {
 						fmt.Println("input error(args not enough)")
 						continue
 					}
-					agents.ActivateAgent(&sessionObj, args[2], args[3])
+					agents.ActivateAgent(&session, args[2], args[3])
 				case "deactivate":
-					agents.DeactivateAgent(&sessionObj)
+					agents.DeactivateAgent(&session)
+				}
+			case "/scope":
+				if len(args) < 2 {
+					// fmt.Println("] TODO:")
+					fmt.Println("] /scope list: show scopes")
+					fmt.Println("] /scope enable [scope]: enable scope")
+					// fmt.Println("] /agent used: show used agents")
+					// fmt.Println("] /agent add [name] [id] [path]: add agents to project")
+					// fmt.Println("] /agent activate [name] [prompt]: activate agent")
+					// fmt.Println("] /agent deactive: deactivate agent")
+					continue
+				}
+				switch args[1] {
+				case "list":
+					for k, v := range toolobj.Scopes {
+						enableToolStr := " "
+						if k == "" {
+							enableToolStr = "*"
+							k = "(default)"
+						} else if session.EnableScopes[k] {
+							enableToolStr = "X"
+						}
+						fmt.Printf("- [%s] %s:%s\n", enableToolStr, k, v)
+					}
+				case "enable":
+					if len(args) < 3 {
+						fmt.Println("input error(args not enough)")
+						continue
+					}
+					actions.EnableScope(&session, args[2])
+				case "disable":
+					if len(args) < 3 {
+						fmt.Println("input error(args not enough)")
+						continue
+					}
+					actions.DisableScope(&session, args[2])
 				}
 			}
 			continue
 		}
 		if input != "!" {
-			request.UserAddMsg(&sessionObj, input, nil)
+			request.UserAddMsg(&session, input, nil)
 		}
 		// 启动 loop
 		for {
 			fmt.Println("--- AI")
 			thinkingFlag := false
-			finish, err := request.SendRequest(context.Background(), &sessionObj, func(delta string, thinkingDelta string) error {
+			finish, err := request.SendRequest(context.Background(), &session, func(delta string, thinkingDelta string) error {
 				if thinkingDelta != "" {
 					if !thinkingFlag {
 						fmt.Print("[Think]")
