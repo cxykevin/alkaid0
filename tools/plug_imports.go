@@ -3,4 +3,5 @@ package tools
 
 import (
 	_ "github.com/cxykevin/alkaid0/tools/tools/edit"
+	_ "github.com/cxykevin/alkaid0/tools/tools/trace"
 )

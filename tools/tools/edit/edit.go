@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/cxykevin/alkaid0/library/json"
 	"github.com/cxykevin/alkaid0/provider/parser"
 	"github.com/cxykevin/alkaid0/storage/structs"
 	"github.com/cxykevin/alkaid0/tools/actions"
@@ -45,28 +46,53 @@ func buildPrompt(session *structs.Chats) (string, error) {
 	return prompt, nil
 }
 
+type toolCallFlagTempory struct {
+	PathOutputed    bool
+	TargetOutputed  bool
+	TextOutputedLen int32
+}
+
 func updateInfo(session *structs.Chats, mp map[string]*any, cross []*any) (bool, []*any, error) {
-	// 只在参数存在时输出，支持流式更新
+
+	tmp, ok := session.TemporyDataOfRequest["tools:edit"]
+	if !ok || tmp == nil {
+		session.TemporyDataOfRequest["tools:edit"] = toolCallFlagTempory{}
+		tmp = session.TemporyDataOfRequest["tools:edit"]
+	}
+	tmpObj := tmp.(toolCallFlagTempory)
 	if pathPtr, ok := mp["path"]; ok && pathPtr != nil {
 		if path, ok := (*pathPtr).(string); ok {
-			fmt.Printf("Edit path: %s\n", path)
+			if !tmpObj.PathOutputed {
+				fmt.Printf("Edit path: %s\n", path)
+				tmpObj.PathOutputed = true
+			}
 		}
 	}
 	if targetPtr, ok := mp["target"]; ok && targetPtr != nil {
 		if target, ok := (*targetPtr).(string); ok {
-			fmt.Printf("Edit target: %s\n", target)
-		}
-	}
-	if textPtr, ok := mp["text"]; ok && textPtr != nil {
-		if text, ok := (*textPtr).(string); ok {
-			// 限制text输出长度，避免日志过多
-			if len(text) > 100 {
-				fmt.Printf("Edit text: %s... (truncated)\n", text[:100])
-			} else {
-				fmt.Printf("Edit text: %s\n", text)
+			if !tmpObj.TargetOutputed {
+				fmt.Printf("Edit target: %s\n", target)
+				tmpObj.TargetOutputed = true
 			}
 		}
 	}
+	if textPtr, ok := mp["text"]; ok && textPtr != nil {
+		var textOut string
+		if text, ok := (*textPtr).(string); ok {
+			textOut = text
+		}
+		if text, ok := (*textPtr).(json.StringSlot); ok {
+			textOut = string(text)
+		}
+		if textOut != "" && int(tmpObj.TextOutputedLen) == 0 {
+			fmt.Print("Edit text: ")
+		}
+		if textOut != "" {
+			fmt.Print(textOut[tmpObj.TextOutputedLen:])
+			tmpObj.TextOutputedLen = int32(len(textOut))
+		}
+	}
+	session.TemporyDataOfRequest["tools:edit"] = tmpObj
 	return true, cross, nil
 }
 

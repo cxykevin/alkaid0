@@ -59,6 +59,7 @@ type aiToolsResponseTemplate struct {
 
 // SendRequest 发送请求
 func SendRequest(ctx context.Context, session *structs.Chats, callback func(string, string) error) (bool, error) {
+	session.TemporyDataOfRequest = make(map[string]any)
 	db := session.DB
 	chatID := session.ID
 	// 取模型ID

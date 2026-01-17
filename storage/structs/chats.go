@@ -11,9 +11,10 @@ type Chats struct {
 	LastModelID uint32
 	NowAgent    string
 	// === 会话过程参数 ===
-	DB                  *gorm.DB            `gorm:"-" json:"-"`
-	CurrentAgentID      string              `gorm:"-" json:"-"`
-	CurrentAgentConfig  structs.AgentConfig `gorm:"-" json:"-"`
-	CurrentActivatePath string              `gorm:"-" json:"-"`
-	EnableScopes        map[string]bool     `gorm:"-" json:"-"`
+	DB                   *gorm.DB            `gorm:"-" json:"-"`
+	CurrentAgentID       string              `gorm:"-" json:"-"`
+	CurrentAgentConfig   structs.AgentConfig `gorm:"-" json:"-"`
+	CurrentActivatePath  string              `gorm:"-" json:"-"`
+	EnableScopes         map[string]bool     `gorm:"-" json:"-"`
+	TemporyDataOfRequest map[string]any      `gorm:"-" json:"-"`
 }
