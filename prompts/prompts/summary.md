@@ -67,3 +67,9 @@ Do not **include any content unrelated to the summary itself**.
 ```text
 The user is developing a multilingual e-commerce website and has decided to use Next.js App Router with i18n-next for internationalization. The basic structure of the language switcher has been completed, but an issue with route parameter propagation remains unresolved. The user explicitly requires clean URLs and does not want language prefixes in the path. The next step is to refine language detection and synchronization in SSR scenarios.
 ```
+
+### Messages
+
+** The messages below this line are the input messages you need to generate the summary. **
+
+============

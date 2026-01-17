@@ -1,7 +1,9 @@
 package request
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 
@@ -47,6 +49,12 @@ func stringDefault(str *string) string {
 		return ""
 	}
 	return *str
+}
+
+type aiToolsResponseTemplate struct {
+	Name       string `json:"name"`
+	ID         string `json:"id"`
+	Parameters string `json:"parameters,omitempty"`
 }
 
 // SendRequest 发送请求
@@ -126,14 +134,36 @@ func SendRequest(ctx context.Context, session *structs.Chats, callback func(stri
 		return true, err
 	}
 	gDelta.WriteString(delta)
+	tools := solver.GetTools()
+	toolsCalledStr := ""
+	if len(tools) > 0 {
+		toolsRender := []aiToolsResponseTemplate{}
+		for _, v := range tools {
+			toolsRender = append(toolsRender, aiToolsResponseTemplate{
+				Name:       v.Name,
+				ID:         v.ID,
+				Parameters: "(omitted content)",
+			})
+		}
+		var buf bytes.Buffer
+		encoder := json.NewEncoder(&buf)
+		encoder.SetIndent("", "    ")
+		encoder.SetEscapeHTML(false)
+		err = encoder.Encode(toolsRender)
+		if err != nil {
+			return true, err
+		}
+		toolsCalledStr = buf.String()
+	}
 	gThinkingDelta.WriteString(thinkingDelta)
 	if gDelta.String() == "" && gThinkingDelta.String() == "" {
 		// 删除
 		err = db.Delete(&structs.Messages{}, msgID).Error
 	} else {
 		err = db.Model(&structs.Messages{}).Where("id = ?", msgID).Updates(structs.Messages{
-			Delta:         gDelta.String(),
-			ThinkingDelta: gThinkingDelta.String(),
+			Delta:                 gDelta.String(),
+			ThinkingDelta:         gThinkingDelta.String(),
+			ToolCallingJSONString: string(toolsCalledStr),
 		}).Error
 	}
 	if err != nil {

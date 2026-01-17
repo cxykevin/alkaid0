@@ -7,8 +7,8 @@ import (
 // GlobalTemplate 思考模板
 var GlobalTemplate *template.Template
 
-// ThinkingWrapTemplate 思考模板
-var ThinkingWrapTemplate *template.Template
+// DeltaWrapTemplate response 模板
+var DeltaWrapTemplate *template.Template
 
 // ToolsWrapTemplate 工具模板
 var ToolsWrapTemplate *template.Template
@@ -28,6 +28,9 @@ var ToolScopesTemplate *template.Template
 // ToolResponseWrapTemplate 工具响应描述模板（更推荐走 trace）
 var ToolResponseWrapTemplate *template.Template
 
+// ToolsCallWrapTemplate 工具调用模板
+var ToolsCallWrapTemplate *template.Template
+
 func init() {
 	// 创建函数映射
 	funcMap := template.FuncMap{
@@ -39,7 +42,7 @@ func init() {
 	}
 
 	GlobalTemplate = template.Must(template.New("Global").Funcs(funcMap).Parse(Global))
-	ThinkingWrapTemplate = template.Must(template.New("ThinkingWrap").Funcs(funcMap).Parse(ThinkingWrap))
+	DeltaWrapTemplate = template.Must(template.New("DeltaWrap").Funcs(funcMap).Parse(DeltaWrap))
 	ToolsWrapTemplate = template.Must(template.New("ToolsWrap").Funcs(funcMap).Parse(ToolsWrap))
 	SummaryWrapTemplate = template.Must(template.New("SummaryWrap").Funcs(funcMap).Parse(SummaryWrap))
 	UserPromptTemplate = template.Must(template.New("UserPrompt").Funcs(funcMap).Parse(UserPromptWrap))

@@ -1,3 +1,0 @@
-<think>
-{{.Thinking}}
-</think>

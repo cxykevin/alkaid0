@@ -237,10 +237,6 @@ func Start(db *gorm.DB) {
 					// fmt.Println("] TODO:")
 					fmt.Println("] /scope list: show scopes")
 					fmt.Println("] /scope enable [scope]: enable scope")
-					// fmt.Println("] /agent used: show used agents")
-					// fmt.Println("] /agent add [name] [id] [path]: add agents to project")
-					// fmt.Println("] /agent activate [name] [prompt]: activate agent")
-					// fmt.Println("] /agent deactive: deactivate agent")
 					continue
 				}
 				switch args[1] {

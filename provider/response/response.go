@@ -80,6 +80,11 @@ func (p *Solver) DoneToken() (bool, string, string, error) {
 	return !p.parser.CalledTools, delta, reasoningDelta, err
 }
 
+// GetTools 获取工具
+func (p *Solver) GetTools() []parser.AIToolsResponse {
+	return p.parser.ToolsSolved
+}
+
 // NewSolver 创建解析器
 func NewSolver(db *gorm.DB, session *structs.Chats) *Solver {
 	obj := &Solver{chatID: session.ID, db: db}

@@ -59,7 +59,7 @@ func Tools(session *structs.Chats) (string, string, *[]*parser.ToolsDefine) {
 		if k == "" {
 			continue
 		}
-		if val, ok := session.EnableScopes[v.Scope]; !ok || !val {
+		if !checkToolScope(session, v.Scope) {
 			continue
 		}
 		unusedPrompt, activePrompt, paras := tools.ExecOneToolGetPrompts(session, k)
@@ -78,6 +78,16 @@ func Tools(session *structs.Chats) (string, string, *[]*parser.ToolsDefine) {
 	}
 
 	return scopesString, globalToolTraceStr, &toolsDef
+}
+
+func checkToolScope(session *structs.Chats, scope string) bool {
+	if scope == "" {
+		return true
+	}
+	if val, ok := session.EnableScopes[scope]; !ok || !val {
+		return false
+	}
+	return true
 }
 
 // ToolsSolver 构建工具处理器
@@ -109,7 +119,7 @@ func ToolsSolver(session *structs.Chats, callback func(string, string, map[strin
 		if k == "" {
 			continue
 		}
-		if val, ok := session.EnableScopes[v.Scope]; !ok || !val {
+		if !checkToolScope(session, v.Scope) {
 			continue
 		}
 		_, _, paras := tools.ExecOneToolGetPrompts(session, k)

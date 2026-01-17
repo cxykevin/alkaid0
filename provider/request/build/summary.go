@@ -75,15 +75,22 @@ func SummaryWithKeepNumber(chatID uint32, agentID string, db *gorm.DB, keepNum i
 				exitFlag = true
 			} else {
 				if v.ThinkingDelta != "" {
+					thinkingWrap := ""
 					if modelConfig.EnableThinking {
 						thinkingString := v.ThinkingDelta
 						msg.ReasoningContent = &thinkingString
-						msg.Content = v.Delta
 					} else {
-						msg.Content = prompts.Render(prompts.ThinkingWrapTemplate, struct {
-							Thinking string
-						}{Thinking: v.ThinkingDelta}) + v.Delta
+						thinkingWrap = v.ThinkingDelta
 					}
+					msg.Content = prompts.Render(prompts.DeltaWrapTemplate, struct {
+						Thinking  string
+						Delta     string
+						ToolsCall string
+					}{
+						Thinking:  thinkingWrap,
+						Delta:     v.Delta,
+						ToolsCall: v.ToolCallingJSONString,
+					})
 				} else {
 					msg.Content = v.Delta
 				}

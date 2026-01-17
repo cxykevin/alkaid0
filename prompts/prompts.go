@@ -12,15 +12,15 @@ var Global string
 //go:embed prompts/tools.md
 var Tools string
 
-// ToolsWrap 工具调用占位符
+// ToolsWrap 工具占位符
 //
 //go:embed prompts/tools_wrap.md
 var ToolsWrap string
 
-// ThinkingWrap 对于不支持思考的模型的思考占位符
+// DeltaWrap ai response 占位符
 //
-//go:embed prompts/thinking_wrap.md
-var ThinkingWrap string
+//go:embed prompts/delta_wrap.md
+var DeltaWrap string
 
 // SummaryWrap 对于不支持思考的模型的思考占位符
 //
