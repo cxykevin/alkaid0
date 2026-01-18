@@ -8,4 +8,5 @@ var Tables = []any{
 	&Terminals{},
 	&Scopes{},
 	&Configs{},
+	&Traces{},
 }

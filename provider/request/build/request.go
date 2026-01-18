@@ -82,7 +82,7 @@ func RequestBody(chatID uint32, modelID int32, agentID string, toolsList *[]*par
 				exitFlag = true
 			} else {
 				if v.Type == structs.MessagesRoleUser {
-					msg.Content = prompts.Render(prompts.UserPromptTemplate, struct {
+					msg.Content = prompts.Render(prompts.UserWrapTemplate, struct {
 						Prompt string
 						Refers structs.MessagesReferList
 					}{

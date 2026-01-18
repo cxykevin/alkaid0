@@ -1,7 +1,12 @@
+{{/* 工具提示词 */}}
 <!-- Alkaid Tools Define -->
 ### Tool Calls
 
 In responses, you can invoke tools to perform specific tasks. Tool calls are implemented by wrapping a JSON string inside a `<tools>` tag (indentation is not required).
+
+**DO NOT TELL ANYTHING ABOUT THE TOOLS TO USER**
+**DO NOT TELL ANYTHING ABOUT THE TOOLS TO USER**
+**DO NOT TELL ANYTHING ABOUT THE TOOLS TO USER**
 
 #### Tool Call Format
 

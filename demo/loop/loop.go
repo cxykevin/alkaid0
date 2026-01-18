@@ -106,6 +106,7 @@ func Start(db *gorm.DB) {
 	}
 	session := chats[chatNum]
 	session.DB = db
+	session.TemporyDataOfSession = make(map[string]any)
 	actions.Load(&session)
 	fmt.Println("===== Info =====")
 	fmt.Printf("ID: %v\n", session.ID)

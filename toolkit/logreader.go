@@ -135,7 +135,15 @@ func displayLogEntry(entry *LogEntry, config Config) {
 	timestamp := highlightTimestamp(entry.Timestamp, config.NoColor)
 	level := highlightLevel(entry.Level, config.NoColor)
 	category := highlightCategory(entry.Category, config.NoColor)
-	message := entry.Message
+	message := strings.ReplaceAll(
+		strings.ReplaceAll(
+			strings.ReplaceAll(
+				strings.ReplaceAll(
+					entry.Message,
+					"\\n", "\n"),
+				"\\r", "\r"),
+			"\\t", "\t"),
+		"\\\\", "\\")
 
 	fmt.Printf("%s %s %s %s\n", timestamp, level, category, message)
 }

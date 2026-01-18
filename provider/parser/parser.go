@@ -231,10 +231,12 @@ func (p *Parser) solveTool() {
 			}
 		}
 		// 调用工具
-		err := p.Tools[toolID].Func(toolCallID, map[string]*any(toolParameters), toolFinishTag)
-		if err != nil {
-			p.Stop = true
-			return
+		if p.Tools[toolID].Func != nil {
+			err := p.Tools[toolID].Func(toolCallID, map[string]*any(toolParameters), toolFinishTag)
+			if err != nil {
+				p.Stop = true
+				return
+			}
 		}
 		if toolFinishTag {
 			p.ToolsSolved = append(p.ToolsSolved, AIToolsResponse{

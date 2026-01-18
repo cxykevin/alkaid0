@@ -1,3 +1,4 @@
+{{/* 工具作用域 */}}
 {{if .Scopes}}
 
 ### Tool Scopes

@@ -2,9 +2,13 @@ package trace
 
 import (
 	_ "embed" // embed
+	"errors"
 	"fmt"
+	"os"
 	"strings"
+	"text/template"
 
+	"github.com/cxykevin/alkaid0/prompts"
 	"github.com/cxykevin/alkaid0/provider/parser"
 	"github.com/cxykevin/alkaid0/storage/structs"
 	"github.com/cxykevin/alkaid0/tools/actions"
@@ -16,6 +20,15 @@ const toolName = "trace"
 
 //go:embed prompt.md
 var prompt string
+
+//go:embed trace.md
+var tracePrompt string
+
+var traceTempate *template.Template
+
+func init() {
+	traceTempate = prompts.Load("tools:trace:trace", tracePrompt)
+}
 
 var paras = map[string]parser.ToolParameters{
 	"untrace": {
@@ -80,13 +93,15 @@ func traceFile(session *structs.Chats, mp map[string]*any, push []*any) (bool, [
 		}, nil
 	}
 
-	// var untrace bool
-	// if untracePtr, ok := mp["untrace"]; ok && untracePtr != nil {
-	// 	untrace, ok = (*untracePtr).(bool)
-	// 	if !ok {
-	// 		untrace := false
-	// 	}
-	// }
+	// 检查并获取untrace参数
+	untracePtr, ok := mp["untrace"]
+	var untrace bool
+	if ok && untracePtr != nil {
+		untrace, ok = (*untracePtr).(bool)
+		if !ok || path == "" {
+			untrace = false
+		}
+	}
 
 	// 检查path
 	if strings.Contains(path, "..") {
@@ -120,15 +135,125 @@ func traceFile(session *structs.Chats, mp map[string]*any, push []*any) (bool, [
 		}, nil
 	}
 
-	// TODO v2: Trace file
-	// TODO v2: Trace to database
-	// TODO v3: RAG trace
+	if untrace {
+		// 删数据库
+		tx := session.DB.Where("chat_id = ? AND path = ?", session.ID, path).Delete(&structs.Traces{})
+		err := tx.Error
+		if err != nil {
+			boolx := false
+			success := any(boolx)
+			errMsg := any(err.Error())
+			return false, push, map[string]*any{
+				"success": &success,
+				"error":   &errMsg,
+			}, err
+		}
+		if tx.RowsAffected == 0 {
+			// 没有找到
+			boolx := false
+			success := any(boolx)
+			errMsg := any("no such trace")
+			return false, push, map[string]*any{
+				"success": &success,
+				"error":   &errMsg,
+			}, nil
+		}
+	} else {
+		// 更新 TraceID
+		session.TraceID++
+		// 写数据库
+		trace := structs.Traces{
+			ChatID:  session.ID,
+			Path:    path,
+			TraceID: session.TraceID,
+		}
+		session.DB.Save(&trace)
+		session.DB.Model(&structs.Chats{}).Where("id = ?", session.ID).Update("trace_id", session.TraceID)
+	}
+
+	// TODO: RAG trace
+
+	// 读 db
+	traces := []structs.Traces{}
+	err := session.DB.Where("chat_id = ?", session.ID).Find(&traces).Error
+	if err != nil {
+		boolx := false
+		success := any(boolx)
+		errMsg := any(err.Error())
+		return false, push, map[string]*any{
+			"success": &success,
+			"error":   &errMsg,
+		}, err
+	}
+	session.TemporyDataOfSession["tools:trace"] = traces
 
 	boolx := true
 	success := any(boolx)
 	return false, push, map[string]*any{
 		"success": &success,
 	}, nil
+}
+
+type templateStruct struct {
+	Name   string
+	Size   string
+	Length uint32
+	Text   string
+}
+
+func buildTrace(session *structs.Chats) (string, error) {
+	if _, ok := session.TemporyDataOfSession["tools:trace"]; !ok {
+		// 读 db
+		traces := []structs.Traces{}
+		err := session.DB.Where("chat_id = ?", session.ID).Find(&traces).Error
+		if err != nil {
+			return "", err
+		}
+		session.TemporyDataOfSession["tools:trace"] = traces
+	}
+	traces, ok := session.TemporyDataOfSession["tools:trace"].([]structs.Traces)
+	if !ok {
+		return "", errors.New("failed to read traces from database")
+	}
+
+	var obj []templateStruct
+	for _, traceObj := range traces {
+		// 读取文件Stat
+		stat, err := os.Stat(traceObj.Path)
+		// 文件过大(100K)
+		if err != nil || stat.Size() > 50*1024 {
+			continue
+		}
+		// 读取文件内容
+		content, err := os.ReadFile(traceObj.Path)
+		if err != nil {
+			continue
+		}
+		str := fileContentToString(content)
+		if len(str) == 0 {
+			continue
+		}
+
+		// 读取行数
+		lines := strings.Split(str, "\n")
+		if len(lines) > 2000 {
+			continue
+		}
+		allLenStrLen := len(fmt.Sprintf("%d", len(lines)))
+		builder := strings.Builder{}
+		for lineno, line := range lines {
+			fmt.Fprintf(&builder, "%*d|%s\n", allLenStrLen, lineno+1, line)
+		}
+		// 转换为字符串
+		obj = append(obj, templateStruct{
+			Name:   traceObj.Path,
+			Size:   fmt.Sprintf("%d", stat.Size()),
+			Length: uint32(len(content)),
+			Text:   builder.String(),
+		})
+	}
+	traceList := prompts.Render(traceTempate, obj)
+	return traceList, nil
 }
 
 func load() string {
@@ -152,6 +277,21 @@ func load() string {
 		PostHook: toolobj.PostHookFunction{
 			Priority: 100,
 			Func:     traceFile,
+		},
+	})
+	actions.HookTool("", &toolobj.Hook{
+		Scope: "",
+		PreHook: toolobj.PreHookFunction{
+			Priority: 100,
+			Func:     buildTrace,
+		},
+		OnHook: toolobj.OnHookFunction{
+			Priority: 100,
+			Func:     nil,
+		},
+		PostHook: toolobj.PostHookFunction{
+			Priority: 100,
+			Func:     nil,
 		},
 	})
 	return toolName

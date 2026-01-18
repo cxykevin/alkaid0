@@ -1,3 +1,4 @@
+{{/* 用户提示词 */}}
 <!-- Alkaid User Prompt -->
 <user_prompt>
 {{.Prompt}}

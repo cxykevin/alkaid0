@@ -1,3 +1,4 @@
+{{/* AI response 占位符 */}}
 {{- if eq .Thinking ""}}
 <think>
 {{.Thinking}}

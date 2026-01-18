@@ -10,6 +10,7 @@ type Chats struct {
 	ID          uint32 `gorm:"primaryKey;autoIncrement"`
 	LastModelID uint32
 	NowAgent    string
+	TraceID     uint64
 	// === 会话过程参数 ===
 	DB                   *gorm.DB            `gorm:"-" json:"-"`
 	CurrentAgentID       string              `gorm:"-" json:"-"`
@@ -17,4 +18,5 @@ type Chats struct {
 	CurrentActivatePath  string              `gorm:"-" json:"-"`
 	EnableScopes         map[string]bool     `gorm:"-" json:"-"`
 	TemporyDataOfRequest map[string]any      `gorm:"-" json:"-"`
+	TemporyDataOfSession map[string]any      `gorm:"-" json:"-"`
 }

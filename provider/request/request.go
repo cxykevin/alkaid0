@@ -126,6 +126,18 @@ func SendRequest(ctx context.Context, session *structs.Chats, callback func(stri
 		err = callback(delta, thinkingDelta)
 		return err
 	}
+
+	// 留日志
+	// 生成json
+	var buf bytes.Buffer
+	encoder := json.NewEncoder(&buf)
+	encoder.SetIndent("", "    ")
+	encoder.SetEscapeHTML(false)
+	err = encoder.Encode(obj)
+	if err == nil {
+		logger.Debug("[request body] %s", buf.String())
+	}
+
 	err = SimpleOpenAIRequest(ctx, modelCfg.ProviderURL, modelCfg.ProviderKey, modelCfg.ModelID, *obj, solveFunc)
 	if err != nil {
 		return true, err

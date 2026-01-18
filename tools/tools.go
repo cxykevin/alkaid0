@@ -63,12 +63,14 @@ func ExecOneToolGetPrompts(session *structs.Chats, name string) ([]string, []str
 		if !checkScopeEnabled(session, hook.Scope) {
 			continue
 		}
-		ret, err := hook.PreHook.Func(session)
-		if err != nil {
-			logger.Error("hook pre hook error: %v", err)
-			continue
+		if hook.PreHook.Func != nil {
+			ret, err := hook.PreHook.Func(session)
+			if err != nil {
+				logger.Error("hook pre hook error: %v", err)
+				continue
+			}
+			prehooks = append(prehooks, ret)
 		}
-		prehooks = append(prehooks, ret)
 		// 合并map
 		if hook.Parameters != nil {
 			maps.Copy(paras, *hook.Parameters)
@@ -100,16 +102,18 @@ func ExecToolOnHook(session *structs.Chats, name string, args map[string]*any) e
 		if !checkScopeEnabled(session, hook.Scope) {
 			continue
 		}
-		pass, passObj, err := hook.OnHook.Func(session, args, passObjs)
-		passObjs = passObj
-		if err != nil {
-			logger.Error("hook post hook error: %v", err)
-			return err
+		if hook.OnHook.Func != nil {
+			pass, passObj, err := hook.OnHook.Func(session, args, passObjs)
+			passObjs = passObj
+			if err != nil {
+				logger.Error("hook post hook error: %v", err)
+				return err
+			}
+			if pass {
+				continue
+			}
+			return nil
 		}
-		if pass {
-			continue
-		}
-		return nil
 	}
 	// logger.Error("all tool passed")
 	return nil
@@ -138,16 +142,18 @@ func ExecToolPostHook(session *structs.Chats, name string, args map[string]*any)
 		if !checkScopeEnabled(session, hook.Scope) {
 			continue
 		}
-		pass, passObj, ret, err := hook.PostHook.Func(session, args, passObjs)
-		passObjs = passObj
-		if err != nil {
-			logger.Error("hook post hook error: %v", err)
-			return map[string]*any{}, err
+		if hook.PreHook.Func != nil {
+			pass, passObj, ret, err := hook.PostHook.Func(session, args, passObjs)
+			passObjs = passObj
+			if err != nil {
+				logger.Error("hook post hook error: %v", err)
+				return map[string]*any{}, err
+			}
+			if pass {
+				continue
+			}
+			return ret, nil
 		}
-		if pass {
-			continue
-		}
-		return ret, nil
 	}
 	// logger.Error("all tool passed")
 	return map[string]*any{}, nil

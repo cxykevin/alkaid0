@@ -12,6 +12,6 @@ Adds a specified code file to the vector database or boosts its retrieval priori
 ### Usage Constraints:
 
 - **File Type**: **STRICTLY** limited to source code files.
-- **Prohibitions**: **DO NOT** execute this on binary files (e.g., .exe, .bin, .png) or excessively large files (more than 50KB or 2000 lines of code). Misuse will lead to retrieval noise and system inefficiency.
+- **Prohibitions**: **DO NOT** execute this on binary files (e.g., .exe, .bin, .png) or excessively large files (more than 100KB or 2000 lines of code). Misuse will lead to retrieval noise and system inefficiency.
 
 **When to Use**: Apply this when a specific module or file is critical to the current task and needs to be "remembered" more accurately by the model.

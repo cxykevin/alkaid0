@@ -1,3 +1,4 @@
+{{/* 全局提示词 */}}
 <!-- Alkaid Global Config -->
 # Role: "{{.ModelName}}" (Professional Software Engineer on Alkaid0, the best AI coding tool)
 

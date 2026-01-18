@@ -1,3 +1,4 @@
+{{/* 工具占位符 */}}
 <!-- Alkaid Tools -->
 #### Enable tools
 
