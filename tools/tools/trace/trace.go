@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"text/template"
 
@@ -49,6 +50,7 @@ func buildPrompt(session *structs.Chats) (string, error) {
 
 type toolCallFlagTempory struct {
 	PathOutputed bool
+	FlagOutputed bool
 }
 
 func updateInfo(session *structs.Chats, mp map[string]*any, cross []*any) (bool, []*any, error) {
@@ -67,6 +69,15 @@ func updateInfo(session *structs.Chats, mp map[string]*any, cross []*any) (bool,
 			}
 		}
 	}
+	if untPtr, ok := mp["untrace"]; ok && untPtr != nil {
+		if unt, ok := (*untPtr).(bool); ok {
+			if !tmpObj.FlagOutputed {
+				fmt.Printf("Untrace: %v\n", unt)
+				tmpObj.FlagOutputed = true
+			}
+		}
+	}
+	session.TemporyDataOfRequest["tools:trace"] = tmpObj
 	return true, cross, nil
 }
 
@@ -92,6 +103,7 @@ func traceFile(session *structs.Chats, mp map[string]*any, push []*any) (bool, [
 			"error":   &errMsg,
 		}, nil
 	}
+	path = filepath.Join(session.CurrentActivatePath, path)
 
 	// 检查并获取untrace参数
 	untracePtr, ok := mp["untrace"]
@@ -137,7 +149,7 @@ func traceFile(session *structs.Chats, mp map[string]*any, push []*any) (bool, [
 
 	if untrace {
 		// 删数据库
-		tx := session.DB.Where("chat_id = ? AND path = ?", session.ID, path).Delete(&structs.Traces{})
+		tx := session.DB.Where("chat_id = ? AND path = ? AND agent_id = ?", session.ID, path, session.CurrentAgentID).Delete(&structs.Traces{})
 		err := tx.Error
 		if err != nil {
 			boolx := false
@@ -159,6 +171,62 @@ func traceFile(session *structs.Chats, mp map[string]*any, push []*any) (bool, [
 			}, nil
 		}
 	} else {
+		// 检查文件是否存在
+
+		stat, err := os.Stat(path)
+		if err != nil {
+			boolx := false
+			success := any(boolx)
+			errMsg := any("file not exist")
+			return false, push, map[string]*any{
+				"success": &success,
+				"error":   &errMsg,
+			}, nil
+		}
+		// 文件过大(100K)
+		if stat.Size() > 50*1024 {
+			boolx := false
+			success := any(boolx)
+			errMsg := any("file too large")
+			return false, push, map[string]*any{
+				"success": &success,
+				"error":   &errMsg,
+			}, nil
+		}
+		// 读取文件内容
+		content, err := os.ReadFile(path)
+		if err != nil {
+			boolx := false
+			success := any(boolx)
+			errMsg := any("file read error: " + err.Error())
+			return false, push, map[string]*any{
+				"success": &success,
+				"error":   &errMsg,
+			}, nil
+		}
+		str := fileContentToString(content)
+		if len(str) == 0 {
+			boolx := false
+			success := any(boolx)
+			errMsg := any("file is empty or cannot readable (may be binary file)")
+			return false, push, map[string]*any{
+				"success": &success,
+				"error":   &errMsg,
+			}, nil
+		}
+
+		// 读取行数
+		lines := strings.Split(str, "\n")
+		if len(lines) > 2000 {
+			boolx := false
+			success := any(boolx)
+			errMsg := any("file is too long")
+			return false, push, map[string]*any{
+				"success": &success,
+				"error":   &errMsg,
+			}, nil
+		}
+
 		// 更新 TraceID
 		session.TraceID++
 		// 写数据库
@@ -166,6 +234,7 @@ func traceFile(session *structs.Chats, mp map[string]*any, push []*any) (bool, [
 			ChatID:  session.ID,
 			Path:    path,
 			TraceID: session.TraceID,
+			AgentID: session.CurrentAgentID,
 		}
 		session.DB.Save(&trace)
 		session.DB.Model(&structs.Chats{}).Where("id = ?", session.ID).Update("trace_id", session.TraceID)
@@ -185,7 +254,7 @@ func traceFile(session *structs.Chats, mp map[string]*any, push []*any) (bool, [
 			"error":   &errMsg,
 		}, err
 	}
-	session.TemporyDataOfSession["tools:trace"] = traces
+	session.TemporyDataOfSession["tools:trace"].(traceCache)[session.CurrentAgentID] = traces
 
 	boolx := true
 	success := any(boolx)
@@ -201,17 +270,25 @@ type templateStruct struct {
 	Text   string
 }
 
+type traceCache map[string]([]structs.Traces)
+
 func buildTrace(session *structs.Chats) (string, error) {
 	if _, ok := session.TemporyDataOfSession["tools:trace"]; !ok {
+		session.TemporyDataOfSession["tools:trace"] = traceCache{}
+	}
+	if _, ok := session.TemporyDataOfSession["tools:trace"].(traceCache); !ok {
+		session.TemporyDataOfSession["tools:trace"] = traceCache{}
+	}
+	if _, ok := session.TemporyDataOfSession["tools:trace"].(traceCache)[session.CurrentAgentID]; !ok {
 		// 读 db
 		traces := []structs.Traces{}
-		err := session.DB.Where("chat_id = ?", session.ID).Find(&traces).Error
+		err := session.DB.Where("chat_id = ? AND agent_id = ?", session.ID, session.CurrentAgentID).Find(&traces).Error
 		if err != nil {
 			return "", err
 		}
-		session.TemporyDataOfSession["tools:trace"] = traces
+		session.TemporyDataOfSession["tools:trace"].(traceCache)[session.CurrentAgentID] = traces
 	}
-	traces, ok := session.TemporyDataOfSession["tools:trace"].([]structs.Traces)
+	traces, ok := session.TemporyDataOfSession["tools:trace"].(traceCache)[session.CurrentAgentID]
 	if !ok {
 		return "", errors.New("failed to read traces from database")
 	}

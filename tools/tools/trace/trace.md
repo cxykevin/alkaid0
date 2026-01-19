@@ -5,7 +5,12 @@ The following are snippets of files currently being **traced**. These files are 
 #### Critical Instructions
 
 1.  **Source of Truth**: Treat these files as the primary reference for the project's coding style, architectural patterns, and business logic.
-2.  **Line Numbering & Referencing**: Each line in the `<content>` block is prefixed with its absolute line number (e.g., ` 10 | code`). When suggesting edits, explaining logic, or identifying bugs, you **MUST** refer to these specific line numbers. However, **DO NOT** include these line numbers in any code you generate or modify. **Line number IS NOT A PART OF FILE, DO NOT contains it in anywhere you OUTPUT**
+2.  **Line Numbering & Referencing**: Each line in the `<content>` block is prefixed with its absolute line number (e.g., ` 10 | code`). When suggesting edits, explaining logic, or identifying bugs, you **MUST** refer to these specific line numbers. However, **DO NOT** include these line numbers in any code you generate or modify. 
+
+**Line number IS NOT A PART OF FILE, DO NOT contains the line number in anywhere you OUTPUT**
+**Line number IS NOT A PART OF FILE, DO NOT contains the line number in anywhere you OUTPUT**
+**Line number IS NOT A PART OF FILE, DO NOT contains the line number in anywhere you OUTPUT**
+
 3.  **Handling Discontinuous Snippets**: 
     *   Be aware that the provided content may consist of **one or more non-contiguous fragments** rather than the full file.
     *   Use the line numbers to determine the relative positioning and distance between code blocks.
