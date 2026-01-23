@@ -193,7 +193,205 @@ type DiffObj struct {
 	HasOmission bool   // 标记目录是否包含省略节点
 }
 
+// parseDistString 解析 dist 字符串，返回路径-ID 映射（不包含根节点）
+func parseDistString(dist string) map[string]int32 {
+	result := make(map[string]int32)
+	if strings.TrimSpace(dist) == "" {
+		return result
+	}
+
+	lines := strings.Split(dist, "\n")
+	if len(lines) == 0 {
+		return result
+	}
+
+	// 跳过第一行（根节点）
+	if len(lines) > 0 {
+		lines = lines[1:]
+	}
+
+	// 使用栈来跟踪当前路径
+	type pathInfo struct {
+		path   string
+		indent int
+	}
+	var pathStack []pathInfo
+	currentPath := ""
+
+	// 动态检测缩进大小（找到第一个非空行的缩进）
+	indentSize := 0
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed != "" {
+			for i := 0; i < len(line); i++ {
+				if line[i] == ' ' {
+					indentSize++
+				} else {
+					break
+				}
+			}
+			break
+		}
+	}
+	if indentSize == 0 {
+		indentSize = len(indentString) // 默认使用4个空格
+	}
+
+	for _, line := range lines {
+		trimmed := strings.TrimRight(line, " ")
+		if trimmed == "" {
+			continue
+		}
+
+		// 计算缩进级别
+		indent := 0
+		for i := 0; i < len(line); i++ {
+			if line[i] == ' ' {
+				indent++
+			} else {
+				break
+			}
+		}
+		indentLevel := indent / indentSize
+
+		// 调整路径栈
+		for len(pathStack) > 0 && pathStack[len(pathStack)-1].indent >= indentLevel {
+			pathStack = pathStack[:len(pathStack)-1]
+		}
+
+		if len(pathStack) > 0 {
+			currentPath = pathStack[len(pathStack)-1].path
+		} else {
+			currentPath = ""
+		}
+
+		// 提取名称和ID
+		content := strings.TrimSpace(trimmed)
+
+		// 检查是否是省略节点
+		if strings.Contains(content, "... (") {
+			continue
+		}
+
+		// 检查是否是错误节点
+		if strings.Contains(content, "!ERROR: ") {
+			continue
+		}
+
+		// 检查是否是文件行（包含 'ID' 格式）
+		if strings.Contains(content, " '") {
+			// 文件行，可能格式: "- filename 'ID'" 或 "filename 'ID'"
+			if after, ok := strings.CutPrefix(content, "- "); ok {
+				content = after
+			}
+			// 查找最后一个空格，分割文件名和ID
+			lastSpace := strings.LastIndex(content, " '")
+			if lastSpace != -1 {
+				name := content[:lastSpace]
+				idStr := strings.TrimSuffix(content[lastSpace+2:], "'")
+				id, err := strconv.ParseInt(idStr, 10, 32)
+				if err == nil {
+					path := name
+					if currentPath != "" {
+						path = currentPath + "/" + name
+					}
+					result[path] = int32(id)
+				}
+			}
+		} else {
+			// 目录行
+			dirName := content
+			path := dirName
+			if currentPath != "" {
+				path = currentPath + "/" + dirName
+			}
+			pathStack = append(pathStack, pathInfo{path: path, indent: indentLevel})
+		}
+	}
+
+	return result
+}
+
+// buildPathMap 将 node 树转换为路径-ID 映射（不包含根节点）
+func buildPathMap(node *Node) map[string]int32 {
+	result := make(map[string]int32)
+	if node == nil {
+		return result
+	}
+
+	// 递归遍历函数
+	var traverse func(n *Node, currentPath string)
+	traverse = func(n *Node, currentPath string) {
+		for _, child := range n.Children {
+			path := child.Name
+			if currentPath != "" {
+				path = currentPath + "/" + child.Name
+			}
+
+			if !child.IsDir && child.ID > 0 {
+				// 只包含文件节点且ID有效的
+				result[path] = child.ID
+			} else if child.IsDir && len(child.Children) > 0 {
+				// 递归遍历目录
+				traverse(child, path)
+			}
+		}
+	}
+
+	traverse(node, "")
+	return result
+}
+
 // SolveCall 解决调用
 func SolveCall(node *Node, dist string) ([]DiffObj, error) {
 	// 根据AI编辑完的字符串string进行更改差分
+
+	// 构建原始路径映射
+	originalMap := buildPathMap(node)
+
+	// 解析目标字符串
+	distMap := parseDistString(dist)
+
+	// 生成差分对象
+	var diffObjs []DiffObj
+
+	// 检查删除和修改（在原始中存在，但在目标中不存在或ID不同）
+	for path, originalID := range originalMap {
+		distID, exists := distMap[path]
+		if !exists {
+			// 文件被删除
+			diffObjs = append(diffObjs, DiffObj{
+				OriginID: originalID,
+				Origin:   path,
+				Mode:     "delete",
+			})
+		} else if distID != originalID {
+			// ID被修改，需要删除旧ID并添加新ID
+			diffObjs = append(diffObjs, DiffObj{
+				OriginID: originalID,
+				Origin:   path,
+				Mode:     "delete",
+			})
+			diffObjs = append(diffObjs, DiffObj{
+				OriginID: distID,
+				Target:   path,
+				Mode:     "add",
+			})
+		}
+		// 如果ID相同，不需要操作
+	}
+
+	// 检查添加（在目标中存在，但在原始中不存在）
+	for path, distID := range distMap {
+		if _, exists := originalMap[path]; !exists {
+			// 文件被添加
+			diffObjs = append(diffObjs, DiffObj{
+				OriginID: distID,
+				Target:   path,
+				Mode:     "add",
+			})
+		}
+	}
+
+	return diffObjs, nil
 }
