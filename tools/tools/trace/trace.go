@@ -273,6 +273,9 @@ type templateStruct struct {
 type traceCache map[string]([]structs.Traces)
 
 func buildTrace(session *structs.Chats) (string, error) {
+	if session.TemporyDataOfSession == nil {
+		session.TemporyDataOfSession = make(map[string]any)
+	}
 	if _, ok := session.TemporyDataOfSession["tools:trace"]; !ok {
 		session.TemporyDataOfSession["tools:trace"] = traceCache{}
 	}

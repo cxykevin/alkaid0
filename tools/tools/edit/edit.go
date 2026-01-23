@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	_ "embed" // embed
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -42,6 +43,13 @@ var paras = map[string]parser.ToolParameters{
 	},
 }
 
+// PassInfo 传递信息
+type PassInfo struct {
+	From        string
+	Description string
+	Parameters  map[string]any
+}
+
 func buildPrompt(session *structs.Chats) (string, error) {
 	return prompt, nil
 }
@@ -53,7 +61,6 @@ type toolCallFlagTempory struct {
 }
 
 func updateInfo(session *structs.Chats, mp map[string]*any, cross []*any) (bool, []*any, error) {
-
 	tmp, ok := session.TemporyDataOfRequest["tools:edit"]
 	if !ok || tmp == nil {
 		session.TemporyDataOfRequest["tools:edit"] = toolCallFlagTempory{}
@@ -96,39 +103,22 @@ func updateInfo(session *structs.Chats, mp map[string]*any, cross []*any) (bool,
 	return true, cross, nil
 }
 
-func writeFile(session *structs.Chats, mp map[string]*any, push []*any) (bool, []*any, map[string]*any, error) {
+// CheckPath 处理路径
+func CheckPath(mp map[string]*any) (string, error) {
 	// 检查并获取path参数
 	pathPtr, ok := mp["path"]
 	if !ok || pathPtr == nil {
-		boolx := false
-		success := any(boolx)
-		errMsg := any("missing path parameter")
-		return false, push, map[string]*any{
-			"success": &success,
-			"error":   &errMsg,
-		}, nil
+		return "", errors.New("missing path parameter")
 	}
 	path, ok := (*pathPtr).(string)
 	if !ok || path == "" {
-		boolx := false
-		success := any(boolx)
-		errMsg := any("invalid or empty path parameter")
-		return false, push, map[string]*any{
-			"success": &success,
-			"error":   &errMsg,
-		}, nil
+		return "", errors.New("invalid or empty path parameter")
 	}
-
 	// 检查path
 	if strings.Contains(path, "..") {
-		boolx := false
-		success := any(boolx)
-		errMsg := any("path cannot contains '..'")
-		return false, push, map[string]*any{
-			"success": &success,
-			"error":   &errMsg,
-		}, nil
+		return "", errors.New("path cannot contains '..'")
 	}
+
 	if strings.HasPrefix(path, "/") ||
 		strings.HasPrefix(path, "\\") ||
 		strings.HasPrefix(path, "~") ||
@@ -141,100 +131,42 @@ func writeFile(session *structs.Chats, mp map[string]*any, push []*any) (bool, [
 		strings.Contains(path, "|") ||
 		strings.Contains(path, "\n") ||
 		strings.Contains(path, "\r") ||
-		strings.Contains(path, "\t") {
-		boolx := false
-		success := any(boolx)
-		errMsg := any("path must be a correct and relative path")
-		return false, push, map[string]*any{
-			"success": &success,
-			"error":   &errMsg,
-		}, nil
+		strings.Contains(path, "\t") ||
+		strings.Contains(path, "..") {
+		return "", errors.New("path must be a correct and relative path")
 	}
+	return path, nil
+}
 
+// CheckTargetText 处理目标和文本
+func CheckTargetText(mp map[string]*any) (string, string, error) {
 	// 检查并获取target参数
 	targetPtr, ok := mp["target"]
 	if !ok || targetPtr == nil {
-		boolx := false
-		success := any(boolx)
-		errMsg := any("missing target parameter")
-		return false, push, map[string]*any{
-			"success": &success,
-			"error":   &errMsg,
-		}, nil
+		return "", "", errors.New("missing target parameter")
 	}
 	target, ok := (*targetPtr).(string)
 	if !ok {
-		boolx := false
-		success := any(boolx)
-		errMsg := any("invalid target parameter")
-		return false, push, map[string]*any{
-			"success": &success,
-			"error":   &errMsg,
-		}, nil
+		return "", "", errors.New("invalid target parameter")
 	}
 
 	// 检查并获取text参数
 	textPtr, ok := mp["text"]
 	if !ok || textPtr == nil {
-		boolx := false
-		success := any(boolx)
-		errMsg := any("missing text parameter")
-		return false, push, map[string]*any{
-			"success": &success,
-			"error":   &errMsg,
-		}, nil
+		return "", "", errors.New("missing text parameter")
 	}
 	text, ok := (*textPtr).(string)
 	if !ok {
-		boolx := false
-		success := any(boolx)
-		errMsg := any("invalid text parameter")
-		return false, push, map[string]*any{
-			"success": &success,
-			"error":   &errMsg,
-		}, nil
+		return "", "", errors.New("invalid text parameter")
 	}
 
-	path = filepath.Join(session.CurrentActivatePath, path)
+	return target, text, nil
+}
 
-	// 读取文件内容
-	var content string
-	lines := []string{}
-	fileExists := true
-
-	file, err := os.Open(path)
-	if err != nil {
-		if os.IsNotExist(err) {
-			fileExists = false
-		} else {
-			boolx := false
-			success := any(boolx)
-			errMsg := any(fmt.Sprintf("failed to open file: %v", err))
-			return false, push, map[string]*any{
-				"success": &success,
-				"error":   &errMsg,
-			}, nil
-		}
-	} else {
-		defer file.Close()
-
-		scanner := bufio.NewScanner(file)
-		for scanner.Scan() {
-			lines = append(lines, scanner.Text())
-		}
-		if err := scanner.Err(); err != nil {
-			boolx := false
-			success := any(boolx)
-			errMsg := any(fmt.Sprintf("failed to read file: %v", err))
-			return false, push, map[string]*any{
-				"success": &success,
-				"error":   &errMsg,
-			}, nil
-		}
-		content = strings.Join(lines, "\n")
-	}
-
+// ProcessString 执行字符串编辑
+func ProcessString(content, target, text string, fileExists bool) (string, error) {
 	var newContent string
+	var err error
 
 	// 根据target执行不同的编辑操作
 	switch {
@@ -255,50 +187,106 @@ func writeFile(session *structs.Chats, mp map[string]*any, push []*any) (bool, [
 		newContent = text + "\n"
 
 	case strings.HasPrefix(target, "@ln:"):
-		newContent, err = handleLineEdit(lines, target, text)
+		lines := strings.Split(content, "\n")
+		newContent, err = handleLineReplace(lines, target, text)
 		if err != nil {
-			boolx := false
-			success := any(boolx)
-			errMsg := any(err.Error())
-			return false, push, map[string]*any{
-				"success": &success,
-				"error":   &errMsg,
-			}, nil
+			return "", err
+		}
+	case strings.HasPrefix(target, "@insert:"):
+		lines := strings.Split(content, "\n")
+		newContent, err = handleLineInsert(lines, target, text)
+		if err != nil {
+			return "", err
 		}
 
 	case strings.HasPrefix(target, "@regex:"):
 		newContent, err = handleRegexEdit(content, target, text)
-		if err != nil {
-			boolx := false
-			success := any(boolx)
-			errMsg := any(err.Error())
-			return false, push, map[string]*any{
-				"success": &success,
-				"error":   &errMsg,
-			}, nil
-		}
+		return newContent, err
 
 	default:
 		// 替换第一个匹配的子字符串
 		if !fileExists {
-			boolx := false
-			success := any(boolx)
-			errMsg := any("file does not exist, cannot replace substring")
-			return false, push, map[string]*any{
-				"success": &success,
-				"error":   &errMsg,
-			}, nil
+			return "", errors.New("file does not exist, cannot replace substring")
 		}
 		if !strings.Contains(content, target) {
+			return "", fmt.Errorf("target string not found: %s", target)
+		}
+		newContent = strings.Replace(content, target, text, 1)
+	}
+	return newContent, nil
+}
+
+func writeFile(session *structs.Chats, mp map[string]*any, cross []*any) (bool, []*any, map[string]*any, error) {
+	path, err := CheckPath(mp)
+	if err != nil {
+		boolx := false
+		success := any(boolx)
+		errMsg := any(err.Error())
+		return false, cross, map[string]*any{
+			"success": &success,
+			"error":   &errMsg,
+		}, nil
+	}
+
+	target, text, err := CheckTargetText(mp)
+	if err != nil {
+		boolx := false
+		success := any(boolx)
+		errMsg := any(err.Error())
+		return false, cross, map[string]*any{
+			"success": &success,
+			"error":   &errMsg,
+		}, nil
+	}
+
+	path = filepath.Join(session.CurrentActivatePath, path)
+
+	// 读取文件内容
+	var content string
+	lines := []string{}
+	fileExists := true
+
+	file, err := os.Open(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			fileExists = false
+		} else {
 			boolx := false
 			success := any(boolx)
-			errMsg := any(fmt.Sprintf("target string not found: %s", target))
-			return false, push, map[string]*any{
+			errMsg := any(fmt.Sprintf("failed to open file: %v", err))
+			return false, cross, map[string]*any{
 				"success": &success,
 				"error":   &errMsg,
 			}, nil
 		}
-		newContent = strings.Replace(content, target, text, 1)
+	} else {
+		defer file.Close()
+
+		scanner := bufio.NewScanner(file)
+		for scanner.Scan() {
+			lines = append(lines, scanner.Text())
+		}
+		if err := scanner.Err(); err != nil {
+			boolx := false
+			success := any(boolx)
+			errMsg := any(fmt.Sprintf("failed to read file: %v", err))
+			return false, cross, map[string]*any{
+				"success": &success,
+				"error":   &errMsg,
+			}, nil
+		}
+		content = strings.Join(lines, "\n")
+	}
+
+	newContent, err := ProcessString(content, target, text, fileExists)
+	if err != nil {
+		boolx := false
+		success := any(boolx)
+		errMsg := any(err.Error())
+		return false, cross, map[string]*any{
+			"success": &success,
+			"error":   &errMsg,
+		}, nil
 	}
 
 	// 写入文件
@@ -307,7 +295,7 @@ func writeFile(session *structs.Chats, mp map[string]*any, push []*any) (bool, [
 		boolx := false
 		success := any(boolx)
 		errMsg := any(fmt.Sprintf("failed to write file: %v", err))
-		return false, push, map[string]*any{
+		return false, cross, map[string]*any{
 			"success": &success,
 			"error":   &errMsg,
 		}, nil
@@ -315,27 +303,27 @@ func writeFile(session *structs.Chats, mp map[string]*any, push []*any) (bool, [
 
 	boolx := true
 	success := any(boolx)
-	return false, push, map[string]*any{
+	return false, cross, map[string]*any{
 		"success": &success,
 	}, nil
 }
 
-func handleLineEdit(lines []string, target, text string) (string, error) {
+func handleLineReplace(lines []string, target, text string) (string, error) {
 	parts := strings.TrimPrefix(target, "@ln:")
 
-	if strings.Contains(parts, "-") {
-		// @ln:{from}-{to} 替换行范围
-		rangeParts := strings.Split(parts, "-")
-		from, _ := strconv.Atoi(rangeParts[0])
-		to, _ := strconv.Atoi(rangeParts[1])
+	if !strings.Contains(parts, "-") {
+		lineNum, err := strconv.Atoi(parts)
 
-		if from > len(lines) {
-			return "", fmt.Errorf("from line %d exceeds file length %d", from, len(lines))
-		}
-		if to > len(lines) {
-			return "", fmt.Errorf("to line %d exceeds file length %d", to, len(lines))
+		if err != nil {
+			return "", fmt.Errorf("invalid line number: %s", parts)
 		}
 
+		from := lineNum
+		to := lineNum
+
+		if lineNum > len(lines) {
+			return "", fmt.Errorf("line %d exceeds file length %d", from, len(lines))
+		}
 		// 构建新内容
 		var buf bytes.Buffer
 		for i := 0; i < from-1; i++ {
@@ -348,8 +336,49 @@ func handleLineEdit(lines []string, target, text string) (string, error) {
 
 		return buf.String(), nil
 	}
-	// @ln:{line} 在指定行前插入
-	lineNum, _ := strconv.Atoi(parts)
+
+	// @ln:{from}-{to} 替换行范围
+	rangeParts := strings.Split(parts, "-")
+	from, err := strconv.Atoi(rangeParts[0])
+
+	if err != nil {
+		return "", fmt.Errorf("invalid line number: %s", rangeParts[0])
+	}
+
+	to, err := strconv.Atoi(rangeParts[1])
+
+	if err != nil {
+		return "", fmt.Errorf("invalid line number: %s", rangeParts[1])
+	}
+
+	if from > len(lines) {
+		return "", fmt.Errorf("from line %d exceeds file length %d", from, len(lines))
+	}
+	if to > len(lines) {
+		return "", fmt.Errorf("to line %d exceeds file length %d", to, len(lines))
+	}
+
+	// 构建新内容
+	var buf bytes.Buffer
+	for i := 0; i < from-1; i++ {
+		buf.WriteString(lines[i] + "\n")
+	}
+	buf.WriteString(text + "\n")
+	for i := to; i < len(lines); i++ {
+		buf.WriteString(lines[i] + "\n")
+	}
+
+	return buf.String(), nil
+
+}
+func handleLineInsert(lines []string, target, text string) (string, error) {
+	parts := strings.TrimPrefix(target, "@insert:")
+
+	lineNum, err := strconv.Atoi(parts)
+
+	if err != nil {
+		return "", fmt.Errorf("invalid line number: %s", parts)
+	}
 
 	if lineNum > len(lines) {
 		return "", fmt.Errorf("line %d exceeds file length %d", lineNum, len(lines))
@@ -366,11 +395,10 @@ func handleLineEdit(lines []string, target, text string) (string, error) {
 	}
 
 	return buf.String(), nil
-
 }
 
 func handleRegexEdit(content, target, text string) (string, error) {
-	// 解析新格式: @regex:/pattern/flags
+	// 解析: @regex:/pattern/flags
 	patternPart := strings.TrimPrefix(target, "@regex:")
 
 	if len(patternPart) < 3 || patternPart[0] != '/' {

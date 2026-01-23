@@ -1,6 +1,7 @@
 package build
 
 import (
+	"github.com/cxykevin/alkaid0/provider/parser"
 	reqStruct "github.com/cxykevin/alkaid0/provider/request/structs"
 	storageStructs "github.com/cxykevin/alkaid0/storage/structs"
 	"gorm.io/gorm"
@@ -14,7 +15,11 @@ func Build(db *gorm.DB, session *storageStructs.Chats) (*reqStruct.ChatCompletio
 	// 	return nil, errors.New("no last chat id")
 	// }
 	// 构造工具
-	scopes, traces, tools := Tools(session)
+	var scopes, traces string
+	var tools *[]*parser.ToolsDefine = &[]*parser.ToolsDefine{}
+	if !session.InTestFlag {
+		scopes, traces, tools = Tools(session)
+	}
 	chatLine := storageStructs.Chats{}
 	err := db.Where("id = ?", session.ID).First(&chatLine).Error
 	if err != nil {

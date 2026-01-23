@@ -19,4 +19,5 @@ type Chats struct {
 	EnableScopes         map[string]bool     `gorm:"-" json:"-"`
 	TemporyDataOfRequest map[string]any      `gorm:"-" json:"-"`
 	TemporyDataOfSession map[string]any      `gorm:"-" json:"-"`
+	InTestFlag           bool                `gorm:"-" json:"-"`
 }

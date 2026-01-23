@@ -56,6 +56,8 @@ func TestBuildSuccess(t *testing.T) {
 		ID:          1,
 		LastModelID: 1,
 		NowAgent:    "",
+		DB:          db, // 设置 DB 字段，供后续工具函数使用
+		InTestFlag:  true,
 	}
 
 	if err := db.Create(&chat).Error; err != nil {
@@ -88,6 +90,8 @@ func TestBuildReal(t *testing.T) {
 		ID:          1,
 		LastModelID: 1,
 		NowAgent:    "",
+		DB:          db, // 设置 DB 字段，供后续工具函数使用
+		InTestFlag:  true,
 	}
 
 	if err := db.Create(&chat).Error; err != nil {
@@ -130,6 +134,8 @@ func TestBuildChatNotFound(t *testing.T) {
 		ID:          999,
 		LastModelID: 1,
 		NowAgent:    "",
+		DB:          db, // 设置 DB 字段，供后续工具函数使用
+		InTestFlag:  true,
 	}
 
 	// 调用 Build 函数
@@ -153,6 +159,8 @@ func TestBuildWithMessages(t *testing.T) {
 		ID:          100,
 		LastModelID: 1,
 		NowAgent:    "",
+		DB:          db, // 设置 DB 字段，供后续工具函数使用
+		InTestFlag:  true,
 	}
 
 	if err := db.Create(&chat).Error; err != nil {
@@ -219,6 +227,8 @@ func TestBuildWithMultipleModels(t *testing.T) {
 		ID:          101,
 		LastModelID: 2,
 		NowAgent:    "",
+		DB:          db, // 设置 DB 字段，供后续工具函数使用
+		InTestFlag:  true,
 	}
 
 	if err := db.Create(&chat).Error; err != nil {
@@ -255,6 +265,8 @@ func TestBuildWithAgent(t *testing.T) {
 		ID:          102,
 		LastModelID: 1,
 		NowAgent:    "test-agent",
+		DB:          db, // 设置 DB 字段，供后续工具函数使用
+		InTestFlag:  true,
 	}
 
 	if err := db.Create(&chat).Error; err != nil {
@@ -283,6 +295,8 @@ func TestBuildModelTemperatureAndTopP(t *testing.T) {
 		ID:          103,
 		LastModelID: 1,
 		NowAgent:    "",
+		DB:          db, // 设置 DB 字段，供后续工具函数使用
+		InTestFlag:  true,
 	}
 
 	if err := db.Create(&chat).Error; err != nil {
@@ -333,6 +347,8 @@ func TestBuildStream(t *testing.T) {
 		ID:          104,
 		LastModelID: 1,
 		NowAgent:    "",
+		DB:          db, // 设置 DB 字段，供后续工具函数使用
+		InTestFlag:  true,
 	}
 
 	if err := db.Create(&chat).Error; err != nil {
@@ -363,11 +379,12 @@ func TestBuildMultipleCalls(t *testing.T) {
 	db := setupBuildTest(t)
 
 	// 创建多个聊天记录
-	for i := 105; i <= 107; i++ {
+	for i := 205; i <= 207; i++ {
 		chat := structs.Chats{
 			ID:          uint32(i),
 			LastModelID: 1,
 			NowAgent:    "",
+			InTestFlag:  true,
 		}
 		if err := db.Create(&chat).Error; err != nil {
 			t.Fatalf("Failed to create test chat %d: %v", i, err)
@@ -375,11 +392,12 @@ func TestBuildMultipleCalls(t *testing.T) {
 	}
 
 	// 多次调用Build，验证每次都返回不同的结果
-	for i := 105; i <= 107; i++ {
+	for i := 205; i <= 207; i++ {
 		chat := structs.Chats{
 			ID:          uint32(i),
 			LastModelID: 1,
 			NowAgent:    "",
+			InTestFlag:  true,
 		}
 
 		result, err := Build(db, &chat)
@@ -407,6 +425,8 @@ func TestBuildWithSummary(t *testing.T) {
 		ID:          108,
 		LastModelID: 1,
 		NowAgent:    "",
+		DB:          db, // 设置 DB 字段，供后续工具函数使用
+		InTestFlag:  true,
 	}
 
 	if err := db.Create(&chat).Error; err != nil {

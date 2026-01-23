@@ -142,7 +142,7 @@ func ExecToolPostHook(session *structs.Chats, name string, args map[string]*any)
 		if !checkScopeEnabled(session, hook.Scope) {
 			continue
 		}
-		if hook.PreHook.Func != nil {
+		if hook.PostHook.Func != nil {
 			pass, passObj, ret, err := hook.PostHook.Func(session, args, passObjs)
 			passObjs = passObj
 			if err != nil {
