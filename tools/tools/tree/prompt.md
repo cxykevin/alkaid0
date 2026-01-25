@@ -10,10 +10,13 @@
 
 1. **Large Directory Protection:** If a directory contains a summary like `... (N files)` (e.g., `node_modules`), **DO NOT** attempt to expand, edit, or add files within it. These are collapsed for performance reasons. You may only delete the entire directory line if requested.
 2. **Structural Integrity:** Ensure all parent-child relationships are maintained through correct indentation. A single missing space can break the tree logic.
+3. **New File:** You must edit the file instead of adding a new file line with unused ID. 
 
 **YOU MUST KEEP THE SAME INDENT LEVELS AS THE PARENT NODE.**
 **YOU MUST KEEP THE SAME INDENT LEVELS AS THE PARENT NODE.**
 **YOU MUST KEEP THE SAME INDENT LEVELS AS THE PARENT NODE.**
+
+Indent: `4 spaces`
 
 ###### Example Task:
 

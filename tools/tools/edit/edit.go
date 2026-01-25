@@ -339,6 +339,11 @@ func handleLineReplace(lines []string, target, text string) (string, error) {
 
 	// @ln:{from}-{to} 替换行范围
 	rangeParts := strings.Split(parts, "-")
+
+	if len(rangeParts) != 2 {
+		return "", fmt.Errorf("invalid line range: %s", parts)
+	}
+
 	from, err := strconv.Atoi(rangeParts[0])
 
 	if err != nil {

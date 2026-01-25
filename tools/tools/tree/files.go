@@ -2,11 +2,18 @@ package tree
 
 import (
 	"cmp"
+	"errors"
+	"fmt"
+	"math/rand"
 	"os"
 	"path/filepath"
 	"slices"
+	"sort"
 	"strconv"
 	"strings"
+	"time"
+
+	"github.com/cxykevin/alkaid0/tools/tools/tree/ios"
 )
 
 // MaxDepth 最大递归深度
@@ -26,9 +33,10 @@ type Node struct {
 	ID          int32
 	IDStart     int32
 	IDEnd       int32
+	RemoveFlag  bool
 }
 
-var dirBlacklists = map[string]bool{
+var dirBlacklistsOrigin = map[string]bool{
 	// 明确 skip
 	".alkaid0_skip": true,
 	// git 目录
@@ -50,6 +58,15 @@ var dirBlacklists = map[string]bool{
 	// windows Thumbs.db
 	"Thumbs.db":   true,
 	"desktop.ini": true,
+}
+
+var dirBlacklists = map[string]bool{}
+
+func init() {
+	// 复制
+	for k, v := range dirBlacklistsOrigin {
+		dirBlacklists[k] = v
+	}
 }
 
 // BuildTree 构建树
@@ -184,214 +201,534 @@ func buildStringRecursive(node *Node, prefix string, builder *strings.Builder) {
 	}
 }
 
-// DiffObj 差分对象
-type DiffObj struct {
-	OriginID    int32
-	Origin      string
-	Target      string
-	Mode        string // "add" or "delete"
-	HasOmission bool   // 标记目录是否包含省略节点
+func sortNodes(nodes []*Node) {
+	slices.SortFunc(nodes, func(i, j *Node) int {
+		return cmp.Compare(i.Name, j.Name)
+	})
+	// 递归排序子节点
+	for _, node := range nodes {
+		sortNodes(node.Children)
+	}
 }
 
-// parseDistString 解析 dist 字符串，返回路径-ID 映射（不包含根节点）
-func parseDistString(dist string) map[string]int32 {
-	result := make(map[string]int32)
-	if strings.TrimSpace(dist) == "" {
-		return result
-	}
-
-	lines := strings.Split(dist, "\n")
-	if len(lines) == 0 {
-		return result
-	}
-
-	// 跳过第一行（根节点）
-	if len(lines) > 0 {
-		lines = lines[1:]
-	}
-
-	// 使用栈来跟踪当前路径
-	type pathInfo struct {
-		path   string
-		indent int
-	}
-	var pathStack []pathInfo
-	currentPath := ""
-
-	// 动态检测缩进大小（找到第一个非空行的缩进）
-	indentSize := 0
-	for _, line := range lines {
-		trimmed := strings.TrimSpace(line)
-		if trimmed != "" {
-			for i := 0; i < len(line); i++ {
-				if line[i] == ' ' {
-					indentSize++
-				} else {
-					break
-				}
-			}
-			break
-		}
-	}
-	if indentSize == 0 {
-		indentSize = len(indentString) // 默认使用4个空格
-	}
-
-	for _, line := range lines {
-		trimmed := strings.TrimRight(line, " ")
-		if trimmed == "" {
+// BuildNodeFromString 从字符串构建节点
+func BuildNodeFromString(str string) (*Node, error) {
+	str = strings.ReplaceAll(str, "\t", indentString)
+	lines := strings.Split(str, "\n")
+	nodeTreeList := []*Node{}
+	nodeTreeList = append(nodeTreeList, &Node{
+		Name:     "", // FakeRoot
+		Path:     "FakeRoot",
+		Children: []*Node{},
+		IsDir:    true,
+	})
+	for _, ln := range lines {
+		if strings.TrimSpace(ln) == "" {
 			continue
 		}
-
-		// 计算缩进级别
-		indent := 0
-		for i := 0; i < len(line); i++ {
-			if line[i] == ' ' {
-				indent++
-			} else {
+		// 计算Indent
+		indentLn := 0
+		for _, char := range ln {
+			if char != ' ' {
 				break
 			}
+			indentLn++
 		}
-		indentLevel := indent / indentSize
-
-		// 调整路径栈
-		for len(pathStack) > 0 && pathStack[len(pathStack)-1].indent >= indentLevel {
-			pathStack = pathStack[:len(pathStack)-1]
+		if (indentLn % len(indentString)) != 0 {
+			return nil, errors.New("invalid indent")
 		}
-
-		if len(pathStack) > 0 {
-			currentPath = pathStack[len(pathStack)-1].path
-		} else {
-			currentPath = ""
-		}
-
-		// 提取名称和ID
-		content := strings.TrimSpace(trimmed)
-
-		// 检查是否是省略节点
-		if strings.Contains(content, "... (") {
+		indent := indentLn / len(indentString)
+		nameTemp := strings.TrimPrefix(strings.TrimSpace(ln), "- ")
+		if strings.HasPrefix(nameTemp, "!ERROR") || strings.HasPrefix(nameTemp, "...") {
 			continue
 		}
-
-		// 检查是否是错误节点
-		if strings.Contains(content, "!ERROR: ") {
-			continue
+		name := nameTemp
+		id := int32(0)
+		if strings.Contains(nameTemp, "'") {
+			nameTemps := strings.Split(nameTemp, "'")
+			if (len(nameTemps)) != 3 || nameTemps[2] != "" {
+				return nil, errors.New("invalid name")
+			}
+			name = strings.TrimSpace(nameTemps[0])
+			idTmp, err := strconv.Atoi(nameTemps[1])
+			if err != nil {
+				return nil, err
+			}
+			id = int32(idTmp)
+		}
+		if strings.Contains(name, "/") ||
+			strings.Contains(name, "\\") ||
+			strings.Contains(name, ":") ||
+			strings.Contains(name, "*") ||
+			strings.Contains(name, "?") ||
+			strings.Contains(name, "\"") ||
+			strings.Contains(name, "<") ||
+			strings.Contains(name, ">") ||
+			strings.Contains(name, "|") ||
+			strings.Contains(name, "\n") ||
+			strings.Contains(name, "\r") ||
+			strings.Contains(name, "\t") ||
+			strings.Contains(name, "..") {
+			return nil, errors.New("path must be a correct and relative path")
+		}
+		if len(nodeTreeList) <= indent {
+			return nil, errors.New("indent too deep")
 		}
 
-		// 检查是否是文件行（包含 'ID' 格式）
-		if strings.Contains(content, " '") {
-			// 文件行，可能格式: "- filename 'ID'" 或 "filename 'ID'"
-			if after, ok := strings.CutPrefix(content, "- "); ok {
-				content = after
-			}
-			// 查找最后一个空格，分割文件名和ID
-			lastSpace := strings.LastIndex(content, " '")
-			if lastSpace != -1 {
-				name := content[:lastSpace]
-				idStr := strings.TrimSuffix(content[lastSpace+2:], "'")
-				id, err := strconv.ParseInt(idStr, 10, 32)
-				if err == nil {
-					path := name
-					if currentPath != "" {
-						path = currentPath + "/" + name
-					}
-					result[path] = int32(id)
-				}
-			}
-		} else {
-			// 目录行
-			dirName := content
-			path := dirName
-			if currentPath != "" {
-				path = currentPath + "/" + dirName
-			}
-			pathStack = append(pathStack, pathInfo{path: path, indent: indentLevel})
+		if _, ok := dirBlacklists[name]; ok {
+			return nil, fmt.Errorf("the '%s' file is not allowed to operate", name)
 		}
+
+		nodeTreeList = nodeTreeList[:indent+1]
+		// 插入
+		// 构造路径
+		path := ""
+		for idx, node := range nodeTreeList {
+			if idx <= 1 {
+				continue
+			}
+			path = filepath.Join(path, node.Name)
+		}
+		path = filepath.Join(path, name)
+		newNode := &Node{
+			Name:     name,
+			ID:       id,
+			IsDir:    (id == 0),
+			Children: []*Node{},
+			Path:     path,
+		}
+		nodeTreeList[indent].Children = append(nodeTreeList[indent].Children, newNode)
+		nodeTreeList = append(nodeTreeList, newNode)
 	}
-
-	return result
+	if len(nodeTreeList[0].Children) == 0 {
+		return nil, errors.New("empty tree")
+	}
+	if len(nodeTreeList[0].Children) != 1 {
+		return nil, errors.New("invalid tree (multiple root nodes)")
+	}
+	// 递归排序
+	sortNodes(nodeTreeList[0].Children[0].Children)
+	return nodeTreeList[0].Children[0], nil
 }
 
-// buildPathMap 将 node 树转换为路径-ID 映射（不包含根节点）
-func buildPathMap(node *Node) map[string]int32 {
-	result := make(map[string]int32)
-	if node == nil {
-		return result
+func solveNodesTreeDiff(result *Node, origin *Node, target *Node) error {
+	// 将 origin 和 target 的差异合并到 result
+
+	// 收集 target 中所有文件 ID 到目标相对路径的映射（用于检测移动）
+	targetIDMap := map[int32]string{}
+	var collectTargetIDs func(n *Node)
+	collectTargetIDs = func(n *Node) {
+		if n == nil {
+			return
+		}
+		if !n.IsDir {
+			if n.ID > 0 {
+				targetIDMap[n.ID] = n.Path
+			}
+			return
+		}
+		for _, c := range n.Children {
+			collectTargetIDs(c)
+		}
+	}
+	collectTargetIDs(target)
+
+	// 递归函数，闭包捕获 targetIDMap
+	var walk func(res *Node, o *Node, t *Node) error
+	walk = func(res *Node, o *Node, t *Node) error {
+		// 准备子节点映射
+		originMap := map[string]*Node{}
+		targetMap := map[string]*Node{}
+		if o != nil {
+			for _, c := range o.Children {
+				originMap[c.Name] = c
+			}
+		}
+		if t != nil {
+			for _, c := range t.Children {
+				targetMap[c.Name] = c
+			}
+		}
+
+		// 收集所有名字，排序以保证稳定性
+		nameSet := map[string]bool{}
+		for k := range originMap {
+			nameSet[k] = true
+		}
+		for k := range targetMap {
+			nameSet[k] = true
+		}
+		names := []string{}
+		for k := range nameSet {
+			names = append(names, k)
+		}
+		sort.Strings(names)
+
+		for _, name := range names {
+			oc := originMap[name]
+			tc := targetMap[name]
+
+			// 跳过空节点
+			if oc == nil && tc == nil {
+				continue
+			}
+
+			// 如果 origin 节点有错误或是省略节点（ChildrenNum 太大），则跳过删除/覆盖，保留 origin
+			if oc != nil && (oc.Error != nil || oc.ChildrenNum > MaxChildrenNum) {
+				// 直接拷贝 origin 到结果
+				clone := &Node{
+					Name:        oc.Name,
+					Path:        oc.Path,
+					IsDir:       oc.IsDir,
+					Children:    []*Node{},
+					ID:          oc.ID,
+					ChildrenNum: oc.ChildrenNum,
+					Error:       oc.Error,
+				}
+				for _, c := range oc.Children {
+					clone.Children = append(clone.Children, &Node{Name: c.Name, Path: c.Path, IsDir: c.IsDir, ID: c.ID})
+				}
+				res.Children = append(res.Children, clone)
+				continue
+			}
+
+			// origin 存在但 target 不存在 -> 标记删除（文件或目录）
+			if oc != nil && tc == nil {
+				// 如果是文件且该文件的 ID 在 target 中被引用到其它路径，则也应删除原位置（移动场景）
+				del := &Node{
+					Name:       oc.Name,
+					Path:       oc.Path,
+					IsDir:      oc.IsDir,
+					Children:   []*Node{},
+					ID:         oc.ID,
+					RemoveFlag: true,
+				}
+				res.Children = append(res.Children, del)
+				continue
+			}
+
+			// origin 不存在但 target 存在 -> 添加目标节点（可能是新文件或目录）
+			if oc == nil && tc != nil {
+				if tc.IsDir {
+					newDir := &Node{Name: tc.Name, Path: tc.Path, IsDir: true, Children: []*Node{}}
+					if err := walk(newDir, &Node{IsDir: true, Children: []*Node{}}, tc); err != nil {
+						return err
+					}
+					res.Children = append(res.Children, newDir)
+				} else {
+					newFile := &Node{Name: tc.Name, Path: tc.Path, IsDir: false, ID: tc.ID}
+					res.Children = append(res.Children, newFile)
+				}
+				continue
+			}
+
+			// 两边都存在的情况
+			if oc != nil && tc != nil {
+				// 都是目录 -> 递归
+				if oc.IsDir && tc.IsDir {
+					newDir := &Node{Name: tc.Name, Path: tc.Path, IsDir: true, Children: []*Node{}}
+					if err := walk(newDir, oc, tc); err != nil {
+						return err
+					}
+					res.Children = append(res.Children, newDir)
+					continue
+				}
+
+				// 都是文件 -> 处理 ID 变化和移动
+				if !oc.IsDir && !tc.IsDir {
+					// 若 ID 相同或目标未指定 ID，则视为保留（若目标未指定且 origin 有 ID，则保留 origin ID）
+					if tc.ID == oc.ID || (tc.ID == 0 && oc.ID > 0) {
+						keep := &Node{Name: tc.Name, Path: tc.Path, IsDir: false, ID: oc.ID}
+						res.Children = append(res.Children, keep)
+						continue
+					}
+
+					// ID 不同或目标指定了新的 ID -> 需要删除原位置并创建目标位置
+					// 删除原文件
+					del := &Node{Name: oc.Name, Path: oc.Path, IsDir: false, ID: oc.ID, RemoveFlag: true}
+					res.Children = append(res.Children, del)
+					// 在目标位置创建新文件（可能引用某个 origin ID 用于复制/移动）
+					newFile := &Node{Name: tc.Name, Path: tc.Path, IsDir: false, ID: tc.ID}
+					res.Children = append(res.Children, newFile)
+					continue
+				}
+
+				// 类型不一致：目录->文件 或 文件->目录，需要同时删除原项并创建目标项
+				if oc.IsDir && !tc.IsDir {
+					// 删除目录
+					del := &Node{Name: oc.Name, Path: oc.Path, IsDir: true, RemoveFlag: true}
+					res.Children = append(res.Children, del)
+					// 创建文件
+					newFile := &Node{Name: tc.Name, Path: tc.Path, IsDir: false, ID: tc.ID}
+					res.Children = append(res.Children, newFile)
+					continue
+				}
+				if !oc.IsDir && tc.IsDir {
+					del := &Node{Name: oc.Name, Path: oc.Path, IsDir: false, ID: oc.ID, RemoveFlag: true}
+					res.Children = append(res.Children, del)
+					newDir := &Node{Name: tc.Name, Path: tc.Path, IsDir: true, Children: []*Node{}}
+					if err := walk(newDir, &Node{IsDir: true, Children: []*Node{}}, tc); err != nil {
+						return err
+					}
+					res.Children = append(res.Children, newDir)
+					continue
+				}
+			}
+		}
+		return nil
 	}
 
-	// 递归遍历函数
-	var traverse func(n *Node, currentPath string)
-	traverse = func(n *Node, currentPath string) {
-		for _, child := range n.Children {
-			path := child.Name
-			if currentPath != "" {
-				path = currentPath + "/" + child.Name
-			}
+	// 启动递归
+	if err := walk(result, origin, target); err != nil {
+		return err
+	}
 
-			if !child.IsDir && child.ID > 0 {
-				// 只包含文件节点且ID有效的
-				result[path] = child.ID
-			} else if child.IsDir && len(child.Children) > 0 {
-				// 递归遍历目录
-				traverse(child, path)
-			}
+	// 对结果排序并返回
+	sortNodes(result.Children)
+	return nil
+}
+
+// DiffStatus 差异表状态
+type DiffStatus int8
+
+// 差异类型
+const (
+	DiffStatusCreateDir DiffStatus = iota
+	DiffStatusCreateFile
+	DiffStatusMove
+	DiffStatusCopy
+	DiffStatusDelete
+)
+
+// Diff 执行差异表
+type Diff struct {
+	Origin string
+	Target string
+	Type   DiffStatus
+}
+
+// diffOriginStatus 原始格式枚举
+type diffOriginStatus int8
+
+// 枚举
+const (
+	// 枚举同样是origin优先级
+	diffOriginStatusCreateDir  diffOriginStatus = 0
+	diffOriginStatusCreateFile diffOriginStatus = 1
+	diffOriginStatusDeleteDir  diffOriginStatus = 2
+	diffOriginStatusDeleteFile diffOriginStatus = 3
+)
+
+type diffOrigin struct {
+	ID     int32
+	Target string
+	Type   diffOriginStatus
+}
+
+type idMapOrigin map[int32]string
+
+func generateDiffNodes(diffObj *[]diffOrigin, node *Node) {
+	if node.IsDir {
+		if node.RemoveFlag {
+			*diffObj = append(*diffObj, diffOrigin{
+				Target: node.Path,
+				Type:   diffOriginStatusDeleteDir,
+			})
+			// 直接短路，不用再递归
+			return
+		}
+		for _, child := range node.Children {
+			generateDiffNodes(diffObj, child)
+		}
+		if len(node.Children) == 0 { // 叶子节点
+			*diffObj = append(*diffObj, diffOrigin{
+				Target: node.Path,
+				Type:   diffOriginStatusCreateDir,
+			})
+		}
+		return
+	}
+	if node.RemoveFlag {
+		*diffObj = append(*diffObj, diffOrigin{
+			ID:     node.ID,
+			Target: node.Path,
+			Type:   diffOriginStatusDeleteFile,
+		})
+		return
+	}
+	*diffObj = append(*diffObj, diffOrigin{
+		ID:     node.ID,
+		Target: node.Path,
+		Type:   diffOriginStatusCreateFile,
+	})
+}
+func generateIDMap(mapOrigin *idMapOrigin, node *Node) {
+	if node.IsDir {
+		for _, child := range node.Children {
+			generateIDMap(mapOrigin, child)
+		}
+		return
+	}
+	(*mapOrigin)[node.ID] = node.Path
+}
+
+func checkNodeFileNameErr(node *Node) error {
+	if !node.IsDir {
+		return nil
+	}
+	mp := map[string]bool{}
+	for _, child := range node.Children {
+		if _, ok := mp[child.Name]; ok {
+			return fmt.Errorf("duplicate file name: %s", child.Name)
+		}
+		mp[child.Name] = true
+		err := checkNodeFileNameErr(child)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+var rander = rand.New(rand.NewSource(time.Now().UnixNano()))
+
+func generateDiff(origin *Node, node *Node) ([]Diff, error) {
+	diffOrigins := []diffOrigin{}
+	mapOrigin := idMapOrigin{}
+
+	generateIDMap(&mapOrigin, origin)
+	generateDiffNodes(&diffOrigins, node)
+
+	obj := []Diff{}
+	// origin优化
+	// 排序
+	sort.Slice(diffOrigins, func(i, j int) bool {
+		return diffOrigins[i].Type < diffOrigins[j].Type
+	})
+
+	// 将 origin 转化为合理的文件操作
+	// 要求：操作之间不冲突，如文件改ID（即同一文件先删后加），先删后从别的地方复制
+
+	// 收集不同类型的操作
+	createDirs := []string{}
+	createFiles := []diffOrigin{}
+	deleteFiles := []diffOrigin{}
+	deleteDirs := []string{}
+
+	for _, d := range diffOrigins {
+		switch d.Type {
+		case diffOriginStatusCreateDir:
+			createDirs = append(createDirs, d.Target)
+		case diffOriginStatusCreateFile:
+			createFiles = append(createFiles, d)
+		case diffOriginStatusDeleteFile:
+			deleteFiles = append(deleteFiles, d)
+		case diffOriginStatusDeleteDir:
+			deleteDirs = append(deleteDirs, d.Target)
 		}
 	}
 
-	traverse(node, "")
-	return result
+	// 先创建目录
+	for _, p := range createDirs {
+		obj = append(obj, Diff{Target: p, Type: DiffStatusCreateDir})
+	}
+
+	// 临时文件名表
+	tmpFilePathTable := map[string]string{}
+
+	// 复制文件
+	for _, d := range createFiles {
+		originPath, ok := mapOrigin[d.ID]
+		if !ok {
+			obj = append(obj, Diff{Target: d.Target, Type: DiffStatusCreateFile})
+			continue
+		}
+		// 生成随机文件名
+		randNum := rander.Intn(8192)
+		tmpFileName := fmt.Sprintf(".alk_%d.%s", randNum, filepath.Base(d.Target))
+		tmpFilePath := filepath.Join(filepath.Dir(d.Target), tmpFileName)
+		tmpFilePathTable[d.Target] = tmpFilePath
+		obj = append(obj, Diff{Origin: originPath, Target: tmpFilePath, Type: DiffStatusCopy})
+	}
+
+	// 删除文件
+	for _, d := range deleteFiles {
+		obj = append(obj, Diff{Target: d.Target, Type: DiffStatusDelete})
+	}
+
+	// 删除路径
+	for _, p := range deleteDirs {
+		obj = append(obj, Diff{Target: p, Type: DiffStatusDelete})
+	}
+
+	// 移动文件
+	for real, tmpdist := range tmpFilePathTable {
+		obj = append(obj, Diff{Origin: tmpdist, Target: real, Type: DiffStatusMove})
+	}
+
+	return obj, nil
+}
+
+const permission = 0755
+
+func solveDiffTask(path string, diff []Diff) error {
+	for _, d := range diff {
+		switch d.Type {
+		case DiffStatusCreateDir:
+			err := os.MkdirAll(filepath.Join(d.Target, path), permission)
+			if err != nil {
+				return err
+			}
+		case DiffStatusCreateFile:
+			// 写空文件
+			err := os.WriteFile(filepath.Join(d.Target, path), []byte{}, permission)
+			if err != nil {
+				return err
+			}
+		case DiffStatusCopy:
+			err := ios.Copy(filepath.Join(d.Origin, path), filepath.Join(d.Target, path))
+			if err != nil {
+				return err
+			}
+		case DiffStatusDelete:
+			err := os.RemoveAll(filepath.Join(d.Target, path))
+			if err != nil {
+				return err
+			}
+		case DiffStatusMove:
+			err := os.Rename(filepath.Join(d.Origin, path), filepath.Join(d.Target, path))
+			if err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 // SolveCall 解决调用
-func SolveCall(node *Node, dist string) ([]DiffObj, error) {
-	// 根据AI编辑完的字符串string进行更改差分
-
-	// 构建原始路径映射
-	originalMap := buildPathMap(node)
-
-	// 解析目标字符串
-	distMap := parseDistString(dist)
-
-	// 生成差分对象
-	var diffObjs []DiffObj
-
-	// 检查删除和修改（在原始中存在，但在目标中不存在或ID不同）
-	for path, originalID := range originalMap {
-		distID, exists := distMap[path]
-		if !exists {
-			// 文件被删除
-			diffObjs = append(diffObjs, DiffObj{
-				OriginID: originalID,
-				Origin:   path,
-				Mode:     "delete",
-			})
-		} else if distID != originalID {
-			// ID被修改，需要删除旧ID并添加新ID
-			diffObjs = append(diffObjs, DiffObj{
-				OriginID: originalID,
-				Origin:   path,
-				Mode:     "delete",
-			})
-			diffObjs = append(diffObjs, DiffObj{
-				OriginID: distID,
-				Target:   path,
-				Mode:     "add",
-			})
-		}
-		// 如果ID相同，不需要操作
+func SolveCall(path string, node *Node, dist string) ([]Diff, error) {
+	distNode, err := BuildNodeFromString(dist)
+	if err != nil {
+		return nil, fmt.Errorf("error in parse string (%v)", err)
 	}
 
-	// 检查添加（在目标中存在，但在原始中不存在）
-	for path, distID := range distMap {
-		if _, exists := originalMap[path]; !exists {
-			// 文件被添加
-			diffObjs = append(diffObjs, DiffObj{
-				OriginID: distID,
-				Target:   path,
-				Mode:     "add",
-			})
-		}
+	err = checkNodeFileNameErr(distNode)
+	if err != nil {
+		return nil, fmt.Errorf("error in check file name (%v)", err)
 	}
 
-	return diffObjs, nil
+	diffNode := &Node{
+		IsDir: true,
+	}
+
+	solveNodesTreeDiff(diffNode, node, distNode)
+	diff, err := generateDiff(node, diffNode)
+	if err != nil {
+		return nil, fmt.Errorf("error in calculate diff (%v)", err)
+	}
+	err = solveDiffTask(path, diff)
+	if err != nil {
+		return nil, fmt.Errorf("error in act (%v)", err)
+	}
+	return diff, nil
 }

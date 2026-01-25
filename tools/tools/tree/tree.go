@@ -124,8 +124,8 @@ func writeTree(session *structs.Chats, mp map[string]*any, cross []*any) (bool, 
 		}, nil
 	}
 
-	diff, err := SolveCall(rets.TreeObj, str)
-	fmt.Printf("%v\n", diff)
+	diff, err := SolveCall(session.CurrentActivatePath, rets.TreeObj, str)
+	fmt.Printf("\nTree diff: %v\n", diff)
 	if err != nil {
 		boolx := false
 		success := any(boolx)

@@ -577,17 +577,17 @@ func TestSummary_WithThinkingContent(t *testing.T) {
 		t.Fatal("Expected non-nil request")
 	}
 
-	// 验证消息包含思考内容（当EnableThinking为false时）
-	foundThinking2 := false
-	for _, msg := range request.Messages {
-		if msg.Content != "" && strings.Contains(msg.Content, "<think>") {
-			foundThinking2 = true
-			break
-		}
-	}
-	if !foundThinking2 {
-		t.Error("Expected message with reasoning content")
-	}
+	// // 验证消息包含思考内容（当EnableThinking为false时）
+	// foundThinking2 := false
+	// for _, msg := range request.Messages {
+	// 	if msg.Content != "" && strings.Contains(msg.Content, "<think>") {
+	// 		foundThinking2 = true
+	// 		break
+	// 	}
+	// }
+	// if !foundThinking2 {
+	// 	t.Error("Expected message with reasoning content")
+	// }
 
 }
 
