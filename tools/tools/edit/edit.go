@@ -13,18 +13,21 @@ import (
 	"strings"
 
 	"github.com/cxykevin/alkaid0/library/json"
+	"github.com/cxykevin/alkaid0/log"
 	"github.com/cxykevin/alkaid0/provider/parser"
 	"github.com/cxykevin/alkaid0/storage/structs"
 	"github.com/cxykevin/alkaid0/tools/actions"
 	"github.com/cxykevin/alkaid0/tools/index"
 	"github.com/cxykevin/alkaid0/tools/toolobj"
-	// "github.com/cxykevin/alkaid0/tools/tools/trace"
+	"github.com/cxykevin/alkaid0/tools/tools/trace"
 )
 
 const toolName = "edit"
 
 //go:embed prompt.md
 var prompt string
+
+var logger = log.New("tools:edit")
 
 var paras = map[string]parser.ToolParameters{
 	"path": {
@@ -95,10 +98,11 @@ func updateInfo(session *structs.Chats, mp map[string]*any, cross []*any) (bool,
 		if textOut != "" && int(tmpObj.TextOutputedLen) == 0 {
 			fmt.Print("Edit text: ")
 		}
-			if textOut != "" && int(tmpObj.TextOutputedLen) < len(textOut) {
-				fmt.Print(textOut[tmpObj.TextOutputedLen:])
-				tmpObj.TextOutputedLen = int32(len(textOut))
-			}	}
+		if textOut != "" && int(tmpObj.TextOutputedLen) < len(textOut) {
+			fmt.Print(textOut[tmpObj.TextOutputedLen:])
+			tmpObj.TextOutputedLen = int32(len(textOut))
+		}
+	}
 	session.TemporyDataOfRequest["tools:edit"] = tmpObj
 	return true, cross, nil
 }
@@ -213,7 +217,6 @@ func ProcessString(content, target, text string, fileExists bool) (string, error
 		}
 		newContent = strings.Replace(content, target, text, 1)
 	}
-	// trace.
 	return newContent, nil
 }
 
@@ -279,8 +282,10 @@ func writeFile(session *structs.Chats, mp map[string]*any, cross []*any) (bool, 
 		content = strings.Join(lines, "\n")
 	}
 
+	logger.Info("edit file \"%s\" mode \"%s\" in ID=%d,agentID=%s", path, target, session.ID, session.CurrentAgentID)
 	newContent, err := ProcessString(content, target, text, fileExists)
 	if err != nil {
+		logger.Warn("failed to process string: %v", err)
 		boolx := false
 		success := any(boolx)
 		errMsg := any(err.Error())
@@ -293,6 +298,7 @@ func writeFile(session *structs.Chats, mp map[string]*any, cross []*any) (bool, 
 	// 写入文件
 	err = os.WriteFile(path, []byte(newContent), 0644)
 	if err != nil {
+		logger.Warn("failed to write file: %v", err)
 		boolx := false
 		success := any(boolx)
 		errMsg := any(fmt.Sprintf("failed to write file: %v", err))
@@ -301,6 +307,11 @@ func writeFile(session *structs.Chats, mp map[string]*any, cross []*any) (bool, 
 			"error":   &errMsg,
 		}, nil
 	}
+
+	pathStr := any("")
+	trace.Trace(session, map[string]*any{
+		"path": &pathStr,
+	}, []*any{})
 
 	boolx := true
 	success := any(boolx)

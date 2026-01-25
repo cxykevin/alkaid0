@@ -13,6 +13,7 @@ import (
 func main() {
 	config.Load()
 	log.Load()
+	defer log.SolvePanic()
 	index.Load()
 	// 读取环境变量 ALKAID0_WORKDIR
 	if workdir := os.Getenv("ALKAID0_WORKDIR"); workdir != "" {

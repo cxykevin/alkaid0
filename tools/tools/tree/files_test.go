@@ -284,7 +284,7 @@ func TestBuildTree(t *testing.T) {
 
 	t.Run("NormalDirectory", func(t *testing.T) {
 		var id int32
-		node := BuildTree(tmpDir, &id)
+		node, _ := BuildTree(tmpDir, &id)
 
 		if node.Name != filepath.Base(tmpDir) {
 			t.Errorf("expected name %s, got %s", filepath.Base(tmpDir), node.Name)
@@ -299,7 +299,7 @@ func TestBuildTree(t *testing.T) {
 
 	t.Run("SingleFile", func(t *testing.T) {
 		var id int32
-		node := BuildTree(file1, &id)
+		node, _ := BuildTree(file1, &id)
 
 		if node.Name != "file1.txt" {
 			t.Errorf("expected name file1.txt, got %s", node.Name)
@@ -314,7 +314,7 @@ func TestBuildTree(t *testing.T) {
 
 	t.Run("NonExistentPath", func(t *testing.T) {
 		var id int32
-		node := BuildTree(filepath.Join(tmpDir, "non_existent"), &id)
+		node, _ := BuildTree(filepath.Join(tmpDir, "non_existent"), &id)
 
 		if node.Error == nil {
 			t.Error("expected error for non-existent path, got nil")
@@ -476,7 +476,7 @@ func TestMaxChildrenNum(t *testing.T) {
 	}
 
 	var id int32
-	node := BuildTree(tmpDir, &id)
+	node, _ := BuildTree(tmpDir, &id)
 
 	if node.ChildrenNum <= MaxChildrenNum {
 		t.Errorf("expected ChildrenNum > %d, got %d", MaxChildrenNum, node.ChildrenNum)
@@ -508,7 +508,7 @@ func TestSolveCallWithOmission(t *testing.T) {
 
 	// 构建原始树
 	var id int32
-	node := BuildTree(tmpDir, &id)
+	node, _ := BuildTree(tmpDir, &id)
 	originalStr := BuildString(node)
 
 	// 验证原始字符串包含省略节点
@@ -556,7 +556,7 @@ func TestSolveCallWithOmission(t *testing.T) {
 
 // 	// 构建原始树
 // 	var id int32
-// 	node := BuildTree(tmpDir, &id)
+// 	node,_ := BuildTree(tmpDir, &id)
 // 	originalStr := BuildString(node)
 // 	t.Logf("Original tree:\n%s", originalStr)
 

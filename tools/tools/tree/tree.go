@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"text/template"
 
+	"github.com/cxykevin/alkaid0/log"
 	"github.com/cxykevin/alkaid0/prompts"
 	"github.com/cxykevin/alkaid0/storage/structs"
 	"github.com/cxykevin/alkaid0/tools/actions"
@@ -23,6 +24,8 @@ var prompt string
 var treePrompt string
 
 var treeTempate *template.Template
+
+var logger = log.New("tools:tree")
 
 func init() {
 	treeTempate = prompts.Load("tools:tree:tree", treePrompt)
@@ -44,9 +47,13 @@ func buildGlobalPrompt(session *structs.Chats) (string, error) {
 	}
 	nowpath, err := filepath.Abs(nowpath)
 	if err != nil {
+		logger.Warn("tree get abs error: %v", err)
 		return "", err
 	}
-	tree := BuildTree(nowpath, &treeID)
+	tree, errs := BuildTree(nowpath, &treeID)
+	for idx, err := range errs {
+		logger.Warn("tree build error (%d/%d): %v", idx+1, len(errs), err)
+	}
 	tree.Name = "(root)"
 	str := BuildString(tree)
 	session.TemporyDataOfRequest["tools:tree"] = &cacheStruct{
@@ -94,6 +101,7 @@ func writeTree(session *structs.Chats, mp map[string]*any, cross []*any) (bool, 
 
 	ret, ok := session.TemporyDataOfRequest["tools:tree"]
 	if !ok {
+		logger.Warn("tree get cache error")
 		boolx := false
 		success := any(boolx)
 		errMsg := any("No cache object found")
@@ -104,6 +112,7 @@ func writeTree(session *structs.Chats, mp map[string]*any, cross []*any) (bool, 
 	}
 	rets, ok := ret.(*cacheStruct)
 	if !ok {
+		logger.Warn("struct type error (mustn't appear)")
 		boolx := false
 		success := any(boolx)
 		errMsg := any("Struct type error")
@@ -115,6 +124,7 @@ func writeTree(session *structs.Chats, mp map[string]*any, cross []*any) (bool, 
 
 	str, err := edit.ProcessString(rets.TreeString, target, text, true)
 	if err != nil {
+		logger.Warn("text process error: %v", err)
 		boolx := false
 		success := any(boolx)
 		errMsg := any(err.Error())
@@ -127,6 +137,7 @@ func writeTree(session *structs.Chats, mp map[string]*any, cross []*any) (bool, 
 	diff, err := SolveCall(session.CurrentActivatePath, rets.TreeObj, str)
 	fmt.Printf("\nTree diff: %v\n", diff)
 	if err != nil {
+		logger.Warn("act diff error: %v", err)
 		boolx := false
 		success := any(boolx)
 		errMsg := any(err.Error())

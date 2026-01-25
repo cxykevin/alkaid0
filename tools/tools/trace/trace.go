@@ -9,6 +9,7 @@ import (
 	"strings"
 	"text/template"
 
+	"github.com/cxykevin/alkaid0/log"
 	"github.com/cxykevin/alkaid0/prompts"
 	"github.com/cxykevin/alkaid0/provider/parser"
 	"github.com/cxykevin/alkaid0/storage/structs"
@@ -26,6 +27,8 @@ var prompt string
 var tracePrompt string
 
 var traceTempate *template.Template
+
+var logger = log.New("tools:trace")
 
 func init() {
 	traceTempate = prompts.Load("tools:trace:trace", tracePrompt)
@@ -81,7 +84,8 @@ func updateInfo(session *structs.Chats, mp map[string]*any, cross []*any) (bool,
 	return true, cross, nil
 }
 
-func traceFile(session *structs.Chats, mp map[string]*any, push []*any) (bool, []*any, map[string]*any, error) {
+// Trace 跟踪文件
+func Trace(session *structs.Chats, mp map[string]*any, push []*any) (bool, []*any, map[string]*any, error) {
 	// 检查并获取path参数
 	pathPtr, ok := mp["path"]
 	if !ok || pathPtr == nil {
@@ -147,11 +151,18 @@ func traceFile(session *structs.Chats, mp map[string]*any, push []*any) (bool, [
 		}, nil
 	}
 
+	traceStr := "trace"
+	if untrace {
+		traceStr = "untrace"
+	}
+	logger.Info("%s file \"%s\" in ID=%d,agentID=%s", traceStr, path, session.ID, session.CurrentAgentID)
+
 	if untrace {
 		// 删数据库
 		tx := session.DB.Where("chat_id = ? AND path = ? AND agent_id = ?", session.ID, path, session.CurrentAgentID).Delete(&structs.Traces{})
 		err := tx.Error
 		if err != nil {
+			logger.Warn("delete trace failed: %v", err)
 			boolx := false
 			success := any(boolx)
 			errMsg := any(err.Error())
@@ -172,7 +183,6 @@ func traceFile(session *structs.Chats, mp map[string]*any, push []*any) (bool, [
 		}
 	} else {
 		// 检查文件是否存在
-
 		stat, err := os.Stat(path)
 		if err != nil {
 			boolx := false
@@ -237,7 +247,17 @@ func traceFile(session *structs.Chats, mp map[string]*any, push []*any) (bool, [
 			AgentID: session.CurrentAgentID,
 		}
 		session.DB.Save(&trace)
-		session.DB.Model(&structs.Chats{}).Where("id = ?", session.ID).Update("trace_id", session.TraceID)
+		err = session.DB.Model(&structs.Chats{}).Where("id = ?", session.ID).Update("trace_id", session.TraceID).Error
+		if err != nil {
+			logger.Warn("update trace failed: %v", err)
+			boolx := false
+			success := any(boolx)
+			errMsg := any(err.Error())
+			return false, push, map[string]*any{
+				"success": &success,
+				"error":   &errMsg,
+			}, nil
+		}
 	}
 
 	// TODO: RAG trace
@@ -246,6 +266,7 @@ func traceFile(session *structs.Chats, mp map[string]*any, push []*any) (bool, [
 	traces := []structs.Traces{}
 	err := session.DB.Where("chat_id = ?", session.ID).Find(&traces).Error
 	if err != nil {
+		logger.Warn("read trace failed: %v", err)
 		boolx := false
 		success := any(boolx)
 		errMsg := any(err.Error())
@@ -301,22 +322,31 @@ func buildTrace(session *structs.Chats) (string, error) {
 		// 读取文件Stat
 		stat, err := os.Stat(traceObj.Path)
 		// 文件过大(100K)
-		if err != nil || stat.Size() > 50*1024 {
+		if err != nil {
+			logger.Warn("trace warning: \"%s\" get stat error: %v", traceObj.Path, err)
+			continue
+		}
+		// 文件过大(100K)
+		if stat.Size() > 50*1024 {
+			logger.Warn("trace warning: \"%s\" too large (%d)", traceObj.Path, stat.Size())
 			continue
 		}
 		// 读取文件内容
 		content, err := os.ReadFile(traceObj.Path)
 		if err != nil {
+			logger.Warn("trace warning: \"%s\" read error: %v", traceObj.Path, err)
 			continue
 		}
 		str := fileContentToString(content)
 		if len(str) == 0 {
+			// logger.Warn("trace warning: \"%s\" empty", traceObj.Path)
 			continue
 		}
 
 		// 读取行数
 		lines := strings.Split(str, "\n")
 		if len(lines) > 2000 {
+			logger.Warn("trace warning: \"%s\" too long (%d)", traceObj.Path, len(lines))
 			continue
 		}
 		allLenStrLen := len(fmt.Sprintf("%d", len(lines)))
@@ -356,7 +386,7 @@ func load() string {
 		},
 		PostHook: toolobj.PostHookFunction{
 			Priority: 100,
-			Func:     traceFile,
+			Func:     Trace,
 		},
 	})
 	actions.HookTool("", &toolobj.Hook{

@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"errors"
 	"fmt"
+	"maps"
 	"math/rand"
 	"os"
 	"path/filepath"
@@ -64,20 +65,20 @@ var dirBlacklists = map[string]bool{}
 
 func init() {
 	// 复制
-	for k, v := range dirBlacklistsOrigin {
-		dirBlacklists[k] = v
-	}
+	maps.Copy(dirBlacklists, dirBlacklistsOrigin)
 }
 
 // BuildTree 构建树
-func BuildTree(dir string, ID *int32) *Node {
+func BuildTree(dir string, ID *int32) (*Node, []error) {
+	errorsTable := []error{}
 	info, err := os.Stat(dir)
 	if err != nil {
+		errorsTable = append(errorsTable, err)
 		return &Node{
 			Name:  filepath.Base(dir),
 			Path:  dir,
 			Error: err,
-		}
+		}, errorsTable
 	}
 	if !info.IsDir() {
 		(*ID)++
@@ -86,15 +87,16 @@ func BuildTree(dir string, ID *int32) *Node {
 			Path:  dir,
 			IsDir: false,
 			ID:    *ID,
-		}
+		}, errorsTable
 	}
 	entries, err := os.ReadDir(dir)
 	if err != nil {
+		errorsTable = append(errorsTable, err)
 		return &Node{
 			Name:  info.Name(),
 			Path:  dir,
 			Error: err,
-		}
+		}, errorsTable
 	}
 	node := &Node{
 		Name:  info.Name(),
@@ -110,7 +112,10 @@ func BuildTree(dir string, ID *int32) *Node {
 			if _, ok := dirBlacklists[entryName]; ok {
 				continue
 			}
-			subnode := BuildTree(filepath.Join(dir, entryName), ID)
+			subnode, errorsSubTable := BuildTree(filepath.Join(dir, entryName), ID)
+			if len(errorsSubTable) > 0 {
+				errorsTable = append(errorsTable, errorsSubTable...)
+			}
 			node.Children = append(node.Children, subnode)
 		}
 		// 排序
@@ -119,7 +124,7 @@ func BuildTree(dir string, ID *int32) *Node {
 		})
 	}
 	node.IDEnd = *ID
-	return node
+	return node, errorsTable
 }
 
 // BuildString 构建字符串
