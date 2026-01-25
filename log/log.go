@@ -93,6 +93,7 @@ type LogsObj struct {
 
 func (l *LogsObj) log(level string, msg string, v ...any) {
 	str := fmt.Sprintf(msg, v...)
+	str = SanitizeSensitiveInfo(str)
 	str = strings.ReplaceAll(strings.ReplaceAll(strings.ReplaceAll(strings.ReplaceAll(
 		str,
 		"\\", "\\\\"),

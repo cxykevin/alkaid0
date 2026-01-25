@@ -770,25 +770,25 @@ func TestSolveCallWithOmission(t *testing.T) {
 // 	})
 // }
 
-// cloneNode 做一个简单的深拷贝用于测试
-func cloneNode(n *Node) *Node {
-	if n == nil {
-		return nil
-	}
-	cn := &Node{
-		Name:        n.Name,
-		Path:        n.Path,
-		IsDir:       n.IsDir,
-		Children:    []*Node{},
-		ID:          n.ID,
-		ChildrenNum: n.ChildrenNum,
-		Error:       n.Error,
-	}
-	for _, c := range n.Children {
-		cn.Children = append(cn.Children, cloneNode(c))
-	}
-	return cn
-}
+// // cloneNode 做一个简单的深拷贝用于测试
+// func cloneNode(n *Node) *Node {
+// 	if n == nil {
+// 		return nil
+// 	}
+// 	cn := &Node{
+// 		Name:        n.Name,
+// 		Path:        n.Path,
+// 		IsDir:       n.IsDir,
+// 		Children:    []*Node{},
+// 		ID:          n.ID,
+// 		ChildrenNum: n.ChildrenNum,
+// 		Error:       n.Error,
+// 	}
+// 	for _, c := range n.Children {
+// 		cn.Children = append(cn.Children, cloneNode(c))
+// 	}
+// 	return cn
+// }
 
 func TestSolveNodesTreeDiff_AddDelete(t *testing.T) {
 	originStr := `root
