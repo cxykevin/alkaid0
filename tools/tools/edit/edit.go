@@ -95,11 +95,10 @@ func updateInfo(session *structs.Chats, mp map[string]*any, cross []*any) (bool,
 		if textOut != "" && int(tmpObj.TextOutputedLen) == 0 {
 			fmt.Print("Edit text: ")
 		}
-		if textOut != "" {
-			fmt.Print(textOut[tmpObj.TextOutputedLen:])
-			tmpObj.TextOutputedLen = int32(len(textOut))
-		}
-	}
+			if textOut != "" && int(tmpObj.TextOutputedLen) < len(textOut) {
+				fmt.Print(textOut[tmpObj.TextOutputedLen:])
+				tmpObj.TextOutputedLen = int32(len(textOut))
+			}	}
 	session.TemporyDataOfRequest["tools:edit"] = tmpObj
 	return true, cross, nil
 }
