@@ -5,9 +5,178 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
+	"slices"
 	"strings"
 	"testing"
 )
+
+// TestBuildNodeFromString_RoundTrip 测试 BuildString 与 BuildNodeFromString 的互转
+func TestBuildNodeFromString_RoundTrip(t *testing.T) {
+	// 构造节点树
+	root := &Node{Name: "root", Path: "root", IsDir: true, Children: []*Node{}}
+	f1 := &Node{Name: "a.txt", Path: filepath.Join("root", "a.txt"), IsDir: false, ID: 1}
+	d1 := &Node{Name: "dir1", Path: filepath.Join("root", "dir1"), IsDir: true, Children: []*Node{}}
+	f2 := &Node{Name: "b.txt", Path: filepath.Join("root", "dir1", "b.txt"), IsDir: false, ID: 2}
+	d1.Children = append(d1.Children, f2)
+	root.Children = append(root.Children, f1, d1)
+
+	s := BuildString(root)
+	// 反向解析
+	parsed, err := BuildNodeFromString(s)
+	if err != nil {
+		t.Fatalf("BuildNodeFromString failed: %v", err)
+	}
+	if parsed.Name != "root" {
+		t.Fatalf("expected root name, got %s", parsed.Name)
+	}
+	// 比较文件名与 id
+	want := map[string]int32{"a.txt": 1, filepath.Join("dir1", "b.txt"): 2}
+	got := map[string]int32{}
+	var walk func(n *Node, prefix string)
+	walk = func(n *Node, prefix string) {
+		for _, c := range n.Children {
+			if c.IsDir {
+				walk(c, filepath.Join(prefix, c.Name))
+			} else {
+				got[filepath.Join(prefix, c.Name)] = c.ID
+			}
+		}
+	}
+	walk(parsed, "")
+	if !reflect.DeepEqual(want, got) {
+		t.Fatalf("roundtrip mismatch:\nwant=%v\ngot=%v", want, got)
+	}
+}
+
+// TestBuildNodeFromString_InvalidIndent 验证错误缩进被拒绝
+func TestBuildNodeFromString_InvalidIndent(t *testing.T) {
+	// 使用 3 个空格，不是 4 的倍数
+	s := "root\n   - a '1'"
+	if _, err := BuildNodeFromString(s); err == nil {
+		t.Fatalf("expected indent error, got nil")
+	}
+}
+
+// TestBuildNodeFromString_InvalidChars 验证非法字符被拒绝
+func TestBuildNodeFromString_InvalidChars(t *testing.T) {
+	s := "root\n    - bad/name '1'"
+	if _, err := BuildNodeFromString(s); err == nil {
+		t.Fatalf("expected invalid name error, got nil")
+	}
+}
+
+// TestBuildNodeFromString_EmptyTree 验证空树被拒绝
+func TestBuildNodeFromString_EmptyTree(t *testing.T) {
+	s := "\n"
+	if _, err := BuildNodeFromString(s); err == nil {
+		t.Fatalf("expected empty tree error, got nil")
+	}
+}
+
+// TestCheckNodeFileNameErr_Duplicate 验证重复文件名检测
+func TestCheckNodeFileNameErr_Duplicate(t *testing.T) {
+	root := &Node{Name: "root", Path: "root", IsDir: true, Children: []*Node{}}
+	a := &Node{Name: "dup.txt", Path: filepath.Join("root", "dup.txt"), IsDir: false, ID: 1}
+	b := &Node{Name: "dup.txt", Path: filepath.Join("root", "dup.txt"), IsDir: false, ID: 2}
+	root.Children = append(root.Children, a, b)
+	if err := checkNodeFileNameErr(root); err == nil {
+		t.Fatalf("expected duplicate file name error, got nil")
+	}
+}
+
+// TestGenerateIDMap 验证 ID 映射生成
+func TestGenerateIDMap(t *testing.T) {
+	origin := &Node{Name: "root", Path: "root", IsDir: true, Children: []*Node{}}
+	a := &Node{Name: "a.txt", Path: filepath.Join("root", "a.txt"), IsDir: false, ID: 10}
+	b := &Node{Name: "b.txt", Path: filepath.Join("root", "b.txt"), IsDir: false, ID: 20}
+	origin.Children = append(origin.Children, a, b)
+	m := idMapOrigin{}
+	generateIDMap(&m, origin)
+	if got := m[10]; got != filepath.Join("root", "a.txt") {
+		t.Fatalf("unexpected mapping for 10: %s", got)
+	}
+	if got := m[20]; got != filepath.Join("root", "b.txt") {
+		t.Fatalf("unexpected mapping for 20: %s", got)
+	}
+}
+
+// TestGenerateDiff_MoveAndCreateDir 验证移动/复制/删除等操作被生成
+func TestGenerateDiff_MoveAndCreateDir(t *testing.T) {
+	// origin: root/a.txt (id=1)
+	origin := &Node{Name: "root", Path: "root", IsDir: true, Children: []*Node{}}
+	a := &Node{Name: "a.txt", Path: filepath.Join("root", "a.txt"), IsDir: false, ID: 1}
+	origin.Children = append(origin.Children, a)
+
+	// target: root/sub/a.txt (id=1)  表示文件被移动到 sub/
+	target := &Node{Name: "root", Path: "root", IsDir: true, Children: []*Node{}}
+	sub := &Node{Name: "sub", Path: filepath.Join("root", "sub"), IsDir: true, Children: []*Node{}}
+	ta := &Node{Name: "a.txt", Path: filepath.Join("root", "sub", "a.txt"), IsDir: false, ID: 1}
+	sub.Children = append(sub.Children, ta)
+	target.Children = append(target.Children, sub)
+
+	// 计算中间 diffNode: 将 origin->target 的差异合并到 diffNode
+	diffNode := &Node{IsDir: true}
+	if err := solveNodesTreeDiff(diffNode, origin, target); err != nil {
+		t.Fatalf("solveNodesTreeDiff error: %v", err)
+	}
+
+	diffs, err := generateDiff(origin, diffNode)
+	if err != nil {
+		t.Fatalf("generateDiff error: %v", err)
+	}
+
+	// 收集类型，以便断言包含 Copy/Move/Delete/CreateDir 等
+	types := []DiffStatus{}
+	for _, d := range diffs {
+		types = append(types, d.Type)
+	}
+	slices.Sort(types)
+
+	// 至少应包含 Copy, Move, Delete（CreateDir 不是必要条件，取决于 diff 生成细节）
+	foundCopy := false
+	foundMove := false
+	foundDelete := false
+	for _, tt := range types {
+		switch tt {
+		case DiffStatusCopy:
+			foundCopy = true
+		case DiffStatusMove:
+			foundMove = true
+		case DiffStatusDelete:
+			foundDelete = true
+		}
+	}
+	if !foundCopy || !foundMove || !foundDelete {
+		t.Fatalf("expected copy/move/delete in diffs, got: %v", types)
+	}
+}
+
+// TestBuildString_Format 验证 BuildString 输出包含文件 ID 与 - 前缀
+func TestBuildString_Format(t *testing.T) {
+	root := &Node{Name: "root", Path: "root", IsDir: true, Children: []*Node{}}
+	f := &Node{Name: "file.txt", Path: filepath.Join("root", "file.txt"), IsDir: false, ID: 42}
+	root.Children = append(root.Children, f)
+	s := BuildString(root)
+	if !stringsContains(s, "- file.txt") || !stringsContains(s, "'42'") {
+		t.Fatalf("unexpected buildstring output: %s", s)
+	}
+}
+
+// stringsContains 简单帮手，避免额外导入
+func stringsContains(s, sub string) bool {
+	return len(sub) == 0 || stringsIndex(s, sub) >= 0
+}
+
+// stringsIndex 最小实现，避免额外导入 strings
+func stringsIndex(s, sep string) int {
+	for i := 0; i+len(sep) <= len(s); i++ {
+		if s[i:i+len(sep)] == sep {
+			return i
+		}
+	}
+	return -1
+}
 
 // TestGenerateDiff_SwapFiles 测试两个目录下同名文件交换 ID 的场景
 func TestGenerateDiff_SwapFiles(t *testing.T) {

@@ -18,6 +18,7 @@ import (
 	"github.com/cxykevin/alkaid0/tools/actions"
 	"github.com/cxykevin/alkaid0/tools/index"
 	"github.com/cxykevin/alkaid0/tools/toolobj"
+	// "github.com/cxykevin/alkaid0/tools/tools/trace"
 )
 
 const toolName = "edit"
@@ -213,6 +214,7 @@ func ProcessString(content, target, text string, fileExists bool) (string, error
 		}
 		newContent = strings.Replace(content, target, text, 1)
 	}
+	// trace.
 	return newContent, nil
 }
 
