@@ -15,7 +15,7 @@ import (
 	"github.com/cxykevin/alkaid0/tools/tools/edit"
 )
 
-const toolName = "edit"
+const toolName = "tree"
 
 //go:embed prompt.md
 var prompt string
@@ -170,7 +170,7 @@ func load() string {
 			Func:     nil,
 		},
 	})
-	actions.HookTool(toolName, &toolobj.Hook{
+	actions.HookTool("edit", &toolobj.Hook{
 		Scope: "",
 		PreHook: toolobj.PreHookFunction{
 			Priority: 90,

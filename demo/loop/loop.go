@@ -247,12 +247,8 @@ func Start(db *gorm.DB) {
 
 		// 处理特殊命令
 		if input == "!" {
-			if lastInput == "" {
-				fmt.Printf("%s⚠ No previous input to repeat%s\n", ColorYellow, ColorReset)
-				continue
-			}
+			fmt.Printf("%s%s(Repeating)%s\n", ColorBold, ColorYellow, ColorReset)
 			input = lastInput
-			fmt.Printf("%s%s(Repeating: %s)%s\n", ColorBold, ColorYellow, input, ColorReset)
 		} else {
 			lastInput = input
 		}

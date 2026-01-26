@@ -3,6 +3,8 @@ package tools
 
 import (
 	_ "github.com/cxykevin/alkaid0/tools/tools/edit"
+	_ "github.com/cxykevin/alkaid0/tools/tools/scope"
+	_ "github.com/cxykevin/alkaid0/tools/tools/test_tool"
 	_ "github.com/cxykevin/alkaid0/tools/tools/trace"
 	_ "github.com/cxykevin/alkaid0/tools/tools/tree"
 )

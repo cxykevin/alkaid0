@@ -1,6 +1,8 @@
 package actions
 
 import (
+	"fmt"
+
 	"github.com/cxykevin/alkaid0/storage/structs"
 	"github.com/cxykevin/alkaid0/tools/toolobj"
 )
@@ -21,23 +23,35 @@ func HookTool(name string, hook *toolobj.Hook) {
 }
 
 // EnableScope 启用命名空间
-func EnableScope(session *structs.Chats, scope string) {
+func EnableScope(session *structs.Chats, scope string) error {
 	if scope == "" {
-		return
+		return nil
+	}
+	_, ok := toolobj.Scopes[scope]
+	if !ok {
+		return fmt.Errorf("scope \"%v\" not found", scope)
 	}
 	session.EnableScopes[scope] = true
 	if err := SetScopeEnabled(session.DB, session.ID, scope, true); err != nil {
 		logger.Error("failed to persist enable scope %s: %v", scope, err)
+		return err
 	}
+	return nil
 }
 
 // DisableScope 禁用命名空间
-func DisableScope(session *structs.Chats, scope string) {
+func DisableScope(session *structs.Chats, scope string) error {
 	if scope == "" {
-		return
+		return nil
+	}
+	_, ok := toolobj.Scopes[scope]
+	if !ok {
+		return fmt.Errorf("scope \"%v\" not found", scope)
 	}
 	session.EnableScopes[scope] = false
 	if err := SetScopeEnabled(session.DB, session.ID, scope, false); err != nil {
 		logger.Error("failed to persist disable scope %s: %v", scope, err)
+		return err
 	}
+	return nil
 }
