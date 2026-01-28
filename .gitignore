@@ -9,3 +9,5 @@ __debug_*
 .alkaid0
 
 non_existent*
+
+product/build.go
