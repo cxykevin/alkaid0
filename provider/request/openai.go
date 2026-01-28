@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/cxykevin/alkaid0/log"
+	"github.com/cxykevin/alkaid0/product"
 	"github.com/cxykevin/alkaid0/provider/request/structs"
 )
 
@@ -48,6 +49,7 @@ func SimpleOpenAIRequest(ctx context.Context, baseURL, apiKey, model string, bod
 	// 设置请求头
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+apiKey)
+	req.Header.Set("User-Agent", product.UserAgent)
 
 	// 发送请求
 	client := &http.Client{Timeout: Timeout}
@@ -141,6 +143,7 @@ func SimpleOpenAIEmbedding(ctx context.Context, baseURL, apiKey, model string, b
 	// 设置请求头
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+apiKey)
+	req.Header.Set("User-Agent", product.UserAgent)
 
 	// 发送请求
 	client := &http.Client{Timeout: Timeout}

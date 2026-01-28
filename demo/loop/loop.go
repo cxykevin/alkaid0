@@ -365,7 +365,7 @@ func Start(db *gorm.DB) {
 						fmt.Printf("  %sNo agents used in this chat%s\n", ColorYellow, ColorReset)
 					} else {
 						for _, v := range agents {
-							fmt.Printf("  %s•%s ID: %s, Path: %s\n", ColorGreen, ColorReset, v.AgentID, v.BindPath)
+							fmt.Printf("  %s-%s Name: %s, ID: %s, Path: %s\n", ColorGreen, ColorReset, v.ID, v.AgentID, v.BindPath)
 						}
 					}
 
@@ -384,7 +384,7 @@ func Start(db *gorm.DB) {
 					agents.ActivateAgent(&session, args[2], args[3])
 
 				case "deactivate":
-					agents.DeactivateAgent(&session)
+					agents.DeactivateAgent(&session, "")
 					fmt.Printf("%s✓ Agent deactivated%s\n", ColorGreen, ColorReset)
 
 				default:

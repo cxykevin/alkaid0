@@ -18,9 +18,10 @@ const maxPage = 10
 const maxToken = 8192
 
 var msgRole = map[structs.MessagesRole]string{
-	structs.MessagesRoleUser:  "user",
-	structs.MessagesRoleAgent: "assistant",
-	structs.MessagesRoleTool:  "user",
+	structs.MessagesRoleUser:        "user",
+	structs.MessagesRoleAgent:       "assistant",
+	structs.MessagesRoleTool:        "user",
+	structs.MessagesRoleCommunicate: "user",
 }
 
 // RequestBody 构建请求
@@ -95,6 +96,18 @@ func RequestBody(chatID uint32, modelID int32, agentID string, toolsList *[]*par
 					}{
 						Prompt: v.Delta,
 					})
+				} else if v.Type == structs.MessagesRoleCommunicate {
+					renderAgentID := ""
+					if v.AgentID != nil {
+						renderAgentID = *v.AgentID
+					}
+					if renderAgentID == agentID {
+						msg.Content = prompts.Render(prompts.AgentWrapTemplate, struct {
+							Prompt string
+						}{
+							Prompt: v.Delta,
+						})
+					}
 				} else if v.ThinkingDelta != "" {
 					thinkingWrap := ""
 					if modelConfig.EnableThinking {

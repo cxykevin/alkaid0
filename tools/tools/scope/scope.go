@@ -53,15 +53,15 @@ func updateInfo(session *structs.Chats, mp map[string]*any, cross []*any) (bool,
 	if namePtr, ok := mp["name"]; ok && namePtr != nil {
 		if name, ok := (*namePtr).(string); ok {
 			if !tmpObj.NameOutputed {
-				fmt.Printf("Trace scope: %s\n", name)
+				fmt.Printf("Use scope: %s\n", name)
 				tmpObj.NameOutputed = true
 			}
 		}
 	}
-	if untPtr, ok := mp["untrace"]; ok && untPtr != nil {
+	if untPtr, ok := mp["disable"]; ok && untPtr != nil {
 		if unt, ok := (*untPtr).(bool); ok {
 			if !tmpObj.FlagOutputed {
-				fmt.Printf("Untrace: %v\n", unt)
+				fmt.Printf("Disable scope: %v\n", unt)
 				tmpObj.FlagOutputed = true
 			}
 		}
@@ -97,10 +97,10 @@ func useScope(session *structs.Chats, mp map[string]*any, cross []*any) (bool, [
 	}
 
 	// 检查并获取untrace参数
-	untracePtr, ok := mp["untrace"]
+	disablePtr, ok := mp["disable"]
 	var disable bool
-	if ok && untracePtr != nil {
-		disable, ok = (*untracePtr).(bool)
+	if ok && disablePtr != nil {
+		disable, ok = (*disablePtr).(bool)
 		if !ok || name == "" {
 			disable = false
 		}
@@ -122,16 +122,6 @@ func useScope(session *structs.Chats, mp map[string]*any, cross []*any) (bool, [
 	}
 
 	logger.Info("%s scope \"%s\" in ID=%d,agentID=%s", enableString, name, session.ID, session.CurrentAgentID)
-
-	if name == "" {
-		boolx := false
-		success := any(boolx)
-		errMsg := any("couldn't enable or disable default scope")
-		return false, cross, map[string]*any{
-			"success": &success,
-			"error":   &errMsg,
-		}, nil
-	}
 
 	if disable {
 		err = actions.DisableScope(session, name)

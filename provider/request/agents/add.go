@@ -37,6 +37,7 @@ func AddAgent(session *structs.Chats, agentCode string, agentID string, path str
 	}
 
 	err := session.DB.Create(storageStructs.SubAgents{
+		ID:       agentCode,
 		AgentID:  agentID,
 		BindPath: path,
 	}).Error

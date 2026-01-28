@@ -6,6 +6,11 @@ import (
 	"text/template"
 )
 
+// AgentWrap Agent交互提示词
+//
+//go:embed prompts/agent_wrap.md
+var AgentWrap string
+
 // DefaultAgent 默认 Agent 的提示词
 //
 //go:embed prompts/default_agent.md
@@ -61,6 +66,9 @@ var ToolsWrap string
 //go:embed prompts/user_wrap.md
 var UserWrap string
 
+// AgentWrap Agent交互提示词模板
+var AgentWrapTemplate *template.Template
+
 // DefaultAgent 默认 Agent 的提示词模板
 var DefaultAgentTemplate *template.Template
 
@@ -95,6 +103,7 @@ var ToolsWrapTemplate *template.Template
 var UserWrapTemplate *template.Template
 
 func initTemplates() {
+	AgentWrapTemplate = Load("AgentWrap", AgentWrap)
 	DefaultAgentTemplate = Load("DefaultAgent", DefaultAgent)
 	DeltaWrapTemplate = Load("DeltaWrap", DeltaWrap)
 	GlobalTemplate = Load("Global", Global)

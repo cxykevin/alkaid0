@@ -43,4 +43,5 @@ type Tools struct {
 	UserDescription string
 	Parameters      map[string]parser.ToolParameters
 	Hooks           []Hook
+	Enable          func(session *structs.Chats) bool
 }

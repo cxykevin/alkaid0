@@ -34,7 +34,7 @@ func ActivateAgent(session *structs.Chats, agentCode string, prompt string) erro
 		ChatID:  session.ID,
 		Delta:   prompt,
 		AgentID: &agentCode,
-		Type:    structs.MessagesRoleUser,
+		Type:    structs.MessagesRoleCommunicate,
 	}).Error
 	if err != nil {
 		return err
@@ -55,13 +55,28 @@ func ActivateAgent(session *structs.Chats, agentCode string, prompt string) erro
 }
 
 // DeactivateAgent 取消激活Agent
-func DeactivateAgent(session *structs.Chats) error {
+func DeactivateAgent(session *structs.Chats, prompt string) error {
 	oldAgent := session.NowAgent
 	// 更新当前Agent
 	err := session.DB.Model(&structs.Chats{}).Where("id = ?", session.ID).Update("now_agent", "").Error
 	if err != nil {
 		return err
 	}
+
+	if prompt != "" {
+		// 提示词写入
+		defaultStr := ""
+		err = session.DB.Create(&structs.Messages{
+			ChatID:  session.ID,
+			Delta:   prompt,
+			AgentID: &defaultStr,
+			Type:    structs.MessagesRoleCommunicate,
+		}).Error
+		if err != nil {
+			return err
+		}
+	}
+
 	// 计算summary
 	session.NowAgent = ""
 	go request.Summary(context.Background(), session.DB, session.ID, oldAgent)

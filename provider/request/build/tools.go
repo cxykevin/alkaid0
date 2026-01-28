@@ -59,6 +59,12 @@ func Tools(session *structs.Chats) (string, string, *[]*parser.ToolsDefine) {
 		if k == "" {
 			continue
 		}
+		if v.Enable != nil {
+			enableFlag := v.Enable(session)
+			if !enableFlag {
+				continue
+			}
+		}
 		if !checkToolScope(session, v.Scope) {
 			continue
 		}
@@ -95,6 +101,15 @@ func ToolsSolver(session *structs.Chats, callback func(string, string, map[strin
 
 	toolsDef := make([]*parser.ToolsDefine, 0)
 	for k, v := range toolobj.ToolsList {
+		if k == "" {
+			continue
+		}
+		if v.Enable != nil {
+			enableFlag := v.Enable(session)
+			if !enableFlag {
+				continue
+			}
+		}
 		toolDefObj := &parser.ToolsDefine{
 			Name: k,
 			Func: func(ID string, arg map[string]*any, ok bool) error {
