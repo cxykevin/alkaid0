@@ -1,3 +1,4 @@
+// Package stack 提供了一个最简栈的实现（线程不安全）
 package stack
 
 // Stack 结构体表示一个栈

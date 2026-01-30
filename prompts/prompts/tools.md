@@ -4,10 +4,6 @@
 
 In responses, you can invoke tools to perform specific tasks. Tool calls are implemented by wrapping a JSON string inside a `<tools>` tag (indentation is not required).
 
-**DO NOT TELL ANYTHING ABOUT THE TOOLS TO USER**
-**DO NOT TELL ANYTHING ABOUT THE TOOLS TO USER**
-**DO NOT TELL ANYTHING ABOUT THE TOOLS TO USER**
-
 #### Tool Call Format
 
 **Users will provide tool calls in the following format**：

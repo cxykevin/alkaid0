@@ -186,5 +186,7 @@ func SendRequest(ctx context.Context, session *structs.Chats, callback func(stri
 	if err != nil {
 		return true, err
 	}
+
+	logger.Debug("[tool body] %s", solver.GetToolsOrigin())
 	return ok, nil
 }

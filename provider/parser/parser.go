@@ -61,16 +61,17 @@ const maxTagLen = 6
 
 // Parser 流式解析器
 type Parser struct {
-	Tools        []*ToolsDefine
-	TokenCache   string
-	Mode         int16
-	KeyMode      int16
-	Stop         bool
-	jsonParser   *json.Parser
-	toolSolveTmp toolSolveTmp
-	ToolResponse map[string]string
-	CalledTools  bool
-	ToolsSolved  []AIToolsResponse
+	Tools            []*ToolsDefine
+	TokenCache       string
+	Mode             int16
+	KeyMode          int16
+	Stop             bool
+	jsonParser       *json.Parser
+	toolSolveTmp     toolSolveTmp
+	ToolResponse     map[string]string
+	CalledTools      bool
+	ToolsSolved      []AIToolsResponse
+	ToolOriginString strings.Builder
 }
 
 type toolSolveTmp struct {
@@ -263,6 +264,7 @@ func (p *Parser) AddToken(token string, tokenThinking string) (string, string, *
 			if p.KeyMode == 1 {
 				responseThinking.WriteString(tokens)
 			} else {
+				p.ToolOriginString.WriteString(tokens)
 				if p.jsonParser != nil {
 					p.jsonParser.AddToken(tokens)
 					// TODO: 解析参数

@@ -8,7 +8,8 @@ import (
 	"github.com/cxykevin/alkaid0/library/json"
 	"github.com/cxykevin/alkaid0/log"
 	"github.com/cxykevin/alkaid0/provider/parser"
-	"github.com/cxykevin/alkaid0/provider/request/agents"
+
+	agents "github.com/cxykevin/alkaid0/provider/request/agents/actions"
 	"github.com/cxykevin/alkaid0/storage/structs"
 	"github.com/cxykevin/alkaid0/tools/actions"
 	"github.com/cxykevin/alkaid0/tools/index"
@@ -201,6 +202,14 @@ func unuseAgent(session *structs.Chats, mp map[string]*any, cross []*any) (bool,
 	}, nil
 }
 
+func enableActivate(session *structs.Chats) bool {
+	return session.CurrentAgentID == ""
+}
+
+func enableDeactivate(session *structs.Chats) bool {
+	return session.CurrentAgentID != ""
+}
+
 func load() string {
 	actions.AddTool(&toolobj.Tools{
 		Scope:           "", // Global Tools
@@ -208,9 +217,7 @@ func load() string {
 		UserDescription: promptIn,
 		Parameters:      parasIn,
 		ID:              "activate_agent",
-		Enable: func(session *structs.Chats) bool {
-			return session.CurrentAgentID == ""
-		},
+		Enable:          enableActivate,
 	})
 	actions.AddTool(&toolobj.Tools{
 		Scope:           "", // Global Tools
@@ -218,9 +225,7 @@ func load() string {
 		UserDescription: promptOut,
 		Parameters:      parasOut,
 		ID:              "deactivate_agent",
-		Enable: func(session *structs.Chats) bool {
-			return session.CurrentAgentID != ""
-		},
+		Enable:          enableDeactivate,
 	})
 	actions.HookTool("activate_agent", &toolobj.Hook{
 		Scope: "",

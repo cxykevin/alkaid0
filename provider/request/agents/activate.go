@@ -13,7 +13,7 @@ import (
 func ActivateAgent(session *structs.Chats, agentCode string, prompt string) error {
 	// 取agent表
 	obj := structs.SubAgents{}
-	err := session.DB.Where("id = ?", agentCode).First(obj).Error
+	err := session.DB.Where("id = ?", agentCode).First(&obj).Error
 	if err != nil {
 		return err
 	}
@@ -24,11 +24,11 @@ func ActivateAgent(session *structs.Chats, agentCode string, prompt string) erro
 		return errors.New("Agent not found")
 	}
 
-	// 更新当前Agent
-	err = session.DB.Model(&structs.Chats{}).Where("id = ?", session.ID).Update("now_agent", agentCode).Error
-	if err != nil {
-		return err
-	}
+	// // 更新当前Agent
+	// err = session.DB.Model(&structs.Chats{}).Where("id = ?", session.ID).Update("now_agent", agentCode).Error
+	// if err != nil {
+	// 	return err
+	// }
 	// 提示词写入
 	err = session.DB.Create(&structs.Messages{
 		ChatID:  session.ID,

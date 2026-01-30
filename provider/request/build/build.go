@@ -25,7 +25,7 @@ func Build(db *gorm.DB, session *storageStructs.Chats) (*reqStruct.ChatCompletio
 	if err != nil {
 		logger.Error("db error %v", err)
 	}
-	body, err := RequestBody(session.ID, int32(chatLine.LastModelID), chatLine.NowAgent, tools, db, scopes, traces)
+	body, err := RequestBody(session.ID, int32(chatLine.LastModelID), chatLine.NowAgent, tools, db, scopes, traces, session.CurrentAgentConfig)
 	if err != nil {
 		logger.Error("build request body error %v", err)
 		return nil, err

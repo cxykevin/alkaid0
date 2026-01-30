@@ -6,11 +6,13 @@ import (
 	"github.com/cxykevin/alkaid0/config"
 	"github.com/cxykevin/alkaid0/demo/loop"
 	"github.com/cxykevin/alkaid0/log"
+	"github.com/cxykevin/alkaid0/mock/openai"
 	"github.com/cxykevin/alkaid0/storage"
 	"github.com/cxykevin/alkaid0/tools/index"
 )
 
 func main() {
+	openai.Start()
 	config.Load()
 	log.Load()
 	defer log.SolvePanic()

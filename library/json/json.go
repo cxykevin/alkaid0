@@ -1,3 +1,4 @@
+// Package json 流式解析 json
 package json
 
 import (

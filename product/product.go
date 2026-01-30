@@ -1,3 +1,4 @@
+// Package product 产品信息
 package product
 
 // Version 版本号

@@ -85,6 +85,11 @@ func (p *Solver) GetTools() []parser.AIToolsResponse {
 	return p.parser.ToolsSolved
 }
 
+// GetToolsOrigin 获取工具原始字符串
+func (p *Solver) GetToolsOrigin() string {
+	return p.parser.ToolOriginString.String()
+}
+
 // NewSolver 创建解析器
 func NewSolver(db *gorm.DB, session *structs.Chats) *Solver {
 	obj := &Solver{chatID: session.ID, db: db}

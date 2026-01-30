@@ -79,6 +79,7 @@ import (
 	"fmt"
 	"math/rand"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 )
@@ -122,6 +123,18 @@ var Models = []Model{
 		Created: time.Now().Unix(),
 		OwnedBy: "mock",
 	},
+	{
+		ID:      "echo-chat",
+		Object:  "model",
+		Created: time.Now().Unix(),
+		OwnedBy: "mock",
+	},
+	{
+		ID:      "echo-chat-flash", // 关闭延迟
+		Object:  "model",
+		Created: time.Now().Unix(),
+		OwnedBy: "mock",
+	},
 }
 
 // --- configs end ---
@@ -152,7 +165,7 @@ type ChatCompletionResponse struct {
 // Choice 选择项
 type Choice struct {
 	Index        int     `json:"index"`
-	Message      Message `json:"message"`
+	Delta        Message `json:"delta"`
 	FinishReason string  `json:"finish_reason"`
 }
 
@@ -242,7 +255,12 @@ func handleChatCompletion(w http.ResponseWriter, r *http.Request) {
 		promptTokens += calculateTokens(msg.Content)
 	}
 
-	responseText := fmt.Sprintf("This is a mock response from model %s. Your message was received and processed.", req.Model)
+	var responseText string
+	if strings.Contains(req.Model, "echo") && len(req.Messages) > 0 {
+		responseText = req.Messages[len(req.Messages)-1].Content
+	} else {
+		responseText = fmt.Sprintf("This is a mock response from model %s. Your message was received and processed.", req.Model)
+	}
 	completionTokens := calculateTokens(responseText)
 
 	resp := ChatCompletionResponse{
@@ -253,7 +271,7 @@ func handleChatCompletion(w http.ResponseWriter, r *http.Request) {
 		Choices: []Choice{
 			{
 				Index: 0,
-				Message: Message{
+				Delta: Message{
 					Role:    "assistant",
 					Content: responseText,
 				},
@@ -283,10 +301,23 @@ func handleStreamingChatCompletion(w http.ResponseWriter, _ *http.Request, req C
 		promptTokens += calculateTokens(msg.Content)
 	}
 	responseText := ""
-	if !strings.Contains(req.Model, "-thinking") {
+	if strings.Contains(req.Model, "-thinking") {
 		responseText = responseText + "<think> This is a CoT string. </think> "
 	}
-	responseText = responseText + fmt.Sprintf("This is a mock response from model %s. Your message was received and processed.", req.Model)
+
+	if strings.Contains(req.Model, "echo") && len(req.Messages) > 0 {
+		responseText += strings.TrimSpace(
+			strings.ReplaceAll(
+				strings.ReplaceAll(
+					strings.ReplaceAll(
+						req.Messages[len(req.Messages)-1].Content,
+						"<!-- Alkaid User Prompt -->", ""),
+					"<user_prompt>", ""),
+				"</user_prompt>", ""),
+		)
+	} else {
+		responseText += responseText + fmt.Sprintf("This is a mock response from model %s. Your message was received and processed.", req.Model)
+	}
 	completionTokens := calculateTokens(responseText)
 
 	responseID := generateID("chatcmpl")
@@ -304,7 +335,7 @@ func handleStreamingChatCompletion(w http.ResponseWriter, _ *http.Request, req C
 
 		choice := Choice{
 			Index: 0,
-			Message: Message{
+			Delta: Message{
 				Role:    "assistant",
 				Content: string(currentContent) + " ",
 			},
@@ -335,9 +366,9 @@ func handleStreamingChatCompletion(w http.ResponseWriter, _ *http.Request, req C
 		}
 
 		fmt.Fprintf(w, "data: %s\n\n", data)
-		flusher.Flush()
 
 		if !strings.Contains(req.Model, "-flash") {
+			flusher.Flush()
 			time.Sleep(50 * time.Millisecond)
 		}
 	}
@@ -433,3 +464,10 @@ func StartServerTask() {
 // func main() {
 // 	StartServer()
 // }
+
+// Start 检查环境变量并启动服务器
+func Start() {
+	if os.Getenv("ALKAID0_DEBUG_MOCKSERVER") == "true" {
+		StartServerTask()
+	}
+}
