@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	"github.com/cxykevin/alkaid0/config/structs"
 )
@@ -23,6 +24,17 @@ var logPath string
 var Logger *log.Logger
 
 var loggerInited bool = false
+
+// 异步日志相关
+type logMessage struct {
+	level      string
+	moduleName string
+	message    string
+}
+
+var logChannel chan logMessage
+var logWaitGroup sync.WaitGroup
+var logFlushMutex sync.Mutex
 
 // ExpandPath 展开路径中的 ~ 和环境变量
 func ExpandPath(path string) string {
@@ -78,6 +90,12 @@ func Load() {
 	// 创建logger，输出到文件
 	Logger = log.New(file, "", log.LstdFlags)
 
+	// 初始化异步日志channel
+	logChannel = make(chan logMessage, 1000) // 缓冲1000条日志
+	
+	// 启动日志处理goroutine
+	go logWorker()
+
 	loggerInited = true
 
 	sysObj := New("log")
@@ -85,6 +103,22 @@ func Load() {
 
 	// logLck.Unlock()
 
+}
+
+// logWorker 异步日志处理worker
+func logWorker() {
+	for msg := range logChannel {
+		str := fmt.Sprintf("[%s][%s] %s", msg.level, msg.moduleName, msg.message)
+		Logger.Println(str)
+		logWaitGroup.Done()
+	}
+}
+
+// flushLogs 等待所有pending的日志写入完成
+func flushLogs() {
+	logFlushMutex.Lock()
+	defer logFlushMutex.Unlock()
+	logWaitGroup.Wait()
 }
 
 // LogsObj 日志对象
@@ -101,6 +135,30 @@ func (l *LogsObj) log(level string, msg string, v ...any) {
 		"\n", "\\n"),
 		"\r", "\\r"),
 		"\t", "\\t")
+	
+	// 异步写入日志
+	logFlushMutex.Lock()
+	logWaitGroup.Add(1)
+	logFlushMutex.Unlock()
+	
+	logChannel <- logMessage{
+		level:      level,
+		moduleName: l.moduleName,
+		message:    str,
+	}
+}
+
+func (l *LogsObj) logSync(level string, msg string, v ...any) {
+	str := fmt.Sprintf(msg, v...)
+	str = SanitizeSensitiveInfo(str)
+	str = strings.ReplaceAll(strings.ReplaceAll(strings.ReplaceAll(strings.ReplaceAll(
+		str,
+		"\\", "\\\\"),
+		"\n", "\\n"),
+		"\r", "\\r"),
+		"\t", "\\t")
+	
+	// 同步写入日志
 	Logger.Printf("[%s][%s] %s", level, l.moduleName, str)
 }
 
@@ -114,9 +172,12 @@ func (l *LogsObj) Warn(msg string, v ...any) {
 	l.log("WARN", msg, v...)
 }
 
-// Error 打印错误
+// Error 打印错误 - 强制同步写入
 func (l *LogsObj) Error(msg string, v ...any) {
-	l.log("ERROR", msg, v...)
+	// 先flush所有pending的日志
+	flushLogs()
+	// 然后同步写入error日志
+	l.logSync("ERROR", msg, v...)
 }
 
 // Debug 打印调试
