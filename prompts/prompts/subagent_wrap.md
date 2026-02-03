@@ -35,6 +35,9 @@ When finished, provide a comprehensive but concise summary to the main agent via
 - Any issues encountered
 - Relevant data in requested format
 
+`deactivate_agent` **MUST NOT called with any other tools at the SAME time!**
+`deactivate_agent` **MUST NOT called with any other tools at the SAME time!**
+
 ---
 
 ## Main Agent Task

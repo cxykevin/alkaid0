@@ -11,6 +11,10 @@ The following are snippets of files currently being **traced**. These files are 
 **Line number IS NOT A PART OF FILE, DO NOT contains the line number in anywhere you OUTPUT**
 **Line number IS NOT A PART OF FILE, DO NOT contains the line number in anywhere you OUTPUT**
 
+**DO NOT INCLUDE LINE NUMBERS IN EDITING!**
+**DO NOT INCLUDE LINE NUMBERS IN EDITING!**
+**DO NOT INCLUDE LINE NUMBERS IN EDITING!**
+
 3.  **Handling Discontinuous Snippets**: 
     *   Be aware that the provided content may consist of **one or more non-contiguous fragments** rather than the full file.
     *   Use the line numbers to determine the relative positioning and distance between code blocks.

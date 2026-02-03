@@ -1,9 +1,11 @@
 package storage
 
 import (
+	_ "embed" // embed
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/cxykevin/alkaid0/log"
 	"gorm.io/gorm"
@@ -17,6 +19,9 @@ var logger *log.LogsObj
 func init() {
 	logger = log.New("storage")
 }
+
+//go:embed auto_execute.sql
+var fastSQL string
 
 // InitStorage 初始化 db
 func InitStorage(dataPath string, dbFile string) *gorm.DB {
@@ -49,6 +54,17 @@ func InitStorage(dataPath string, dbFile string) *gorm.DB {
 	if db, err = InitDB(dbPath); err != nil {
 		logger.Error("failed to init db %s: %v", dataPath, err)
 		panic(err)
+	}
+
+	for v := range strings.SplitSeq(fastSQL, ";") {
+		vs := strings.TrimSpace(v)
+		if vs == "" {
+			continue
+		}
+		err := db.Exec(vs).Error
+		if err != nil {
+			logger.Error("failed to execute sql \"%s\": %v", vs, err)
+		}
 	}
 	return db
 }

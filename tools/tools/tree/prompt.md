@@ -18,26 +18,52 @@
 
 Indent: `4 spaces`
 
+
+**Line number IS NOT A PART OF FILE, DO NOT contains the line number in anywhere you OUTPUT**
+
+**DO NOT INCLUDE LINE NUMBERS IN EDITING!**
+
 ###### Example Task:
 
 *   **User Request:** "Copy `bar` from `foo` to `hello` as `bar_copy`, then delete `world`."
 
 *   **Current State in Context:**
     ```
-    foo
-        - bar `1`
-    hello
-        - world `2`
+    1|foo
+    2|    - bar `1`
+    3|hello
+    4|    - world `2`
     ```
 
 *   **Your Action (Edit @tree):**
     1. Add `- bar_copy '1'` under the `hello` directory.
     2. Remove the line `- world '2'`.
+    
+*   **Your Output:**
+
+<tools>
+[
+    {
+        "name": "edit",
+        "id": "edit_tree_copy",
+        "path": "@tree",
+        "target": "hello\n",
+        "text": "hello\n    - bar_copy '1'"
+    },
+    {
+        "name": "edit",
+        "id": "edit_tree_remove_world",
+        "path": "@tree",
+        "target": "@ln:1-1",
+        "text": ""
+    }
+]
+</tools>
 
 *   **Resulting State:**
     ```
-    foo
-        - bar `1`
-    hello
-        - bar_copy `1`
+    1|foo
+    2|    - bar `1`
+    3|hello
+    4|    - bar_copy `1`
     ```
