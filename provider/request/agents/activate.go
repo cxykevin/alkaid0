@@ -5,6 +5,7 @@ import (
 	"errors"
 
 	"github.com/cxykevin/alkaid0/config"
+	cfgStruct "github.com/cxykevin/alkaid0/config/structs"
 	"github.com/cxykevin/alkaid0/provider/request"
 	"github.com/cxykevin/alkaid0/storage/structs"
 )
@@ -80,5 +81,9 @@ func DeactivateAgent(session *structs.Chats, prompt string) error {
 	// 计算summary
 	session.NowAgent = ""
 	go request.Summary(context.Background(), session.DB, session.ID, oldAgent)
+
+	session.CurrentActivatePath = ""
+	session.CurrentAgentID = ""
+	session.CurrentAgentConfig = cfgStruct.AgentConfig{}
 	return nil
 }

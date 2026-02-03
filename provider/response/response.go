@@ -23,6 +23,7 @@ type Solver struct {
 	toolResponses []toolSaveStruct
 	chatID        uint32
 	db            *gorm.DB
+	session       *structs.Chats
 }
 
 func (p *Solver) saveToolResponse(toolName string, toolID string, response map[string]*any) error {
@@ -69,9 +70,10 @@ func (p *Solver) DoneToken() (bool, string, string, error) {
 		return true, delta, reasoningDelta, err
 	}
 	err = p.db.Create(&storageStructs.Messages{
-		ChatID: p.chatID,
-		Delta:  buf.String(),
-		Type:   storageStructs.MessagesRoleTool,
+		ChatID:  p.chatID,
+		Delta:   buf.String(),
+		Type:    storageStructs.MessagesRoleTool,
+		AgentID: &p.session.CurrentAgentID,
 	}).Error
 	if err != nil {
 		return true, delta, reasoningDelta, err
@@ -92,7 +94,7 @@ func (p *Solver) GetToolsOrigin() string {
 
 // NewSolver 创建解析器
 func NewSolver(db *gorm.DB, session *structs.Chats) *Solver {
-	obj := &Solver{chatID: session.ID, db: db}
+	obj := &Solver{chatID: session.ID, db: db, session: session}
 	obj.parser = parser.NewParser(*build.ToolsSolver(session, obj.saveToolResponse))
 	return obj
 }

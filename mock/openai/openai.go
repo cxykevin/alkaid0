@@ -306,15 +306,21 @@ func handleStreamingChatCompletion(w http.ResponseWriter, _ *http.Request, req C
 	}
 
 	if strings.Contains(req.Model, "echo") && len(req.Messages) > 0 {
-		responseText += strings.TrimSpace(
-			strings.ReplaceAll(
+		if strings.Contains(req.Messages[len(req.Messages)-1].Content, "<|show_full_messages|>") {
+			for _, v := range req.Messages {
+				responseText += fmt.Sprintf("---- role: %s ----\n%s\n\n", v.Role, v.Content)
+			}
+		} else {
+			responseText += strings.TrimSpace(
 				strings.ReplaceAll(
 					strings.ReplaceAll(
-						req.Messages[len(req.Messages)-1].Content,
-						"<!-- Alkaid User Prompt -->", ""),
-					"<user_prompt>", ""),
-				"</user_prompt>", ""),
-		)
+						strings.ReplaceAll(
+							req.Messages[len(req.Messages)-1].Content,
+							"<!-- Alkaid User Prompt -->", ""),
+						"<user_prompt>", ""),
+					"</user_prompt>", ""),
+			)
+		}
 	} else {
 		responseText += responseText + fmt.Sprintf("This is a mock response from model %s. Your message was received and processed.", req.Model)
 	}

@@ -11,6 +11,8 @@ func act(obj any) (any, error) {
 	switch objs := obj.(type) {
 	case actions.Add:
 		return nil, AddAgent(objs.Session, objs.AgentCode, objs.AgentID, objs.Path)
+	case actions.Update:
+		return nil, UpdateAgent(objs.Session, objs.AgentCode, objs.AgentID, objs.Path)
 	case actions.Del:
 		return nil, DeleteAgent(objs.Session, objs.AgentCode)
 	case actions.List:

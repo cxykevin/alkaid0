@@ -38,9 +38,9 @@ type toolCallFlagTempory struct {
 	FlagOutputed bool
 }
 
-func buildPrompt(session *structs.Chats) (string, error) {
-	return prompt, nil
-}
+// func buildPrompt(session *structs.Chats) (string, error) {
+// 	return prompt, nil
+// }
 
 func updateInfo(session *structs.Chats, mp map[string]*any, cross []*any) (bool, []*any, error) {
 	// 只在参数存在时输出，支持流式更新
@@ -158,7 +158,7 @@ func load() string {
 		Scope: "",
 		PreHook: toolobj.PreHookFunction{
 			Priority: 100,
-			Func:     buildPrompt,
+			Func:     nil,
 		},
 		OnHook: toolobj.OnHookFunction{
 			Priority: 100,

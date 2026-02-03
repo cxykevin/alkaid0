@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/cxykevin/alkaid0/config"
+	"github.com/cxykevin/alkaid0/provider/request/agents/actions"
 	"github.com/cxykevin/alkaid0/provider/request/build"
 	reqStruct "github.com/cxykevin/alkaid0/provider/request/structs"
 	"github.com/cxykevin/alkaid0/provider/response"
@@ -24,15 +25,16 @@ func UserAddMsg(session *structs.Chats, msg string, refers *structs.MessagesRefe
 	} else {
 		refer = *refers
 	}
-	var chat structs.Chats
-	db.First(&chat, 1)
-	chat.NowAgent = ""
-	err := db.Select("NowAgent").Save(&chat).Error
-	if err != nil {
-		return err
+
+	if session.CurrentAgentID != "" {
+		err := actions.DeactivateAgent(session, "<| user stopped subagent |>")
+		if err != nil {
+			return err
+		}
 	}
+
 	// 插入
-	err = db.Create(&structs.Messages{
+	err := db.Create(&structs.Messages{
 		ChatID: chatID,
 		Delta:  msg,
 		Refers: refer,
@@ -61,14 +63,21 @@ type aiToolsResponseTemplate struct {
 func SendRequest(ctx context.Context, session *structs.Chats, callback func(string, string) error) (bool, error) {
 	session.TemporyDataOfRequest = make(map[string]any)
 	db := session.DB
-	chatID := session.ID
-	// 取模型ID
-	var chat structs.Chats
-	err := db.First(&chat, chatID).Error
-	if err != nil {
-		return true, err
+
+	modelID := session.LastModelID
+	if session.CurrentAgentID != "" {
+		modelIDRet := uint32(session.CurrentAgentConfig.AgentModel)
+		if modelIDRet != 0 {
+			modelID = modelIDRet
+		}
 	}
-	modelCfg, ok := config.GlobalConfig.Model.Models[int32(chat.LastModelID)]
+	// 取模型ID
+	// var chat structs.Chats
+	// err := db.First(&chat, chatID).Error
+	// if err != nil {
+	// 	return true, err
+	// }
+	modelCfg, ok := config.GlobalConfig.Model.Models[int32(modelID)]
 	if !ok {
 		return true, errors.New("model not found")
 	}
@@ -86,14 +95,15 @@ func SendRequest(ctx context.Context, session *structs.Chats, callback func(stri
 	// }
 
 	solver := response.NewSolver(db, session)
+	agent := session.CurrentAgentID
 	// 写库
 	reqObj := structs.Messages{
-		ChatID:        chatID,
-		AgentID:       &chat.NowAgent,
+		ChatID:        session.ID,
+		AgentID:       &agent,
 		Delta:         "",
 		ThinkingDelta: "",
 		Type:          structs.MessagesRoleAgent,
-		ModelID:       chat.LastModelID,
+		ModelID:       modelID,
 		ModelName:     modelCfg.ModelName,
 	}
 	tx := db.Create(&reqObj)
@@ -148,7 +158,6 @@ func SendRequest(ctx context.Context, session *structs.Chats, callback func(stri
 	}
 	gDelta.WriteString(delta)
 	tools := solver.GetTools()
-	toolsCalledStr := ""
 	if len(tools) > 0 {
 		toolsRender := []aiToolsResponseTemplate{}
 		for _, v := range tools {
@@ -166,7 +175,6 @@ func SendRequest(ctx context.Context, session *structs.Chats, callback func(stri
 		if err != nil {
 			return true, err
 		}
-		toolsCalledStr = buf.String()
 	}
 	gThinkingDelta.WriteString(thinkingDelta)
 	if gDelta.String() == "" && gThinkingDelta.String() == "" {
@@ -176,7 +184,7 @@ func SendRequest(ctx context.Context, session *structs.Chats, callback func(stri
 		err = db.Model(&structs.Messages{}).Where("id = ?", msgID).Updates(structs.Messages{
 			Delta:                 gDelta.String(),
 			ThinkingDelta:         gThinkingDelta.String(),
-			ToolCallingJSONString: string(toolsCalledStr),
+			ToolCallingJSONString: string(solver.GetToolsOrigin()),
 		}).Error
 	}
 	if err != nil {

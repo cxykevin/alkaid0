@@ -26,6 +26,11 @@ var DeltaWrap string
 //go:embed prompts/global.md
 var Global string
 
+// SubagentWrap Agent交互提示词
+//
+//go:embed prompts/subagent_wrap.md
+var SubagentWrap string
+
 // Summary 总结提示词
 //
 //go:embed prompts/summary.md
@@ -78,6 +83,9 @@ var DeltaWrapTemplate *template.Template
 // Global 全局提示词模板
 var GlobalTemplate *template.Template
 
+// SubagentWrap Agent交互提示词模板
+var SubagentWrapTemplate *template.Template
+
 // Summary 总结提示词模板
 var SummaryTemplate *template.Template
 
@@ -107,6 +115,7 @@ func initTemplates() {
 	DefaultAgentTemplate = Load("DefaultAgent", DefaultAgent)
 	DeltaWrapTemplate = Load("DeltaWrap", DeltaWrap)
 	GlobalTemplate = Load("Global", Global)
+	SubagentWrapTemplate = Load("SubagentWrap", SubagentWrap)
 	SummaryTemplate = Load("Summary", Summary)
 	SummaryWrapTemplate = Load("SummaryWrap", SummaryWrap)
 	ToolPrehookTemplate = Load("ToolPrehook", ToolPrehook)

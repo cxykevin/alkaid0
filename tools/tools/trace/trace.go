@@ -47,9 +47,9 @@ var paras = map[string]parser.ToolParameters{
 	},
 }
 
-func buildPrompt(session *structs.Chats) (string, error) {
-	return prompt, nil
-}
+// func buildPrompt(session *structs.Chats) (string, error) {
+// 	return prompt, nil
+// }
 
 type toolCallFlagTempory struct {
 	PathOutputed bool
@@ -378,7 +378,7 @@ func load() string {
 		Scope: "",
 		PreHook: toolobj.PreHookFunction{
 			Priority: 100,
-			Func:     buildPrompt,
+			Func:     nil,
 		},
 		OnHook: toolobj.OnHookFunction{
 			Priority: 100,

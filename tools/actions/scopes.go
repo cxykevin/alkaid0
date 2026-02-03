@@ -34,8 +34,21 @@ func SetScopeEnabled(db *gorm.DB, chatID uint32, name string, enabled bool) erro
 		logger.Info("DB not initialized, skip persist scope %s", name)
 		return nil
 	}
-	s := structs.Scopes{Name: name, Enabled: enabled, ChatID: chatID}
-	return db.Save(&s).Error
+	// 先查找是否存在
+	var existing structs.Scopes
+	result := db.Where("name = ? AND chat_id = ?", name, chatID).First(&existing)
+
+	switch result.Error {
+	case nil:
+		// 记录存在，更新
+		return db.Model(&existing).Update("enabled", enabled).Error
+	case gorm.ErrRecordNotFound:
+		// 记录不存在，创建
+		s := structs.Scopes{Name: name, Enabled: enabled, ChatID: chatID}
+		return db.Create(&s).Error
+	}
+
+	return result.Error
 }
 
 // getAllScopes 返回数据库中所有命名空间的启用状态

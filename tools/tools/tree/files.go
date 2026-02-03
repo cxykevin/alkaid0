@@ -68,6 +68,16 @@ func init() {
 	maps.Copy(dirBlacklists, dirBlacklistsOrigin)
 }
 
+func sortNodeCmp(i, j *Node) int {
+	if i.IsDir && !j.IsDir {
+		return -1
+	}
+	if !i.IsDir && j.IsDir {
+		return 1
+	}
+	return cmp.Compare(i.Name, j.Name)
+}
+
 // BuildTree 构建树
 func BuildTree(dir string, ID *int32) (*Node, []error) {
 	errorsTable := []error{}
@@ -119,9 +129,7 @@ func BuildTree(dir string, ID *int32) (*Node, []error) {
 			node.Children = append(node.Children, subnode)
 		}
 		// 排序
-		slices.SortFunc(node.Children, func(i, j *Node) int {
-			return cmp.Compare(i.Name, j.Name)
-		})
+		slices.SortFunc(node.Children, sortNodeCmp)
 	}
 	node.IDEnd = *ID
 	return node, errorsTable
@@ -207,9 +215,7 @@ func buildStringRecursive(node *Node, prefix string, builder *strings.Builder) {
 }
 
 func sortNodes(nodes []*Node) {
-	slices.SortFunc(nodes, func(i, j *Node) int {
-		return cmp.Compare(i.Name, j.Name)
-	})
+	slices.SortFunc(nodes, sortNodeCmp)
 	// 递归排序子节点
 	for _, node := range nodes {
 		sortNodes(node.Children)

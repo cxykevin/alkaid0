@@ -4,6 +4,7 @@ import (
 	_ "embed" // embed
 	"fmt"
 	"path/filepath"
+	"strings"
 	"text/template"
 
 	"github.com/cxykevin/alkaid0/log"
@@ -60,7 +61,14 @@ func buildGlobalPrompt(session *structs.Chats) (string, error) {
 		TreeObj:    tree,
 		TreeString: str,
 	}
-	return prompts.Render(treeTempate, str), nil
+
+	allLenStrLen := len(fmt.Sprintf("%d", len(str)))
+	builder := strings.Builder{}
+	for lineno, line := range strings.Split(str, "\n") {
+		fmt.Fprintf(&builder, "%*d|%s\n", allLenStrLen, lineno+1, line)
+	}
+
+	return prompts.Render(treeTempate, builder.String()), nil
 }
 
 func buildPrompt(session *structs.Chats) (string, error) {

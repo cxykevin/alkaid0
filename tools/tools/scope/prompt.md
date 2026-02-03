@@ -7,3 +7,7 @@ Scope is a collection of tools that can be enabled or disabled.Enable a scope me
 Enable or disable the tools scopes.
 
 > `""` is the default scope, it couldn't be disabled.
+
+**DO NOT try to enable or disable a unknown scope!**
+**DO NOT try to enable or disable a unknown scope!**
+**DO NOT try to enable or disable a unknown scope!**

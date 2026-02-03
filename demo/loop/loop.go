@@ -451,10 +451,9 @@ func Start(db *gorm.DB) {
 			finish, err := request.SendRequest(context.Background(), &session, func(delta string, thinkingDelta string) error {
 				if thinkingDelta != "" {
 					if !thinkingFlag {
-						fmt.Printf("%s[Thinking]%s ", ColorPurple, ColorReset)
 						thinkingFlag = true
 					}
-					fmt.Print(thinkingDelta)
+					fmt.Printf("%s%s%s ", ColorPurple, thinkingDelta, ColorReset)
 				}
 
 				if delta != "" {

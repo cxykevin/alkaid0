@@ -19,6 +19,11 @@ func initTestEnv() *gorm.DB {
 
 	os.Setenv("ALKAID_DEBUG_SQLITEFILE", ":memory:")
 	db := storage.InitStorage("", "")
+	
+	// 强制重建 Scopes 表以确保使用最新的结构
+	db.Migrator().DropTable(&storageStructs.Scopes{})
+	db.AutoMigrate(&storageStructs.Scopes{})
+	
 	return db
 }
 
@@ -77,8 +82,14 @@ func TestHookTool(t *testing.T) {
 
 func TestEnableScope(t *testing.T) {
 	db := initTestEnv()
+	actions.AddScope("scope1", "Test scope 1")
 	testChat := &storageStructs.Chats{ID: 1, DB: db, EnableScopes: make(map[string]bool)}
-	actions.EnableScope(testChat, "scope1")
+	// 先创建 Chats 记录
+	db.Create(testChat)
+	err := actions.EnableScope(testChat, "scope1")
+	if err != nil {
+		t.Errorf("EnableScope returned error: %v", err)
+	}
 	if val, ok := testChat.EnableScopes["scope1"]; !ok || !val {
 		t.Errorf("EnableScope failed: scope1 not enabled in session")
 	}
@@ -86,9 +97,18 @@ func TestEnableScope(t *testing.T) {
 
 func TestDisableScope(t *testing.T) {
 	db := initTestEnv()
-	testChat := &storageStructs.Chats{ID: 1, DB: db, EnableScopes: make(map[string]bool)}
-	actions.EnableScope(testChat, "scope1")
-	actions.DisableScope(testChat, "scope1")
+	actions.AddScope("scope1", "Test scope 1")
+	testChat := &storageStructs.Chats{ID: 2, DB: db, EnableScopes: make(map[string]bool)}
+	// 先创建 Chats 记录
+	db.Create(testChat)
+	err := actions.EnableScope(testChat, "scope1")
+	if err != nil {
+		t.Errorf("EnableScope returned error: %v", err)
+	}
+	err = actions.DisableScope(testChat, "scope1")
+	if err != nil {
+		t.Errorf("DisableScope returned error: %v", err)
+	}
 	if val, ok := testChat.EnableScopes["scope1"]; !ok || val {
 		t.Errorf("DisableScope failed: scope1 should be disabled in session")
 	}

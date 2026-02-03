@@ -3,6 +3,7 @@ package build
 import (
 	"container/list"
 	"encoding/json"
+	"fmt"
 
 	"github.com/cxykevin/alkaid0/config"
 	cfgStruct "github.com/cxykevin/alkaid0/config/structs"
@@ -36,8 +37,13 @@ func RequestBody(chatID uint32, modelID int32, agentCode string, toolsList *[]*p
 		return nil, err
 	}
 
+	// 验证 agent 是否存在
 	var agentConfig *cfgStruct.AgentConfig = nil
 	if agentCode != "" {
+		_, ok := config.GlobalConfig.Agent.Agents[agentCode]
+		if !ok {
+			return nil, fmt.Errorf("agent not found: %s", agentCode)
+		}
 		agentConfig = &agentCfg
 	}
 
@@ -99,11 +105,19 @@ func RequestBody(chatID uint32, modelID int32, agentCode string, toolsList *[]*p
 						renderAgentID = *v.AgentID
 					}
 					if renderAgentID == agentCode {
-						msg.Content = prompts.Render(prompts.AgentWrapTemplate, struct {
-							Prompt string
-						}{
-							Prompt: v.Delta,
-						})
+						if agentCode == "" {
+							msg.Content = prompts.Render(prompts.AgentWrapTemplate, struct {
+								Prompt string
+							}{
+								Prompt: v.Delta,
+							})
+						} else {
+							msg.Content = prompts.Render(prompts.SubagentWrapTemplate, struct {
+								Prompt string
+							}{
+								Prompt: v.Delta,
+							})
+						}
 					}
 				} else if v.ThinkingDelta != "" {
 					thinkingWrap := ""

@@ -22,6 +22,17 @@ func AddAgent(session *structs.Chats, agentCode string, agentID string, path str
 	return err
 }
 
+// UpdateAgent 更新
+func UpdateAgent(session *structs.Chats, agentCode string, agentID string, path string) error {
+	_, err := Call(Update{
+		Session:   session,
+		AgentCode: agentCode,
+		AgentID:   agentID,
+		Path:      path,
+	})
+	return err
+}
+
 // DeleteAgent 删除
 func DeleteAgent(session *structs.Chats, agentCode string) error {
 	_, err := Call(Del{

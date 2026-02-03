@@ -10,6 +10,14 @@ type Add struct {
 	Path      string
 }
 
+// Update 更新Agent
+type Update struct {
+	Session   *structs.Chats
+	AgentCode string
+	AgentID   string
+	Path      string
+}
+
 // Del 删除Agent
 type Del struct {
 	Session   *structs.Chats
