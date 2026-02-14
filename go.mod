@@ -3,6 +3,7 @@ module github.com/cxykevin/alkaid0
 go 1.25.4
 
 require (
+	github.com/KennethanCeyer/ptyx v0.2.0
 	github.com/glebarez/sqlite v1.11.0
 	golang.org/x/net v0.49.0
 	golang.org/x/sys v0.40.0
@@ -11,7 +12,6 @@ require (
 )
 
 require (
-	github.com/KennethanCeyer/ptyx v0.2.0 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/glebarez/go-sqlite v1.22.0 // indirect
 	github.com/google/uuid v1.6.0 // indirect
