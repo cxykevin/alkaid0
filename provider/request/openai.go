@@ -16,6 +16,7 @@ import (
 )
 
 var logger *log.LogsObj
+var httpClient = &http.Client{Timeout: Timeout}
 
 func init() {
 	logger = log.New("request")
@@ -52,8 +53,7 @@ func SimpleOpenAIRequest(ctx context.Context, baseURL, apiKey, model string, bod
 	req.Header.Set("User-Agent", product.UserAgent)
 
 	// 发送请求
-	client := &http.Client{Timeout: Timeout}
-	resp, err := client.Do(req)
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		logger.Error("call openai chat error when call: %v", err)
 		logger.Debug("error body: %s", string(payload))
@@ -146,8 +146,7 @@ func SimpleOpenAIEmbedding(ctx context.Context, baseURL, apiKey, model string, b
 	req.Header.Set("User-Agent", product.UserAgent)
 
 	// 发送请求
-	client := &http.Client{Timeout: Timeout}
-	resp, err := client.Do(req)
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		logger.Error("call openai embedding error when call: %v", err)
 		logger.Debug("error body: %s", string(payload))

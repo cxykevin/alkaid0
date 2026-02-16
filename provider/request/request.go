@@ -113,7 +113,12 @@ func SendRequest(ctx context.Context, session *structs.Chats, callback func(stri
 	}
 	var gDelta strings.Builder
 	var gThinkingDelta strings.Builder
+	var pendingDelta strings.Builder
+	var pendingThinkingDelta strings.Builder
+	var lastFlushLen int
+	var lastFlushThinkingLen int
 	msgID := reqObj.ID
+	const tokenFlushThreshold = 256
 	solveFunc := func(body reqStruct.ChatCompletionResponse) error {
 		if len(body.Choices) == 0 {
 			return nil
@@ -121,20 +126,30 @@ func SendRequest(ctx context.Context, session *structs.Chats, callback func(stri
 		delta, thinkingDelta, err := solver.AddToken(body.Choices[0].Delta.Content, stringDefault(body.Choices[0].Delta.ReasoningContent))
 		gDelta.WriteString(delta)
 		gThinkingDelta.WriteString(thinkingDelta)
+		pendingDelta.WriteString(delta)
+		pendingThinkingDelta.WriteString(thinkingDelta)
 		if err != nil {
 			return err
 		}
-		gstring := gDelta.String()
-		gtstring := gThinkingDelta.String()
-		err = db.Model(&structs.Messages{}).Where("id = ?", msgID).Updates(structs.Messages{
-			Delta:         gstring,
-			ThinkingDelta: gtstring,
-		}).Error
-		if err != nil {
+		shouldFlush := pendingDelta.Len()+pendingThinkingDelta.Len() >= tokenFlushThreshold
+		if shouldFlush {
+			gstring := gDelta.String()
+			gtstring := gThinkingDelta.String()
+			if err := db.Model(&structs.Messages{}).Where("id = ?", msgID).Updates(structs.Messages{
+				Delta:         gstring,
+				ThinkingDelta: gtstring,
+			}).Error; err != nil {
+				return err
+			}
+			pendingDelta.Reset()
+			pendingThinkingDelta.Reset()
+			lastFlushLen = len(gstring)
+			lastFlushThinkingLen = len(gtstring)
+		}
+		if err := callback(delta, thinkingDelta); err != nil {
 			return err
 		}
-		err = callback(delta, thinkingDelta)
-		return err
+		return nil
 	}
 
 	// 留日志
@@ -181,11 +196,19 @@ func SendRequest(ctx context.Context, session *structs.Chats, callback func(stri
 		// 删除
 		err = db.Delete(&structs.Messages{}, msgID).Error
 	} else {
-		err = db.Model(&structs.Messages{}).Where("id = ?", msgID).Updates(structs.Messages{
-			Delta:                 gDelta.String(),
-			ThinkingDelta:         gThinkingDelta.String(),
-			ToolCallingJSONString: string(solver.GetToolsOrigin()),
-		}).Error
+		finalDelta := gDelta.String()
+		finalThinkingDelta := gThinkingDelta.String()
+		if len(finalDelta) != lastFlushLen || len(finalThinkingDelta) != lastFlushThinkingLen {
+			err = db.Model(&structs.Messages{}).Where("id = ?", msgID).Updates(structs.Messages{
+				Delta:         finalDelta,
+				ThinkingDelta: finalThinkingDelta,
+			}).Error
+		}
+		if err == nil {
+			err = db.Model(&structs.Messages{}).Where("id = ?", msgID).Update(
+				"tool_calling_json_string", string(solver.GetToolsOrigin()),
+			).Error
+		}
 	}
 	if err != nil {
 		return true, err

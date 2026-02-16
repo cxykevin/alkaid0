@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/cxykevin/alkaid0/internal/configutil"
+
 	"github.com/cxykevin/alkaid0/config/structs"
 )
 
@@ -17,7 +19,7 @@ func TestConfig(t *testing.T) {
 	}
 
 	home, _ := os.UserHomeDir()
-	if ExpandPath("~/test") != home+"/test" {
+	if configutil.ExpandPath("~/test") != home+"/test" {
 		t.Errorf("ExpandPath failed for ~")
 	}
 }
@@ -47,7 +49,7 @@ func TestExpandPath(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := ExpandPath(tt.input)
+			result := configutil.ExpandPath(tt.input)
 			if tt.contains != "" && result != tt.input && !filepath.IsAbs(result) && tt.input[0] != '~' {
 				t.Errorf("ExpandPath(%s) = %s, expected to contain %s", tt.input, result, tt.contains)
 			}
@@ -85,7 +87,7 @@ func TestLoadAndSave(t *testing.T) {
 	
 	// 保存配置
 	Save()
-	
+
 	// 重新加载
 	Load()
 	
@@ -185,7 +187,7 @@ func TestExpandPathWithEnvVar(t *testing.T) {
 	os.Setenv("TEST_VAR", "test_value")
 	defer os.Unsetenv("TEST_VAR")
 	
-	result := ExpandPath("$TEST_VAR/path")
+	result := configutil.ExpandPath("$TEST_VAR/path")
 	if result != "test_value/path" {
 		t.Errorf("Expected 'test_value/path', got %s", result)
 	}

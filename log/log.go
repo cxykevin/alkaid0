@@ -8,8 +8,10 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	"github.com/cxykevin/alkaid0/config/structs"
+	"github.com/cxykevin/alkaid0/internal/configutil"
 )
 
 // GlobalConfig 配置文件对象
@@ -35,19 +37,8 @@ type logMessage struct {
 var logChannel chan logMessage
 var logWaitGroup sync.WaitGroup
 var logFlushMutex sync.Mutex
-
-// ExpandPath 展开路径中的 ~ 和环境变量
-func ExpandPath(path string) string {
-	if len(path) > 0 && path[0] == '~' {
-		// 获取用户家目录
-		homeDir, err := os.UserHomeDir()
-		if err == nil {
-			path = homeDir + path[1:]
-		}
-	}
-	// 展开环境变量
-	return os.ExpandEnv(path)
-}
+var droppedLogCount uint64
+var isShutdown uint32
 
 // var logLck sync.Mutex
 
@@ -65,7 +56,7 @@ func Load() {
 	}
 
 	// 展开用户目录路径
-	expandedPath := ExpandPath(logPath)
+	expandedPath := configutil.ExpandPath(logPath)
 
 	// 确保目录存在
 	dir := filepath.Dir(expandedPath)
@@ -92,7 +83,7 @@ func Load() {
 
 	// 初始化异步日志channel
 	logChannel = make(chan logMessage, 1000) // 缓冲1000条日志
-	
+
 	// 启动日志处理goroutine
 	go logWorker()
 
@@ -121,7 +112,15 @@ func flushLogs() {
 	logWaitGroup.Wait()
 }
 
-// LogsObj 日志对象
+func Shutdown() {
+	if !loggerInited {
+		return
+	}
+	atomic.StoreUint32(&isShutdown, 1)
+	flushLogs()
+	close(logChannel)
+}
+
 type LogsObj struct {
 	moduleName string
 }
@@ -135,16 +134,27 @@ func (l *LogsObj) log(level string, msg string, v ...any) {
 		"\n", "\\n"),
 		"\r", "\\r"),
 		"\t", "\\t")
-	
+
+	if atomic.LoadUint32(&isShutdown) == 1 {
+		l.logSync(level, "%s", str)
+		return
+	}
+
 	// 异步写入日志
 	logFlushMutex.Lock()
 	logWaitGroup.Add(1)
 	logFlushMutex.Unlock()
-	
-	logChannel <- logMessage{
+
+	select {
+	case logChannel <- logMessage{
 		level:      level,
 		moduleName: l.moduleName,
 		message:    str,
+	}:
+	default:
+		logWaitGroup.Done()
+		atomic.AddUint64(&droppedLogCount, 1)
+		l.logSync("WARN", "log channel full, drop log (total dropped: %d)", atomic.LoadUint64(&droppedLogCount))
 	}
 }
 

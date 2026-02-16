@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 
 	"github.com/cxykevin/alkaid0/config/structs"
+	"github.com/cxykevin/alkaid0/internal/configutil"
 	"github.com/cxykevin/alkaid0/product"
 )
 
@@ -16,19 +17,6 @@ const defaultConfigPath = "~/.config/alkaid0/config.json"
 const envConfigName = "ALKAID0_CONFIG_PATH"
 
 var configPath string
-
-// ExpandPath 展开路径中的 ~ 和环境变量
-func ExpandPath(path string) string {
-	if len(path) > 0 && path[0] == '~' {
-		// 获取用户家目录
-		homeDir, err := os.UserHomeDir()
-		if err == nil {
-			path = homeDir + path[1:]
-		}
-	}
-	// 展开环境变量
-	return os.ExpandEnv(path)
-}
 
 // Load 加载配置文件
 func Load() {
@@ -48,7 +36,7 @@ func Load() {
 	}
 
 	// 展开用户目录路径
-	expandedPath := ExpandPath(configPath)
+	expandedPath := configutil.ExpandPath(configPath)
 
 	// 确保目录存在
 	dir := filepath.Dir(expandedPath)
@@ -61,26 +49,19 @@ func Load() {
 	data, err := os.ReadFile(expandedPath)
 	if err != nil {
 		// 文件不存在或读取失败，备份旧文件并创建新配置
-		if os.IsNotExist(err) {
-			// 创建默认配置
-			Save()
-			return
-		}
-
-		// 如果是其他错误，尝试备份旧文件
 		if _, backupErr := os.Stat(expandedPath); backupErr == nil {
 			backupPath := expandedPath + ".bak"
-			os.Rename(expandedPath, backupPath)
+			_ = os.Rename(expandedPath, backupPath)
 		}
-
-		// 创建默认配置
 		Save()
 		return
 	}
 
 	// 解析配置文件
 	if err := json.Unmarshal(data, GlobalConfig); err != nil {
-		Save()
+		// 解析失败时备份原文件
+		backupPath := expandedPath + ".bak"
+		_ = os.Rename(expandedPath, backupPath)
 		return
 	}
 }
@@ -93,7 +74,7 @@ func Save() {
 	}
 
 	// 展开用户目录路径
-	expandedPath := ExpandPath(configPath)
+	expandedPath := configutil.ExpandPath(configPath)
 
 	// 确保目录存在
 	dir := filepath.Dir(expandedPath)

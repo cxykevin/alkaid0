@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"strconv"
 	"text/template"
 
 	"github.com/cxykevin/alkaid0/log"
@@ -357,7 +358,7 @@ func buildTrace(session *structs.Chats) (string, error) {
 		// 转换为字符串
 		obj = append(obj, templateStruct{
 			Name:   traceObj.Path,
-			Size:   fmt.Sprintf("%d", stat.Size()),
+			Size:   strconv.FormatInt(stat.Size(), 10),
 			Length: uint32(len(content)),
 			Text:   builder.String(),
 		})

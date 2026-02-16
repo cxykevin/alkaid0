@@ -4,6 +4,8 @@ import (
 	"os"
 	"strings"
 	"testing"
+
+	"github.com/cxykevin/alkaid0/internal/configutil"
 )
 
 func TestExpandPath(t *testing.T) {
@@ -18,7 +20,7 @@ func TestExpandPath(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		got := ExpandPath(tt.input)
+		got := configutil.ExpandPath(tt.input)
 		if got != tt.expected {
 			t.Errorf("ExpandPath(%q) = %q; want %q", tt.input, got, tt.expected)
 		}

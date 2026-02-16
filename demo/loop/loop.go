@@ -76,7 +76,7 @@ func printBoxHeader(title string, color string) {
 }
 
 // Start 启动 Demo Loop
-func Start(db *gorm.DB) {
+func Start(ctx context.Context, db *gorm.DB) {
 	fmt.Println("\033[2J")
 	logger.Info("loop initing")
 	reader := bufio.NewReader(os.Stdin)
@@ -234,6 +234,12 @@ func Start(db *gorm.DB) {
 
 	// 获取用户输入
 	for {
+		select {
+		case <-ctx.Done():
+			fmt.Printf("\n%s%sReceived signal, shutting down...%s\n", ColorBold, ColorYellow, ColorReset)
+			return
+		default:
+		}
 		var input string
 		fmt.Printf("\n%s%s┌─ Input ─┐%s\n", ColorBold, ColorPurple, ColorReset)
 		fmt.Printf("%s%s│ >%s ", ColorBold, ColorPurple, ColorReset)
