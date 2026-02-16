@@ -44,7 +44,6 @@ func TestIsolationModes(t *testing.T) {
 	}{
 		{"显式设置None", IsolationNone, IsolationNone},
 		{"显式设置OS", IsolationOS, IsolationOS},
-		{"显式设置App", IsolationApp, IsolationApp},
 	}
 
 	for _, tt := range tests {
@@ -77,8 +76,6 @@ func TestIsPathWritable(t *testing.T) {
 		{"无隔离-任意路径", IsolationNone, "/etc", true},
 		{"OS隔离-临时目录", IsolationOS, tmpDir, true},
 		{"OS隔离-系统目录", IsolationOS, "/etc", false},
-		{"应用隔离-临时目录", IsolationApp, tmpDir, true},
-		{"应用隔离-系统目录", IsolationApp, "/etc", false},
 	}
 
 	for _, tt := range tests {
@@ -288,7 +285,6 @@ func TestValidateCommand(t *testing.T) {
 		{"OS隔离-有效命令", IsolationOS, validCmd, false},
 		{"OS隔离-不存在命令", IsolationOS, "nonexistentcommand12345", true},
 		{"OS隔离-危险命令", IsolationOS, dangerousCmd, true},
-		{"应用隔离-危险命令", IsolationApp, dangerousCmd, true},
 	}
 
 	for _, tt := range tests {
@@ -337,17 +333,12 @@ func TestSetWorkDir(t *testing.T) {
 
 func TestSetIsolationMode(t *testing.T) {
 	cfg := Config{
-		IsolationMode: IsolationApp, // 使用非零值
+		IsolationMode: IsolationOS, // 使用非零值
 	}
 	sb, err := New(cfg)
 	if err != nil {
 		t.Fatalf("创建沙盒失败: %v", err)
 	}
-
-	if sb.GetIsolationMode() != IsolationApp {
-		t.Errorf("初始隔离模式 = %v, 期望 IsolationApp", sb.GetIsolationMode())
-	}
-
 	sb.SetIsolationMode(IsolationOS)
 	if sb.GetIsolationMode() != IsolationOS {
 		t.Errorf("设置后隔离模式 = %v, 期望 IsolationOS", sb.GetIsolationMode())
@@ -404,7 +395,6 @@ func TestIsolationModeString(t *testing.T) {
 	}{
 		{IsolationNone, "none"},
 		{IsolationOS, "os"},
-		{IsolationApp, "app"},
 	}
 
 	for _, tt := range tests {
@@ -417,113 +407,91 @@ func TestIsolationModeString(t *testing.T) {
 	}
 }
 
-func TestLinuxIsolation(t *testing.T) {
-	if runtime.GOOS != "linux" {
-		t.Skip("仅在Linux上运行")
-	}
-
+func TestIsolationOSSpec(t *testing.T) {
 	if os.Getenv("ALKAID0_TEST_SANDBOX") == "" {
 		t.Skip("跳过隔离测试（设置 ALKAID0_TEST_SANDBOX=true 启用）")
 	}
+	switch runtime.GOOS {
+	case "linux":
+		cfg := Config{
+			WritableDirs:  []string{"/tmp"},
+			IsolationMode: IsolationOS,
+			Timeout:       5 * time.Second,
+		}
 
-	cfg := Config{
-		WritableDirs:  []string{"/tmp"},
-		IsolationMode: IsolationOS,
-		Timeout:       5 * time.Second,
+		sb, err := New(cfg)
+		if err != nil {
+			t.Fatalf("创建沙盒失败: %v", err)
+		}
+
+		// 测试读取系统文件
+		cmd, err := sb.Execute("cat", "/etc/hostname")
+		if err != nil {
+			t.Fatalf("创建命令失败: %v", err)
+		}
+
+		var stdout bytes.Buffer
+		cmd.SetStdout(&stdout)
+
+		if err := cmd.Run(); err != nil {
+			t.Fatalf("隔离执行失败: %v", err)
+		}
+
+		t.Logf("读取到hostname: %s", stdout.String())
+	case "darwin":
+		cfg := Config{
+			WritableDirs:  []string{"/tmp"},
+			IsolationMode: IsolationOS,
+			Timeout:       5 * time.Second,
+		}
+
+		sb, err := New(cfg)
+		if err != nil {
+			t.Fatalf("创建沙盒失败: %v", err)
+		}
+
+		cmd, err := sb.Execute("echo", "hello")
+		if err != nil {
+			t.Fatalf("创建命令失败: %v", err)
+		}
+
+		var stdout bytes.Buffer
+		cmd.SetStdout(&stdout)
+
+		if err := cmd.Run(); err != nil {
+			t.Fatalf("隔离执行失败: %v", err)
+		}
+
+		t.Logf("输出: %s", stdout.String())
+	case "windows":
+		cfg := Config{
+			WritableDirs:  []string{os.TempDir()},
+			IsolationMode: IsolationOS,
+			Timeout:       5 * time.Second,
+		}
+
+		sb, err := New(cfg)
+		if err != nil {
+			t.Fatalf("创建沙盒失败: %v", err)
+		}
+
+		cmd, err := sb.Execute("cmd.exe", "/c", "echo hello")
+		if err != nil {
+			t.Fatalf("创建命令失败: %v", err)
+		}
+
+		var stdout bytes.Buffer
+		cmd.SetStdout(&stdout)
+
+		if err := cmd.Run(); err != nil {
+			t.Fatalf("隔离执行失败: %v", err)
+		}
+
+		t.Logf("输出: %s", stdout.String())
+	default:
+		t.Skip("跳过未知平台隔离测试")
 	}
 
-	sb, err := New(cfg)
-	if err != nil {
-		t.Fatalf("创建沙盒失败: %v", err)
-	}
-
-	// 测试读取系统文件
-	cmd, err := sb.Execute("cat", "/etc/hostname")
-	if err != nil {
-		t.Fatalf("创建命令失败: %v", err)
-	}
-
-	var stdout bytes.Buffer
-	cmd.SetStdout(&stdout)
-
-	if err := cmd.Run(); err != nil {
-		t.Logf("隔离执行失败: %v", err)
-		t.Skip("跳过Linux隔离测试")
-	}
-
-	t.Logf("读取到hostname: %s", stdout.String())
-}
-
-func TestDarwinIsolation(t *testing.T) {
-	if runtime.GOOS != "darwin" {
-		t.Skip("仅在macOS上运行")
-	}
-
-	if os.Getenv("ALKAID0_TEST_SANDBOX") == "" {
-		t.Skip("跳过隔离测试（设置 ALKAID0_TEST_SANDBOX=true 启用）")
-	}
-
-	cfg := Config{
-		WritableDirs:  []string{"/tmp"},
-		IsolationMode: IsolationOS,
-		Timeout:       5 * time.Second,
-	}
-
-	sb, err := New(cfg)
-	if err != nil {
-		t.Fatalf("创建沙盒失败: %v", err)
-	}
-
-	cmd, err := sb.Execute("echo", "hello")
-	if err != nil {
-		t.Fatalf("创建命令失败: %v", err)
-	}
-
-	var stdout bytes.Buffer
-	cmd.SetStdout(&stdout)
-
-	if err := cmd.Run(); err != nil {
-		t.Logf("隔离执行失败: %v", err)
-		t.Skip("跳过macOS隔离测试")
-	}
-
-	t.Logf("输出: %s", stdout.String())
-}
-
-func TestWindowsIsolation(t *testing.T) {
-	if runtime.GOOS != "windows" {
-		t.Skip("仅在Windows上运行")
-	}
-
-	if os.Getenv("ALKAID0_TEST_SANDBOX") == "" {
-		t.Skip("跳过隔离测试（设置 ALKAID0_TEST_SANDBOX=true 启用）")
-	}
-
-	cfg := Config{
-		WritableDirs:  []string{os.TempDir()},
-		IsolationMode: IsolationOS,
-		Timeout:       5 * time.Second,
-	}
-
-	sb, err := New(cfg)
-	if err != nil {
-		t.Fatalf("创建沙盒失败: %v", err)
-	}
-
-	cmd, err := sb.Execute("cmd.exe", "/c", "echo hello")
-	if err != nil {
-		t.Fatalf("创建命令失败: %v", err)
-	}
-
-	var stdout bytes.Buffer
-	cmd.SetStdout(&stdout)
-
-	if err := cmd.Run(); err != nil {
-		t.Logf("隔离执行失败: %v", err)
-		t.Skip("跳过Windows隔离测试")
-	}
-
-	t.Logf("输出: %s", stdout.String())
 }
 
 func TestDirectoryPermissions(t *testing.T) {
@@ -579,20 +547,6 @@ func TestDirectoryPermissions(t *testing.T) {
 			testPath:      filepath.Join(readOnlyDir, "subdir", "test.txt"),
 			shouldWrite:   false,
 			description:   "非指定目录的子目录应该只读",
-		},
-		{
-			name:          "App隔离-temp目录内可写",
-			isolationMode: IsolationApp,
-			testPath:      filepath.Join(tempDir, "test.txt"),
-			shouldWrite:   true,
-			description:   "指定目录内应该可写",
-		},
-		{
-			name:          "App隔离-非指定目录只读",
-			isolationMode: IsolationApp,
-			testPath:      filepath.Join(readOnlyDir, "test.txt"),
-			shouldWrite:   false,
-			description:   "指定目录外应该只读",
 		},
 		{
 			name:          "无隔离-任意路径可写",
@@ -752,13 +706,18 @@ func TestSandboxWriteRestriction(t *testing.T) {
 	}
 	defer os.RemoveAll(writableDir)
 
+	var readOnlyDir string
 	// 创建只读目录（不在可写列表中）
-	// 使用 /var 目录，它不太可能在临时目录中
-	readOnlyDir := "/var/tmp/sandbox-test-write-restriction-" + fmt.Sprintf("%d", os.Getpid())
-	if err := os.MkdirAll(readOnlyDir, 0755); err != nil {
-		t.Fatalf("创建只读目录失败: %v", err)
+	if runtime.GOOS == "windows" {
+		readOnlyDir = "C:\\"
+	} else {
+		// 使用 /var 目录，它不太可能在临时目录中
+		readOnlyDir = "/var/tmp/sandbox-test-write-restriction-" + fmt.Sprintf("%d", os.Getpid())
+		if err := os.MkdirAll(readOnlyDir, 0755); err != nil {
+			t.Fatalf("创建只读目录失败: %v", err)
+		}
+		defer os.RemoveAll(readOnlyDir)
 	}
-	defer os.RemoveAll(readOnlyDir)
 
 	cfg := Config{
 		WritableDirs:  []string{writableDir},
@@ -872,8 +831,7 @@ func BenchmarkExecuteNoIsolation(b *testing.B) {
 		cmdArgs = []string{"test"}
 	}
 
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		cmd, err := sb.Execute(cmdName, cmdArgs...)
 		if err != nil {
 			b.Fatalf("创建命令失败: %v", err)

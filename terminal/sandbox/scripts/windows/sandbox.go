@@ -178,6 +178,11 @@ func createRestrictedToken(currentToken *windows.Token, wkSIDs *WellknownSIDs) (
 		// },
 	}
 
+	usr, err := currentToken.GetTokenUser()
+	if err != nil {
+		return nil, err
+	}
+
 	restrictSIDs := []windows.SIDAndAttributes{
 		{
 			Sid:        wkSIDs.WriteRestrictedCode,
@@ -193,6 +198,10 @@ func createRestrictedToken(currentToken *windows.Token, wkSIDs *WellknownSIDs) (
 		},
 		{
 			Sid:        wkSIDs.World,
+			Attributes: 0,
+		},
+		{
+			Sid:        usr.User.Sid,
 			Attributes: 0,
 		},
 		// {
@@ -466,12 +475,12 @@ func createRunToken() (*windows.Token, error) {
 
 	key, err := registry.OpenKey(registry.LOCAL_MACHINE, "Software\\Alkaid0\\sandbox", registry.QUERY_VALUE)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("get sandbox registry key failed: %v", err)
 	}
 	defer key.Close()
 	passwordEnc, _, err := key.GetBinaryValue("accountPassword")
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("get key failed: %v", err)
 	}
 	passwordBytes, err := winExtra.LibCryptUnprotectData(passwordEnc, []byte(dpapiEntropy), winExtra.CryptProtectLocalMachine)
 	if err != nil {
@@ -642,17 +651,12 @@ func ApplyDACL(path string, dacl *windows.ACL) error {
 }
 
 // addPrivilegeToCurrentToken 添加权限
-func addPrivilegeToCurrentToken() error {
+func addPrivilegeToCurrentToken(priv string) error {
 	tkn, err := getToken()
 	if err != nil {
 		return err
 	}
-
-	assignPrimaryTknPriv, err := getPrivilegeLUID("SeAssignPrimaryTokenPrivilege")
-	if err != nil {
-		return err
-	}
-	increaseQutoaPriv, err := getPrivilegeLUID("SeIncreaseQuotaPrivilege")
+	privLUID, err := getPrivilegeLUID(priv)
 	if err != nil {
 		return err
 	}
@@ -660,17 +664,7 @@ func addPrivilegeToCurrentToken() error {
 	newStateBuffer := make([]byte, 4+unsafe.Sizeof(windows.LUIDAndAttributes{}))
 	newState := (*windows.Tokenprivileges)(unsafe.Pointer(&newStateBuffer[0]))
 	newState.PrivilegeCount = 1
-	newState.Privileges[0].Luid = assignPrimaryTknPriv
-	newState.Privileges[0].Attributes = windows.SE_PRIVILEGE_ENABLED
-
-	err = windows.AdjustTokenPrivileges(*tkn, false, newState, uint32(len(newStateBuffer)), nil, nil)
-	if err != nil {
-		return err
-	}
-	newStateBuffer = make([]byte, 4+unsafe.Sizeof(windows.LUIDAndAttributes{}))
-	newState = (*windows.Tokenprivileges)(unsafe.Pointer(&newStateBuffer[0]))
-	newState.PrivilegeCount = 1
-	newState.Privileges[0].Luid = increaseQutoaPriv
+	newState.Privileges[0].Luid = privLUID
 	newState.Privileges[0].Attributes = windows.SE_PRIVILEGE_ENABLED
 
 	err = windows.AdjustTokenPrivileges(*tkn, false, newState, uint32(len(newStateBuffer)), nil, nil)
@@ -680,19 +674,9 @@ func addPrivilegeToCurrentToken() error {
 	return nil
 }
 
-// CreateProc 创建线程
-func CreateProc(appName string, commandLine string, workDir string, startupInfo *windows.StartupInfo) (*windows.ProcessInformation, error) {
-
-	token, err := createRunToken()
-	if err != nil {
-		return nil, err
-	}
-	defer token.Close()
-	pAppName := windows.StringToUTF16Ptr(appName)
-	pCommandLine := windows.StringToUTF16Ptr(commandLine)
-
+func getSecurityDescriptor(DACL *windows.ACL) (*windows.SecurityAttributes, error) {
 	sec := windows.SecurityAttributes{
-		InheritHandle:      0,
+		InheritHandle:      1,
 		SecurityDescriptor: &windows.SECURITY_DESCRIPTOR{},
 	}
 
@@ -701,36 +685,75 @@ func CreateProc(appName string, commandLine string, workDir string, startupInfo 
 		return nil, err
 	}
 
-	dacl, err := GetDACL()
-
-	sd.SetDACL(dacl, true, false)
+	sd.SetDACL(DACL, true, false)
 
 	sec.SecurityDescriptor, err = sd.ToSelfRelative()
 	if err != nil {
 		return nil, err
 	}
+	return &sec, nil
+}
 
-	pWorkDir := windows.StringToUTF16Ptr(workDir)
+// CreateProc 创建线程
+func CreateProc(appName string, commandLine string, workDir string, startupInfo *windows.StartupInfoEx, envPtr *uint16) (windows.ProcessInformation, error) {
+	err := InitAlkaid0SandboxUser()
+	if err != nil {
+		return windows.ProcessInformation{}, fmt.Errorf("init user failed: %v", err)
+	}
+
+	err = addPrivilegeToCurrentToken("SeAssignPrimaryTokenPrivilege")
+	if err != nil {
+		return windows.ProcessInformation{}, fmt.Errorf("add privilege failed: %v", err)
+	}
+	err = addPrivilegeToCurrentToken("SeIncreaseQuotaPrivilege")
+	if err != nil {
+		return windows.ProcessInformation{}, fmt.Errorf("add privilege failed: %v", err)
+	}
+	token, err := createRunToken()
+	if err != nil {
+		return windows.ProcessInformation{}, fmt.Errorf("create token failed: %v", err)
+	}
+	defer token.Close()
+	var pAppName *uint16 = nil
+	if appName != "" {
+		pAppName = windows.StringToUTF16Ptr(appName)
+	}
+	pCommandLine := windows.StringToUTF16Ptr(commandLine)
+
+	dacl, err := GetDACL()
+	if err != nil {
+		return windows.ProcessInformation{}, err
+	}
+	sec, err := getSecurityDescriptor(dacl)
+	if err != nil {
+		return windows.ProcessInformation{}, err
+	}
+
+	var pWorkDir *uint16 = nil
+	if workDir != "" {
+		pWorkDir = windows.StringToUTF16Ptr(workDir)
+	}
 
 	var procInfo windows.ProcessInformation
+	inheritHandles := startupInfo != nil && ((startupInfo.Flags&windows.STARTF_USESTDHANDLES) != 0 || startupInfo.ProcThreadAttributeList != nil)
 
-	err = windows.CreateProcessAsUser(
+	err = winExtra.CreateProcessAsUserEx(
 		*token,
 		pAppName,
 		pCommandLine,
-		&sec,
+		sec,
 		nil,
-		false,
-		0,
-		nil,
+		inheritHandles,
+		windows.CREATE_UNICODE_ENVIRONMENT|windows.EXTENDED_STARTUPINFO_PRESENT,
+		envPtr,
 		pWorkDir,
 		startupInfo,
 		&procInfo,
 	)
 	if err != nil {
-		return nil, err
+		return windows.ProcessInformation{}, err
 	}
-	return &procInfo, nil
+	return procInfo, nil
 }
 
 // SetLimitToWorkdir 设置工作目录权限
@@ -768,6 +791,35 @@ func SetLimitToWorkdir(workDir string) (func() error, error) {
 			return err
 		}
 		return nil
+	}
+
+	return cleanFunc, nil
+}
+
+// SetLimitToDir 设置一般权限
+func SetLimitToDir(workDir []string) (func() error, error) {
+	cleanFunc := func() error {
+		for _, dir := range workDir {
+			DenyDACL, err := GetDenyDACL()
+			if err != nil {
+				return err
+			}
+			err = ApplyDACL(dir, DenyDACL)
+			if err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	for _, dir := range workDir {
+		DACL, err := GetDACL()
+		if err != nil {
+			return cleanFunc, err
+		}
+		err = ApplyDACL(dir, DACL)
+		if err != nil {
+			return cleanFunc, err
+		}
 	}
 
 	return cleanFunc, nil

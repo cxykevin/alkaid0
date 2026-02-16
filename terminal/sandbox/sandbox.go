@@ -23,8 +23,6 @@ const (
 	IsolationNone IsolationMode = iota
 	// IsolationOS 操作系统级隔离
 	IsolationOS
-	// IsolationApp 应用层隔离（旧版本，兼容性）
-	IsolationApp
 )
 
 // Sandbox 表示一个命令执行沙盒
@@ -105,30 +103,29 @@ func New(cfg Config) (*Sandbox, error) {
 	}, nil
 }
 
+// Icmd 命令接口
+type Icmd interface {
+	Start() error
+	Wait() error
+	Kill() error
+	SetStdin(r io.Reader)
+	SetStdout(w io.Writer)
+	SetStderr(w io.Writer)
+	Clean()
+}
+
 // Command 创建一个沙盒命令
 type Command struct {
 	sandbox *Sandbox
-	cmd     *exec.Cmd
+	cmd     Icmd
 	ctx     context.Context
 	cancel  context.CancelFunc
-	runner  commandRunner
 	// 命令信息
 	name    string
 	args    []string
 	workDir string
 	env     []string
 	temp    any
-}
-
-// commandRunner 表示可执行命令的统一接口（用于 Windows 特殊实现）
-type commandRunner interface {
-	Start() error
-	Wait() error
-	Run() error
-	SetStdin(io.Reader)
-	SetStdout(io.Writer)
-	SetStderr(io.Writer)
-	Kill() error
 }
 
 // Execute 在沙盒中执行命令
@@ -147,11 +144,8 @@ func (s *Sandbox) Execute(name string, args ...string) (*Command, error) {
 
 	switch s.isolationMode {
 	case IsolationNone:
+		cmd := createIsolateNoneCmd(ctx, name, args, s.env, s.workDir)
 		// 无隔离，直接运行
-		cmd := exec.CommandContext(ctx, name, args...)
-		cmd.Dir = s.workDir
-		cmd.Env = s.env
-
 		return &Command{
 			sandbox: s,
 			cmd:     cmd,
@@ -174,23 +168,6 @@ func (s *Sandbox) Execute(name string, args ...string) (*Command, error) {
 		isolatedCmd.sandbox = s
 		return isolatedCmd, nil
 
-	case IsolationApp:
-		// 应用层隔离（旧版本）
-		cmd := exec.CommandContext(ctx, name, args...)
-		cmd.Dir = s.workDir
-		cmd.Env = s.env
-
-		return &Command{
-			sandbox: s,
-			cmd:     cmd,
-			ctx:     ctx,
-			cancel:  cancel,
-			name:    name,
-			args:    args,
-			workDir: s.workDir,
-			env:     s.env,
-		}, nil
-
 	default:
 		cancel()
 		return nil, fmt.Errorf("不支持的隔离模式: %d", s.isolationMode)
@@ -199,74 +176,31 @@ func (s *Sandbox) Execute(name string, args ...string) (*Command, error) {
 
 // SetStdin 设置标准输入
 func (c *Command) SetStdin(r io.Reader) {
-	if c.runner != nil {
-		c.runner.SetStdin(r)
-		return
-	}
-	if c.cmd != nil {
-		c.cmd.Stdin = r
-	}
+	c.cmd.SetStdin(r)
 }
 
 // SetStdout 设置标准输出
 func (c *Command) SetStdout(w io.Writer) {
-	if c.runner != nil {
-		c.runner.SetStdout(w)
-		return
-	}
-	if c.cmd != nil {
-		c.cmd.Stdout = w
-	}
+	c.cmd.SetStdout(w)
 }
 
 // SetStderr 设置标准错误
 func (c *Command) SetStderr(w io.Writer) {
-	if c.runner != nil {
-		c.runner.SetStderr(w)
-		return
-	}
-	if c.cmd != nil {
-		c.cmd.Stderr = w
-	}
+	c.cmd.SetStderr(w)
 }
 
 // Start 启动命令
 func (c *Command) Start() error {
-	if c.runner != nil {
-		if err := c.runner.Start(); err != nil {
-			return err
-		}
-		if c.ctx != nil {
-			go func() {
-				<-c.ctx.Done()
-				_ = c.runner.Kill()
-			}()
-		}
-		return nil
-	}
 	return c.cmd.Start()
 }
 
 // Wait 等待命令完成
 func (c *Command) Wait() error {
-	defer c.cancel()
-	defer c.cleanupCommand()
-	if c.runner != nil {
-		return c.runner.Wait()
-	}
 	return c.cmd.Wait()
 }
 
 // Run 运行命令并等待完成
 func (c *Command) Run() error {
-	if c.runner != nil {
-		if err := c.Start(); err != nil {
-			c.cancel()
-			c.cleanupCommand()
-			return err
-		}
-		return c.Wait()
-	}
 	if err := c.Start(); err != nil {
 		c.cancel()
 		return err
@@ -276,11 +210,8 @@ func (c *Command) Run() error {
 
 // Kill 强制终止命令
 func (c *Command) Kill() error {
-	if c.runner != nil {
-		return c.runner.Kill()
-	}
-	if c.cmd.Process != nil {
-		return c.cmd.Process.Kill()
+	if c.cmd != nil {
+		return c.cmd.Kill()
 	}
 	return errors.New("进程未启动")
 }
@@ -453,8 +384,6 @@ func (m IsolationMode) String() string {
 		return "none"
 	case IsolationOS:
 		return "os"
-	case IsolationApp:
-		return "app"
 	default:
 		return "unknown"
 	}

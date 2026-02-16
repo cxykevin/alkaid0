@@ -307,18 +307,14 @@ func TestCreateProc(t *testing.T) {
 	securityTestMutex.Lock()
 	defer securityTestMutex.Unlock()
 
-	err := addPrivilegeToCurrentToken()
-	if err != nil {
-		t.Fatalf("AddPrivilegeToCurrentToken failed: %v", err)
-	}
 	dir, err := os.MkdirTemp("", "sandbox-acl-*")
 	if err != nil {
 		t.Fatalf("MkdirTemp failed: %v", err)
 	}
 	defer os.RemoveAll(dir)
-	var stupInfo windows.StartupInfo
+	var stupInfo windows.StartupInfoEx
 	stupInfo.Cb = uint32(unsafe.Sizeof(stupInfo))
-	proc, err := CreateProc("C:\\Windows\\System32\\cmd.exe", "cmd /C \"echo hello world!\"", dir, &stupInfo)
+	proc, err := CreateProc("C:\\Windows\\System32\\cmd.exe", "cmd /C \"echo hello world!\"", dir, &stupInfo, nil)
 	if err != nil {
 		t.Fatalf("CreateProc failed: %v", err)
 	}

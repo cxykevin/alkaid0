@@ -3,6 +3,7 @@
 package windows
 
 import (
+	"syscall"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
@@ -11,6 +12,7 @@ import (
 var (
 	procCreateProcessWithLogonW = dllAdvapi.NewProc("CreateProcessWithLogonW")
 	procLogonUserW              = dllAdvapi.NewProc("LogonUserW")
+	procCreateProcessAsUserW    = dllAdvapi.NewProc("CreateProcessAsUserW")
 	// dllKernel32                 = windows.NewLazyDLL("kernel32.dll")
 	// procCloseHandle             = dllKernel32.NewProc("CloseHandle")
 )
@@ -161,4 +163,17 @@ func LibLogonUserW(username, domain, password string, loginType, loginProvier ui
 		return nil, err
 	}
 	return &tkn, nil
+}
+
+// CreateProcessAsUserEx 使用指定用户凭据创建进程(内置sdk的Ex结构体版本)
+func CreateProcessAsUserEx(token windows.Token, appName *uint16, commandLine *uint16, procSecurity *windows.SecurityAttributes, threadSecurity *windows.SecurityAttributes, inheritHandles bool, creationFlags uint32, env *uint16, currentDir *uint16, startupInfo *windows.StartupInfoEx, outProcInfo *windows.ProcessInformation) (err error) {
+	var _p0 uint32
+	if inheritHandles {
+		_p0 = 1
+	}
+	r1, _, e1 := syscall.SyscallN(procCreateProcessAsUserW.Addr(), uintptr(token), uintptr(unsafe.Pointer(appName)), uintptr(unsafe.Pointer(commandLine)), uintptr(unsafe.Pointer(procSecurity)), uintptr(unsafe.Pointer(threadSecurity)), uintptr(_p0), uintptr(creationFlags), uintptr(unsafe.Pointer(env)), uintptr(unsafe.Pointer(currentDir)), uintptr(unsafe.Pointer(startupInfo)), uintptr(unsafe.Pointer(outProcInfo)))
+	if r1 == 0 {
+		err = windows.Errno(e1)
+	}
+	return
 }

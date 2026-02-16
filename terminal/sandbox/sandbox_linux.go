@@ -21,7 +21,7 @@ func (s *Sandbox) createIsolatedCommand(ctx context.Context, name string, args .
 	}
 
 	return &Command{
-		cmd:     cmd,
+		cmd:     createExecFromCmd(cmd, func() {}),
 		ctx:     ctx,
 		name:    name,
 		args:    args,
