@@ -3,10 +3,14 @@ package loop
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"os"
+	"os/signal"
 	"strconv"
 	"strings"
+	"sync"
+	"syscall"
 
 	"github.com/cxykevin/alkaid0/config"
 	"github.com/cxykevin/alkaid0/log"
@@ -82,6 +86,41 @@ func Start(ctx context.Context, db *gorm.DB) {
 	reader := bufio.NewReader(os.Stdin)
 	chats := []structs.Chats{}
 	assert(db.Find(&chats).Error)
+
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, os.Interrupt, syscall.SIGINT)
+	defer signal.Stop(sigCh)
+
+	var isResponding bool
+	var cancelResponse context.CancelFunc
+	var mu sync.Mutex
+
+	interruptCh := make(chan struct{}, 1)
+	go func() {
+		for {
+			select {
+			case <-sigCh:
+				mu.Lock()
+				responding := isResponding
+				cancel := cancelResponse
+				mu.Unlock()
+				if responding {
+					if cancel != nil {
+						cancel()
+					}
+					select {
+					case interruptCh <- struct{}{}:
+					default:
+					}
+				} else {
+					fmt.Printf("\n%s%sGoodbye!%s\n", ColorBold, ColorCyan, ColorReset)
+					os.Exit(0)
+				}
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
 
 	// 显示标题
 	fmt.Printf("%s%s╔════════════════════════════════════════════════════════════╗%s\n", ColorBold, ColorCyan, ColorReset)
@@ -234,6 +273,15 @@ func Start(ctx context.Context, db *gorm.DB) {
 
 	// 获取用户输入
 	for {
+		select {
+		case <-interruptCh:
+			fmt.Printf("\n%s%s(Interrupted)%s\n", ColorBold, ColorYellow, ColorReset)
+			mu.Lock()
+			isResponding = false
+			mu.Unlock()
+			continue
+		default:
+		}
 		select {
 		case <-ctx.Done():
 			fmt.Printf("\n%s%sReceived signal, shutting down...%s\n", ColorBold, ColorYellow, ColorReset)
@@ -450,16 +498,28 @@ func Start(ctx context.Context, db *gorm.DB) {
 		fmt.Printf("\n%s%s┌─ AI Response ─┐%s\n", ColorBold, ColorBlue, ColorReset)
 
 		// 启动 loop
+		retryCount := 0
 		for {
 			thinkingFlag := false
 			responseStarted := false
 
-			finish, err := request.SendRequest(context.Background(), &session, func(delta string, thinkingDelta string) error {
+			responseCtx, responseCancel := context.WithCancel(context.Background())
+			mu.Lock()
+			isResponding = true
+			cancelResponse = responseCancel
+			mu.Unlock()
+
+			finish, err := request.SendRequest(responseCtx, &session, func(delta string, thinkingDelta string) error {
+				select {
+				case <-responseCtx.Done():
+					return responseCtx.Err()
+				default:
+				}
 				if thinkingDelta != "" {
 					if !thinkingFlag {
 						thinkingFlag = true
 					}
-					fmt.Printf("%s%s%s ", ColorPurple, thinkingDelta, ColorReset)
+					fmt.Printf("%s%s%s", ColorBlue, thinkingDelta, ColorReset)
 				}
 
 				if delta != "" {
@@ -475,11 +535,19 @@ func Start(ctx context.Context, db *gorm.DB) {
 				return nil
 			})
 
+			mu.Lock()
+			isResponding = false
+			cancelResponse = nil
+			mu.Unlock()
+
 			if thinkingFlag {
 				fmt.Printf("\n")
 			}
 
 			if err != nil {
+				if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+					break
+				}
 				fmt.Printf("\n%s❌ Error:%s\n%v\n", ColorRed, ColorReset, err)
 				break
 			}
@@ -488,6 +556,16 @@ func Start(ctx context.Context, db *gorm.DB) {
 				if !responseStarted && !thinkingFlag {
 					fmt.Printf("%s(No response)%s\n", ColorYellow, ColorReset)
 				}
+				break
+			}
+
+			if responseStarted {
+				break
+			}
+
+			retryCount++
+			if retryCount >= 3 {
+				fmt.Printf("\n%s❌ Error:%s\n%v\n", ColorRed, ColorReset, "tool loop did not finish")
 				break
 			}
 		}

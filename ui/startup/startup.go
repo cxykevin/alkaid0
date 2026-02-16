@@ -22,7 +22,7 @@ func Startup() {
 	defer log.SolvePanic()
 	index.Load()
 
-	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM)
 	defer stop()
 
 	// 读取环境变量 ALKAID0_WORKDIR
