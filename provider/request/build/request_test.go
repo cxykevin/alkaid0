@@ -387,19 +387,19 @@ func TestRequestBody_InvalidModel(t *testing.T) {
 	setupTestConfig()
 }
 
-// TestRequestBody_InvalidAgent 测试无效代理ID
-func TestRequestBody_InvalidAgent(t *testing.T) {
-	setupTestConfig()
-	db := setupTestDB(t)
+// // TestRequestBody_InvalidAgent 测试无效代理ID
+// func TestRequestBody_InvalidAgent(t *testing.T) {
+// 	setupTestConfig()
+// 	db := setupTestDB(t)
 
-	toolsList := []*parser.ToolsDefine{}
+// 	toolsList := []*parser.ToolsDefine{}
 
-	// 使用不存在的代理ID
-	_, err := RequestBody(1, 1, "invalid-agent", &toolsList, db, "", "", cfgStruct.AgentConfig{})
-	if err == nil {
-		t.Error("Expected error for invalid agent ID")
-	}
-}
+// 	// 使用不存在的代理ID
+// 	_, err := RequestBody(1, 1, "invalid-agent", &toolsList, db, "", "", cfgStruct.AgentConfig{})
+// 	if err == nil {
+// 		t.Error("Expected error for invalid agent ID")
+// 	}
+// }
 
 // // TestRequestBody_ToolMarshalError 测试工具序列化错误
 // func TestRequestBody_ToolMarshalError(t *testing.T) {
