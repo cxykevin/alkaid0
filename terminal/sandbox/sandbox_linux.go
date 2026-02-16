@@ -21,7 +21,7 @@ func (s *Sandbox) createIsolatedCommand(ctx context.Context, name string, args .
 	}
 
 	return &Command{
-		cmd:     createExecFromCmd(cmd, func() {}),
+		cmd:     CreateExecFromCmd(cmd, func() {}),
 		ctx:     ctx,
 		name:    name,
 		args:    args,
@@ -30,8 +30,7 @@ func (s *Sandbox) createIsolatedCommand(ctx context.Context, name string, args .
 	}, nil
 }
 
-// createLinuxIsolatedCommand 创建Linux隔离命令（使用user namespaces）
-// 零外部依赖：除 unshare/bash 外，不依赖任何预装工具
+// createLinuxIsolatedCommand 创建Linux隔离命令
 func (s *Sandbox) createLinuxIsolatedCommand(ctx context.Context, name string, args ...string) (*exec.Cmd, error) {
 	// 构建可写目录的bind mount命令
 	writableMounts := s.generateWritableMounts()
@@ -42,8 +41,7 @@ func (s *Sandbox) createLinuxIsolatedCommand(ctx context.Context, name string, a
 		chrootWorkDir = "/" + chrootWorkDir
 	}
 
-	// 极简内联脚本：先chroot，再内部挂载
-	// 优势：虚拟文件系统/proc/dev等只需要在内部存在，外部不污染
+	// 先chroot，再内部挂载
 	script := fmt.Sprintf(mountScript,
 		writableMounts,
 		chrootWorkDir,
@@ -96,14 +94,4 @@ func shellQuote(s string) string {
 	}
 	// 简单处理：单引号包裹，内部单引号转义
 	return "'" + strings.ReplaceAll(s, "'", "'\"'\"'") + "'"
-}
-
-// generateBindMounts 生成bind mount命令
-func (s *Sandbox) generateBindMounts() string {
-	var mounts []string
-	for _, dir := range s.writableDirs {
-		mounts = append(mounts, fmt.Sprintf("mount --bind %s $TMPROOT%s", dir, dir))
-		mounts = append(mounts, fmt.Sprintf("mount -o remount,rw,bind $TMPROOT%s", dir))
-	}
-	return strings.Join(mounts, "\n")
 }

@@ -80,93 +80,7 @@ func TestCreateRestrictedToken(t *testing.T) {
 	}
 	defer restrictedToken.Close()
 	t.Log(restrictedToken)
-
-	// 使用受限令牌启动进程
-	// cmd := exec.Command("cmd", "/c", "echo test")
-	// cmd.SysProcAttr = &syscall.SysProcAttr{
-	// 	Token: syscall.Token(syscall.Token(*restrictedToken)),
-	// }
-
-	// err = cmd.Run()
-	// // 期望：访问被拒绝（成功受限）
-	// if err != nil {
-	// 	t.Errorf("Error: %v", err)
-	// }
-
-	// 使用受限令牌启动进程
-	// cmd2 := exec.Command("cmd", "/c", "echo test > test.txt")
-	// cmd2.SysProcAttr = &syscall.SysProcAttr{
-	// 	Token: syscall.Token(syscall.Token(*restrictedToken)),
-	// }
-
-	// err = cmd2.Run()
-	// // 期望：访问被拒绝（成功受限）
-	// if err == nil {
-	// 	t.Error("期望受限令牌无法写入系统目录，但成功了")
-	// } else {
-	// 	t.Logf("Succeed error: %v", err)
-	// }
-
-	// // 使用受限令牌启动进程
-	// cmd3 := exec.Command("cmd", "/c", "ping www.baidu.com")
-	// cmd3.SysProcAttr = &syscall.SysProcAttr{
-	// 	Token: syscall.Token(syscall.Token(*restrictedToken)),
-	// }
-
-	// err = cmd3.Run()
-	// if err != nil {
-	// 	t.Error(err)
-	// }
 }
-
-// func TestSetTokenIntegrityMediumLevel(t *testing.T) {
-// 	tkn, err := GetToken()
-// 	if err != nil {
-// 		t.Error(err)
-// 	}
-// 	defer tkn.Close()
-// 	err = SetTokenIntegrityMediumLevel(tkn)
-// 	if err != nil {
-// 		t.Error(err)
-// 	}
-
-// 	// 使用低完整性令牌启动进程
-// 	cmd := exec.Command("cmd", "/c", "echo test")
-// 	cmd.SysProcAttr = &syscall.SysProcAttr{
-// 		Token: syscall.Token(syscall.Token(*tkn)),
-// 	}
-
-// 	err = cmd.Run()
-// 	// 期望：访问被拒绝（成功受限）
-// 	if err != nil {
-// 		t.Errorf("Error: %v", err)
-// 	}
-
-// 	// 疑似关闭 UAC 副作用，Medium无效
-// 	// // 使用低完整性令牌启动进程
-// 	// cmd2 := exec.Command("cmd", "/c", "echo test > C:\\Windows\\System32\\test.txt")
-// 	// cmd2.SysProcAttr = &syscall.SysProcAttr{
-// 	// 	Token: syscall.Token(syscall.Token(*tkn)),
-// 	// }
-
-// 	// err = cmd2.Run()
-// 	// // 期望：访问被拒绝（成功受限）
-// 	// if err == nil {
-// 	// 	t.Error("期望中完整性令牌无法写入系统目录，但成功了")
-// 	// } else {
-// 	// 	t.Logf("Succeed error: %v", err)
-// 	// }
-
-// 	// cmd3 := exec.Command("cmd", "/c", "ping www.baidu.com")
-// 	// cmd3.SysProcAttr = &syscall.SysProcAttr{
-// 	// 	Token: syscall.Token(syscall.Token(*tkn)),
-// 	// }
-
-// 	// err = cmd3.Run()
-// 	// if err != nil {
-// 	// 	t.Error(err)
-// 	// }
-// }
 
 func TestInitAlkaid0SandboxUser(t *testing.T) {
 	securityTestMutex.Lock()
@@ -240,7 +154,6 @@ func TestGetAccountSID(t *testing.T) {
 // 		t.Error(err)
 // 	}
 // 	t.Logf("sid: %v", sid)
-
 // }
 
 func TestCreateRunToken(t *testing.T) {
@@ -253,14 +166,6 @@ func TestCreateRunToken(t *testing.T) {
 	}
 	defer tkn.Close()
 	t.Logf("Token: %v", tkn)
-	// cmd := exec.Command("cmd", "/c", "echo test")
-	// cmd.SysProcAttr = &syscall.SysProcAttr{
-	// 	Token: syscall.Token(syscall.Token(*tkn)),
-	// }
-	// err = cmd.Run()
-	// if err != nil {
-	// 	t.Error(err)
-	// }
 
 }
 

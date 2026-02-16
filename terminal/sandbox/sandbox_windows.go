@@ -28,8 +28,6 @@ func (s *Sandbox) createIsolatedCommand(ctx context.Context, name string, args .
 		return nil, fmt.Errorf("设置工作目录权限失败: %w", err)
 	}
 
-	// winSandbox.CreateProc()
-
 	cmd := winSandbox.CommandContext(ctx, name, args...)
 	cmd.Dir = s.workDir
 	cmd.Env = s.env
@@ -38,8 +36,6 @@ func (s *Sandbox) createIsolatedCommand(ctx context.Context, name string, args .
 	} else if cmd.Path == "" {
 		cmd.Path = name
 	}
-
-	// runner := newWindowsRunner(cmd, *token, ctx)
 
 	return &Command{
 		cmd:     cmd,

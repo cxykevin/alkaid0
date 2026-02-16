@@ -6,47 +6,63 @@ import (
 	"os/exec"
 )
 
-// execCmd 执行对象
-type execCmd struct {
+// ExecCmd 执行对象
+type ExecCmd struct {
 	cmd   *exec.Cmd
 	clean func()
 }
 
-func createExecFromCmd(cmd *exec.Cmd, clean func()) *execCmd {
-	return &execCmd{cmd: cmd, clean: clean}
+// CreateExecFromCmd exec.Cmd 包装器
+func CreateExecFromCmd(cmd *exec.Cmd, clean func()) *ExecCmd {
+	return &ExecCmd{cmd: cmd, clean: clean}
 }
 
-func createIsolateNoneCmd(ctx context.Context, name string, args []string, env []string, dir string) *execCmd {
+func createIsolateNoneCmd(ctx context.Context, name string, args []string, env []string, dir string) *ExecCmd {
 
 	cmd := exec.CommandContext(ctx, name, args...)
 	cmd.Dir = dir
 	cmd.Env = env
 
-	return &execCmd{cmd: cmd, clean: func() {}}
+	return &ExecCmd{cmd: cmd, clean: func() {}}
 }
 
-func (e *execCmd) Start() error {
+// Start 启动
+func (e *ExecCmd) Start() error {
 	return e.cmd.Start()
 }
-func (e *execCmd) Wait() error {
+
+// Wait 等待
+func (e *ExecCmd) Wait() error {
 	return e.cmd.Wait()
 }
-func (e *execCmd) Run() error {
+
+// Run 执行
+func (e *ExecCmd) Run() error {
 	return e.cmd.Run()
 }
-func (e *execCmd) SetStdin(r io.Reader) {
+
+// SetStdin 设置标准输入
+func (e *ExecCmd) SetStdin(r io.Reader) {
 	e.cmd.Stdin = r
 }
-func (e *execCmd) SetStdout(w io.Writer) {
+
+// SetStdout 设置标准输出
+func (e *ExecCmd) SetStdout(w io.Writer) {
 	e.cmd.Stdout = w
 }
-func (e *execCmd) SetStderr(w io.Writer) {
+
+// SetStderr 设置标准错误
+func (e *ExecCmd) SetStderr(w io.Writer) {
 	e.cmd.Stderr = w
 }
-func (e *execCmd) Kill() error {
+
+// Kill 终止
+func (e *ExecCmd) Kill() error {
 	return e.cmd.Process.Kill()
 }
-func (e *execCmd) Clean() {
+
+// Clean 清理
+func (e *ExecCmd) Clean() {
 	e.clean()
 	e.cmd = nil
 }
