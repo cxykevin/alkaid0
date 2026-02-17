@@ -5,23 +5,39 @@ import (
 
 	"github.com/cxykevin/alkaid0/config"
 	"github.com/cxykevin/alkaid0/storage/structs"
-	storageStructs "github.com/cxykevin/alkaid0/storage/structs"
-	"gorm.io/gorm"
 )
 
 // LoadAgent 加载 Agent
-func LoadAgent(db *gorm.DB, session *structs.Chats, agentCode string) error { // 从DB拿到AgentID
-	subagentObj := storageStructs.SubAgents{}
-	err := db.Where("id = ?", agentCode).First(&agentCode).Error
+func LoadAgent(session *structs.Chats) error {
+	// 取agent表
+	obj := structs.SubAgents{}
+	err := session.DB.Where("id = ?", session.NowAgent).First(&obj).Error
 	if err != nil {
 		return err
 	}
-	agentConfig, ok := config.GlobalConfig.Agent.Agents[subagentObj.AgentID]
+
+	// 取agent配置
+	agentConfig, ok := config.GlobalConfig.Agent.Agents[obj.AgentID]
 	if !ok {
 		return errors.New("Agent not found")
 	}
-	session.CurrentAgentID = subagentObj.AgentID
+
+	// // 更新当前Agent
+	// err = session.DB.Model(&structs.Chats{}).Where("id = ?", session.ID).Update("now_agent", agentCode).Error
+	// if err != nil {
+	// 	return err
+	// }
+	// 提示词写入
+
+	// 设置值
+	session.CurrentActivatePath = obj.BindPath
+	session.CurrentAgentID = obj.ID
 	session.CurrentAgentConfig = agentConfig
-	session.CurrentActivatePath = subagentObj.BindPath
+
+	// 写DB
+	err = session.DB.Save(session).Error
+	if err != nil {
+		return err
+	}
 	return nil
 }

@@ -3,7 +3,6 @@ package agents
 import (
 	"github.com/cxykevin/alkaid0/log"
 	"github.com/cxykevin/alkaid0/storage/structs"
-	"gorm.io/gorm"
 )
 
 var logger *log.LogsObj
@@ -22,6 +21,6 @@ func init() {
 // var CurrentAgentConfig cfgStructs.AgentConfig
 
 // Load 加载代理
-func Load(db *gorm.DB, session *structs.Chats) error {
-	return LoadAgent(session.DB, session, session.NowAgent)
+func Load(session *structs.Chats) error {
+	return LoadAgent(session)
 }

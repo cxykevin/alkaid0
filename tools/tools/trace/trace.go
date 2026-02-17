@@ -156,11 +156,11 @@ func Trace(session *structs.Chats, mp map[string]*any, push []*any) (bool, []*an
 	if untrace {
 		traceStr = "untrace"
 	}
-	logger.Info("%s file \"%s\" in ID=%d,agentID=%s", traceStr, path, session.ID, session.CurrentAgentID)
+	logger.Info("%s file \"%s\" in ID=%d,agentID=%s", traceStr, path, session.ID, session.NowAgent)
 
 	if untrace {
 		// 删数据库
-		tx := session.DB.Where("chat_id = ? AND path = ? AND agent_id = ?", session.ID, path, session.CurrentAgentID).Delete(&structs.Traces{})
+		tx := session.DB.Where("chat_id = ? AND path = ? AND agent_id = ?", session.ID, path, session.NowAgent).Delete(&structs.Traces{})
 		err := tx.Error
 		if err != nil {
 			logger.Warn("delete trace failed: %v", err)
@@ -245,7 +245,7 @@ func Trace(session *structs.Chats, mp map[string]*any, push []*any) (bool, []*an
 			ChatID:  session.ID,
 			Path:    path,
 			TraceID: session.TraceID,
-			AgentID: session.CurrentAgentID,
+			AgentID: session.NowAgent,
 		}
 		err = session.DB.Save(&trace).Error
 		if err != nil {
@@ -284,7 +284,7 @@ func Trace(session *structs.Chats, mp map[string]*any, push []*any) (bool, []*an
 		session.TemporyDataOfSession["tools:trace"] = traceCache{}
 	}
 	traces := []structs.Traces{}
-	err := session.DB.Where("chat_id = ?", session.ID).Find(&traces).Error
+	err := session.DB.Where("chat_id = ? AND agent_id = ?", session.ID, session.NowAgent).Find(&traces).Error
 	if err != nil {
 		logger.Warn("read trace failed: %v", err)
 		boolx := false
@@ -298,7 +298,7 @@ func Trace(session *structs.Chats, mp map[string]*any, push []*any) (bool, []*an
 	if len(traces) == 0 {
 		logger.Warn("trace warning: no traces for chat_id=%d", session.ID)
 	}
-	session.TemporyDataOfSession["tools:trace"].(traceCache)[session.CurrentAgentID] = traces
+	session.TemporyDataOfSession["tools:trace"].(traceCache)[session.NowAgent] = traces
 
 	boolx := true
 	success := any(boolx)
@@ -326,16 +326,16 @@ func buildTrace(session *structs.Chats) (string, error) {
 	if _, ok := session.TemporyDataOfSession["tools:trace"].(traceCache); !ok {
 		session.TemporyDataOfSession["tools:trace"] = traceCache{}
 	}
-	if _, ok := session.TemporyDataOfSession["tools:trace"].(traceCache)[session.CurrentAgentID]; !ok {
+	if _, ok := session.TemporyDataOfSession["tools:trace"].(traceCache)[session.NowAgent]; !ok {
 		// 读 db
 		traces := []structs.Traces{}
-		err := session.DB.Where("chat_id = ?", session.ID).Find(&traces).Error
+		err := session.DB.Where("chat_id = ? AND agent_id = ?", session.ID, session.NowAgent).Find(&traces).Error
 		if err != nil {
 			return "", err
 		}
-		session.TemporyDataOfSession["tools:trace"].(traceCache)[session.CurrentAgentID] = traces
+		session.TemporyDataOfSession["tools:trace"].(traceCache)[session.NowAgent] = traces
 	}
-	traces, ok := session.TemporyDataOfSession["tools:trace"].(traceCache)[session.CurrentAgentID]
+	traces, ok := session.TemporyDataOfSession["tools:trace"].(traceCache)[session.NowAgent]
 	if !ok {
 		return "", errors.New("failed to read traces from database")
 	}

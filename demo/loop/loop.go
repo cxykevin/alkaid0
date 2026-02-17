@@ -222,6 +222,8 @@ func Start(ctx context.Context, db *gorm.DB) {
 	storage.GlobalConfig.LastChatID = session.ID
 	logger.Debug("use chat ID:%v|Agent:%v|Model:%v", session.ID, session.NowAgent, session.LastModelID)
 
+	agents.Load(&session)
+
 	// 显示历史消息
 	fmt.Printf("\n%s%s╔════════════════════════════════════════════════════════════╗%s\n", ColorBold, ColorCyan, ColorReset)
 	fmt.Printf("%s%s║%s  Conversation History                                      %s%s║%s\n", ColorBold, ColorCyan, ColorReset, ColorBold, ColorCyan, ColorReset)
