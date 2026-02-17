@@ -498,7 +498,7 @@ func Start(ctx context.Context, db *gorm.DB) {
 		fmt.Printf("\n%s%s┌─ AI Response ─┐%s\n", ColorBold, ColorBlue, ColorReset)
 
 		// 启动 loop
-		retryCount := 0
+		loopCount := 0
 		for {
 			thinkingFlag := false
 			responseStarted := false
@@ -559,13 +559,9 @@ func Start(ctx context.Context, db *gorm.DB) {
 				break
 			}
 
-			if responseStarted {
-				break
-			}
-
-			retryCount++
-			if retryCount >= 3 {
-				fmt.Printf("\n%s❌ Error:%s\n%v\n", ColorRed, ColorReset, "tool loop did not finish")
+			loopCount++
+			if loopCount >= int(config.GlobalConfig.Agent.MaxCallCount) {
+				fmt.Printf("\n%s(loop count exceeded %d)%s\n", ColorYellow, config.GlobalConfig.Agent.MaxCallCount, ColorReset)
 				break
 			}
 		}

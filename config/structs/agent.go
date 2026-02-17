@@ -15,4 +15,5 @@ type AgentsConfig struct {
 	Agents       map[string]AgentConfig
 	GlobalPrompt string `default:""`
 	SummaryModel int32
+	MaxCallCount int32 `default:"50"`
 }

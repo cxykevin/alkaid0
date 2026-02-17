@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 	"strconv"
+	"strings"
 	"text/template"
 
 	"github.com/cxykevin/alkaid0/log"
@@ -247,7 +247,17 @@ func Trace(session *structs.Chats, mp map[string]*any, push []*any) (bool, []*an
 			TraceID: session.TraceID,
 			AgentID: session.CurrentAgentID,
 		}
-		session.DB.Save(&trace)
+		err = session.DB.Save(&trace).Error
+		if err != nil {
+			logger.Warn("trace failed: %v", err)
+			boolx := false
+			success := any(boolx)
+			errMsg := any(err.Error())
+			return false, push, map[string]*any{
+				"success": &success,
+				"error":   &errMsg,
+			}, nil
+		}
 		err = session.DB.Model(&structs.Chats{}).Where("id = ?", session.ID).Update("trace_id", session.TraceID).Error
 		if err != nil {
 			logger.Warn("update trace failed: %v", err)
@@ -264,6 +274,15 @@ func Trace(session *structs.Chats, mp map[string]*any, push []*any) (bool, []*an
 	// TODO: RAG trace
 
 	// 读 db
+	if session.TemporyDataOfSession == nil {
+		session.TemporyDataOfSession = make(map[string]any)
+	}
+	if _, ok := session.TemporyDataOfSession["tools:trace"]; !ok {
+		session.TemporyDataOfSession["tools:trace"] = traceCache{}
+	}
+	if _, ok := session.TemporyDataOfSession["tools:trace"].(traceCache); !ok {
+		session.TemporyDataOfSession["tools:trace"] = traceCache{}
+	}
 	traces := []structs.Traces{}
 	err := session.DB.Where("chat_id = ?", session.ID).Find(&traces).Error
 	if err != nil {
@@ -275,6 +294,9 @@ func Trace(session *structs.Chats, mp map[string]*any, push []*any) (bool, []*an
 			"success": &success,
 			"error":   &errMsg,
 		}, err
+	}
+	if len(traces) == 0 {
+		logger.Warn("trace warning: no traces for chat_id=%d", session.ID)
 	}
 	session.TemporyDataOfSession["tools:trace"].(traceCache)[session.CurrentAgentID] = traces
 
@@ -307,7 +329,7 @@ func buildTrace(session *structs.Chats) (string, error) {
 	if _, ok := session.TemporyDataOfSession["tools:trace"].(traceCache)[session.CurrentAgentID]; !ok {
 		// 读 db
 		traces := []structs.Traces{}
-		err := session.DB.Where("chat_id = ? AND agent_id = ?", session.ID, session.CurrentAgentID).Find(&traces).Error
+		err := session.DB.Where("chat_id = ?", session.ID).Find(&traces).Error
 		if err != nil {
 			return "", err
 		}
