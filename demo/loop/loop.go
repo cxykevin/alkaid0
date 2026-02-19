@@ -14,12 +14,8 @@ import (
 
 	"github.com/cxykevin/alkaid0/config"
 	"github.com/cxykevin/alkaid0/log"
-	"github.com/cxykevin/alkaid0/provider/request"
-	"github.com/cxykevin/alkaid0/provider/request/agents"
-	"github.com/cxykevin/alkaid0/storage"
-	"github.com/cxykevin/alkaid0/storage/structs"
-	"github.com/cxykevin/alkaid0/tools/actions"
-	"github.com/cxykevin/alkaid0/tools/toolobj"
+	"github.com/cxykevin/alkaid0/ui/funcs"
+	"github.com/cxykevin/alkaid0/ui/state"
 	"gorm.io/gorm"
 )
 
@@ -63,17 +59,6 @@ func unwrap[T any](args T, err error) T {
 	return args
 }
 
-// getModelName 获取模型名称
-func getModelName(modelID uint32) string {
-	if modelID == 0 {
-		return "unknown"
-	}
-	if modelInfo, ok := config.GlobalConfig.Model.Models[int32(modelID)]; ok {
-		return modelInfo.ModelName
-	}
-	return "unknown"
-}
-
 // printBoxHeader 打印简单的盒子标题
 func printBoxHeader(title string, color string) {
 	fmt.Printf("\n%s%s┌─ %s ─┐%s\n", ColorBold, color, title, ColorReset)
@@ -84,8 +69,8 @@ func Start(ctx context.Context, db *gorm.DB) {
 	fmt.Println("\033[2J")
 	logger.Info("loop initing")
 	reader := bufio.NewReader(os.Stdin)
-	chats := []structs.Chats{}
-	assert(db.Find(&chats).Error)
+
+	chats := unwrap(funcs.GetChats(db))
 
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, os.Interrupt, syscall.SIGINT)
@@ -139,7 +124,7 @@ func Start(ctx context.Context, db *gorm.DB) {
 		}
 
 		fmt.Printf("\n%sCommands:%s\n", ColorBold, ColorReset)
-		fmt.Printf("  %s[ 1-%d]%s %sEnter existing chat%s\n", ColorGreen, len(chats), ColorReset, ColorBlue, ColorReset)
+		fmt.Printf("  %s[ 1-%d]%s %sEnter existing chat (N = chat number)%s\n", ColorGreen, len(chats), ColorReset, ColorBlue, ColorReset)
 		fmt.Printf("  %s[   0]%s %sCreate new chat%s\n", ColorGreen, ColorReset, ColorBlue, ColorReset)
 		if len(chats) > 0 {
 			fmt.Printf("  %s[  -N]%s %sDelete chat (N = chat number)%s\n", ColorRed, ColorReset, ColorBlue, ColorReset)
@@ -174,8 +159,8 @@ func Start(ctx context.Context, db *gorm.DB) {
 			deletedChat := chats[absNum-1]
 			logger.Info("delete chat %d (ID: %v)", absNum, deletedChat.ID)
 
-			assert(db.Delete(&structs.Chats{}, deletedChat.ID).Error)
-			assert(db.Find(&chats).Error)
+			assert(funcs.DeleteChat(db, &deletedChat))
+			chats = unwrap(funcs.GetChats(db))
 
 			fmt.Printf("%s✓ Chat #%d deleted successfully%s\n", ColorGreen, deletedChat.ID, ColorReset)
 			showChatList()
@@ -183,11 +168,10 @@ func Start(ctx context.Context, db *gorm.DB) {
 			// 创建或进入聊天
 			if inputNum == 0 {
 				logger.Info("create new chat")
-				newChat := &structs.Chats{}
-				assert(db.Create(newChat).Error)
-				assert(db.Find(&chats).Error)
+				newID := unwrap(funcs.CreateChat(db))
+				chats = unwrap(funcs.GetChats(db))
 				inputNum = len(chats)
-				fmt.Printf("%s✓ New chat created (ID: %d)%s\n", ColorGreen, newChat.ID, ColorReset)
+				fmt.Printf("%s✓ New chat created (ID: %d)%s\n", ColorGreen, newID, ColorReset)
 			}
 
 			if inputNum < 1 || inputNum > len(chats) {
@@ -199,19 +183,19 @@ func Start(ctx context.Context, db *gorm.DB) {
 			flag = false
 		}
 	}
-	session := chats[chatNum]
-	session.DB = db
-	session.TemporyDataOfSession = make(map[string]any)
-	actions.Load(&session)
 
-	// 显示会话信息
+	sessionObj := unwrap(funcs.InitChat(db, &chats[chatNum]))
+	session := *sessionObj
+	modelName := funcs.GetModelName(session.LastModelID, "unknown")
+	logger.Debug("use chat ID:%v|Agent:%v|Model:%v", session.ID, session.NowAgent, session.LastModelID)
+
 	fmt.Printf("\n%s%s╔════════════════════════════════════════════════════════════╗%s\n", ColorBold, ColorCyan, ColorReset)
 	fmt.Printf("%s%s║%s  Chat Session: %s%-44d%s%s%s║%s\n", ColorBold, ColorCyan, ColorReset, ColorYellow, session.ID, ColorReset, ColorBold, ColorCyan, ColorReset)
 	fmt.Printf("%s%s╚════════════════════════════════════════════════════════════╝%s\n", ColorBold, ColorCyan, ColorReset)
 
 	// 显示配置信息
 	printBoxHeader("Configuration", ColorPurple)
-	modelName := getModelName(session.LastModelID)
+
 	fmt.Printf("  %sModel:%s  %s\n", ColorBlue, ColorReset, modelName)
 	if session.NowAgent != "" {
 		fmt.Printf("  %sAgent:%s  %s\n", ColorBlue, ColorReset, session.NowAgent)
@@ -219,18 +203,12 @@ func Start(ctx context.Context, db *gorm.DB) {
 		fmt.Printf("  %sAgent:%s  %s(none)%s\n", ColorBlue, ColorReset, ColorYellow, ColorReset)
 	}
 
-	storage.GlobalConfig.LastChatID = session.ID
-	logger.Debug("use chat ID:%v|Agent:%v|Model:%v", session.ID, session.NowAgent, session.LastModelID)
-
-	agents.Load(&session)
-
 	// 显示历史消息
 	fmt.Printf("\n%s%s╔════════════════════════════════════════════════════════════╗%s\n", ColorBold, ColorCyan, ColorReset)
 	fmt.Printf("%s%s║%s  Conversation History                                      %s%s║%s\n", ColorBold, ColorCyan, ColorReset, ColorBold, ColorCyan, ColorReset)
 	fmt.Printf("%s%s╚════════════════════════════════════════════════════════════╝%s\n", ColorBold, ColorCyan, ColorReset)
 
-	chatMsgs := []structs.Messages{}
-	assert(db.Where("chat_id = ?", session.ID).Order("id ASC").Find(&chatMsgs).Error)
+	chatMsgs := unwrap(funcs.GetHistory(&session))
 
 	if len(chatMsgs) == 0 {
 		fmt.Printf("\n%s%sNo messages yet. Start typing to begin!%s\n", ColorYellow, ColorBold, ColorReset)
@@ -247,7 +225,7 @@ func Start(ctx context.Context, db *gorm.DB) {
 				fmt.Printf("%s\n", v.Delta)
 
 			case 1: // AI
-				modelDisplay := getModelName(v.ModelID)
+				modelDisplay := funcs.GetModelName(v.ModelID, "unknown")
 
 				fmt.Printf("\n%s%s┌─ AI (%s%s%s", ColorBold, ColorBlue, ColorReset, modelDisplay, ColorBold+ColorBlue)
 				if v.AgentID != nil && *v.AgentID != "" {
@@ -256,7 +234,7 @@ func Start(ctx context.Context, db *gorm.DB) {
 				fmt.Printf("%s) ─┐%s\n", ColorBold+ColorBlue, ColorReset)
 
 				if v.ThinkingDelta != "" {
-					fmt.Printf("%s[Thinking]%s %s\n", ColorPurple, ColorReset, v.ThinkingDelta)
+					fmt.Printf("%s[Thinking]%s%s\n", ColorBlue, v.ThinkingDelta, ColorReset)
 				}
 				fmt.Printf("%s\n", v.Delta)
 
@@ -270,8 +248,123 @@ func Start(ctx context.Context, db *gorm.DB) {
 	fmt.Printf("\n%s%s╔════════════════════════════════════════════════════════════╗%s\n", ColorBold, ColorCyan, ColorReset)
 	fmt.Printf("%s%s║%s  Ready for Input                                           %s%s║%s\n", ColorBold, ColorCyan, ColorReset, ColorBold, ColorCyan, ColorReset)
 	fmt.Printf("%s%s╚════════════════════════════════════════════════════════════╝%s\n", ColorBold, ColorCyan, ColorReset)
+
 	fmt.Printf("%sType /help for available commands or enter your message:%s\n", ColorBlue, ColorReset)
 	var lastInput string
+
+	var runResponseLoop func()
+	runResponseLoop = func() {
+		// 显示 AI 响应
+		fmt.Printf("\n%s%s┌─ AI Response ─┐%s\n", ColorBold, ColorBlue, ColorReset)
+
+		// 启动 loop
+		loopCount := 0
+		for {
+			thinkingFlag := false
+			responseStarted := false
+
+			responseCtx, responseCancel := context.WithCancel(context.Background())
+			mu.Lock()
+			isResponding = true
+			cancelResponse = responseCancel
+			mu.Unlock()
+
+			finish, err := funcs.SendRequest(responseCtx, &session, func(delta string, thinkingDelta string) error {
+				select {
+				case <-responseCtx.Done():
+					return responseCtx.Err()
+				default:
+				}
+				if thinkingDelta != "" {
+					if !thinkingFlag {
+						thinkingFlag = true
+					}
+					fmt.Printf("%s%s%s", ColorBlue, thinkingDelta, ColorReset)
+				}
+
+				if delta != "" {
+					if thinkingFlag {
+						fmt.Printf("\n")
+						thinkingFlag = false
+					}
+					if !responseStarted {
+						responseStarted = true
+					}
+					fmt.Print(delta)
+				}
+				return nil
+			})
+
+			mu.Lock()
+			isResponding = false
+			cancelResponse = nil
+			mu.Unlock()
+
+			if thinkingFlag {
+				fmt.Printf("\n")
+			}
+
+			if err != nil {
+				if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+					break
+				}
+				fmt.Printf("\n%s❌ Error:%s\n%v\n", ColorRed, ColorReset, err)
+				break
+			}
+
+			if finish {
+				if session.State == state.StateWaitApprove {
+					autoHandled, approved, pendingTools, pErr := funcs.AutoHandlePendingToolCalls(&session)
+					if pErr != nil {
+						fmt.Printf("%s❌ Failed to load pending tool calls: %v%s\n", ColorRed, pErr, ColorReset)
+					} else if autoHandled {
+						if approved {
+							runResponseLoop()
+							return
+						}
+						break
+					} else if len(pendingTools) > 0 {
+						fmt.Printf("\n%s%s┌─ Pending Tool Calls ─┐%s\n", ColorBold, ColorYellow, ColorReset)
+						for idx, t := range pendingTools {
+							fmt.Printf("%s[%d]%s %s (id=%s)\n", ColorYellow, idx+1, ColorReset, t.Name, t.ID)
+						}
+						fmt.Printf("%sUse /approve or type anything to continue.%s\n", ColorYellow, ColorReset)
+					}
+					break
+				}
+				if !responseStarted && !thinkingFlag {
+					fmt.Printf("%s(No response)%s\n", ColorYellow, ColorReset)
+				}
+				break
+			}
+
+			loopCount++
+			if loopCount >= int(config.GlobalConfig.Agent.MaxCallCount) {
+				fmt.Printf("\n%s(loop count exceeded %d)%s\n", ColorYellow, config.GlobalConfig.Agent.MaxCallCount, ColorReset)
+				break
+			}
+		}
+	}
+
+	// 启动时如有待审批，尝试自动处理并提示用户
+	if session.State == state.StateWaitApprove {
+		autoHandled, approved, pendingTools, err := funcs.AutoHandlePendingToolCalls(&session)
+		if err != nil {
+			fmt.Printf("%s❌ Failed to load pending tool calls: %v%s\n", ColorRed, err, ColorReset)
+		} else if autoHandled {
+			if approved {
+				func() {
+					runResponseLoop()
+				}()
+			}
+		} else if len(pendingTools) > 0 {
+			fmt.Printf("\n%s%s┌─ Pending Tool Calls ─┐%s\n", ColorBold, ColorYellow, ColorReset)
+			for idx, t := range pendingTools {
+				fmt.Printf("%s[%d]%s %s (id=%s)\n", ColorYellow, idx+1, ColorReset, t.Name, t.ID)
+			}
+			fmt.Printf("%sUse /approve or type anything to continue.%s\n", ColorYellow, ColorReset)
+		}
+	}
 
 	// 获取用户输入
 	for {
@@ -336,6 +429,9 @@ func Start(ctx context.Context, db *gorm.DB) {
 				fmt.Printf("  %s/scope list%s        List available scopes\n", ColorGreen, ColorReset)
 				fmt.Printf("  %s/scope enable%s      Enable a scope\n", ColorGreen, ColorReset)
 				fmt.Printf("  %s/scope disable%s     Disable a scope\n", ColorGreen, ColorReset)
+				fmt.Printf("\n%sApproval Commands:%s\n", ColorBold, ColorReset)
+				fmt.Printf("  %s/approve%s  Approve pending tool calls\n", ColorGreen, ColorReset)
+				fmt.Printf("  %s(others)%s  Reject pending tool calls and tell reasons\n", ColorGreen, ColorReset)
 				fmt.Printf("\n%sShortcuts:%s\n", ColorBold, ColorReset)
 				fmt.Printf("  %s!%s Repeat last input\n", ColorGreen, ColorReset)
 
@@ -345,16 +441,17 @@ func Start(ctx context.Context, db *gorm.DB) {
 
 			case "/models":
 				printBoxHeader("Available Models", ColorBlue)
-				if len(config.GlobalConfig.Model.Models) == 0 {
+				models := funcs.GetModels()
+				if len(models) == 0 {
 					fmt.Printf("  %sNo models configured%s\n", ColorYellow, ColorReset)
 				} else {
-					for k, v := range config.GlobalConfig.Model.Models {
+					for _, v := range models {
 						marker := " "
-						if uint32(k) == session.LastModelID {
+						if uint32(v.ID) == session.LastModelID {
 							marker = "✓"
 						}
 						fmt.Printf("  %s[%s]%s [%2d] %s%-20s%s (%s)\n",
-							ColorGreen, marker, ColorReset, k, ColorBold, v.ModelName, ColorReset, v.ModelID)
+							ColorGreen, marker, ColorReset, v.ID, ColorBold, v.Config.ModelName, ColorReset, v.Config.ModelID)
 					}
 				}
 
@@ -368,26 +465,26 @@ func Start(ctx context.Context, db *gorm.DB) {
 					fmt.Printf("%s❌ Invalid model ID: must be a number%s\n", ColorRed, ColorReset)
 					continue
 				}
-				modelInfo, ok := config.GlobalConfig.Model.Models[int32(modelID)]
-				if !ok {
+				modelInfo, err := funcs.GetModelInfo(int32(modelID))
+				if err != nil {
 					fmt.Printf("%s❌ Model not found: %d%s\n", ColorRed, modelID, ColorReset)
 					continue
 				}
-				session.LastModelID = uint32(modelID)
-				assert(db.Save(&session).Error)
+				assert(funcs.SelectModel(&session, int32(modelID)))
 				fmt.Printf("%s✓ Model changed to: %s%s%s\n", ColorGreen, ColorBold, modelInfo.ModelName, ColorReset)
 
-			case "/summary":
-				fmt.Printf("\n%s%sGenerating summary...%s\n", ColorBold, ColorYellow, ColorReset)
-				ret, err := request.SummarySession(context.Background(), &session)
-				if err != nil {
-					fmt.Printf("%s❌ Error generating summary:%s\n%v\n", ColorRed, ColorReset, err)
-				} else {
-					fmt.Printf("\n%s%s╔════════════════════════════════════════════════════════════╗%s\n", ColorBold, ColorCyan, ColorReset)
-					fmt.Printf("%s%s║%s  Conversation Summary                                      %s%s║%s\n", ColorBold, ColorCyan, ColorReset, ColorBold, ColorCyan, ColorReset)
-					fmt.Printf("%s%s╚════════════════════════════════════════════════════════════╝%s\n", ColorBold, ColorCyan, ColorReset)
-					fmt.Printf("\n%s\n", ret)
+			case "/approve":
+				if session.State != state.StateWaitApprove {
+					fmt.Printf("%sNo pending tool calls%s\n", ColorYellow, ColorReset)
+					continue
 				}
+				if err := funcs.ApproveToolCalls(&session); err != nil {
+					fmt.Printf("%s❌ Approve failed: %v%s\n", ColorRed, err, ColorReset)
+				} else {
+					fmt.Printf("%s✓ Tool calls approved%s\n", ColorGreen, ColorReset)
+					runResponseLoop()
+				}
+				continue
 
 			case "/agent":
 				if len(args) < 2 {
@@ -402,20 +499,21 @@ func Start(ctx context.Context, db *gorm.DB) {
 
 				switch args[1] {
 				case "list":
+					agents := funcs.GetAgentTags()
 					printBoxHeader("Available Agents", ColorBlue)
-					if len(config.GlobalConfig.Agent.Agents) == 0 {
+					if len(agents) == 0 {
 						fmt.Printf("  %sNo agents configured%s\n", ColorYellow, ColorReset)
 					} else {
-						for k, v := range config.GlobalConfig.Agent.Agents {
-							modelName := getModelName(uint32(v.AgentModel))
-							fmt.Printf("\n  %s[%s]%s %s\n", ColorGreen, k, ColorReset, v.AgentName)
+						for _, v := range agents {
+							modelName := funcs.GetModelName(uint32(v.Agent.AgentModel), "unknown")
+							fmt.Printf("\n  %s[%s]%s %s\n", ColorGreen, v.ID, ColorReset, v.Agent.AgentName)
 							fmt.Printf("      Model: %s\n", modelName)
-							fmt.Printf("      Desc:  %s\n", v.AgentDescription)
+							fmt.Printf("      Desc:  %s\n", v.Agent.AgentDescription)
 						}
 					}
 
 				case "used":
-					agents := unwrap(agents.ListAgents(db))
+					agents := unwrap(funcs.GetAgents(&session))
 					fmt.Printf("\n%s%s┌─ Used Agents ─┐%s\n", ColorBold, ColorBlue, ColorReset)
 					if len(agents) == 0 {
 						fmt.Printf("  %sNo agents used in this chat%s\n", ColorYellow, ColorReset)
@@ -430,17 +528,23 @@ func Start(ctx context.Context, db *gorm.DB) {
 						fmt.Printf("%s❌ Usage: /agent add <name> <id> <path>%s\n", ColorRed, ColorReset)
 						continue
 					}
-					agents.AddAgent(&session, args[2], args[3], args[4])
+					err := funcs.AddAgent(&session, args[2], args[3], args[4])
+					if err != nil {
+						fmt.Printf("%s❌ Error adding agent: %v%s\n", ColorRed, err, ColorReset)
+					}
 
 				case "activate":
 					if len(args) < 4 {
 						fmt.Printf("%s❌ Usage: /agent activate <name> <prompt>%s\n", ColorRed, ColorReset)
 						continue
 					}
-					agents.ActivateAgent(&session, args[2], args[3])
+					err := funcs.ActivateAgent(&session, args[2], args[3])
+					if err != nil {
+						fmt.Printf("%s❌ Error activating agent: %v%s\n", ColorRed, err, ColorReset)
+					}
 
 				case "deactivate":
-					agents.DeactivateAgent(&session, "")
+					funcs.DeactivateAgent(&session, "")
 					fmt.Printf("%s✓ Agent deactivated%s\n", ColorGreen, ColorReset)
 
 				default:
@@ -459,15 +563,15 @@ func Start(ctx context.Context, db *gorm.DB) {
 				switch args[1] {
 				case "list":
 					fmt.Printf("\n%s%s┌─ Available Scopes ─┐%s\n", ColorBold, ColorBlue, ColorReset)
-					for k, v := range toolobj.Scopes {
+					for _, v := range funcs.GetScopes() {
 						enabled := " "
-						if k == "" {
+						if v.ID == "" {
 							enabled = "✓"
-							k = "(default)"
-						} else if session.EnableScopes[k] {
+							v.ID = "(default)"
+						} else if session.EnableScopes[v.ID] {
 							enabled = "✓"
 						}
-						fmt.Printf("  %s[%s]%s %-15s %s\n", ColorGreen, enabled, ColorReset, k, v)
+						fmt.Printf("  %s[%s]%s %-15s %s\n", ColorGreen, enabled, ColorReset, v.ID, v.Prompt)
 					}
 
 				case "enable":
@@ -475,14 +579,20 @@ func Start(ctx context.Context, db *gorm.DB) {
 						fmt.Printf("%s❌ Usage: /scope enable <scope>%s\n", ColorRed, ColorReset)
 						continue
 					}
-					actions.EnableScope(&session, args[2])
+					err := funcs.EnableScope(&session, args[2])
+					if err != nil {
+						fmt.Printf("%s❌ Error enabling scope: %v%s\n", ColorRed, err, ColorReset)
+					}
 
 				case "disable":
 					if len(args) < 3 {
 						fmt.Printf("%s❌ Usage: /scope disable <scope>%s\n", ColorRed, ColorReset)
 						continue
 					}
-					actions.DisableScope(&session, args[2])
+					err := funcs.DisableScope(&session, args[2])
+					if err != nil {
+						fmt.Printf("%s❌ Error disabling scope: %v%s\n", ColorRed, err, ColorReset)
+					}
 
 				default:
 					fmt.Printf("%s❌ Unknown scope command: %s%s\n", ColorRed, args[1], ColorReset)
@@ -494,78 +604,12 @@ func Start(ctx context.Context, db *gorm.DB) {
 			}
 			continue
 		}
-		request.UserAddMsg(&session, input, nil)
+		err := funcs.UserAddMsg(&session, input, nil)
+		if err != nil {
+			fmt.Printf("%s❌ Error adding user message: %v%s\n", ColorRed, err, ColorReset)
+		}
 
 		// 显示 AI 响应
-		fmt.Printf("\n%s%s┌─ AI Response ─┐%s\n", ColorBold, ColorBlue, ColorReset)
-
-		// 启动 loop
-		loopCount := 0
-		for {
-			thinkingFlag := false
-			responseStarted := false
-
-			responseCtx, responseCancel := context.WithCancel(context.Background())
-			mu.Lock()
-			isResponding = true
-			cancelResponse = responseCancel
-			mu.Unlock()
-
-			finish, err := request.SendRequest(responseCtx, &session, func(delta string, thinkingDelta string) error {
-				select {
-				case <-responseCtx.Done():
-					return responseCtx.Err()
-				default:
-				}
-				if thinkingDelta != "" {
-					if !thinkingFlag {
-						thinkingFlag = true
-					}
-					fmt.Printf("%s%s%s", ColorBlue, thinkingDelta, ColorReset)
-				}
-
-				if delta != "" {
-					if thinkingFlag {
-						fmt.Printf("\n")
-						thinkingFlag = false
-					}
-					if !responseStarted {
-						responseStarted = true
-					}
-					fmt.Print(delta)
-				}
-				return nil
-			})
-
-			mu.Lock()
-			isResponding = false
-			cancelResponse = nil
-			mu.Unlock()
-
-			if thinkingFlag {
-				fmt.Printf("\n")
-			}
-
-			if err != nil {
-				if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-					break
-				}
-				fmt.Printf("\n%s❌ Error:%s\n%v\n", ColorRed, ColorReset, err)
-				break
-			}
-
-			if finish {
-				if !responseStarted && !thinkingFlag {
-					fmt.Printf("%s(No response)%s\n", ColorYellow, ColorReset)
-				}
-				break
-			}
-
-			loopCount++
-			if loopCount >= int(config.GlobalConfig.Agent.MaxCallCount) {
-				fmt.Printf("\n%s(loop count exceeded %d)%s\n", ColorYellow, config.GlobalConfig.Agent.MaxCallCount, ColorReset)
-				break
-			}
-		}
+		runResponseLoop()
 	}
 }

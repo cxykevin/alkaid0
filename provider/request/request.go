@@ -8,20 +8,23 @@ import (
 	"strings"
 
 	"github.com/cxykevin/alkaid0/config"
+	"github.com/cxykevin/alkaid0/prompts"
 	"github.com/cxykevin/alkaid0/provider/request/agents/actions"
 	"github.com/cxykevin/alkaid0/provider/request/build"
 	reqStruct "github.com/cxykevin/alkaid0/provider/request/structs"
 	"github.com/cxykevin/alkaid0/provider/response"
-	"github.com/cxykevin/alkaid0/storage/structs"
+	storageStructs "github.com/cxykevin/alkaid0/storage/structs"
+	"github.com/cxykevin/alkaid0/tools"
+	"github.com/cxykevin/alkaid0/ui/state"
 )
 
 // UserAddMsg 用户发送消息
-func UserAddMsg(session *structs.Chats, msg string, refers *structs.MessagesReferList) error {
+func UserAddMsg(session *storageStructs.Chats, msg string, refers *storageStructs.MessagesReferList) error {
 	db := session.DB
 	chatID := session.ID
-	var refer structs.MessagesReferList
+	var refer storageStructs.MessagesReferList
 	if refers == nil {
-		refer = structs.MessagesReferList{}
+		refer = storageStructs.MessagesReferList{}
 	} else {
 		refer = *refers
 	}
@@ -33,12 +36,26 @@ func UserAddMsg(session *structs.Chats, msg string, refers *structs.MessagesRefe
 		}
 	}
 
+	if session.State == state.StateWaitApprove {
+		reason := prompts.Render(prompts.UserRejectTemplate, msg)
+		if err := db.Create(&storageStructs.Messages{
+			ChatID: chatID,
+			Delta:  reason,
+			Refers: refer,
+			Type:   storageStructs.MessagesRoleCommunicate,
+		}).Error; err != nil {
+			return err
+		}
+		session.State = state.StateIdle
+		return db.Save(session).Error
+	}
+
 	// 插入
-	err := db.Create(&structs.Messages{
+	err := db.Create(&storageStructs.Messages{
 		ChatID: chatID,
 		Delta:  msg,
 		Refers: refer,
-		Type:   structs.MessagesRoleUser,
+		Type:   storageStructs.MessagesRoleUser,
 	}).Error
 	if err != nil {
 		return err
@@ -53,14 +70,112 @@ func stringDefault(str *string) string {
 	return *str
 }
 
-type aiToolsResponseTemplate struct {
-	Name       string `json:"name"`
-	ID         string `json:"id"`
-	Parameters string `json:"parameters,omitempty"`
+// CanAutoApprove 自动审批策略（待补充）
+func CanAutoApprove(session *storageStructs.Chats, toolCalls []ToolCall, msg *storageStructs.Messages) (bool, string, error) {
+	return false, "", nil
+}
+
+// RejectToolCallsNoDeactivate 自动拒绝工具调用（不退出 subagent）
+func RejectToolCallsNoDeactivate(session *storageStructs.Chats, reason string, refers *storageStructs.MessagesReferList) error {
+	if session.State != state.StateWaitApprove {
+		return nil
+	}
+	if session.DB == nil {
+		return errors.New("db not initialized")
+	}
+	refer := storageStructs.MessagesReferList{}
+	if refers != nil {
+		refer = *refers
+	}
+	finalReason := prompts.Render(prompts.UserRejectTemplate, reason)
+	if err := session.DB.Create(&storageStructs.Messages{
+		ChatID: session.ID,
+		Delta:  finalReason,
+		Refers: refer,
+		Type:   storageStructs.MessagesRoleCommunicate,
+	}).Error; err != nil {
+		return err
+	}
+	session.State = state.StateIdle
+	return session.DB.Save(session).Error
+}
+
+// ToolCall 工具调用
+type ToolCall struct {
+	Name       string          `json:"name"`
+	ID         string          `json:"id"`
+	Parameters map[string]*any `json:"parameters"`
+}
+
+// ParseToolsFromJSON 解析工具调用
+func ParseToolsFromJSON(payload string) ([]ToolCall, error) {
+	if payload == "" {
+		return nil, nil
+	}
+	var tools []ToolCall
+	if err := json.Unmarshal([]byte(payload), &tools); err != nil {
+		return nil, err
+	}
+	return tools, nil
+}
+
+// ApplyToolOnHooks 应用工具调用
+func ApplyToolOnHooks(session *storageStructs.Chats, toolCallingJSON string) error {
+	if toolCallingJSON == "" {
+		return nil
+	}
+	toolCalls, err := ParseToolsFromJSON(toolCallingJSON)
+	if err != nil {
+		return err
+	}
+	for _, call := range toolCalls {
+		if err := tools.ExecToolOnHook(session, call.Name, call.Parameters); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// ExecuteToolCalls 执行工具调用
+func ExecuteToolCalls(session *storageStructs.Chats, toolCallingJSON string) (bool, error) {
+	if toolCallingJSON == "" {
+		return true, nil
+	}
+	if session.DB == nil {
+		return true, errors.New("db not initialized")
+	}
+	session.State = state.StateToolCalling
+	if err := session.DB.Save(session).Error; err != nil {
+		return true, err
+	}
+	if err := ApplyToolOnHooks(session, toolCallingJSON); err != nil {
+		session.State = state.StateIdle
+		if saveErr := session.DB.Save(session).Error; saveErr != nil {
+			return true, saveErr
+		}
+		return true, err
+	}
+
+	solver := response.NewSolver(session.DB, session)
+	_, _, err := solver.AddToken("<tools>"+toolCallingJSON+"</tools>", "")
+	if err != nil {
+		session.State = state.StateIdle
+		if saveErr := session.DB.Save(session).Error; saveErr != nil {
+			return true, saveErr
+		}
+		return true, err
+	}
+	ok, _, _, err := solver.DoneToken()
+	session.State = state.StateIdle
+	if saveErr := session.DB.Save(session).Error; saveErr != nil {
+		return ok, saveErr
+	}
+	return ok, err
 }
 
 // SendRequest 发送请求
-func SendRequest(ctx context.Context, session *structs.Chats, callback func(string, string) error) (bool, error) {
+func SendRequest(ctx context.Context, session *storageStructs.Chats, callback func(string, string) error) (bool, error) {
+	session.State = state.StateWaiting
 	session.TemporyDataOfRequest = make(map[string]any)
 	db := session.DB
 
@@ -81,10 +196,6 @@ func SendRequest(ctx context.Context, session *structs.Chats, callback func(stri
 	if !ok {
 		return true, errors.New("model not found")
 	}
-	obj, err := build.Build(db, session)
-	if err != nil {
-		return true, err
-	}
 
 	// var agentConfig *cfgStruct.AgentConfig = nil
 	// if agentID != "" {
@@ -97,20 +208,21 @@ func SendRequest(ctx context.Context, session *structs.Chats, callback func(stri
 	solver := response.NewSolver(db, session)
 	agent := session.CurrentAgentID
 	// 写库
-	reqObj := structs.Messages{
+	reqObj := storageStructs.Messages{
 		ChatID:        session.ID,
 		AgentID:       &agent,
 		Delta:         "",
 		ThinkingDelta: "",
-		Type:          structs.MessagesRoleAgent,
+		Type:          storageStructs.MessagesRoleAgent,
 		ModelID:       modelID,
 		ModelName:     modelCfg.ModelName,
 	}
 	tx := db.Create(&reqObj)
 	// 取主键
 	if tx.Error != nil {
-		return true, err
+		return true, tx.Error
 	}
+
 	var gDelta strings.Builder
 	var gThinkingDelta strings.Builder
 	var pendingDelta strings.Builder
@@ -120,6 +232,9 @@ func SendRequest(ctx context.Context, session *structs.Chats, callback func(stri
 	msgID := reqObj.ID
 	const tokenFlushThreshold = 256
 	solveFunc := func(body reqStruct.ChatCompletionResponse) error {
+		if session.State == state.StateRequesting {
+			session.State = state.StateReciving
+		}
 		if len(body.Choices) == 0 {
 			return nil
 		}
@@ -135,7 +250,7 @@ func SendRequest(ctx context.Context, session *structs.Chats, callback func(stri
 		if shouldFlush {
 			gstring := gDelta.String()
 			gtstring := gThinkingDelta.String()
-			if err := db.Model(&structs.Messages{}).Where("id = ?", msgID).Updates(structs.Messages{
+			if err := db.Model(&storageStructs.Messages{}).Where("id = ?", msgID).Updates(storageStructs.Messages{
 				Delta:         gstring,
 				ThinkingDelta: gtstring,
 			}).Error; err != nil {
@@ -152,6 +267,12 @@ func SendRequest(ctx context.Context, session *structs.Chats, callback func(stri
 		return nil
 	}
 
+	session.State = state.StateGeneratingPrompt
+	obj, err := build.Build(db, session)
+	if err != nil {
+		return true, err
+	}
+
 	// 留日志
 	// 生成json
 	var buf bytes.Buffer
@@ -163,6 +284,8 @@ func SendRequest(ctx context.Context, session *structs.Chats, callback func(stri
 		logger.Debug("[request body] %s", buf.String())
 	}
 
+	session.State = state.StateRequesting
+
 	err = SimpleOpenAIRequest(ctx, modelCfg.ProviderURL, modelCfg.ProviderKey, modelCfg.ModelID, *obj, solveFunc)
 	if err != nil {
 		return true, err
@@ -173,45 +296,34 @@ func SendRequest(ctx context.Context, session *structs.Chats, callback func(stri
 	}
 	gDelta.WriteString(delta)
 	tools := solver.GetTools()
-	if len(tools) > 0 {
-		toolsRender := []aiToolsResponseTemplate{}
-		for _, v := range tools {
-			toolsRender = append(toolsRender, aiToolsResponseTemplate{
-				Name:       v.Name,
-				ID:         v.ID,
-				Parameters: "(omitted content)",
-			})
-		}
-		var buf bytes.Buffer
-		encoder := json.NewEncoder(&buf)
-		encoder.SetIndent("", "    ")
-		encoder.SetEscapeHTML(false)
-		err = encoder.Encode(toolsRender)
-		if err != nil {
-			return true, err
-		}
-	}
 	gThinkingDelta.WriteString(thinkingDelta)
-	if gDelta.String() == "" && gThinkingDelta.String() == "" {
+	if gDelta.String() == "" && gThinkingDelta.String() == "" && len(tools) == 0 {
 		// 删除
-		err = db.Delete(&structs.Messages{}, msgID).Error
+		err = db.Delete(&storageStructs.Messages{}, msgID).Error
 	} else {
 		finalDelta := gDelta.String()
 		finalThinkingDelta := gThinkingDelta.String()
 		if len(finalDelta) != lastFlushLen || len(finalThinkingDelta) != lastFlushThinkingLen {
-			err = db.Model(&structs.Messages{}).Where("id = ?", msgID).Updates(structs.Messages{
+			err = db.Model(&storageStructs.Messages{}).Where("id = ?", msgID).Updates(storageStructs.Messages{
 				Delta:         finalDelta,
 				ThinkingDelta: finalThinkingDelta,
 			}).Error
 		}
 		if err == nil {
-			err = db.Model(&structs.Messages{}).Where("id = ?", msgID).Update(
+			err = db.Model(&storageStructs.Messages{}).Where("id = ?", msgID).Update(
 				"tool_calling_json_string", string(solver.GetToolsOrigin()),
 			).Error
 		}
 	}
 	if err != nil {
 		return true, err
+	}
+	if len(tools) > 0 {
+		session.State = state.StateWaitApprove
+		if saveErr := db.Save(session).Error; saveErr != nil {
+			return true, saveErr
+		}
+		return true, nil
 	}
 	err = callback(delta, thinkingDelta)
 	if err != nil {

@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/cxykevin/alkaid0/provider/parser"
+	"github.com/cxykevin/alkaid0/provider/request"
 	"github.com/cxykevin/alkaid0/provider/response"
 	"github.com/cxykevin/alkaid0/storage"
 	storageStructs "github.com/cxykevin/alkaid0/storage/structs"
@@ -155,32 +156,16 @@ func TestSolver_ToolCalling_SingleTool(t *testing.T) {
 	testChat := &storageStructs.Chats{
 		ID:           chatID,
 		EnableScopes: map[string]bool{"test_scope": true},
+		DB:           db,
 	}
-	s := response.NewSolver(db, testChat)
 
 	// 模拟AI返回的工具调用JSON
 	toolCallJSON := `[{"name": "test_calculator", "id": "call_123", "parameters": {"expression": "1+1"}}]`
 
-	// 添加工具调用token
-	resp, thinking, err := s.AddToken("<tools>"+toolCallJSON+"</tools>", "")
+	// 执行完整工具调用流程
+	_, err = request.ExecuteToolCalls(testChat, toolCallJSON)
 	if err != nil {
-		t.Fatalf("AddToken error: %v", err)
-	}
-
-	// 完成token处理
-	_, r2, t2, err := s.DoneToken()
-	if err != nil {
-		t.Fatalf("DoneToken error: %v", err)
-	}
-	resp += r2
-	thinking += t2
-
-	// 验证响应内容
-	if resp != "" {
-		t.Fatalf("expected empty response, got '%s'", resp)
-	}
-	if thinking != "" {
-		t.Fatalf("expected empty thinking, got '%s'", thinking)
+		t.Fatalf("ExecuteToolCalls error: %v", err)
 	}
 
 	// 验证数据库中保存的toolResponses
@@ -332,8 +317,8 @@ func TestSolver_ToolCalling_MultipleTools(t *testing.T) {
 	testChat := &storageStructs.Chats{
 		ID:           chatID,
 		EnableScopes: map[string]bool{"test_scope": true},
+		DB:           db,
 	}
-	s := response.NewSolver(db, testChat)
 
 	// 模拟AI返回的多个工具调用JSON
 	toolCallJSON := `[` +
@@ -341,16 +326,10 @@ func TestSolver_ToolCalling_MultipleTools(t *testing.T) {
 		`{"name": "test_echo", "id": "call_456", "parameters": {"message": "Hello World"}}` +
 		`]`
 
-	// 添加工具调用token
-	_, _, err = s.AddToken("<tools>"+toolCallJSON+"</tools>", "")
+	// 执行完整工具调用流程
+	_, err = request.ExecuteToolCalls(testChat, toolCallJSON)
 	if err != nil {
-		t.Fatalf("AddToken error: %v", err)
-	}
-
-	// 完成token处理
-	_, _, _, err = s.DoneToken()
-	if err != nil {
-		t.Fatalf("DoneToken error: %v", err)
+		t.Fatalf("ExecuteToolCalls error: %v", err)
 	}
 
 	// 验证数据库中保存的toolResponses

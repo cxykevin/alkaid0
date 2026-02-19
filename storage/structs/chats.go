@@ -2,6 +2,7 @@ package structs
 
 import (
 	"github.com/cxykevin/alkaid0/config/structs"
+	"github.com/cxykevin/alkaid0/ui/state"
 	"gorm.io/gorm"
 )
 
@@ -11,6 +12,7 @@ type Chats struct {
 	LastModelID uint32
 	NowAgent    string
 	TraceID     uint64
+	State       state.State
 	// === 会话过程参数 ===
 	DB                   *gorm.DB            `gorm:"-" json:"-"`
 	CurrentAgentID       string              `gorm:"-" json:"-"`

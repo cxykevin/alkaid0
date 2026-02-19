@@ -66,6 +66,11 @@ var Tools string
 //go:embed prompts/tools_wrap.md
 var ToolsWrap string
 
+// UserReject <user reject last tools calling>
+//
+//go:embed prompts/user_reject.md
+var UserReject string
+
 // UserWrap 用户提示词
 //
 //go:embed prompts/user_wrap.md
@@ -107,6 +112,9 @@ var ToolsTemplate *template.Template
 // ToolsWrap 工具占位符模板
 var ToolsWrapTemplate *template.Template
 
+// UserReject <user reject last tools calling>模板
+var UserRejectTemplate *template.Template
+
 // UserWrap 用户提示词模板
 var UserWrapTemplate *template.Template
 
@@ -123,5 +131,6 @@ func initTemplates() {
 	ToolScopesTemplate = Load("ToolScopes", ToolScopes)
 	ToolsTemplate = Load("Tools", Tools)
 	ToolsWrapTemplate = Load("ToolsWrap", ToolsWrap)
+	UserRejectTemplate = Load("UserReject", UserReject)
 	UserWrapTemplate = Load("UserWrap", UserWrap)
 }

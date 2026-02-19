@@ -9,6 +9,9 @@ import (
 
 // LoadAgent 加载 Agent
 func LoadAgent(session *structs.Chats) error {
+	if session.NowAgent == "" {
+		return nil
+	}
 	// 取agent表
 	obj := structs.SubAgents{}
 	err := session.DB.Where("id = ?", session.NowAgent).First(&obj).Error

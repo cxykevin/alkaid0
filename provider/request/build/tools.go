@@ -6,6 +6,7 @@ import (
 	"github.com/cxykevin/alkaid0/storage/structs"
 	"github.com/cxykevin/alkaid0/tools"
 	"github.com/cxykevin/alkaid0/tools/toolobj"
+	"github.com/cxykevin/alkaid0/ui/state"
 )
 
 type scopeInfo struct {
@@ -110,21 +111,25 @@ func ToolsSolver(session *structs.Chats, callback func(string, string, map[strin
 				continue
 			}
 		}
+		toolKey := k
 		toolDefObj := &parser.ToolsDefine{
 			Name: k,
 			Func: func(ID string, arg map[string]*any, ok bool) error {
 				if !ok {
-					err := tools.ExecToolOnHook(session, k, arg)
+					err := tools.ExecToolOnHook(session, toolKey, arg)
 					if err != nil {
 						return err
 					}
 					return nil
 				}
-				ret, err := tools.ExecToolPostHook(session, k, arg)
+				if session.State != state.StateToolCalling {
+					return nil
+				}
+				ret, err := tools.ExecToolPostHook(session, toolKey, arg)
 				if err != nil {
 					return err
 				}
-				err = callback(k, ID, ret)
+				err = callback(toolKey, ID, ret)
 				if err != nil {
 					return err
 				}
