@@ -1,0 +1,7 @@
+(
+    ToolCall.Name == "scope" ||
+    ToolCall.Name == "activate_agent" ||
+    ToolCall.Name == "deactivate_agent" ||
+    ToolCall.Name == "agent" ||
+    (ToolCall.Name == "trace" && param(ToolCall, "untrace") == true)
+)

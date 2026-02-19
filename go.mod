@@ -4,6 +4,7 @@ go 1.25.4
 
 require (
 	github.com/KennethanCeyer/ptyx v0.2.0
+	github.com/expr-lang/expr v1.17.6
 	github.com/glebarez/sqlite v1.11.0
 	golang.org/x/net v0.50.0
 	golang.org/x/sys v0.41.0
