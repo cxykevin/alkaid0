@@ -505,7 +505,11 @@ func Start(ctx context.Context, db *gorm.DB) {
 						fmt.Printf("  %sNo agents configured%s\n", ColorYellow, ColorReset)
 					} else {
 						for _, v := range agents {
-							modelName := funcs.GetModelName(uint32(v.Agent.AgentModel), "unknown")
+							model := uint32(v.Agent.AgentModel)
+							if model == 0 {
+								model = session.LastModelID
+							}
+							modelName := funcs.GetModelName(uint32(model), "unknown")
 							fmt.Printf("\n  %s[%s]%s %s\n", ColorGreen, v.ID, ColorReset, v.Agent.AgentName)
 							fmt.Printf("      Model: %s\n", modelName)
 							fmt.Printf("      Desc:  %s\n", v.Agent.AgentDescription)

@@ -4,7 +4,7 @@ import (
 	"errors"
 	"strings"
 
-	"github.com/cxykevin/alkaid0/config"
+	agentconfig "github.com/cxykevin/alkaid0/provider/request/agents/config"
 	"github.com/cxykevin/alkaid0/storage/structs"
 	storageStructs "github.com/cxykevin/alkaid0/storage/structs"
 )
@@ -31,7 +31,7 @@ func AddAgent(session *structs.Chats, agentCode string, agentID string, path str
 		return errors.New("path must be a correct and relative path")
 	}
 
-	_, ok := config.GlobalConfig.Agent.Agents[agentID]
+	_, ok := agentconfig.GetAgentConfig(agentID)
 	if !ok {
 		return errors.New("agent id not found")
 	}

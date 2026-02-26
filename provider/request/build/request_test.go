@@ -9,6 +9,7 @@ import (
 	"github.com/cxykevin/alkaid0/config"
 	cfgStruct "github.com/cxykevin/alkaid0/config/structs"
 	"github.com/cxykevin/alkaid0/provider/parser"
+	agentconfig "github.com/cxykevin/alkaid0/provider/request/agents/config"
 	"github.com/cxykevin/alkaid0/storage/structs"
 	"github.com/glebarez/sqlite"
 	"gorm.io/gorm"
@@ -190,7 +191,7 @@ func TestRequestBody_Real(t *testing.T) {
 	}
 
 	// 调用 RequestBody
-	agentCfg := config.GlobalConfig.Agent.Agents["test-agent"]
+	agentCfg, _ := agentconfig.GetAgentConfig("test-agent")
 	request, err := RequestBody(1, 1, "test-agent", &toolsList, db, "", "", agentCfg)
 	if err != nil {
 		t.Fatalf("RequestBody failed: %v", err)
@@ -377,7 +378,7 @@ func TestRequestBody_InvalidModel(t *testing.T) {
 	toolsList := []*parser.ToolsDefine{}
 
 	// 使用不存在的模型ID
-	agentCfg := config.GlobalConfig.Agent.Agents["test-agent"]
+	agentCfg, _ := agentconfig.GetAgentConfig("test-agent")
 	_, err := RequestBody(1, 999, "test-agent", &toolsList, db, "", "", agentCfg)
 	if err == nil {
 		t.Error("Expected error for invalid model ID")
@@ -447,7 +448,7 @@ func TestRequestBody_EmptyMessages(t *testing.T) {
 	toolsList := []*parser.ToolsDefine{}
 
 	// 不插入任何消息
-	agentCfg := config.GlobalConfig.Agent.Agents["test-agent"]
+	agentCfg, _ := agentconfig.GetAgentConfig("test-agent")
 	request, err := RequestBody(5, 1, "test-agent", &toolsList, db, "", "", agentCfg)
 	if err != nil {
 		t.Fatalf("RequestBody failed: %v", err)
@@ -483,7 +484,7 @@ func TestRequestBody_ManyMessages(t *testing.T) {
 
 	toolsList := []*parser.ToolsDefine{}
 
-	agentCfg := config.GlobalConfig.Agent.Agents["test-agent"]
+	agentCfg, _ := agentconfig.GetAgentConfig("test-agent")
 	request, err := RequestBody(6, 1, "test-agent", &toolsList, db, "", "", agentCfg)
 	if err != nil {
 		t.Fatalf("RequestBody failed: %v", err)

@@ -14,11 +14,12 @@ type AgentConfig struct {
 
 // AgentsConfig 代理配置结构
 type AgentsConfig struct {
-	Agents             map[string]AgentConfig
-	GlobalPrompt       string `default:""`
-	SummaryModel       int32
-	MaxCallCount       int32  `default:"50"`
-	DefaultAutoApprove string `default:""` // 全局默认自动批准表达式
-	DefaultAutoReject  string `default:""` // 全局默认自动拒绝表达式
-	IgnoreDefaultRules bool   `default:"false"`
+	Agents              map[string]AgentConfig
+	IgnoreBuiltinAgents bool   `default:"false"`
+	GlobalPrompt        string `default:""`
+	SummaryModel        int32
+	MaxCallCount        int32  `default:"50"`
+	DefaultAutoApprove  string `default:""` // 全局默认自动批准表达式
+	DefaultAutoReject   string `default:""` // 全局默认自动拒绝表达式
+	IgnoreDefaultRules  bool   `default:"false"`
 }

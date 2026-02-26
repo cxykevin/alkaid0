@@ -3,7 +3,7 @@ package agents
 import (
 	"errors"
 
-	"github.com/cxykevin/alkaid0/config"
+	agentconfig "github.com/cxykevin/alkaid0/provider/request/agents/config"
 	"github.com/cxykevin/alkaid0/storage/structs"
 )
 
@@ -20,7 +20,7 @@ func LoadAgent(session *structs.Chats) error {
 	}
 
 	// 取agent配置
-	agentConfig, ok := config.GlobalConfig.Agent.Agents[obj.AgentID]
+	agentConfig, ok := agentconfig.GetAgentConfig(obj.AgentID)
 	if !ok {
 		return errors.New("Agent not found")
 	}

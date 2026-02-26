@@ -4,9 +4,9 @@ import (
 	"context"
 	"errors"
 
-	"github.com/cxykevin/alkaid0/config"
 	cfgStruct "github.com/cxykevin/alkaid0/config/structs"
 	"github.com/cxykevin/alkaid0/provider/request"
+	agentconfig "github.com/cxykevin/alkaid0/provider/request/agents/config"
 	"github.com/cxykevin/alkaid0/storage/structs"
 )
 
@@ -20,7 +20,7 @@ func ActivateAgent(session *structs.Chats, agentCode string, prompt string) erro
 	}
 
 	// 取agent配置
-	agentConfig, ok := config.GlobalConfig.Agent.Agents[obj.AgentID]
+	agentConfig, ok := agentconfig.GetAgentConfig(obj.AgentID)
 	if !ok {
 		return errors.New("Agent not found")
 	}

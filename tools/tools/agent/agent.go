@@ -6,13 +6,13 @@ import (
 	"fmt"
 	"text/template"
 
-	"github.com/cxykevin/alkaid0/config"
 	"github.com/cxykevin/alkaid0/library/json"
 	"github.com/cxykevin/alkaid0/log"
 	"github.com/cxykevin/alkaid0/prompts"
 	"github.com/cxykevin/alkaid0/provider/parser"
 
 	agents "github.com/cxykevin/alkaid0/provider/request/agents/actions"
+	agentconfig "github.com/cxykevin/alkaid0/provider/request/agents/config"
 	"github.com/cxykevin/alkaid0/storage/structs"
 	"github.com/cxykevin/alkaid0/tools/actions"
 	"github.com/cxykevin/alkaid0/tools/index"
@@ -438,9 +438,9 @@ func buildGlobalPrompt(session *structs.Chats) (string, error) {
 	tmpl.Tags = make([]struct {
 		Name        string
 		Description string
-	}, len(config.GlobalConfig.Agent.Agents))
+	}, len(agentconfig.GetAgentConfigMap()))
 	idx := 0
-	for i, agent := range config.GlobalConfig.Agent.Agents {
+	for i, agent := range agentconfig.GetAgentConfigMap() {
 		tmpl.Tags[idx].Name = i
 		tmpl.Tags[idx].Description = agent.AgentDescription
 		idx++
