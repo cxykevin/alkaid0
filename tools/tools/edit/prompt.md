@@ -38,9 +38,11 @@ Edit or create file or virtual objects.
     {
         "name": "edit",
         "id": "edit_helloworld",
-        "path": "helloworld.py",
-        "target": "@all",
-        "text": "print('hello world')\n"
+        "parameters": {
+            "path": "helloworld.py",
+            "target": "@all",
+            "text": "print('hello world')\n"
+        }
     }
 ]
 </tools>
@@ -78,9 +80,11 @@ Edit or create file or virtual objects.
     {
         "name": "edit",
         "id": "edit_algorithm",
-        "path": "main.cpp",
-        "target": "int a, b;\n    cin >> a >> b;\n    cout << a + b",
-        "text": "cout << \"hello world\""
+        "parameters": {
+            "path": "main.cpp",
+            "target": "int a, b;\n    cin >> a >> b;\n    cout << a + b",
+            "text": "cout << \"hello world\""
+        }
     }
 ]
 </tools>
