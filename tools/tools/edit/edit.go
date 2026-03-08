@@ -243,7 +243,7 @@ func writeFile(session *structs.Chats, mp map[string]*any, cross []*any) (bool, 
 		}, nil
 	}
 
-	path = filepath.Join(session.CurrentActivatePath, path)
+	path = filepath.Join(session.Root, filepath.Join(session.CurrentActivatePath, path))
 
 	// 读取文件内容
 	var content string

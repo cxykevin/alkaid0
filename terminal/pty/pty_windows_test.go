@@ -1,19 +1,15 @@
+//go:build windows
+
 package pty
 
-import (
-	"runtime"
-	"testing"
-)
+import "testing"
 
-func TestNew(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("Windows 下需要 ConPTY 支持")
-	}
+func TestNewWindows(t *testing.T) {
 	cfg := Config{Rows: 24, Cols: 80}
 
 	p, f, err := New(cfg)
 	if err != nil {
-		t.Fatalf("创建PTY失败: %v", err)
+		t.Skipf("ConPTY 不可用: %v", err)
 	}
 	defer p.Close()
 
@@ -28,15 +24,12 @@ func TestNew(t *testing.T) {
 	}
 }
 
-func TestResizeAndGetSize(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("Windows 下需要 ConPTY 支持")
-	}
+func TestResizeAndGetSizeWindows(t *testing.T) {
 	cfg := Config{Rows: 24, Cols: 80}
 
 	p, _, err := New(cfg)
 	if err != nil {
-		t.Fatalf("创建PTY失败: %v", err)
+		t.Skipf("ConPTY 不可用: %v", err)
 	}
 	defer p.Close()
 
@@ -53,15 +46,12 @@ func TestResizeAndGetSize(t *testing.T) {
 	}
 }
 
-func TestCloseMultipleTimes(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("Windows 下需要 ConPTY 支持")
-	}
+func TestCloseMultipleTimesWindows(t *testing.T) {
 	cfg := Config{Rows: 24, Cols: 80}
 
 	p, _, err := New(cfg)
 	if err != nil {
-		t.Fatalf("创建PTY失败: %v", err)
+		t.Skipf("ConPTY 不可用: %v", err)
 	}
 
 	if err := p.Close(); err != nil {

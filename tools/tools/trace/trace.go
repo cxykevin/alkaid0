@@ -343,7 +343,7 @@ func buildTrace(session *structs.Chats) (string, error) {
 	var obj []templateStruct
 	for _, traceObj := range traces {
 		// 读取文件Stat
-		stat, err := os.Stat(traceObj.Path)
+		stat, err := os.Stat(filepath.Join(session.Root, traceObj.Path))
 		// 文件过大(100K)
 		if err != nil {
 			logger.Warn("trace warning: \"%s\" get stat error: %v", traceObj.Path, err)

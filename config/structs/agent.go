@@ -22,4 +22,5 @@ type AgentsConfig struct {
 	DefaultAutoApprove  string `default:""` // 全局默认自动批准表达式
 	DefaultAutoReject   string `default:""` // 全局默认自动拒绝表达式
 	IgnoreDefaultRules  bool   `default:"false"`
+	UseShell            string `default:""`
 }

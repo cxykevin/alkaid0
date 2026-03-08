@@ -186,6 +186,7 @@ func Start(ctx context.Context, db *gorm.DB) {
 
 	sessionObj := unwrap(funcs.InitChat(db, &chats[chatNum]))
 	session := *sessionObj
+	session.Root, _ = os.Getwd()
 	modelName := funcs.GetModelName(session.LastModelID, "unknown")
 	logger.Debug("use chat ID:%v|Agent:%v|Model:%v", session.ID, session.NowAgent, session.LastModelID)
 

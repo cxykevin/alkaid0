@@ -11,6 +11,7 @@ type Chats struct {
 	ID          uint32 `gorm:"primaryKey;autoIncrement"`
 	LastModelID uint32
 	NowAgent    string
+	Root        string
 	TraceID     uint64
 	State       state.State
 	// === 会话过程参数 ===

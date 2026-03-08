@@ -1,4 +1,4 @@
-//go:build !windows
+//go:build windows
 
 package pty
 
@@ -16,6 +16,7 @@ type PTY struct {
 	closed bool
 	rows   uint16
 	cols   uint16
+	con    *conPty
 }
 
 // Config PTY配置
@@ -35,7 +36,7 @@ func New(cfg Config) (*PTY, *os.File, error) {
 		cfg.Cols = 80
 	}
 
-	master, slave, err := openPTY()
+	master, slave, con, err := openPTY(cfg)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -48,10 +49,11 @@ func New(cfg Config) (*PTY, *os.File, error) {
 		closed: false,
 		rows:   cfg.Rows,
 		cols:   cfg.Cols,
+		con:    con,
 	}
 
 	if cfg.Rows > 0 && cfg.Cols > 0 {
-		_ = setWinsize(int(master.Fd()), int(cfg.Cols), int(cfg.Rows))
+		_ = setWinsize(int(master.Fd()), int(cfg.Cols), int(cfg.Rows), con)
 	}
 
 	return p, master, nil
@@ -103,7 +105,12 @@ func (p *PTY) Close() error {
 	p.closed = true
 
 	if p.fd != nil {
-		return p.fd.Close()
+		_ = p.fd.Close()
+		p.fd = nil
+	}
+	if p.con != nil {
+		_ = p.con.Close()
+		p.con = nil
 	}
 
 	return nil
@@ -121,7 +128,7 @@ func (p *PTY) Resize(rows, cols uint16) error {
 		return errors.New("PTY not initialized")
 	}
 
-	if err := setWinsize(int(p.fd.Fd()), int(cols), int(rows)); err != nil {
+	if err := setWinsize(int(p.fd.Fd()), int(cols), int(rows), p.con); err != nil {
 		return err
 	}
 	p.rows = rows
