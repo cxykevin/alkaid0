@@ -332,6 +332,92 @@ func TestUserAddMsg_WithCurrentAgent(t *testing.T) {
 	}
 }
 
+// TestCanAutoApprove 测试自动审批和拒绝逻辑
+func TestCanAutoApprove(t *testing.T) {
+	db := setupTestDB(t)
+
+	// 设置基础环境
+	session := &structs.Chats{
+		ID: 1,
+		DB: db,
+		CurrentAgentConfig: cfgStruct.AgentConfig{
+			AutoApprove: "ToolCall.Name == \"approve_me\"",
+			AutoReject:  "ToolCall.Name == \"reject_me\"",
+		},
+	}
+	msg := &structs.Messages{}
+
+	// 1. 测试拒绝规则触发
+	callsReject := []ToolCall{
+		{Name: "reject_me", ID: "1"},
+	}
+	approved, reason, err := CanAutoApprove(session, callsReject, msg)
+	if err != nil {
+		t.Fatalf("CanAutoApprove failed: %v", err)
+	}
+	if approved {
+		t.Error("Expected rejected for 'reject_me', but got approved")
+	}
+	_ = reason
+
+	// 2. 测试审批规则触发
+	callsApprove := []ToolCall{
+		{Name: "approve_me", ID: "2"},
+	}
+	approved, reason, err = CanAutoApprove(session, callsApprove, msg)
+	if err != nil {
+		t.Fatalf("CanAutoApprove failed: %v", err)
+	}
+	if !approved {
+		t.Error("Expected approved for 'approve_me', but got rejected")
+	}
+
+	// 3. 测试混合调用（一个审批，一个拒绝）-> 应该拒绝
+	callsMixed := []ToolCall{
+		{Name: "approve_me", ID: "3"},
+		{Name: "reject_me", ID: "4"},
+	}
+	approved, reason, err = CanAutoApprove(session, callsMixed, msg)
+	if err != nil {
+		t.Fatalf("CanAutoApprove failed: %v", err)
+	}
+	if approved {
+		t.Error("Expected rejected for mixed calls containing 'reject_me', but got approved")
+	}
+
+	// 4. 测试未命中任何规则 -> 应该拒绝
+	callsNone := []ToolCall{
+		{Name: "unknown_tool", ID: "5"},
+	}
+	approved, reason, err = CanAutoApprove(session, callsNone, msg)
+	if err != nil {
+		t.Fatalf("CanAutoApprove failed: %v", err)
+	}
+	if approved {
+		t.Error("Expected rejected for unknown tool, but got approved")
+	}
+
+	// 5. 测试参数检查 (hasParam, param)
+	session.CurrentAgentConfig.AutoApprove = "hasParam(ToolCall, \"safe\") && param(ToolCall, \"safe\") == true"
+	safeVal := any(true)
+	callsParam := []ToolCall{
+		{
+			Name: "any_tool",
+			ID:   "6",
+			Parameters: map[string]*any{
+				"safe": &safeVal,
+			},
+		},
+	}
+	approved, reason, err = CanAutoApprove(session, callsParam, msg)
+	if err != nil {
+		t.Fatalf("CanAutoApprove failed with params: %v", err)
+	}
+	if !approved {
+		t.Error("Expected approved for tool with safe=true parameter")
+	}
+}
+
 // TestStringDefault 测试 stringDefault 辅助函数
 func TestStringDefault(t *testing.T) {
 	// 测试 nil 指针

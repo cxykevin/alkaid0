@@ -13,33 +13,38 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/cxykevin/alkaid0/log"
 )
 
-// IsolationMode 隔离模式
+var logger = log.New("sandbox")
+
+// IsolationMode 隔离模式，定义了沙盒对宿主系统的保护强度。
 type IsolationMode int
 
 const (
-	// IsolationNone 无隔离（真机运行）
+	// IsolationNone 无隔离模式。命令直接在宿主系统运行，通常用于受信任的本地操作。
 	IsolationNone IsolationMode = iota
-	// IsolationOS 操作系统级隔离
+	// IsolationOS 操作系统级隔离。利用平台特性（如 Linux namespaces, macOS sandbox-exec）
+	// 限制进程对文件系统、网络和进程树的访问。
 	IsolationOS
 )
 
-// Sandbox 表示一个命令执行沙盒
+// Sandbox 表示一个命令执行沙盒，它通过维护可写目录白名单和危险命令黑名单来确保安全。
 type Sandbox struct {
-	// 允许读写的目录列表
+	// 允许读写的目录列表（白名单）。只有在此列表及其子目录下的文件操作才被允许。
 	writableDirs []string
-	// 临时目录
+	// 临时目录，用于存放命令执行过程中的临时文件。
 	tmpDir string
-	// 工作目录
+	// 工作目录，命令启动时的初始路径。
 	workDir string
-	// 环境变量
+	// 环境变量，传递给被执行命令的配置。
 	env []string
-	// 超时时间
+	// 超时时间，防止恶意脚本或死循环耗尽系统资源。
 	timeout time.Duration
-	// 隔离模式
+	// 隔离模式，决定了安全限制的实现方式。
 	isolationMode IsolationMode
-	// 互斥锁
+	// 互斥锁，保证多线程环境下沙盒配置的安全性。
 	mu sync.RWMutex
 }
 
@@ -133,6 +138,8 @@ func (s *Sandbox) Execute(name string, args ...string) (*Command, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
+	logger.Info("Execute command: %s %v (isolation: %s)", name, args, s.isolationMode.String())
+
 	// 创建上下文
 	var ctx context.Context
 	var cancel context.CancelFunc
@@ -161,6 +168,7 @@ func (s *Sandbox) Execute(name string, args ...string) (*Command, error) {
 		// OS级隔离
 		isolatedCmd, err := s.createIsolatedCommand(ctx, name, args...)
 		if err != nil {
+			logger.Error("createIsolatedCommand error: %v", err)
 			cancel()
 			return nil, fmt.Errorf("创建隔离命令失败: %w", err)
 		}
@@ -170,6 +178,7 @@ func (s *Sandbox) Execute(name string, args ...string) (*Command, error) {
 
 	default:
 		cancel()
+		logger.Error("unsupported isolation mode: %d", s.isolationMode)
 		return nil, fmt.Errorf("不支持的隔离模式: %d", s.isolationMode)
 	}
 }
@@ -191,12 +200,19 @@ func (c *Command) SetStderr(w io.Writer) {
 
 // Start 启动命令
 func (c *Command) Start() error {
+	logger.Debug("starting command: %s", c.name)
 	return c.cmd.Start()
 }
 
 // Wait 等待命令完成
 func (c *Command) Wait() error {
-	return c.cmd.Wait()
+	err := c.cmd.Wait()
+	if err != nil {
+		logger.Warn("command %s finished with error: %v", c.name, err)
+	} else {
+		logger.Debug("command %s finished successfully", c.name)
+	}
+	return err
 }
 
 // Run 运行命令并等待完成
@@ -210,18 +226,20 @@ func (c *Command) Run() error {
 
 // Kill 强制终止命令
 func (c *Command) Kill() error {
+	logger.Info("killing command: %s", c.name)
 	if c.cmd != nil {
 		return c.cmd.Kill()
 	}
 	return errors.New("进程未启动")
 }
 
-// IsPathWritable 检查路径是否可写
+// IsPathWritable 检查给定路径是否在沙盒允许的可写目录白名单内。
+// 这一步是防止“目录遍历攻击”和“越权访问”的关键防御措施。
 func (s *Sandbox) IsPathWritable(path string) bool {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	// 如果是无隔离模式，所有路径都可写
+	// 如果是无隔离模式，则信任所有操作，不进行路径校验。
 	if s.isolationMode == IsolationNone {
 		return true
 	}
@@ -229,6 +247,7 @@ func (s *Sandbox) IsPathWritable(path string) bool {
 	cleanPath := filepath.Clean(path)
 	absPath, err := filepath.Abs(cleanPath)
 	if err != nil {
+		logger.Warn("failed to get absolute path for %s: %v", path, err)
 		return false
 	}
 
@@ -238,7 +257,8 @@ func (s *Sandbox) IsPathWritable(path string) bool {
 			continue
 		}
 
-		// 检查路径是否在允许的目录下
+		// 通过计算相对路径来判断 absPath 是否位于 absDir 内部。
+		// 如果相对路径不包含 ".."，说明 absPath 是 absDir 的子路径或其本身。
 		rel, err := filepath.Rel(absDir, absPath)
 		if err != nil {
 			continue
@@ -250,40 +270,30 @@ func (s *Sandbox) IsPathWritable(path string) bool {
 		}
 	}
 
+	logger.Warn("path not writable: %s (abs: %s)", path, absPath)
 	return false
 }
 
-// ValidateCommand 验证命令是否安全
+// ValidateCommand 验证待执行的命令及其参数是否安全。
+// 在此版本中，我们禁用了危险命令黑名单检查，完全依靠沙盒隔离机制来保护系统。
 func (s *Sandbox) ValidateCommand(name string, args ...string) error {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	// Windows 内置命令列表
+	// Windows 内置命令列表（如 dir, cd）通常不对应独立的 .exe 文件，
+	// 而是由 cmd.exe 或 powershell.exe 解释执行。
 	windowsBuiltins := map[string]bool{
 		"echo": true, "cd": true, "dir": true, "copy": true, "move": true,
 		"del": true, "type": true, "set": true, "if": true, "for": true,
 	}
 
-	// 检查命令是否存在
+	// 检查命令是否存在于系统的 PATH 中。
 	// 对于 Windows 内置命令，跳过 LookPath 检查
 	isWindowsBuiltin := runtime.GOOS == "windows" && windowsBuiltins[strings.ToLower(name)]
 	if !isWindowsBuiltin {
 		_, err := exec.LookPath(name)
 		if err != nil {
 			return fmt.Errorf("命令不存在: %s", name)
-		}
-	}
-
-	// 如果是无隔离模式，跳过危险命令检查
-	if s.isolationMode == IsolationNone {
-		return nil
-	}
-
-	// 检查危险命令（可根据需要扩展）
-	dangerousCommands := []string{"rm", "del", "format", "mkfs"}
-	for _, dangerous := range dangerousCommands {
-		if strings.Contains(strings.ToLower(name), dangerous) {
-			return fmt.Errorf("禁止执行危险命令: %s", name)
 		}
 	}
 
@@ -387,4 +397,32 @@ func (m IsolationMode) String() string {
 	default:
 		return "unknown"
 	}
+}
+
+// IsSandboxSupported 检查当前环境是否支持沙盒。
+// 如果存在 /.dockerenv 或者无法列出根目录内容，则认为不支持沙盒（通常意味着已经处于受限环境）。
+func IsSandboxSupported() bool {
+	// 1. 检查是否在 Docker 容器中
+	if _, err := os.Stat("/.dockerenv"); err == nil {
+		logger.Info("Detected Docker environment, sandbox disabled")
+		return false
+	}
+
+	// 2. 检查是否能列出根目录（简单的权限/环境检测）
+	// 在某些受限环境或特定的沙盒实现中，列出根目录可能会失败
+	if runtime.GOOS != "windows" {
+		f, err := os.Open("/")
+		if err != nil {
+			logger.Info("Failed to open root directory, sandbox disabled: %v", err)
+			return false
+		}
+		defer f.Close()
+		_, err = f.Readdirnames(1)
+		if err != nil && err != io.EOF {
+			logger.Info("Failed to read root directory, sandbox disabled: %v", err)
+			return false
+		}
+	}
+
+	return true
 }

@@ -26,6 +26,7 @@ import (
 
 // UserAddMsg 用户发送消息
 func UserAddMsg(session *storageStructs.Chats, msg string, refers *storageStructs.MessagesReferList) error {
+	logger.Info("UserAddMsg: chatID=%d, msgLen=%d", session.ID, len(msg))
 	db := session.DB
 	chatID := session.ID
 	var refer storageStructs.MessagesReferList
@@ -76,12 +77,16 @@ func stringDefault(str *string) string {
 	return *str
 }
 
+// toolCallExprEnv 定义了自动审批/拒绝规则表达式的执行环境。
+// 规则可以通过访问 ToolCalls（所有调用）、ToolCall（当前调用）和 Agent 配置来做出决策。
 type toolCallExprEnv struct {
 	ToolCalls []ToolCall
 	ToolCall  ToolCall
 	Agent     cfgStructs.AgentConfig
 }
 
+// mergeAutoRuleExpr 将用户定义的规则与系统内置规则合并。
+// 使用逻辑或 (||) 连接，意味着只要任一规则触发（审批或拒绝），该决策即生效。
 func mergeAutoRuleExpr(userExpr string, builtinExpr string) string {
 	userExpr = strings.TrimSpace(userExpr)
 	builtinExpr = strings.TrimSpace(builtinExpr)
@@ -147,8 +152,29 @@ func exprTruthy(value any) bool {
 	}
 }
 
+// ToolCall 工具调用
+type ToolCall struct {
+	Name       string          `json:"name"`
+	ID         string          `json:"id"`
+	Parameters map[string]*any `json:"parameters"`
+}
+
+func (t ToolCall) AsMap() map[string]any {
+	return map[string]any{
+		"Name":       t.Name,
+		"ID":         t.ID,
+		"Parameters": t.Parameters,
+	}
+}
+
+// compileExpr 编译表达式字符串为可执行程序，并注入自定义函数（如 regex, contains）。
+// 这允许安全规则利用强大的字符串处理能力来识别危险参数。
 func compileExpr(program string) (*vm.Program, error) {
-	return expr.Compile(program, expr.Env(toolCallExprEnv{}), expr.Function("regex", func(params ...any) (any, error) {
+	return expr.Compile(program, expr.Env(map[string]any{
+		"ToolCalls": []map[string]any{},
+		"ToolCall":  map[string]any{},
+		"Agent":     cfgStructs.AgentConfig{},
+	}), expr.Function("regex", func(params ...any) (any, error) {
 		if len(params) != 2 {
 			return false, nil
 		}
@@ -182,8 +208,20 @@ func compileExpr(program string) (*vm.Program, error) {
 		if len(params) != 2 {
 			return false, nil
 		}
-		call, ok := params[0].(ToolCall)
-		if !ok {
+		var call ToolCall
+		if m, ok := params[0].(map[string]any); ok {
+			if name, ok := m["Name"].(string); ok {
+				call.Name = name
+			}
+			if id, ok := m["ID"].(string); ok {
+				call.ID = id
+			}
+			if params, ok := m["Parameters"].(map[string]*any); ok {
+				call.Parameters = params
+			}
+		} else if c, ok := params[0].(ToolCall); ok {
+			call = c
+		} else {
 			return false, nil
 		}
 		key, ok := params[1].(string)
@@ -195,8 +233,20 @@ func compileExpr(program string) (*vm.Program, error) {
 		if len(params) != 2 {
 			return nil, nil
 		}
-		call, ok := params[0].(ToolCall)
-		if !ok {
+		var call ToolCall
+		if m, ok := params[0].(map[string]any); ok {
+			if name, ok := m["Name"].(string); ok {
+				call.Name = name
+			}
+			if id, ok := m["ID"].(string); ok {
+				call.ID = id
+			}
+			if params, ok := m["Parameters"].(map[string]*any); ok {
+				call.Parameters = params
+			}
+		} else if c, ok := params[0].(ToolCall); ok {
+			call = c
+		} else {
 			return nil, nil
 		}
 		key, ok := params[1].(string)
@@ -207,7 +257,9 @@ func compileExpr(program string) (*vm.Program, error) {
 	}))
 }
 
-// CanAutoApprove 自动审批策略（待补充）
+// CanAutoApprove 根据配置的表达式规则判断一组工具调用是否可以自动执行。
+// 逻辑顺序：先检查拒绝规则（任一调用触发拒绝则整体不自动执行），再检查审批规则（所有调用必须触发审批）。
+// 这种设计确保了安全性优先：只要有一个调用被认为可疑，就必须人工介入。
 func CanAutoApprove(session *storageStructs.Chats, toolCalls []ToolCall, msg *storageStructs.Messages) (bool, string, error) {
 	if session == nil || msg == nil || len(toolCalls) == 0 {
 		return false, "", nil
@@ -215,6 +267,7 @@ func CanAutoApprove(session *storageStructs.Chats, toolCalls []ToolCall, msg *st
 
 	autoApprove := strings.TrimSpace(session.CurrentAgentConfig.AutoApprove)
 	autoReject := strings.TrimSpace(session.CurrentAgentConfig.AutoReject)
+	// 优先级：Agent 级别配置 > 全局默认配置
 	if autoApprove == "" {
 		autoApprove = strings.TrimSpace(config.GlobalConfig.Agent.DefaultAutoApprove)
 	}
@@ -232,89 +285,75 @@ func CanAutoApprove(session *storageStructs.Chats, toolCalls []ToolCall, msg *st
 	autoApprove = mergeAutoRuleExpr(autoApprove, builtinAutoApprove)
 	autoReject = mergeAutoRuleExpr(autoReject, builtinAutoReject)
 
+	logger.Debug("autoApprove expr: %s", autoApprove)
+	logger.Debug("autoReject expr: %s", autoReject)
+
 	var approveProgram *vm.Program
 	var rejectProgram *vm.Program
 	var err error
 	if autoReject != "" {
 		rejectProgram, err = compileExpr(autoReject)
 		if err != nil {
+			logger.Error("compile autoReject expr error: %v", err)
 			return false, "", err
 		}
 	}
 	if autoApprove != "" {
 		approveProgram, err = compileExpr(autoApprove)
 		if err != nil {
+			logger.Error("compile autoApprove expr error: %v", err)
 			return false, "", err
 		}
 	}
 
+	callsMap := make([]map[string]any, len(toolCalls))
+	for i, c := range toolCalls {
+		callsMap[i] = c.AsMap()
+	}
+
+	// 1. 拒绝检查：只要有一个工具调用命中了拒绝规则，则整体不自动执行
 	if rejectProgram != nil {
 		for _, call := range toolCalls {
-			result, runErr := expr.Run(rejectProgram, toolCallExprEnv{
-				ToolCalls: toolCalls,
-				ToolCall:  call,
-				Agent:     session.CurrentAgentConfig,
+			result, runErr := expr.Run(rejectProgram, map[string]any{
+				"ToolCalls": callsMap,
+				"ToolCall":  call.AsMap(),
+				"Agent":     session.CurrentAgentConfig,
 			})
 			if runErr != nil {
+				logger.Error("run autoReject expr error: %v", runErr)
 				return false, "", runErr
 			}
 			if exprTruthy(result) {
+				logger.Info("autoReject matched for tool: %s", call.Name)
 				return false, "", nil
 			}
 		}
 	}
 
+	// 2. 审批检查：如果没有配置审批规则，默认不自动执行
 	if approveProgram == nil {
 		return false, "", nil
 	}
 
+	// 3. 审批检查：所有工具调用都必须命中审批规则，才允许自动执行
 	for _, call := range toolCalls {
-		result, runErr := expr.Run(approveProgram, toolCallExprEnv{
-			ToolCalls: toolCalls,
-			ToolCall:  call,
-			Agent:     session.CurrentAgentConfig,
+		result, runErr := expr.Run(approveProgram, map[string]any{
+			"ToolCalls": callsMap,
+			"ToolCall":  call.AsMap(),
+			"Agent":     session.CurrentAgentConfig,
 		})
 		if runErr != nil {
+			logger.Error("run autoApprove expr error: %v", runErr)
 			return false, "", runErr
 		}
 		if !exprTruthy(result) {
+			logger.Info("autoApprove NOT matched for tool: %s", call.Name)
 			return false, "", nil
 		}
 	}
 
+	logger.Info("all tool calls auto-approved")
 	return true, "", nil
-}
-
-// RejectToolCallsNoDeactivate 自动拒绝工具调用（不退出 subagent）
-func RejectToolCallsNoDeactivate(session *storageStructs.Chats, reason string, refers *storageStructs.MessagesReferList) error {
-	if session.State != state.StateWaitApprove {
-		return nil
-	}
-	if session.DB == nil {
-		return errors.New("db not initialized")
-	}
-	refer := storageStructs.MessagesReferList{}
-	if refers != nil {
-		refer = *refers
-	}
-	finalReason := prompts.Render(prompts.UserRejectTemplate, reason)
-	if err := session.DB.Create(&storageStructs.Messages{
-		ChatID: session.ID,
-		Delta:  finalReason,
-		Refers: refer,
-		Type:   storageStructs.MessagesRoleCommunicate,
-	}).Error; err != nil {
-		return err
-	}
-	session.State = state.StateIdle
-	return session.DB.Save(session).Error
-}
-
-// ToolCall 工具调用
-type ToolCall struct {
-	Name       string          `json:"name"`
-	ID         string          `json:"id"`
-	Parameters map[string]*any `json:"parameters"`
 }
 
 // ParseToolsFromJSON 解析工具调用
@@ -381,6 +420,31 @@ func ParseToolsFromJSON(payload string) ([]ToolCall, error) {
 		tools = append(tools, tool)
 	}
 	return tools, nil
+}
+
+// RejectToolCallsNoDeactivate 自动拒绝工具调用（不退出 subagent）
+func RejectToolCallsNoDeactivate(session *storageStructs.Chats, reason string, refers *storageStructs.MessagesReferList) error {
+	if session.State != state.StateWaitApprove {
+		return nil
+	}
+	if session.DB == nil {
+		return errors.New("db not initialized")
+	}
+	refer := storageStructs.MessagesReferList{}
+	if refers != nil {
+		refer = *refers
+	}
+	finalReason := prompts.Render(prompts.UserRejectTemplate, reason)
+	if err := session.DB.Create(&storageStructs.Messages{
+		ChatID: session.ID,
+		Delta:  finalReason,
+		Refers: refer,
+		Type:   storageStructs.MessagesRoleCommunicate,
+	}).Error; err != nil {
+		return err
+	}
+	session.State = state.StateIdle
+	return session.DB.Save(session).Error
 }
 
 // ApplyToolOnHooks 应用工具调用
@@ -494,6 +558,9 @@ func SendRequest(ctx context.Context, session *storageStructs.Chats, callback fu
 	var lastFlushLen int
 	var lastFlushThinkingLen int
 	msgID := reqObj.ID
+	// tokenFlushThreshold 定义了向数据库刷新消息内容的阈值。
+	// 在流式响应中，如果每收到一个 token 就写入数据库，会对磁盘 I/O 造成巨大压力。
+	// 通过累积一定数量的 token（此处为 256）再统一更新，可以显著提升性能，同时保证用户在刷新页面时能看到大部分内容。
 	const tokenFlushThreshold = 256
 	solveFunc := func(body reqStruct.ChatCompletionResponse) error {
 		if session.State == state.StateRequesting {
@@ -502,6 +569,7 @@ func SendRequest(ctx context.Context, session *storageStructs.Chats, callback fu
 		if len(body.Choices) == 0 {
 			return nil
 		}
+		// 调用 solver 解析 token（可能包含 <think> 或 <tools> 标签）
 		delta, thinkingDelta, err := solver.AddToken(body.Choices[0].Delta.Content, stringDefault(body.Choices[0].Delta.ReasoningContent))
 		gDelta.WriteString(delta)
 		gThinkingDelta.WriteString(thinkingDelta)
@@ -510,6 +578,7 @@ func SendRequest(ctx context.Context, session *storageStructs.Chats, callback fu
 		if err != nil {
 			return err
 		}
+		// 达到阈值时执行数据库更新
 		shouldFlush := pendingDelta.Len()+pendingThinkingDelta.Len() >= tokenFlushThreshold
 		if shouldFlush {
 			gstring := gDelta.String()
@@ -525,6 +594,7 @@ func SendRequest(ctx context.Context, session *storageStructs.Chats, callback fu
 			lastFlushLen = len(gstring)
 			lastFlushThinkingLen = len(gtstring)
 		}
+		// 回调函数通常用于实时推送到 UI 界面
 		if err := callback(delta, thinkingDelta); err != nil {
 			return err
 		}

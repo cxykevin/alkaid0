@@ -10,6 +10,7 @@ type AgentConfig struct {
 	AgentShortDescription string `default:"A default subagent"`          // 代理简短描述（AI激活）
 	AutoApprove           string `default:""`                            // 自动批准表达式
 	AutoReject            string `default:""`                            // 自动拒绝表达式
+	DisableSandbox        bool   `default:"false"`                       // 禁用沙盒
 }
 
 // AgentsConfig 代理配置结构
@@ -19,8 +20,9 @@ type AgentsConfig struct {
 	GlobalPrompt        string `default:""`
 	SummaryModel        int32
 	MaxCallCount        int32  `default:"50"`
-	DefaultAutoApprove  string `default:""` // 全局默认自动批准表达式
-	DefaultAutoReject   string `default:""` // 全局默认自动拒绝表达式
+	DefaultAutoApprove  string `default:"" json:"AutoApprove"` // 全局默认自动批准表达式
+	DefaultAutoReject   string `default:"" json:"AutoReject"`  // 全局默认自动拒绝表达式
 	IgnoreDefaultRules  bool   `default:"false"`
 	UseShell            string `default:""`
+	DisableSandbox      bool   `default:"false"`
 }

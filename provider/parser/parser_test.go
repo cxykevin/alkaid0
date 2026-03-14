@@ -14,7 +14,7 @@ var testTools = []*parser.ToolsDefine{}
 
 // TestNewParser 测试解析器创建
 func TestNewParser(t *testing.T) {
-	p := parser.NewParser(testTools)
+	p := parser.NewParser(nil, testTools)
 	if p == nil {
 		t.Fatal("解析器创建失败")
 	}
@@ -25,7 +25,7 @@ func TestNewParser(t *testing.T) {
 
 // TestAddTokenNormalText 测试普通文本解析
 func TestAddTokenNormalText(t *testing.T) {
-	p := parser.NewParser(testTools)
+	p := parser.NewParser(nil, testTools)
 
 	// 测试普通文本
 	response, thinking, _, err := p.AddToken("Hello World", "")
@@ -50,7 +50,7 @@ func TestAddTokenNormalText(t *testing.T) {
 
 // TestAddTokenThinkTag 测试 think 标签解析
 func TestAddTokenThinkTag(t *testing.T) {
-	p := parser.NewParser(testTools)
+	p := parser.NewParser(nil, testTools)
 
 	// 测试 think 标签
 	token := "<think>这是思考内容</think>"
@@ -76,7 +76,7 @@ func TestAddTokenThinkTag(t *testing.T) {
 
 // // TestAddTokenToolsTag 测试 tools 标签解析
 // func TestAddTokenToolsTag(t *testing.T) {
-// 	p := parser.NewParser(testTools)
+// 	p := parser.NewParser(nil, testTools)
 
 // 	// 测试 tools 标签
 // 	token := "<tools>\n{\n  \"name\": \"calculator\",\n  \"parameters\": {\n    \"expression\": \"2+2\"\n  }\n}\n</tools>"
@@ -98,7 +98,7 @@ func TestAddTokenThinkTag(t *testing.T) {
 
 // TestAddTokenMixedContent 测试混合内容解析
 func TestAddTokenMixedContent(t *testing.T) {
-	p := parser.NewParser(testTools)
+	p := parser.NewParser(nil, testTools)
 
 	// 测试混合内容
 	token := "普通文本<think>思考内容</think>更多文本结尾文本"
@@ -130,7 +130,7 @@ func TestAddTokenMixedContent(t *testing.T) {
 
 // TestDoneToken 测试结束 token 处理
 func TestDoneToken(t *testing.T) {
-	p := parser.NewParser(testTools)
+	p := parser.NewParser(nil, testTools)
 
 	// 测试不同状态下的 DoneToken
 	testCases := []struct {
@@ -185,7 +185,7 @@ func TestDoneToken(t *testing.T) {
 
 // TestParserEdgeCases 测试边界情况
 func TestParserEdgeCases(t *testing.T) {
-	p := parser.NewParser(testTools)
+	p := parser.NewParser(nil, testTools)
 
 	// 测试超长标签
 	longTag := "<" + string(make([]byte, 10)) + ">" // 超过 maxTagLen
@@ -215,7 +215,7 @@ func TestParserEdgeCases(t *testing.T) {
 
 // BenchmarkParserAddToken 性能测试
 func BenchmarkParserAddToken(b *testing.B) {
-	p := parser.NewParser(testTools)
+	p := parser.NewParser(nil, testTools)
 	testToken := "这是一个测试token<think>思考内容</think>更多内容"
 
 	for b.Loop() {
@@ -225,7 +225,7 @@ func BenchmarkParserAddToken(b *testing.B) {
 
 // BenchmarkParserDoneToken 性能测试
 func BenchmarkParserDoneToken(b *testing.B) {
-	p := parser.NewParser(testTools)
+	p := parser.NewParser(nil, testTools)
 
 	for b.Loop() {
 		p.DoneToken()
@@ -234,7 +234,7 @@ func BenchmarkParserDoneToken(b *testing.B) {
 
 // TestParserThinkNotFull 测试思考不完整边界情况
 func TestParserThinkNotFull(t *testing.T) {
-	p := parser.NewParser(testTools)
+	p := parser.NewParser(nil, testTools)
 
 	// 测试嵌套标签（应该按普通文本处理）
 	nestedTag := "aaaa<think>内容</inner></outer>"
@@ -252,7 +252,7 @@ func TestParserThinkNotFull(t *testing.T) {
 		t.Errorf("期望思考 '%s'，实际 '%s'", expectedThinking, thinking)
 	}
 
-	p = parser.NewParser(testTools)
+	p = parser.NewParser(nil, testTools)
 	// 测试嵌套标签（应该按普通文本处理）
 	nestedTag = "aaaa<think>内容</inner></outer></aaaaaaaa"
 	response, thinking, _, err = p.AddToken(nestedTag, "")
@@ -275,7 +275,7 @@ func TestParserThinkNotFull(t *testing.T) {
 		t.Errorf("期望思考 '%s'，实际 '%s'", expectedThinking, thinking)
 	}
 
-	p = parser.NewParser(testTools)
+	p = parser.NewParser(nil, testTools)
 	// 测试嵌套标签（应该按普通文本处理）
 	nestedTag = "aaaa<think>内容</inner></outer></think"
 	response, thinking, _, err = p.AddToken(nestedTag, "")
@@ -301,7 +301,7 @@ func TestParserThinkNotFull(t *testing.T) {
 
 // // TestParserToolsTag 测试工具标签解析
 // func TestParserToolsTag(t *testing.T) {
-// 	p := parser.NewParser(testTools)
+// 	p := parser.NewParser(nil, testTools)
 
 // 	// 测试 tools 标签
 // 	toolsContent := `{
@@ -343,7 +343,7 @@ func TestParserThinkNotFull(t *testing.T) {
 
 // TestParserUnmatchedTags 测试不匹配标签
 func TestParserUnmatchedTags(t *testing.T) {
-	p := parser.NewParser(testTools)
+	p := parser.NewParser(nil, testTools)
 
 	// 测试不匹配标签：只有开始标签
 	token := "<think>内容没有结束标签"
@@ -368,7 +368,7 @@ func TestParserUnmatchedTags(t *testing.T) {
 	}
 
 	// 测试不匹配标签：结束标签没有开始
-	p = parser.NewParser(testTools)
+	p = parser.NewParser(nil, testTools)
 	token = "内容没有开始标签</think>"
 	response, thinking, _, err = p.AddToken(token, "")
 	if err != nil {
@@ -384,7 +384,7 @@ func TestParserUnmatchedTags(t *testing.T) {
 	}
 
 	// 测试错位标签
-	p = parser.NewParser(testTools)
+	p = parser.NewParser(nil, testTools)
 	token = "前缀<think>思考内容</tools>后缀"
 	response, thinking, _, err = p.AddToken(token, "")
 	if err != nil {
@@ -410,7 +410,7 @@ func TestParserUnmatchedTags(t *testing.T) {
 
 // TestParserEmptyTags 测试空标签
 func TestParserEmptyTags(t *testing.T) {
-	p := parser.NewParser(testTools)
+	p := parser.NewParser(nil, testTools)
 
 	// 测试空 think 标签
 	token := "<think></think>"
@@ -457,7 +457,7 @@ func TestParserEmptyTags(t *testing.T) {
 
 // TestParserSpecialCharacters 测试特殊字符处理
 func TestParserSpecialCharacters(t *testing.T) {
-	p := parser.NewParser(testTools)
+	p := parser.NewParser(nil, testTools)
 
 	// 测试换行符
 	token := "第一行\n第二行<think>思考包含\n换行符</think>"
@@ -476,7 +476,7 @@ func TestParserSpecialCharacters(t *testing.T) {
 	}
 
 	// 测试制表符
-	p = parser.NewParser(testTools)
+	p = parser.NewParser(nil, testTools)
 	token = "文本\t制表符<think>思考\t制表符</think>"
 	response, thinking, _, err = p.AddToken(token, "")
 	if err != nil {
@@ -493,7 +493,7 @@ func TestParserSpecialCharacters(t *testing.T) {
 	}
 
 	// 测试转义字符
-	p = parser.NewParser(testTools)
+	p = parser.NewParser(nil, testTools)
 	token = "文本\n\t\\<开始标签"
 	response, thinking, _, err = p.AddToken(token, "")
 	if err != nil {
@@ -511,7 +511,7 @@ func TestParserSpecialCharacters(t *testing.T) {
 
 // TestParserChineseCharacters 测试中文字符处理
 func TestParserChineseCharacters(t *testing.T) {
-	p := parser.NewParser(testTools)
+	p := parser.NewParser(nil, testTools)
 
 	// 测试包含中文的普通文本
 	token := "这是一个中文测试文本<think>这是中文思考内容</think>继续中文文本"
@@ -530,7 +530,7 @@ func TestParserChineseCharacters(t *testing.T) {
 	}
 
 	// 测试纯中文标签（应该作为普通文本处理）
-	p = parser.NewParser(testTools)
+	p = parser.NewParser(nil, testTools)
 	token = "<中文标签>内容</中文标签>"
 	response, thinking, _, err = p.AddToken(token, "")
 	if err != nil {
@@ -547,7 +547,7 @@ func TestParserChineseCharacters(t *testing.T) {
 
 // TestParserMultipleAddTokens 测试多次调用 AddToken
 func TestParserMultipleAddTokens(t *testing.T) {
-	p := parser.NewParser(testTools)
+	p := parser.NewParser(nil, testTools)
 
 	// 分批添加内容
 	responses := []string{}
@@ -623,7 +623,7 @@ func TestParserMultipleAddTokens(t *testing.T) {
 
 // TestParserExtremeLength 测试极端长度文本
 func TestParserExtremeLength(t *testing.T) {
-	p := parser.NewParser(testTools)
+	p := parser.NewParser(nil, testTools)
 
 	// 测试超长普通文本
 	longText := ""
@@ -643,7 +643,7 @@ func TestParserExtremeLength(t *testing.T) {
 	}
 
 	// 测试超长思考内容
-	p = parser.NewParser(testTools)
+	p = parser.NewParser(nil, testTools)
 	longThinkText := ""
 	for range 10000 {
 		longThinkText += "思"
@@ -664,7 +664,7 @@ func TestParserExtremeLength(t *testing.T) {
 
 // TestParserMaxTagLength 测试最大标签长度边界
 func TestParserMaxTagLength(t *testing.T) {
-	p := parser.NewParser(testTools)
+	p := parser.NewParser(nil, testTools)
 
 	// 测试正好 maxTagLen 长度的标签
 	fiveCharTag := "<think" // 正好 5 个字符 (<think)
@@ -684,7 +684,7 @@ func TestParserMaxTagLength(t *testing.T) {
 		t.Errorf("期望响应为'<think'，实际 '%s'", response)
 	}
 
-	p = parser.NewParser(testTools)
+	p = parser.NewParser(nil, testTools)
 	// 测试超过 maxTagLen 长度的标签
 	sixCharTag := "<thinks" // 超过 5 个字符
 	response = ""
@@ -714,7 +714,7 @@ func TestParserComplexScenarios(t *testing.T) {
 	// 测试多个标签的复杂嵌套
 	complexContent := "文本1<think>思考1</think>文本2\n换行内容<think>思考2\n多行内容</think><tools>[]</tools>\n后续文本"
 
-	p := parser.NewParser(testTools)
+	p := parser.NewParser(nil, testTools)
 	response, thinking, _, err := p.AddToken(complexContent, "")
 	if err != nil {
 		t.Fatalf("解析失败: %v", err)
@@ -730,7 +730,7 @@ func TestParserComplexScenarios(t *testing.T) {
 	}
 
 	// 测试标签在行末的情况
-	p = parser.NewParser(testTools)
+	p = parser.NewParser(nil, testTools)
 	lineEndTag := "行末标签<think>行末思考</think>"
 	response, thinking, _, err = p.AddToken(lineEndTag, "")
 	if err != nil {
@@ -773,7 +773,7 @@ func TestSolveToolBasicStringParameter(t *testing.T) {
 		},
 	}
 
-	p := parser.NewParser(tools)
+	p := parser.NewParser(nil, tools)
 	p.ToolResponse = make(map[string]string)
 	// 测试普通文本
 	toolcallObj := []any{
@@ -803,7 +803,7 @@ func TestSolveToolBasicStringParameter(t *testing.T) {
 
 // // TestSolveToolIntParameter 测试整数参数类型校验
 // func TestSolveToolIntParameter(t *testing.T) {
-// 	p := parser.NewParser(testTools)
+// 	p := parser.NewParser(nil, testTools)
 // 	p.ToolResponse = make(map[string]string)
 
 // 	// 测试有效的整数参数（以 float64 形式传入）
@@ -830,7 +830,7 @@ func TestSolveToolBasicStringParameter(t *testing.T) {
 // 	}
 
 // 	// 测试非整数参数（应该失败）
-// 	p = parser.NewParser(testTools)
+// 	p = parser.NewParser(nil, testTools)
 // 	p.ToolResponse = make(map[string]string)
 // 	floatValue := any(42.5) // 非整数
 // 	toolObj = map[string]*any{
@@ -854,7 +854,7 @@ func TestSolveToolBasicStringParameter(t *testing.T) {
 
 // // TestSolveToolFloatParameter 测试浮点数参数类型校验
 // func TestSolveToolFloatParameter(t *testing.T) {
-// 	p := parser.NewParser(testTools)
+// 	p := parser.NewParser(nil, testTools)
 // 	p.ToolResponse = make(map[string]string)
 
 // 	floatValue := any(3.14159)
@@ -882,7 +882,7 @@ func TestSolveToolBasicStringParameter(t *testing.T) {
 
 // // TestSolveToolBooleanParameter 测试布尔值参数类型校验
 // func TestSolveToolBooleanParameter(t *testing.T) {
-// 	p := parser.NewParser(testTools)
+// 	p := parser.NewParser(nil, testTools)
 // 	p.ToolResponse = make(map[string]string)
 
 // 	boolValue := any(true)
@@ -908,7 +908,7 @@ func TestSolveToolBasicStringParameter(t *testing.T) {
 // 	}
 
 // 	// 测试布尔值类型错误
-// 	p = parser.NewParser(testTools)
+// 	p = parser.NewParser(nil, testTools)
 // 	p.ToolResponse = make(map[string]string)
 // 	invalidBool := any("not a bool")
 // 	toolObj = map[string]*any{
@@ -932,7 +932,7 @@ func TestSolveToolBasicStringParameter(t *testing.T) {
 
 // // TestSolveToolArrayParameter 测试数组参数类型校验
 // func TestSolveToolArrayParameter(t *testing.T) {
-// 	p := parser.NewParser(testTools)
+// 	p := parser.NewParser(nil, testTools)
 // 	p.ToolResponse = make(map[string]string)
 
 // 	arrayValue := any([]any{1, "two", 3.0})
@@ -960,7 +960,7 @@ func TestSolveToolBasicStringParameter(t *testing.T) {
 
 // // TestSolveToolObjectParameter 测试对象参数类型校验
 // func TestSolveToolObjectParameter(t *testing.T) {
-// 	p := parser.NewParser(testTools)
+// 	p := parser.NewParser(nil, testTools)
 // 	p.ToolResponse = make(map[string]string)
 
 // 	configObj := any(map[string]*any{
@@ -991,7 +991,7 @@ func TestSolveToolBasicStringParameter(t *testing.T) {
 
 // // TestSolveToolNotFoundTool 测试工具不存在错误
 // func TestSolveToolNotFoundTool(t *testing.T) {
-// 	p := parser.NewParser(testTools)
+// 	p := parser.NewParser(nil, testTools)
 // 	p.ToolResponse = make(map[string]string)
 
 // 	textValue := any("test")
@@ -1016,7 +1016,7 @@ func TestSolveToolBasicStringParameter(t *testing.T) {
 
 // // TestSolveToolMissingToolName 测试缺失工具名称
 // func TestSolveToolMissingToolName(t *testing.T) {
-// 	p := parser.NewParser(testTools)
+// 	p := parser.NewParser(nil, testTools)
 // 	p.ToolResponse = make(map[string]string)
 
 // 	// 缺失 name 字段
@@ -1040,7 +1040,7 @@ func TestSolveToolBasicStringParameter(t *testing.T) {
 
 // // TestSolveToolMissingToolID 测试缺失工具 ID
 // func TestSolveToolMissingToolID(t *testing.T) {
-// 	p := parser.NewParser(testTools)
+// 	p := parser.NewParser(nil, testTools)
 // 	p.ToolResponse = make(map[string]string)
 
 // 	// 缺失 id 字段
@@ -1064,7 +1064,7 @@ func TestSolveToolBasicStringParameter(t *testing.T) {
 
 // // TestSolveToolMissingParameters 测试缺失参数对象
 // func TestSolveToolMissingParameters(t *testing.T) {
-// 	p := parser.NewParser(testTools)
+// 	p := parser.NewParser(nil, testTools)
 // 	p.ToolResponse = make(map[string]string)
 
 // 	// 缺失 parameters 字段
@@ -1086,7 +1086,7 @@ func TestSolveToolBasicStringParameter(t *testing.T) {
 
 // // TestSolveToolParameterTypeMismatch 测试参数类型不匹配
 // func TestSolveToolParameterTypeMismatch(t *testing.T) {
-// 	p := parser.NewParser(testTools)
+// 	p := parser.NewParser(nil, testTools)
 // 	p.ToolResponse = make(map[string]string)
 
 // 	// 提供字符串，但期望整数
@@ -1112,7 +1112,7 @@ func TestSolveToolBasicStringParameter(t *testing.T) {
 
 // // TestSolveToolNullObject 测试 null 工具对象
 // func TestSolveToolNullObject(t *testing.T) {
-// 	p := parser.NewParser(testTools)
+// 	p := parser.NewParser(nil, testTools)
 // 	p.ToolResponse = make(map[string]string)
 
 // 	// 包含 null 对象的工具列表（不是最后一个元素）
@@ -1135,7 +1135,7 @@ func TestSolveToolBasicStringParameter(t *testing.T) {
 
 // // TestSolveToolNullObjectLastElement 测试最后一个元素为 null
 // func TestSolveToolNullObjectLastElement(t *testing.T) {
-// 	p := parser.NewParser(testTools)
+// 	p := parser.NewParser(nil, testTools)
 // 	p.ToolResponse = make(map[string]string)
 
 // 	// 最后一个元素为 null（应该继续，不停止）
@@ -1165,7 +1165,7 @@ func TestSolveToolBasicStringParameter(t *testing.T) {
 
 // // TestSolveToolMultipleTools 测试多个工具顺序调用
 // func TestSolveToolMultipleTools(t *testing.T) {
-// 	p := parser.NewParser(testTools)
+// 	p := parser.NewParser(nil, testTools)
 // 	p.ToolResponse = make(map[string]string)
 
 // 	// 创建多个工具调用对象
@@ -1222,7 +1222,7 @@ func TestSolveToolBasicStringParameter(t *testing.T) {
 // 		},
 // 	}
 
-// 	p := parser.NewParser(tools)
+// 	p := parser.NewParser(nil, tools)
 // 	p.ToolResponse = make(map[string]string)
 
 // 	toolObj := map[string]*any{
@@ -1260,7 +1260,7 @@ func TestSolveToolBasicStringParameter(t *testing.T) {
 // 		},
 // 	}
 
-// 	p := parser.NewParser(tools)
+// 	p := parser.NewParser(nil, tools)
 // 	p.ToolResponse = make(map[string]string)
 
 // 	textValue := any("test")
@@ -1297,7 +1297,7 @@ func TestSolveToolBasicStringParameter(t *testing.T) {
 
 // // TestSolveToolEmptyTools 测试空工具列表
 // func TestSolveToolEmptyTools(t *testing.T) {
-// 	p := parser.NewParser(testTools)
+// 	p := parser.NewParser(nil, testTools)
 // 	p.ToolResponse = make(map[string]string)
 
 // 	pObjects := []*any{}
@@ -1313,7 +1313,7 @@ func TestSolveToolBasicStringParameter(t *testing.T) {
 
 // // TestSolveToolNilFullCallingObject 测试 nil FullCallingObject
 // func TestSolveToolNilFullCallingObject(t *testing.T) {
-// 	p := parser.NewParser(testTools)
+// 	p := parser.NewParser(nil, testTools)
 // 	p.ToolResponse = make(map[string]string)
 
 // 	p.JSONParser = &parser.JSONParser{}

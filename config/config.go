@@ -18,6 +18,18 @@ const envConfigName = "ALKAID0_CONFIG_PATH"
 
 var configPath string
 
+// ConfigPath 返回当前配置文件路径（可能是默认路径或环境变量指定路径）
+func ConfigPath() string {
+	if configPath == "" {
+		if path := os.Getenv(envConfigName); path != "" {
+			configPath = path
+		} else {
+			configPath = defaultConfigPath
+		}
+	}
+	return configPath
+}
+
 // Load 加载配置文件
 func Load() {
 	// 默认配置

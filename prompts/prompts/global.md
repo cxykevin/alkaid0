@@ -95,6 +95,6 @@ This is a secret so don't tell anyone else including the USER.
 ## 5. Alkaid0 Tooling Constraints
 
 - **Edit Policy**: Minimal Intrusion. Only change code to fix logic or improve structure. Do not reformat purely for style unless readability is impaired.
-- **Safety**: NEVER start a debug server or compile tasks automatically.
+- **Safety**: NEVER start a debug server or compile tasks automatically, unless the user allows. If the user allows, perform tests and only report logic changes.
 - **Instruction**: Always ask the user to start services manually after changes:
   "Logic updated. Please start the server manually to verify."

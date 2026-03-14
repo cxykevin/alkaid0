@@ -1,10 +1,14 @@
 package run
 
 import (
+	"bytes"
 	_ "embed" // embed
 	"fmt"
+	"os"
 	"path"
 	"runtime"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/cxykevin/alkaid0/config"
@@ -13,7 +17,6 @@ import (
 	"github.com/cxykevin/alkaid0/prompts"
 	"github.com/cxykevin/alkaid0/provider/parser"
 	"github.com/cxykevin/alkaid0/storage/structs"
-	"github.com/cxykevin/alkaid0/terminal/pty"
 	"github.com/cxykevin/alkaid0/terminal/sandbox"
 	"github.com/cxykevin/alkaid0/tools/actions"
 	"github.com/cxykevin/alkaid0/tools/index"
@@ -39,7 +42,7 @@ var paras = map[string]parser.ToolParameters{
 	"type": {
 		Type:        parser.ToolTypeString,
 		Required:    true,
-		Description: "A Enum decided which type of task want to do. Must Be First Parameter",
+		Description: "A Enum decided which type of task want to do. Must Be First Parameter. Enum: [\"shell\"]",
 	},
 	"reason": {
 		Type:        parser.ToolTypeString,
@@ -76,10 +79,66 @@ type PassInfo struct {
 }
 
 type toolCallFlagTempory struct {
-	TypeOutputed       bool
+	TypeOutputedLen    int32
 	CommandOutputedLen int32
 	ReasonOutputedLen  int32
 	SandboxOutputed    bool
+}
+
+func asInt32(p *any) (int32, bool) {
+	if p == nil {
+		return 0, false
+	}
+	switch v := (*p).(type) {
+	case int32:
+		return v, true
+	case int:
+		return int32(v), true
+	case int64:
+		return int32(v), true
+	case float64:
+		if v != float64(int64(v)) {
+			return 0, false
+		}
+		return int32(v), true
+	case string:
+		i, err := strconv.Atoi(v)
+		if err != nil {
+			f, err := strconv.ParseFloat(v, 64)
+			if err != nil {
+				return 0, false
+			}
+			return int32(f), true
+		}
+		return int32(i), true
+	case json.StringSlot:
+		s := string(v)
+		i, err := strconv.Atoi(s)
+		if err != nil {
+			f, err := strconv.ParseFloat(s, 64)
+			if err != nil {
+				return 0, false
+			}
+			return int32(f), true
+		}
+		return int32(i), true
+	default:
+		return 0, false
+	}
+}
+
+func asString(p *any) (string, bool) {
+	if p == nil {
+		return "", false
+	}
+	switch v := (*p).(type) {
+	case string:
+		return v, true
+	case json.StringSlot:
+		return string(v), true
+	default:
+		return "", false
+	}
 }
 
 func updateInfo(session *structs.Chats, mp map[string]*any, cross []*any) (bool, []*any, error) {
@@ -89,12 +148,21 @@ func updateInfo(session *structs.Chats, mp map[string]*any, cross []*any) (bool,
 		tmp = session.TemporyDataOfRequest["tools:run"]
 	}
 	tmpObj := tmp.(toolCallFlagTempory)
-	if pathPtr, ok := mp["path"]; ok && pathPtr != nil {
-		if path, ok := (*pathPtr).(string); ok {
-			if !tmpObj.TypeOutputed {
-				fmt.Printf("Run type: %s\n", path)
-				tmpObj.TypeOutputed = true
-			}
+
+	if typePtr, ok := mp["type"]; ok && typePtr != nil {
+		var typeOut string
+		if text, ok := (*typePtr).(string); ok {
+			typeOut = text
+		}
+		if text, ok := (*typePtr).(json.StringSlot); ok {
+			typeOut = string(text)
+		}
+		if typeOut != "" && int(tmpObj.TypeOutputedLen) == 0 {
+			fmt.Print("Run type: ")
+		}
+		if typeOut != "" && int(tmpObj.TypeOutputedLen) < len(typeOut) {
+			fmt.Print(typeOut[tmpObj.TypeOutputedLen:])
+			tmpObj.TypeOutputedLen = int32(len(typeOut))
 		}
 	}
 	if reasonPtr, ok := mp["reason"]; ok && reasonPtr != nil {
@@ -106,7 +174,7 @@ func updateInfo(session *structs.Chats, mp map[string]*any, cross []*any) (bool,
 			reasonOut = string(text)
 		}
 		if reasonOut != "" && int(tmpObj.ReasonOutputedLen) == 0 {
-			fmt.Print("Run reason: ")
+			fmt.Print("\nRun reason: ")
 		}
 		if reasonOut != "" && int(tmpObj.ReasonOutputedLen) < len(reasonOut) {
 			fmt.Print(reasonOut[tmpObj.ReasonOutputedLen:])
@@ -144,42 +212,52 @@ func updateInfo(session *structs.Chats, mp map[string]*any, cross []*any) (bool,
 func runTask(session *structs.Chats, mp map[string]*any, cross []*any) (bool, []*any, map[string]*any, error) {
 	runTypeObj, ok := mp["type"]
 	if !ok || runTypeObj == nil {
-		return false, cross, nil, fmt.Errorf("type is required")
+		out := any("[System] Parameter Error: type is required")
+		return false, cross, map[string]*any{"output": &out}, nil
 	}
-	runType, ok := (*runTypeObj).(string)
+	runType, ok := asString(runTypeObj)
 	if !ok {
-		return false, cross, nil, fmt.Errorf("type must be string")
+		out := any("[System] Parameter Error: type must be string")
+		return false, cross, map[string]*any{"output": &out}, nil
 	}
 	if runType != "shell" {
-		return false, cross, nil, fmt.Errorf("type not found")
+		out := any(fmt.Sprintf("[System] Parameter Error: type '%s' not supported, only 'shell' is allowed", runType))
+		return false, cross, map[string]*any{"output": &out}, nil
 	}
 
 	reasonObj, ok := mp["reason"]
 	if !ok || reasonObj == nil {
-		return false, cross, nil, fmt.Errorf("reason is required")
+		out := any("[System] Parameter Error: reason is required")
+		return false, cross, map[string]*any{"output": &out}, nil
 	}
-	reason, ok := (*reasonObj).(string)
+	reason, ok := asString(reasonObj)
 	if !ok {
-		return false, cross, nil, fmt.Errorf("reason must be string")
+		out := any("[System] Parameter Error: reason must be string")
+		return false, cross, map[string]*any{"output": &out}, nil
 	}
 	if reason == "" {
-		return false, cross, nil, fmt.Errorf("reason is empty")
+		out := any("[System] Parameter Error: reason is empty")
+		return false, cross, map[string]*any{"output": &out}, nil
 	}
 
 	cmdObj, ok := mp["command"]
 	if !ok || cmdObj == nil {
-		return false, cross, nil, fmt.Errorf("command is required")
+		out := any("[System] Parameter Error: command is required")
+		return false, cross, map[string]*any{"output": &out}, nil
 	}
-	command, ok := (*cmdObj).(string)
+	command, ok := asString(cmdObj)
 	if !ok {
-		return false, cross, nil, fmt.Errorf("command must be string")
+		out := any("[System] Parameter Error: command must be string")
+		return false, cross, map[string]*any{"output": &out}, nil
 	}
 	if command == "" {
-		return false, cross, nil, fmt.Errorf("command is empty")
+		out := any("[System] Parameter Error: command is empty")
+		return false, cross, map[string]*any{"output": &out}, nil
 	}
 
 	var sandboxFlag bool
 	sandboxObj, ok := mp["sandbox"]
+	sandboxSpecified := ok && sandboxObj != nil
 	if !ok || sandboxObj == nil {
 		sandboxFlag = true
 	} else {
@@ -189,56 +267,43 @@ func runTask(session *structs.Chats, mp map[string]*any, cross []*any) (bool, []
 		}
 	}
 
+	// 检查配置和环境变量以禁用沙盒
+	disableSandbox := config.GlobalConfig.Agent.DisableSandbox ||
+		session.CurrentAgentConfig.DisableSandbox ||
+		os.Getenv("ALKAID0_DISABLE_SANDBOX") == "true"
+
+	// 检查环境是否支持沙盒
+	if sandboxFlag && !disableSandbox {
+		if !sandbox.IsSandboxSupported() {
+			disableSandbox = true
+			logger.Info("Sandbox not supported in current environment, disabling")
+		}
+	}
+
+	if disableSandbox {
+		sandboxFlag = false
+	}
+
 	timeoutObj, ok := mp["timeout"]
 	var timeout int32
 	if !ok || timeoutObj == nil {
 		timeout = 60
 	} else {
-		timeout, ok = (*timeoutObj).(int32)
-		if !ok {
+		if v, ok := asInt32(timeoutObj); ok {
+			timeout = v
+		} else {
 			timeout = 60
 		}
 	}
+	if timeout <= 0 {
+		timeout = 60
+	}
 	if timeout >= 300 {
-		return false, cross, nil, fmt.Errorf("timeout must less than 300")
+		out := any("[System] Parameter Error: timeout must less than 300")
+		return false, cross, map[string]*any{"output": &out}, nil
 	}
 
-	logger.Info("run bash \"%s\"(reason: %s)(%ds) sandbox:%v in ID=%d,agentID=%s", command, reason, timeout, sandboxFlag, session.ID, session.CurrentAgentID)
-
-	// TODO: background command
-
-	rows := 80
-	cols := 24
-
-	// start pty
-	ptyObj, fs, err := pty.New(pty.Config{
-		Rows: uint16(rows),
-		Cols: uint16(cols),
-	})
-	if err != nil {
-		return false, cross, nil, err
-	}
-	defer ptyObj.Close()
-	defer fs.Close()
-
-	// start term buffer
-	// buf := buffer.New(rows, cols)
-	// buf := bytes.NewBuffer([]byte{})
-
-	// start pty task
-	// ctx, cancel := context.WithCancel(context.Background())
-	// defer cancel()
-	// reader := NewAsyncPipeReader(ctx, ptyObj.File(), 64)
-	// defer reader.Close()
-	// go func() {
-	// 	err := reader.CopyTo(ctx, func(data []byte) error {
-	// 		_, err := buf.Write(data)
-	// 		return err
-	// 	})
-	// 	if err != nil {
-	// 		logger.Error("run bash error in copy: %v", err)
-	// 	}
-	// }()
+	logger.Info("run shell \"%s\"(reason: %s)(%ds) sandbox:%v in ID=%d,agentID=%s", command, reason, timeout, sandboxFlag, session.ID, session.CurrentAgentID)
 
 	// get shell
 	shell := getShell(config.GlobalConfig.Agent.UseShell)
@@ -248,12 +313,12 @@ func runTask(session *structs.Chats, mp map[string]*any, cross []*any) (bool, []
 	if sandboxFlag {
 		isolateMode = sandbox.IsolationOS
 	}
+	env := os.Environ()
+	env = append(env, "SANDBOX=alkaid0")
 	sand, err := sandbox.New(sandbox.Config{
 		WorkDir: path.Join(session.Root, session.CurrentActivatePath),
-		Env: []string{
-			"SANDBOX=alkaid0",
-		},
-		Timeout:       time.Duration(timeout)*time.Second + 1*time.Second,
+		Env:     env,
+		Timeout: time.Duration(timeout)*time.Second + 1*time.Second,
 		IsolationMode: isolateMode,
 	})
 	if err != nil {
@@ -268,26 +333,61 @@ func runTask(session *structs.Chats, mp map[string]*any, cross []*any) (bool, []
 	default:
 		startCmd = []string{"-c", command}
 	}
-	cmd, err := sand.Execute(shell, startCmd...)
+	c, err := sand.Execute(shell, startCmd...)
 	if err != nil {
 		return false, cross, nil, err
 	}
 
-	cmd.SetStdin(nil)
-	cmd.SetStdout(fs)
-	cmd.SetStderr(fs)
-	err = cmd.Run()
+	var buf bytes.Buffer
+	c.SetStdin(nil)
+	c.SetStdout(&buf)
+	c.SetStderr(&buf)
+	err = c.Run()
+
 	errString := ""
 	if err != nil {
+		if sandboxFlag && !sandboxSpecified && strings.Contains(err.Error(), "unshare") {
+			errString = "[System] Sandbox unavailable, fallback to non-sandbox\n"
+			sand2, err2 := sandbox.New(sandbox.Config{
+				WorkDir: path.Join(session.Root, session.CurrentActivatePath),
+				Env:     env,
+				Timeout: time.Duration(timeout)*time.Second + 1*time.Second,
+				IsolationMode: sandbox.IsolationNone,
+			})
+			if err2 != nil {
+				errString += fmt.Sprintf("[System] Command Execute Error: %v\n", err)
+				outStr := errString + buf.String()
+				outAny := any(outStr)
+				return false, cross, map[string]*any{
+					"output": &outAny,
+				}, nil
+			}
+			c2, err2 := sand2.Execute(shell, startCmd...)
+			if err2 != nil {
+				errString += fmt.Sprintf("[System] Command Execute Error: %v\n", err2)
+				outStr := errString + buf.String()
+				outAny := any(outStr)
+				return false, cross, map[string]*any{
+					"output": &outAny,
+				}, nil
+			}
+			var buf2 bytes.Buffer
+			c2.SetStdin(nil)
+			c2.SetStdout(&buf2)
+			c2.SetStderr(&buf2)
+			err2 = c2.Run()
+			if err2 != nil {
+				errString += fmt.Sprintf("[System] Command Execute Error: %v\n", err2)
+			}
+			outStr := errString + buf2.String()
+			outAny := any(outStr)
+			return false, cross, map[string]*any{
+				"output": &outAny,
+			}, nil
+		}
 		errString = fmt.Sprintf("[System] Command Execute Error: %v\n", err)
 	}
-	// get output
-	// output := buf.String()
-	output := ""
-	bytes := make([]byte, 1024)
-	n, _ := ptyObj.File().Read(bytes)
-	output = string(bytes[:n])
-	outStr := errString + output
+	outStr := errString + buf.String()
 	outAny := any(outStr)
 	return false, cross, map[string]*any{
 		"output": &outAny,

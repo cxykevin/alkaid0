@@ -95,6 +95,6 @@ func (p *Solver) GetToolsOrigin() string {
 // NewSolver 创建解析器
 func NewSolver(db *gorm.DB, session *structs.Chats) *Solver {
 	obj := &Solver{chatID: session.ID, db: db, session: session}
-	obj.parser = parser.NewParser(*build.ToolsSolver(session, obj.saveToolResponse))
+	obj.parser = parser.NewParser(session, *build.ToolsSolver(session, obj.saveToolResponse))
 	return obj
 }
