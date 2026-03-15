@@ -3,6 +3,7 @@ package agentconfig
 import (
 	_ "embed" // embed
 	"encoding/json"
+	"maps"
 
 	"github.com/cxykevin/alkaid0/config"
 	"github.com/cxykevin/alkaid0/config/structs"
@@ -18,7 +19,9 @@ var logger = log.New("agents/builtins")
 
 func init() {
 	err := json.Unmarshal([]byte(builtinsJSONString), &builtins)
-	logger.Error("load builtin agents failed: %v", err)
+	if err != nil {
+		logger.Error("load builtin agents failed: %v", err)
+	}
 }
 
 // GetAgentConfig 获取agent信息
@@ -42,11 +45,7 @@ func GetAgentConfigMap() map[string]structs.AgentConfig {
 
 func mergeMap(a, b map[string]structs.AgentConfig) map[string]structs.AgentConfig {
 	result := make(map[string]structs.AgentConfig)
-	for k, v := range a {
-		result[k] = v
-	}
-	for k, v := range b {
-		result[k] = v
-	}
+	maps.Copy(result, a)
+	maps.Copy(result, b)
 	return result
 }
