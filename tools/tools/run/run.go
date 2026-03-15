@@ -21,6 +21,7 @@ import (
 	"github.com/cxykevin/alkaid0/tools/actions"
 	"github.com/cxykevin/alkaid0/tools/index"
 	"github.com/cxykevin/alkaid0/tools/toolobj"
+	"github.com/cxykevin/alkaid0/tools/tools/trace"
 	"github.com/shirou/gopsutil/v4/host"
 )
 
@@ -316,9 +317,9 @@ func runTask(session *structs.Chats, mp map[string]*any, cross []*any) (bool, []
 	env := os.Environ()
 	env = append(env, "SANDBOX=alkaid0")
 	sand, err := sandbox.New(sandbox.Config{
-		WorkDir: path.Join(session.Root, session.CurrentActivatePath),
-		Env:     env,
-		Timeout: time.Duration(timeout)*time.Second + 1*time.Second,
+		WorkDir:       path.Join(session.Root, session.CurrentActivatePath),
+		Env:           env,
+		Timeout:       time.Duration(timeout)*time.Second + 1*time.Second,
 		IsolationMode: isolateMode,
 	})
 	if err != nil {
@@ -349,9 +350,9 @@ func runTask(session *structs.Chats, mp map[string]*any, cross []*any) (bool, []
 		if sandboxFlag && !sandboxSpecified && strings.Contains(err.Error(), "unshare") {
 			errString = "[System] Sandbox unavailable, fallback to non-sandbox\n"
 			sand2, err2 := sandbox.New(sandbox.Config{
-				WorkDir: path.Join(session.Root, session.CurrentActivatePath),
-				Env:     env,
-				Timeout: time.Duration(timeout)*time.Second + 1*time.Second,
+				WorkDir:       path.Join(session.Root, session.CurrentActivatePath),
+				Env:           env,
+				Timeout:       time.Duration(timeout)*time.Second + 1*time.Second,
 				IsolationMode: sandbox.IsolationNone,
 			})
 			if err2 != nil {
@@ -387,11 +388,32 @@ func runTask(session *structs.Chats, mp map[string]*any, cross []*any) (bool, []
 		}
 		errString = fmt.Sprintf("[System] Command Execute Error: %v\n", err)
 	}
+
+	idAny, ok := mp["_id"]
+	toolID := ""
+	if !ok || idAny == nil {
+		toolID = "unknown"
+	} else {
+		toolID, ok = (*idAny).(string)
+		if !ok {
+			toolID = "unknown"
+		}
+	}
+
 	outStr := errString + buf.String()
-	outAny := any(outStr)
+	// gettime
+	timeStr := time.Now().Format("20060102-150405")
+	path := "run/" + toolID + "-" + timeStr
+	trace.AddTempObject(session, path, outStr, true)
+	outPth := "@temp/" + path
+	outAny := any(outPth)
+	reasonAny := any(reason)
 	return false, cross, map[string]*any{
-		"output": &outAny,
+		// "output": &outAny,
+		"reason": &reasonAny,
+		"path":   &outAny,
 	}, nil
+
 }
 
 func getShell(shell string) string {

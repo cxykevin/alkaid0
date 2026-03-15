@@ -19,11 +19,11 @@ func initTestEnv() *gorm.DB {
 
 	os.Setenv("ALKAID_DEBUG_SQLITEFILE", ":memory:")
 	db := storage.InitStorage("", "")
-	
+
 	// 强制重建 Scopes 表以确保使用最新的结构
 	db.Migrator().DropTable(&storageStructs.Scopes{})
 	db.AutoMigrate(&storageStructs.Scopes{})
-	
+
 	return db
 }
 
@@ -299,7 +299,7 @@ func TestExecToolPostHook(t *testing.T) {
 
 	v := any("value")
 	args := map[string]*any{"key": &v}
-	result, err := ExecToolPostHook(testChat, "tool1", args)
+	result, err := ExecToolPostHook(testChat, "tool1", args, "1")
 
 	if err != nil {
 		t.Errorf("ExecToolPostHook failed: expected no error, got %v", err)
@@ -340,7 +340,7 @@ func TestExecToolPostHookAllPass(t *testing.T) {
 
 	v := any("value")
 	args := map[string]*any{"key": &v}
-	res, err := ExecToolPostHook(testChat, "tool1", args)
+	res, err := ExecToolPostHook(testChat, "tool1", args, "2")
 
 	if err != nil {
 		t.Errorf("ExecToolPostHook failed: expected no error when all hooks pass, got %v", err)
@@ -377,7 +377,7 @@ func TestExecToolPostHookError(t *testing.T) {
 
 	v := any("value")
 	args := map[string]*any{"key": &v}
-	_, err := ExecToolPostHook(testChat, "tool1", args)
+	_, err := ExecToolPostHook(testChat, "tool1", args, "3")
 
 	if err == nil {
 		t.Errorf("ExecToolPostHook failed: expected error from hook")
@@ -620,7 +620,7 @@ func TestPostHookPrioritySorting(t *testing.T) {
 	actions.AddTool(tool)
 	v := any("value")
 	args := map[string]*any{"key": &v}
-	_, err := ExecToolPostHook(testChat, "tool1", args)
+	_, err := ExecToolPostHook(testChat, "tool1", args, "4")
 
 	if err != nil {
 		t.Fatalf("ExecToolOnHook returned error: %v", err)

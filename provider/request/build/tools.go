@@ -125,7 +125,7 @@ func ToolsSolver(session *structs.Chats, callback func(string, string, map[strin
 				if session.State != state.StateToolCalling {
 					return nil
 				}
-				ret, err := tools.ExecToolPostHook(session, toolKey, arg)
+				ret, err := tools.ExecToolPostHook(session, toolKey, arg, ID)
 				if err != nil {
 					return err
 				}

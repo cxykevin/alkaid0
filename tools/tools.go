@@ -120,7 +120,7 @@ func ExecToolOnHook(session *structs.Chats, name string, args map[string]*any) e
 }
 
 // ExecToolPostHook 执行工具
-func ExecToolPostHook(session *structs.Chats, name string, args map[string]*any) (map[string]*any, error) {
+func ExecToolPostHook(session *structs.Chats, name string, args map[string]*any, toolID string) (map[string]*any, error) {
 	passObjs := make([]*any, 0)
 
 	// 检查工具是否存在
@@ -143,6 +143,8 @@ func ExecToolPostHook(session *structs.Chats, name string, args map[string]*any)
 			continue
 		}
 		if hook.PostHook.Func != nil {
+			idAny := any(toolID)
+			args["_id"] = &idAny
 			pass, passObj, ret, err := hook.PostHook.Func(session, args, passObjs)
 			passObjs = passObj
 			if err != nil {

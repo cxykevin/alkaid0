@@ -31,6 +31,12 @@ var traceTempate *template.Template
 
 var logger = log.New("tools:trace")
 
+// MaxFileLine 最大文件行数
+const MaxFileLine = 2000
+
+// MaxFileSize 最大文件大小
+const MaxFileSize = 50 * 1024 // 50KB
+
 func init() {
 	traceTempate = prompts.Load("tools:trace:trace", tracePrompt)
 }
@@ -183,52 +189,61 @@ func Trace(session *structs.Chats, mp map[string]*any, push []*any) (bool, []*an
 			}, nil
 		}
 	} else {
-		// 检查文件是否存在
-		stat, err := os.Stat(path)
-		if err != nil {
-			boolx := false
-			success := any(boolx)
-			errMsg := any("file not exist")
-			return false, push, map[string]*any{
-				"success": &success,
-				"error":   &errMsg,
-			}, nil
-		}
-		// 文件过大(100K)
-		if stat.Size() > 50*1024 {
-			boolx := false
-			success := any(boolx)
-			errMsg := any("file too large")
-			return false, push, map[string]*any{
-				"success": &success,
-				"error":   &errMsg,
-			}, nil
-		}
-		// 读取文件内容
-		content, err := os.ReadFile(path)
-		if err != nil {
-			boolx := false
-			success := any(boolx)
-			errMsg := any("file read error: " + err.Error())
-			return false, push, map[string]*any{
-				"success": &success,
-				"error":   &errMsg,
-			}, nil
-		}
-		str := fileContentToString(content)
-		if len(str) == 0 {
-			boolx := false
-			success := any(boolx)
-			errMsg := any("file is empty or cannot readable (may be binary file)")
-			return false, push, map[string]*any{
-				"success": &success,
-				"error":   &errMsg,
-			}, nil
+		var str string
+		var err error
+		if vpath, ok := strings.CutPrefix(path, "@temp/"); ok {
+			// 查db
+			var fileObj structs.ReferFiles
+			session.DB.Where("chat_id = ?", session.ID).Where("path = ?", vpath).First(&fileObj)
+			str = fileObj.Content
+		} else {
+			// 检查文件是否存在
+			stat, err := os.Stat(path)
+			if err != nil {
+				boolx := false
+				success := any(boolx)
+				errMsg := any("file not exist")
+				return false, push, map[string]*any{
+					"success": &success,
+					"error":   &errMsg,
+				}, nil
+			}
+			// 文件过大(100K)
+			if stat.Size() > MaxFileSize {
+				boolx := false
+				success := any(boolx)
+				errMsg := any("file too large")
+				return false, push, map[string]*any{
+					"success": &success,
+					"error":   &errMsg,
+				}, nil
+			}
+			// 读取文件内容
+			content, err := os.ReadFile(path)
+			if err != nil {
+				boolx := false
+				success := any(boolx)
+				errMsg := any("file read error: " + err.Error())
+				return false, push, map[string]*any{
+					"success": &success,
+					"error":   &errMsg,
+				}, nil
+			}
+			str = fileContentToString(content)
+			if len(str) == 0 {
+				boolx := false
+				success := any(boolx)
+				errMsg := any("file is empty or cannot readable (may be binary file)")
+				return false, push, map[string]*any{
+					"success": &success,
+					"error":   &errMsg,
+				}, nil
+			}
 		}
 
 		// 读取行数
 		lines := strings.Split(str, "\n")
-		if len(lines) > 2000 {
+		if len(lines) > MaxFileLine {
 			boolx := false
 			success := any(boolx)
 			errMsg := any("file is too long")
@@ -295,9 +310,6 @@ func Trace(session *structs.Chats, mp map[string]*any, push []*any) (bool, []*an
 			"error":   &errMsg,
 		}, err
 	}
-	if len(traces) == 0 {
-		logger.Warn("trace warning: no traces for chat_id=%d", session.ID)
-	}
 	session.TemporyDataOfSession["tools:trace"].(traceCache)[session.NowAgent] = traces
 
 	boolx := true
@@ -342,33 +354,48 @@ func buildTrace(session *structs.Chats) (string, error) {
 
 	var obj []templateStruct
 	for _, traceObj := range traces {
-		// 读取文件Stat
-		stat, err := os.Stat(filepath.Join(session.Root, traceObj.Path))
-		// 文件过大(100K)
-		if err != nil {
-			logger.Warn("trace warning: \"%s\" get stat error: %v", traceObj.Path, err)
-			continue
-		}
-		// 文件过大(100K)
-		if stat.Size() > 50*1024 {
-			logger.Warn("trace warning: \"%s\" too large (%d)", traceObj.Path, stat.Size())
-			continue
-		}
-		// 读取文件内容
-		content, err := os.ReadFile(traceObj.Path)
-		if err != nil {
-			logger.Warn("trace warning: \"%s\" read error: %v", traceObj.Path, err)
-			continue
-		}
-		str := fileContentToString(content)
-		if len(str) == 0 {
-			// logger.Warn("trace warning: \"%s\" empty", traceObj.Path)
-			continue
+
+		var str string
+		var size int64
+		var originLen int
+
+		path := filepath.Join(session.Root, traceObj.Path)
+
+		if vpath, ok := strings.CutPrefix(traceObj.Path, "@temp/"); ok {
+			// 查db
+			var fileObj structs.ReferFiles
+			session.DB.Where("chat_id = ?", session.ID).Where("path = ?", vpath).First(&fileObj)
+			str = fileObj.Content
+		} else {
+			// 读取文件Stat
+			stat, err := os.Stat(path)
+			if err != nil {
+				logger.Warn("trace warning: \"%s\" get stat error: %v", traceObj.Path, err)
+				continue
+			}
+			// 文件过大(100K)
+			if stat.Size() > MaxFileSize {
+				logger.Warn("trace warning: \"%s\" too large (%d)", traceObj.Path, stat.Size())
+				continue
+			}
+			// 读取文件内容
+			content, err := os.ReadFile(traceObj.Path)
+			if err != nil {
+				logger.Warn("trace warning: \"%s\" read error: %v", traceObj.Path, err)
+				continue
+			}
+			str := fileContentToString(content)
+			if len(str) == 0 {
+				// logger.Warn("trace warning: \"%s\" empty", traceObj.Path)
+				continue
+			}
+			size = stat.Size()
+			originLen = len(content)
 		}
 
 		// 读取行数
 		lines := strings.Split(str, "\n")
-		if len(lines) > 2000 {
+		if len(lines) > MaxFileLine {
 			logger.Warn("trace warning: \"%s\" too long (%d)", traceObj.Path, len(lines))
 			continue
 		}
@@ -380,8 +407,8 @@ func buildTrace(session *structs.Chats) (string, error) {
 		// 转换为字符串
 		obj = append(obj, templateStruct{
 			Name:   traceObj.Path,
-			Size:   strconv.FormatInt(stat.Size(), 10),
-			Length: uint32(len(content)),
+			Size:   strconv.FormatInt(size, 10),
+			Length: uint32(originLen),
 			Text:   builder.String(),
 		})
 	}
@@ -432,4 +459,61 @@ func load() string {
 
 func init() {
 	index.AddIndex(load)
+}
+
+// AddTempObject 添加临时文件
+func AddTempObject(session *structs.Chats, path string, content string, ro bool) error {
+	// 截取ctn后2000行
+	if ln := len(strings.Split(content, "\n")); ln > 2000 {
+		content = "(omitted)\n" + strings.Join(strings.Split(content, "\n")[ln-1998:], "\n")
+	}
+	err := session.DB.Create(structs.ReferFiles{
+		ChatID:   session.ID,
+		Path:     path,
+		Content:  content,
+		ReadOnly: ro,
+	}).Error
+	if err != nil {
+		logger.Warn("add temp failed: %v", err)
+		return err
+	}
+
+	// 更新 TraceID
+	session.TraceID++
+	// 写数据库
+	trace := structs.Traces{
+		ChatID:  session.ID,
+		Path:    "@temp/" + path,
+		TraceID: session.TraceID,
+		AgentID: session.NowAgent,
+	}
+	err = session.DB.Save(&trace).Error
+	if err != nil {
+		logger.Warn("add trace failed: %v", err)
+		return err
+	}
+	err = session.DB.Model(&structs.Chats{}).Where("id = ?", session.ID).Update("trace_id", session.TraceID).Error
+	if err != nil {
+		logger.Warn("add trace failed: %v", err)
+		return err
+	}
+
+	if session.TemporyDataOfSession == nil {
+		session.TemporyDataOfSession = make(map[string]any)
+	}
+	if _, ok := session.TemporyDataOfSession["tools:trace"]; !ok {
+		session.TemporyDataOfSession["tools:trace"] = traceCache{}
+	}
+	if _, ok := session.TemporyDataOfSession["tools:trace"].(traceCache); !ok {
+		session.TemporyDataOfSession["tools:trace"] = traceCache{}
+	}
+	traces := []structs.Traces{}
+	err = session.DB.Where("chat_id = ? AND agent_id = ?", session.ID, session.NowAgent).Find(&traces).Error
+	if err != nil {
+		logger.Warn("sync trace failed: %v", err)
+		return err
+	}
+	session.TemporyDataOfSession["tools:trace"].(traceCache)[session.NowAgent] = traces
+
+	return err
 }

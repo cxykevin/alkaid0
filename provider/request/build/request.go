@@ -43,9 +43,15 @@ func RequestBody(chatID uint32, modelID int32, agentCode string, toolsList *[]*p
 	response.Stream = true
 	if modelConfig.ModelTemperature != -1 {
 		response.Temperature = &modelConfig.ModelTemperature
+	} else {
+		v := float32(0.2)
+		response.Temperature = &v
 	}
 	if modelConfig.ModelTopP != -1 {
 		response.TopP = &modelConfig.ModelTopP
+	} else {
+		v := float32(0.9)
+		response.TopP = &v
 	}
 	var maxTokenObj int = maxToken
 	response.MaxTokens = &maxTokenObj

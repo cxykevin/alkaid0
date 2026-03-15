@@ -9,4 +9,5 @@ var Tables = []any{
 	&Scopes{},
 	&Configs{},
 	&Traces{},
+	&ReferFiles{},
 }
