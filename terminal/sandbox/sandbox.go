@@ -98,6 +98,7 @@ func New(cfg Config) (*Sandbox, error) {
 	// 如果用户没有显式设置，使用OS级隔离
 	// 这里我们保持用户的选择，包括IsolationNone
 
+	logger.Info("Sandbox: created new sandbox (workDir: %s, isolation: %s)", workDir, isolationMode.String())
 	return &Sandbox{
 		writableDirs:  writableDirs,
 		tmpDir:        tmpDir,

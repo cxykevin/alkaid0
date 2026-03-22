@@ -17,6 +17,7 @@ func Build(db *gorm.DB, session *storageStructs.Chats) (*reqStruct.ChatCompletio
 	// 构造工具
 	var scopes, traces string
 	var tools *[]*parser.ToolsDefine = &[]*parser.ToolsDefine{}
+	logger.Info("building request body for chatID=%d, agent=%s", session.ID, session.NowAgent)
 	if !session.InTestFlag {
 		scopes, traces, tools = Tools(session)
 	}

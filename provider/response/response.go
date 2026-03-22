@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"encoding/json"
 
+	"github.com/cxykevin/alkaid0/log"
+
 	"github.com/cxykevin/alkaid0/provider/parser"
 	"github.com/cxykevin/alkaid0/provider/request/build"
 	"github.com/cxykevin/alkaid0/storage/structs"
@@ -18,6 +20,12 @@ type toolSaveStruct struct {
 }
 
 // Solver 解析器
+var logger *log.LogsObj
+
+func init() {
+	logger = log.New("response")
+}
+
 type Solver struct {
 	parser        *parser.Parser
 	toolResponses []toolSaveStruct
@@ -43,6 +51,7 @@ func (p *Solver) saveToolResponse(toolName string, toolID string, response map[s
 		ID:     toolID,
 		Return: buf.String(),
 	})
+	logger.Debug("tool response saved: %s (ID: %s)", toolName, toolID)
 	return nil
 }
 

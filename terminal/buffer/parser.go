@@ -8,9 +8,9 @@ import (
 
 // Parser VT/XTerm转义序列解析器
 type Parser struct {
-	buffer *Buffer
-	state  parserState
-	params []int
+	buffer       *Buffer
+	state        parserState
+	params       []int
 	intermediate []byte
 }
 
@@ -392,7 +392,7 @@ func indexColor(index uint8) Color {
 		r := (idx / 36) % 6
 		g := (idx / 6) % 6
 		b := idx % 6
-		
+
 		// 将0-5映射到0,95,135,175,215,255
 		toRGB := func(v uint8) uint8 {
 			if v == 0 {
@@ -400,7 +400,7 @@ func indexColor(index uint8) Color {
 			}
 			return 55 + v*40
 		}
-		
+
 		return Color{
 			R: toRGB(r),
 			G: toRGB(g),

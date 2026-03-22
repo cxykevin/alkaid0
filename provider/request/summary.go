@@ -20,6 +20,7 @@ const SummaryTimeout = 120 * time.Second
 
 // Summary 获取总结
 func Summary(ctx context.Context, db *gorm.DB, chatID uint32, agentID string) (string, error) {
+	logger.Info("starting summary for chatID=%d, agentID=%s", chatID, agentID)
 	msgID, obj, err := build.Summary(chatID, agentID, db)
 	if err != nil {
 		return "", err
@@ -59,8 +60,10 @@ func Summary(ctx context.Context, db *gorm.DB, chatID uint32, agentID string) (s
 		Error
 
 	if err != nil {
+		logger.Error("failed to save summary to db: %v", err)
 		return respStr, err
 	}
+	logger.Info("summary saved successfully for chatID=%d", chatID)
 
 	return respStr, nil
 

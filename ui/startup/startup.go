@@ -18,10 +18,13 @@ import (
 	"github.com/cxykevin/alkaid0/tools/index"
 )
 
-const alkaid0IgnoreEntry = "\n# alkaid0\n.alkaid0/\n"
+const alkaid0IgnoreEntry = "\n# alkaid0\n.alkaid0/\n.alk_*\n"
+
+var logger = log.New("startup")
 
 // Startup 启动程序
 func Startup() {
+	logger.Info("starting alkaid0...")
 	openai.Start()
 	config.Load()
 	log.Load()
@@ -34,18 +37,20 @@ func Startup() {
 
 	// 读取环境变量 ALKAID0_WORKDIR
 	if workdir := os.Getenv("ALKAID0_WORKDIR"); workdir != "" {
+		logger.Info("changing workdir to: %s", workdir)
 		// 设置工作目录
 		_ = os.Chdir(workdir)
 	}
+	logger.Info("initializing storage...")
 	db := storage.InitStorage("", "")
 	defer log.Shutdown()
 
 	// 启动 Demo Loop
+	logger.Info("starting demo loop...")
 	loop.Start(ctx, db)
 }
 
 func ensureGlobalGitIgnore() {
-	logger := log.New("startup")
 	markerPath, err := gitInitMarkerPath()
 	if err != nil {
 		logger.Warn("resolve git init marker path failed: %v", err)
@@ -188,7 +193,7 @@ func appendIgnoreIfMissing(path string) error {
 		return err
 	}
 	content := string(data)
-	if strings.Contains(content, "\n.alkaid0/") || strings.HasSuffix(strings.TrimSpace(content), ".alkaid0/") {
+	if strings.Contains(content, "\n.alk_*") || strings.HasSuffix(strings.TrimSpace(content), ".alk_*") {
 		return nil
 	}
 

@@ -282,6 +282,7 @@ func runTask(session *structs.Chats, mp map[string]*any, cross []*any) (bool, []
 	}
 
 	if disableSandbox {
+		logger.Info("sandbox disabled by config or environment")
 		sandboxFlag = false
 	}
 
@@ -405,6 +406,7 @@ func runTask(session *structs.Chats, mp map[string]*any, cross []*any) (bool, []
 	timeStr := time.Now().Format("20060102-150405")
 	path := "run/" + toolID + "-" + timeStr
 	trace.AddTempObject(session, path, outStr, true)
+	logger.Info("command execution finished, output saved to: %s", path)
 	outPth := "@temp/" + path
 	outAny := any(outPth)
 	reasonAny := any(reason)

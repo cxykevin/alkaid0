@@ -76,7 +76,7 @@ func TestUserAddMsg_Basic(t *testing.T) {
 // 注意：由于 GORM 的 gob 序列化问题，这个测试被简化
 func TestUserAddMsg_WithRefers(t *testing.T) {
 	t.Skip("Skipping test due to GORM gob serialization issues with MessagesReferList")
-	
+
 	db := setupTestDB(t)
 
 	// 创建一个聊天会话
@@ -270,7 +270,7 @@ func TestUserAddMsg_InvalidChatID(t *testing.T) {
 	// 但是 GORM 默认不强制外键约束在 SQLite 中
 	// 所以这个测试可能会成功，取决于数据库配置
 	err := UserAddMsg(session, "Test message", nil)
-	
+
 	// SQLite 默认不强制外键，所以这可能不会失败
 	// 我们只是验证函数能够处理这种情况
 	if err != nil {
@@ -282,7 +282,7 @@ func TestUserAddMsg_InvalidChatID(t *testing.T) {
 // 注意：这个测试会因为 chancall 未初始化而 panic，所以我们跳过它
 func TestUserAddMsg_WithCurrentAgent(t *testing.T) {
 	t.Skip("Skipping test that requires chancall initialization - DeactivateAgent will panic without registered consumer")
-	
+
 	db := setupTestDB(t)
 
 	// 创建一个聊天会话
@@ -317,7 +317,7 @@ func TestUserAddMsg_WithCurrentAgent(t *testing.T) {
 
 	// 注意：DeactivateAgent 依赖 chancall，在单元测试中会 panic
 	err := UserAddMsg(session, "Message with agent", nil)
-	
+
 	if err != nil {
 		t.Logf("Expected: DeactivateAgent may fail without registered consumer: %v", err)
 		return

@@ -167,7 +167,7 @@ func (l *LogsObj) logSync(level string, msg string, v ...any) {
 		"\n", "\\n"),
 		"\r", "\\r"),
 		"\t", "\\t")
-	
+
 	// 同步写入日志
 	Logger.Printf("[%s][%s] %s", level, l.moduleName, str)
 }

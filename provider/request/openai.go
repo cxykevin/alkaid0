@@ -70,9 +70,9 @@ func SimpleOpenAIRequest(ctx context.Context, baseURL, apiKey, model string, bod
 			logger.Debug("error body: %d: %s", resp.StatusCode, string(respBody))
 			return fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(respBody))
 		}
-		logger.Error("call openai chat error when unmarshal: %v", err)
+		logger.Error("call openai chat error when check stat %v", resp.StatusCode)
 		logger.Debug("error body: %s", errResp.Error.Message)
-		return fmt.Errorf("API error: %s", errResp.Error.Message)
+		return fmt.Errorf("API error: %d %s", resp.StatusCode, errResp.Error.Message)
 	}
 
 	// 读取流式响应

@@ -255,7 +255,6 @@ func (p *Parser) solveTool() {
 		}
 		// 调用工具的回调函数（如更新 UI 或执行预检）
 		if p.Tools[toolID].Func != nil {
-			logger.Debug("calling tool function: %s (id: %s, finish: %v)", toolName, toolCallID, toolFinishTag)
 			err := p.Tools[toolID].Func(toolCallID, map[string]*any(toolParameters), toolFinishTag)
 			if err != nil {
 				logger.Error("tool function error: %v", err)
@@ -321,9 +320,11 @@ func (p *Parser) AddToken(token string, tokenThinking string) (string, string, *
 				switch p.TokenCache {
 				case "think":
 					logger.Debug("entering think mode")
+					logger.Info("Parser: entering think mode")
 					p.KeyMode = 1
 				case "tools":
 					logger.Debug("entering tools mode")
+					logger.Info("Parser: entering tools mode")
 					p.jsonParser = json.New()
 					p.KeyMode = 2
 				default:

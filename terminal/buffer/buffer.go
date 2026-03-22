@@ -41,20 +41,20 @@ type Buffer struct {
 	cells   [][]Cell
 	cursorX int
 	cursorY int
-	
+
 	// 当前属性
 	currentFG    Color
 	currentBG    Color
 	currentAttrs Attributes
-	
+
 	// 滚动区域
 	scrollTop    int
 	scrollBottom int
-	
+
 	// 状态
-	mu           sync.RWMutex
-	savedCursor  struct{ x, y int }
-	
+	mu          sync.RWMutex
+	savedCursor struct{ x, y int }
+
 	// 解析器状态
 	parser *Parser
 }
@@ -91,7 +91,7 @@ func New(rows, cols int) *Buffer {
 		scrollTop:    0,
 		scrollBottom: rows - 1,
 	}
-	
+
 	b.parser = NewParser(b)
 	return b
 }
@@ -110,7 +110,7 @@ func DefaultBG() Color {
 func (b *Buffer) Write(p []byte) (n int, err error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	
+
 	return b.parser.Write(p)
 }
 
@@ -142,7 +142,7 @@ func (b *Buffer) WriteRune(r rune) {
 			Attrs: b.currentAttrs,
 		}
 		b.cursorX++
-		
+
 		// 自动换行
 		if b.cursorX >= b.cols {
 			b.cursorX = 0
@@ -159,11 +159,11 @@ func (b *Buffer) WriteRune(r rune) {
 func (b *Buffer) GetCell(row, col int) (Cell, error) {
 	b.mu.RLock()
 	defer b.mu.RUnlock()
-	
+
 	if row < 0 || row >= b.rows || col < 0 || col >= b.cols {
 		return Cell{}, fmt.Errorf("坐标越界: (%d, %d)", row, col)
 	}
-	
+
 	return b.cells[row][col], nil
 }
 
@@ -171,18 +171,18 @@ func (b *Buffer) GetCell(row, col int) (Cell, error) {
 func (b *Buffer) GetLine(row int) (string, error) {
 	b.mu.RLock()
 	defer b.mu.RUnlock()
-	
+
 	if row < 0 || row >= b.rows {
 		return "", fmt.Errorf("行号越界: %d", row)
 	}
-	
+
 	var buf bytes.Buffer
 	for _, cell := range b.cells[row] {
 		if cell.Char != 0 {
 			buf.WriteRune(cell.Char)
 		}
 	}
-	
+
 	return buf.String(), nil
 }
 
@@ -190,7 +190,7 @@ func (b *Buffer) GetLine(row int) (string, error) {
 func (b *Buffer) GetContent() string {
 	b.mu.RLock()
 	defer b.mu.RUnlock()
-	
+
 	var buf bytes.Buffer
 	for i := 0; i < b.rows; i++ {
 		for j := 0; j < b.cols; j++ {
@@ -204,7 +204,7 @@ func (b *Buffer) GetContent() string {
 			buf.WriteRune('\n')
 		}
 	}
-	
+
 	return buf.String()
 }
 
@@ -234,11 +234,11 @@ func (b *Buffer) clearUnlocked() {
 func (b *Buffer) Resize(rows, cols int) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	
+
 	if rows <= 0 || cols <= 0 {
 		return
 	}
-	
+
 	newCells := make([][]Cell, rows)
 	for i := range newCells {
 		newCells[i] = make([]Cell, cols)
@@ -254,12 +254,12 @@ func (b *Buffer) Resize(rows, cols int) {
 			}
 		}
 	}
-	
+
 	b.cells = newCells
 	b.rows = rows
 	b.cols = cols
 	b.scrollBottom = rows - 1
-	
+
 	// 调整光标位置
 	if b.cursorX >= cols {
 		b.cursorX = cols - 1
@@ -287,7 +287,7 @@ func (b *Buffer) GetCursor() (x, y int) {
 func (b *Buffer) SetCursor(x, y int) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	
+
 	if x >= 0 && x < b.cols {
 		b.cursorX = x
 	}
@@ -328,12 +328,12 @@ func (b *Buffer) scrollUp(n int) {
 	if n <= 0 {
 		return
 	}
-	
+
 	// 向上滚动n行
 	for i := b.scrollTop; i <= b.scrollBottom-n; i++ {
 		copy(b.cells[i], b.cells[i+n])
 	}
-	
+
 	// 清空底部n行
 	for i := b.scrollBottom - n + 1; i <= b.scrollBottom; i++ {
 		for j := 0; j < b.cols; j++ {
@@ -350,12 +350,12 @@ func (b *Buffer) scrollDown(n int) {
 	if n <= 0 {
 		return
 	}
-	
+
 	// 向下滚动n行
 	for i := b.scrollBottom; i >= b.scrollTop+n; i-- {
 		copy(b.cells[i], b.cells[i-n])
 	}
-	
+
 	// 清空顶部n行
 	for i := b.scrollTop; i < b.scrollTop+n; i++ {
 		for j := 0; j < b.cols; j++ {

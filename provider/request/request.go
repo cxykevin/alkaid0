@@ -521,6 +521,7 @@ func SendRequest(ctx context.Context, session *storageStructs.Chats, callback fu
 	// 	return true, err
 	// }
 	modelCfg, ok := config.GlobalConfig.Model.Models[int32(modelID)]
+	logger.Info("SendRequest: using model %s (ID: %d)", modelCfg.ModelName, modelID)
 	if !ok {
 		return true, errors.New("model not found")
 	}
@@ -602,6 +603,7 @@ func SendRequest(ctx context.Context, session *storageStructs.Chats, callback fu
 	}
 
 	session.State = state.StateGeneratingPrompt
+	logger.Debug("SendRequest: generating prompt for chat %d", session.ID)
 	obj, err := build.Build(db, session)
 	if err != nil {
 		return true, err

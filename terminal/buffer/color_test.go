@@ -29,14 +29,14 @@ func Test256ColorConversion(t *testing.T) {
 		{"亮品红", 13, Color{R: 255, G: 0, B: 255}},
 		{"亮青", 14, Color{R: 0, G: 255, B: 255}},
 		{"亮白", 15, Color{R: 255, G: 255, B: 255}},
-		
+
 		// 216色立方体 - 测试几个关键点
 		{"立方体起点", 16, Color{R: 0, G: 0, B: 0}},
 		{"立方体红", 196, Color{R: 255, G: 0, B: 0}},
 		{"立方体绿", 46, Color{R: 0, G: 255, B: 0}},
 		{"立方体蓝", 21, Color{R: 0, G: 0, B: 255}},
 		{"立方体白", 231, Color{R: 255, G: 255, B: 255}},
-		
+
 		// 24级灰度
 		{"灰度起点", 232, Color{R: 8, G: 8, B: 8}},
 		{"灰度中点", 244, Color{R: 128, G: 128, B: 128}},
@@ -58,7 +58,7 @@ func Test256ColorConversion(t *testing.T) {
 // TestANSI256Colors 测试ANSI 256色序列解析
 func TestANSI256Colors(t *testing.T) {
 	buf := New(24, 80)
-	
+
 	// 测试256色前景色
 	buf.Write([]byte("\x1b[38;5;196mRed"))
 	cell, _ := buf.GetCell(0, 0)
@@ -66,7 +66,7 @@ func TestANSI256Colors(t *testing.T) {
 		t.Errorf("256色前景色错误: 期望 RGB(255,0,0), 得到 RGB(%d,%d,%d)",
 			cell.FG.R, cell.FG.G, cell.FG.B)
 	}
-	
+
 	// 测试256色背景色
 	buf.Clear()
 	buf.Write([]byte("\x1b[48;5;46mGreen"))
@@ -75,7 +75,7 @@ func TestANSI256Colors(t *testing.T) {
 		t.Errorf("256色背景色错误: 期望 RGB(0,255,0), 得到 RGB(%d,%d,%d)",
 			cell.BG.R, cell.BG.G, cell.BG.B)
 	}
-	
+
 	// 测试灰度色
 	buf.Clear()
 	buf.Write([]byte("\x1b[38;5;244mGray"))
@@ -89,7 +89,7 @@ func TestANSI256Colors(t *testing.T) {
 // TestTrueColorSupport 测试RGB true color支持
 func TestTrueColorSupport(t *testing.T) {
 	buf := New(24, 80)
-	
+
 	// 测试RGB前景色
 	buf.Write([]byte("\x1b[38;2;123;45;67mCustom"))
 	cell, _ := buf.GetCell(0, 0)
@@ -97,7 +97,7 @@ func TestTrueColorSupport(t *testing.T) {
 		t.Errorf("RGB前景色错误: 期望 RGB(123,45,67), 得到 RGB(%d,%d,%d)",
 			cell.FG.R, cell.FG.G, cell.FG.B)
 	}
-	
+
 	// 测试RGB背景色
 	buf.Clear()
 	buf.Write([]byte("\x1b[48;2;200;150;100mCustomBG"))
@@ -113,7 +113,7 @@ func TestColorStructSize(t *testing.T) {
 	var c Color
 	// Color结构体现在只有3个uint8字段，应该是3字节（可能有对齐）
 	t.Logf("Color结构体大小: %d 字节", unsafe.Sizeof(c))
-	
+
 	// 验证Color只包含RGB字段
 	c = Color{R: 255, G: 128, B: 64}
 	if c.R != 255 || c.G != 128 || c.B != 64 {

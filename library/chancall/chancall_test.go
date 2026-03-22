@@ -67,9 +67,9 @@ func TestConsumerNotFound(t *testing.T) {
 		In:       "test",
 		Out:      make(chan Ret, 1),
 	}
-	
+
 	actChan <- ev
-	
+
 	// 等待结果
 	select {
 	case ret := <-ev.Out:

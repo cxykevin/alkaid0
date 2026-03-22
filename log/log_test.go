@@ -31,9 +31,9 @@ func TestLogger(t *testing.T) {
 	// 测试初始化和基本日志功能
 	os.Setenv(envLogName, "test.log")
 	defer os.Remove("test.log")
-	
+
 	Load()
-	
+
 	l := New("test-module")
 	l.Info("test info message")
 	l.Error("test error message")
@@ -207,22 +207,22 @@ func TestSanitizeSensitiveInfo_EdgeCases(t *testing.T) {
 func TestNew_WithoutInit(t *testing.T) {
 	// 重置初始化标志
 	loggerInited = false
-	
+
 	// 设置测试日志文件
 	os.Setenv(envLogName, "test_new.log")
 	defer os.Remove("test_new.log")
-	
+
 	// 调用 New 应该自动初始化
 	l := New("test-auto-init")
-	
+
 	if l == nil {
 		t.Fatal("New() returned nil")
 	}
-	
+
 	if l.moduleName != "test-auto-init" {
 		t.Errorf("Expected module name 'test-auto-init', got '%s'", l.moduleName)
 	}
-	
+
 	// 验证日志系统已初始化
 	if !loggerInited {
 		t.Error("Logger should be initialized after calling New()")
@@ -235,14 +235,14 @@ func TestNew_AlreadyInited(t *testing.T) {
 	os.Setenv(envLogName, "test_new2.log")
 	defer os.Remove("test_new2.log")
 	Load()
-	
+
 	// 调用 New
 	l := New("test-module-2")
-	
+
 	if l == nil {
 		t.Fatal("New() returned nil")
 	}
-	
+
 	if l.moduleName != "test-module-2" {
 		t.Errorf("Expected module name 'test-module-2', got '%s'", l.moduleName)
 	}
@@ -253,10 +253,10 @@ func TestSolvePanic_NoPanic(t *testing.T) {
 	// 设置测试日志文件
 	os.Setenv(envLogName, "test_panic.log")
 	defer os.Remove("test_panic.log")
-	
+
 	// 在 defer 中调用 SolvePanic，但不触发 panic
 	defer SolvePanic()
-	
+
 	// 正常执行，不应该有任何问题
 	_ = 1 + 1
 }
@@ -265,7 +265,7 @@ func TestSolvePanic_NoPanic(t *testing.T) {
 // 注意：这个测试会导致进程退出，所以我们跳过它
 func TestSolvePanic_WithPanic(t *testing.T) {
 	t.Skip("Skipping test that causes process exit")
-	
+
 	// 如果要测试，需要在子进程中运行
 	// 这里只是展示如何使用 SolvePanic
 	defer SolvePanic()

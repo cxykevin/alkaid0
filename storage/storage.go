@@ -41,6 +41,12 @@ func InitStorage(dataPath string, dbFile string) *gorm.DB {
 	}
 
 	logger.Info("storage init in %s/%s", dataPath, dbFile)
+	if v := os.Getenv("ALKAID_DEBUG_PROJECTPATH"); v != "" {
+		logger.Debug("using ALKAID_DEBUG_PROJECTPATH: %s", v)
+	}
+	if v := os.Getenv("ALKAID_DEBUG_SQLITEFILE"); v != "" {
+		logger.Debug("using ALKAID_DEBUG_SQLITEFILE: %s", v)
+	}
 
 	// 确保工作目录存在
 	if err := os.MkdirAll(dataPath, 0755); err != nil {
@@ -61,6 +67,7 @@ func InitStorage(dataPath string, dbFile string) *gorm.DB {
 		if vs == "" {
 			continue
 		}
+		logger.Debug("executing fastSQL: %s", vs)
 		err := db.Exec(vs).Error
 		if err != nil {
 			logger.Error("failed to execute sql \"%s\": %v", vs, err)

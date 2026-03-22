@@ -109,14 +109,17 @@ func writeTree(session *structs.Chats, mp map[string]*any, cross []*any) (bool, 
 
 	ret, ok := session.TemporyDataOfRequest["tools:tree"]
 	if !ok {
-		logger.Warn("tree get cache error")
-		boolx := false
-		success := any(boolx)
-		errMsg := any("No cache object found")
-		return false, cross, map[string]*any{
-			"success": &success,
-			"error":   &errMsg,
-		}, nil
+		_, err := buildGlobalPrompt(session)
+		if err != nil {
+			boolx := false
+			success := any(boolx)
+			errMsg := any("Failed to rebuild tree cache: " + err.Error())
+			return false, cross, map[string]*any{
+				"success": &success,
+				"error":   &errMsg,
+			}, nil
+		}
+		ret = session.TemporyDataOfRequest["tools:tree"]
 	}
 	rets, ok := ret.(*cacheStruct)
 	if !ok {

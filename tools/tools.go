@@ -33,6 +33,7 @@ func checkScopeEnabled(session *structs.Chats, scope string) bool {
 
 // ExecOneToolGetPrompts 执行预调用，获取提示词表
 func ExecOneToolGetPrompts(session *structs.Chats, name string) ([]string, []string, map[string]parser.ToolParameters) {
+	logger.Debug("getting prompts for tool: %s", name)
 	// 执行 PreHook
 	unusedHooks := make([]string, 0)
 	for name, prompts := range toolobj.Scopes {

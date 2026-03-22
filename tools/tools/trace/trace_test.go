@@ -16,11 +16,11 @@ func setupTestDB(t *testing.T) *gorm.DB {
 	if err != nil {
 		t.Fatalf("Failed to open test database: %v", err)
 	}
-	
+
 	if err := db.AutoMigrate(&structs.Traces{}, &structs.Chats{}); err != nil {
 		t.Fatalf("Failed to migrate: %v", err)
 	}
-	
+
 	return db
 }
 
@@ -70,7 +70,7 @@ func TestUpdateInfo(t *testing.T) {
 	mp := map[string]*any{
 		"path": func() *any { s := any("test.txt"); return &s }(),
 	}
-	
+
 	pass, cross, err := updateInfo(session, mp, []*any{})
 	if err != nil {
 		t.Fatalf("Unexpected error: %v", err)
@@ -96,7 +96,7 @@ func TestUpdateInfoWithUntrace(t *testing.T) {
 		"path":    func() *any { s := any("test.txt"); return &s }(),
 		"untrace": func() *any { b := any(true); return &b }(),
 	}
-	
+
 	pass, _, err := updateInfo(session, mp, []*any{})
 	if err != nil {
 		t.Fatalf("Unexpected error: %v", err)
@@ -109,12 +109,12 @@ func TestUpdateInfoWithUntrace(t *testing.T) {
 	if !ok {
 		t.Fatal("Expected temporary data to be set")
 	}
-	
+
 	tmpObj, ok := tmp.(toolCallFlagTempory)
 	if !ok {
 		t.Fatal("Expected toolCallFlagTempory type")
 	}
-	
+
 	if !tmpObj.PathOutputed {
 		t.Error("Expected PathOutputed to be true")
 	}
@@ -129,7 +129,7 @@ func TestTraceMissingPath(t *testing.T) {
 	}
 
 	mp := map[string]*any{}
-	
+
 	pass, _, result, err := Trace(session, mp, []*any{})
 	if err != nil {
 		t.Fatalf("Unexpected error: %v", err)
@@ -137,13 +137,13 @@ func TestTraceMissingPath(t *testing.T) {
 	if pass {
 		t.Error("Expected pass to be false")
 	}
-	
+
 	if successPtr, ok := result["success"]; !ok || successPtr == nil {
 		t.Fatal("Expected success in result")
 	} else if success, ok := (*successPtr).(bool); !ok || success {
 		t.Error("Expected success to be false")
 	}
-	
+
 	if errorPtr, ok := result["error"]; !ok || errorPtr == nil {
 		t.Fatal("Expected error in result")
 	}
@@ -175,7 +175,7 @@ func TestTraceInvalidPath(t *testing.T) {
 			mp := map[string]*any{
 				"path": func() *any { s := any(tt.path); return &s }(),
 			}
-			
+
 			pass, _, result, err := Trace(session, mp, []*any{})
 			if err != nil {
 				t.Fatalf("Unexpected error: %v", err)
@@ -183,7 +183,7 @@ func TestTraceInvalidPath(t *testing.T) {
 			if pass {
 				t.Error("Expected pass to be false")
 			}
-			
+
 			if successPtr, ok := result["success"]; !ok || successPtr == nil {
 				t.Fatal("Expected success in result")
 			} else if success, ok := (*successPtr).(bool); !ok || success {
@@ -195,9 +195,9 @@ func TestTraceInvalidPath(t *testing.T) {
 
 func TestTraceFileNotExist(t *testing.T) {
 	db := setupTestDB(t)
-	
+
 	tmpDir := t.TempDir()
-	
+
 	session := &structs.Chats{
 		ID:                   1,
 		DB:                   db,
@@ -210,7 +210,7 @@ func TestTraceFileNotExist(t *testing.T) {
 	mp := map[string]*any{
 		"path": func() *any { s := any("nonexistent.txt"); return &s }(),
 	}
-	
+
 	pass, _, result, err := Trace(session, mp, []*any{})
 	if err != nil {
 		t.Fatalf("Unexpected error: %v", err)
@@ -218,7 +218,7 @@ func TestTraceFileNotExist(t *testing.T) {
 	if pass {
 		t.Error("Expected pass to be false")
 	}
-	
+
 	if successPtr, ok := result["success"]; !ok || successPtr == nil {
 		t.Fatal("Expected success in result")
 	} else if success, ok := (*successPtr).(bool); !ok || success {
@@ -228,14 +228,14 @@ func TestTraceFileNotExist(t *testing.T) {
 
 func TestTraceSuccess(t *testing.T) {
 	db := setupTestDB(t)
-	
+
 	tmpDir := t.TempDir()
 	testFile := filepath.Join(tmpDir, "test.txt")
 	content := "line1\nline2\nline3"
 	if err := os.WriteFile(testFile, []byte(content), 0644); err != nil {
 		t.Fatalf("Failed to create test file: %v", err)
 	}
-	
+
 	// 先在数据库中创建chat记录
 	chat := structs.Chats{
 		ID:      1,
@@ -244,7 +244,7 @@ func TestTraceSuccess(t *testing.T) {
 	if err := db.Create(&chat).Error; err != nil {
 		t.Fatalf("Failed to create chat: %v", err)
 	}
-	
+
 	session := &structs.Chats{
 		ID:                   1,
 		DB:                   db,
@@ -254,14 +254,14 @@ func TestTraceSuccess(t *testing.T) {
 		CurrentAgentID:       "test_agent",
 		TraceID:              0,
 	}
-	
+
 	// 初始化 traceCache
 	session.TemporyDataOfSession["tools:trace"] = traceCache{}
 
 	mp := map[string]*any{
 		"path": func() *any { s := any("test.txt"); return &s }(),
 	}
-	
+
 	pass, _, result, err := Trace(session, mp, []*any{})
 	if err != nil {
 		t.Fatalf("Unexpected error: %v", err)
@@ -269,7 +269,7 @@ func TestTraceSuccess(t *testing.T) {
 	if pass {
 		t.Error("Expected pass to be false")
 	}
-	
+
 	// 检查结果
 	if successPtr, ok := result["success"]; ok && successPtr != nil {
 		if success, ok := (*successPtr).(bool); ok && success {
@@ -285,17 +285,17 @@ func TestTraceSuccess(t *testing.T) {
 			}
 		}
 	}
-	
+
 	// 如果没有成功，也不算失败，因为可能有其他原因
 	t.Log("Trace may not have succeeded, but test continues")
 }
 
 func TestTraceFileTooLarge(t *testing.T) {
 	db := setupTestDB(t)
-	
+
 	tmpDir := t.TempDir()
 	testFile := filepath.Join(tmpDir, "large.txt")
-	
+
 	// 创建一个超过50KB的文件
 	largeContent := make([]byte, 51*1024)
 	for i := range largeContent {
@@ -304,7 +304,7 @@ func TestTraceFileTooLarge(t *testing.T) {
 	if err := os.WriteFile(testFile, largeContent, 0644); err != nil {
 		t.Fatalf("Failed to create test file: %v", err)
 	}
-	
+
 	session := &structs.Chats{
 		ID:                   1,
 		DB:                   db,
@@ -317,7 +317,7 @@ func TestTraceFileTooLarge(t *testing.T) {
 	mp := map[string]*any{
 		"path": func() *any { s := any("large.txt"); return &s }(),
 	}
-	
+
 	pass, _, result, err := Trace(session, mp, []*any{})
 	if err != nil {
 		t.Fatalf("Unexpected error: %v", err)
@@ -325,7 +325,7 @@ func TestTraceFileTooLarge(t *testing.T) {
 	if pass {
 		t.Error("Expected pass to be false")
 	}
-	
+
 	if successPtr, ok := result["success"]; !ok || successPtr == nil {
 		t.Fatal("Expected success in result")
 	} else if success, ok := (*successPtr).(bool); !ok || success {
@@ -335,10 +335,10 @@ func TestTraceFileTooLarge(t *testing.T) {
 
 func TestUntraceSuccess(t *testing.T) {
 	db := setupTestDB(t)
-	
+
 	tmpDir := t.TempDir()
 	testFile := filepath.Join(tmpDir, "test.txt")
-	
+
 	// 先创建一个trace记录
 	trace := structs.Traces{
 		ChatID:  1,
@@ -349,7 +349,7 @@ func TestUntraceSuccess(t *testing.T) {
 	if err := db.Create(&trace).Error; err != nil {
 		t.Fatalf("Failed to create trace: %v", err)
 	}
-	
+
 	session := &structs.Chats{
 		ID:                   1,
 		DB:                   db,
@@ -358,7 +358,7 @@ func TestUntraceSuccess(t *testing.T) {
 		CurrentActivatePath:  tmpDir,
 		CurrentAgentID:       "test_agent",
 	}
-	
+
 	// 初始化 traceCache
 	session.TemporyDataOfSession["tools:trace"] = traceCache{}
 
@@ -366,7 +366,7 @@ func TestUntraceSuccess(t *testing.T) {
 		"path":    func() *any { s := any("test.txt"); return &s }(),
 		"untrace": func() *any { b := any(true); return &b }(),
 	}
-	
+
 	pass, _, result, err := Trace(session, mp, []*any{})
 	if err != nil {
 		t.Fatalf("Unexpected error: %v", err)
@@ -374,14 +374,14 @@ func TestUntraceSuccess(t *testing.T) {
 	if pass {
 		t.Error("Expected pass to be false")
 	}
-	
+
 	// 检查结果 - untrace可能会失败如果记录不存在
 	if successPtr, ok := result["success"]; ok && successPtr != nil {
 		success, _ := (*successPtr).(bool)
 		// 只要有结果就可以，不强制要求成功
 		_ = success
 	}
-	
+
 	// 验证数据库记录（可能已删除或未找到）
 	var count int64
 	db.Model(&structs.Traces{}).Where("chat_id = ? AND path = ? AND agent_id = ?", session.ID, testFile, session.CurrentAgentID).Count(&count)
@@ -391,9 +391,9 @@ func TestUntraceSuccess(t *testing.T) {
 
 func TestUntraceNotFound(t *testing.T) {
 	db := setupTestDB(t)
-	
+
 	tmpDir := t.TempDir()
-	
+
 	session := &structs.Chats{
 		ID:                   1,
 		DB:                   db,
@@ -402,7 +402,7 @@ func TestUntraceNotFound(t *testing.T) {
 		CurrentActivatePath:  tmpDir,
 		CurrentAgentID:       "test_agent",
 	}
-	
+
 	// 初始化 traceCache
 	session.TemporyDataOfSession["tools:trace"] = traceCache{}
 
@@ -410,7 +410,7 @@ func TestUntraceNotFound(t *testing.T) {
 		"path":    func() *any { s := any("nonexistent.txt"); return &s }(),
 		"untrace": func() *any { b := any(true); return &b }(),
 	}
-	
+
 	pass, _, result, err := Trace(session, mp, []*any{})
 	if err != nil {
 		t.Fatalf("Unexpected error: %v", err)
@@ -418,7 +418,7 @@ func TestUntraceNotFound(t *testing.T) {
 	if pass {
 		t.Error("Expected pass to be false")
 	}
-	
+
 	if successPtr, ok := result["success"]; !ok || successPtr == nil {
 		t.Fatal("Expected success in result")
 	} else if success, ok := (*successPtr).(bool); !ok || success {
@@ -428,14 +428,14 @@ func TestUntraceNotFound(t *testing.T) {
 
 func TestBuildTrace(t *testing.T) {
 	db := setupTestDB(t)
-	
+
 	tmpDir := t.TempDir()
 	testFile := filepath.Join(tmpDir, "test.txt")
 	content := "line1\nline2\nline3"
 	if err := os.WriteFile(testFile, []byte(content), 0644); err != nil {
 		t.Fatalf("Failed to create test file: %v", err)
 	}
-	
+
 	// 创建trace记录
 	trace := structs.Traces{
 		ChatID:  1,
@@ -446,18 +446,18 @@ func TestBuildTrace(t *testing.T) {
 	if err := db.Create(&trace).Error; err != nil {
 		t.Fatalf("Failed to create trace: %v", err)
 	}
-	
+
 	session := &structs.Chats{
 		ID:             1,
 		DB:             db,
 		CurrentAgentID: "test_agent",
 	}
-	
+
 	result, err := buildTrace(session)
 	if err != nil {
 		t.Fatalf("Unexpected error: %v", err)
 	}
-	
+
 	if result == "" {
 		t.Error("Expected non-empty result")
 	}
@@ -465,18 +465,18 @@ func TestBuildTrace(t *testing.T) {
 
 func TestBuildTraceEmptyCache(t *testing.T) {
 	db := setupTestDB(t)
-	
+
 	session := &structs.Chats{
 		ID:             1,
 		DB:             db,
 		CurrentAgentID: "test_agent",
 	}
-	
+
 	result, err := buildTrace(session)
 	if err != nil {
 		t.Fatalf("Unexpected error: %v", err)
 	}
-	
+
 	// 应该返回空字符串或模板的空结果
 	_ = result
 }
@@ -484,20 +484,20 @@ func TestBuildTraceEmptyCache(t *testing.T) {
 func TestLoad(t *testing.T) {
 	// 清空全局状态
 	toolobj.ToolsList = make(map[string]*toolobj.Tools)
-	
+
 	// 先创建空字符串的工具，避免HookTool panic
 	toolobj.ToolsList[""] = &toolobj.Tools{
 		ID:    "",
 		Name:  "",
 		Hooks: []toolobj.Hook{},
 	}
-	
+
 	result := load()
-	
+
 	if result != toolName {
 		t.Errorf("Expected %s, got %s", toolName, result)
 	}
-	
+
 	// 验证工具已添加
 	if tool, ok := toolobj.ToolsList[toolName]; !ok {
 		t.Error("Tool not added")
@@ -513,13 +513,13 @@ func TestLoad(t *testing.T) {
 
 func TestTraceEmptyFile(t *testing.T) {
 	db := setupTestDB(t)
-	
+
 	tmpDir := t.TempDir()
 	testFile := filepath.Join(tmpDir, "empty.txt")
 	if err := os.WriteFile(testFile, []byte{}, 0644); err != nil {
 		t.Fatalf("Failed to create test file: %v", err)
 	}
-	
+
 	session := &structs.Chats{
 		ID:                   1,
 		DB:                   db,
@@ -528,13 +528,13 @@ func TestTraceEmptyFile(t *testing.T) {
 		CurrentActivatePath:  tmpDir,
 		CurrentAgentID:       "test_agent",
 	}
-	
+
 	session.TemporyDataOfSession["tools:trace"] = traceCache{}
 
 	mp := map[string]*any{
 		"path": func() *any { s := any("empty.txt"); return &s }(),
 	}
-	
+
 	pass, _, result, err := Trace(session, mp, []*any{})
 	if err != nil {
 		t.Fatalf("Unexpected error: %v", err)
@@ -542,7 +542,7 @@ func TestTraceEmptyFile(t *testing.T) {
 	if pass {
 		t.Error("Expected pass to be false")
 	}
-	
+
 	if successPtr, ok := result["success"]; !ok || successPtr == nil {
 		t.Fatal("Expected success in result")
 	} else if success, ok := (*successPtr).(bool); !ok || success {

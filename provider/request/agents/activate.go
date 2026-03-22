@@ -10,8 +10,11 @@ import (
 	"github.com/cxykevin/alkaid0/storage/structs"
 )
 
+//var logger = log.New("agents")
+
 // ActivateAgent 激活Agent
 func ActivateAgent(session *structs.Chats, agentCode string, prompt string) error {
+	logger.Info("activating agent: %s", agentCode)
 	// 取agent表
 	obj := structs.SubAgents{}
 	err := session.DB.Where("id = ?", agentCode).First(&obj).Error
@@ -57,6 +60,7 @@ func ActivateAgent(session *structs.Chats, agentCode string, prompt string) erro
 
 // DeactivateAgent 取消激活Agent
 func DeactivateAgent(session *structs.Chats, prompt string) error {
+	logger.Info("deactivating agent: %s", session.NowAgent)
 	oldAgent := session.NowAgent
 	// 更新当前Agent
 	err := session.DB.Model(&structs.Chats{}).Where("id = ?", session.ID).Update("now_agent", "").Error
