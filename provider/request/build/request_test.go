@@ -136,8 +136,8 @@ func TestRequestBody_Basic(t *testing.T) {
 		t.Errorf("Expected max_tokens %d, got %d", maxToken, *request.MaxTokens)
 	}
 
-	// 验证消息数量（应该包含系统消息和用户消息）
-	expectedMsgCount := 7 // global, global prompt, agent, tools, tools guide, user messages (2)
+	// 验证消息数量（应该包含 1 个合并后的系统消息和 2 个对话消息）
+	expectedMsgCount := 3 // 1 merged system message + 2 conversation messages
 	if len(request.Messages) != expectedMsgCount {
 		t.Errorf("Expected %d messages, got %d", expectedMsgCount, len(request.Messages))
 		for i, msg := range request.Messages {
@@ -148,6 +148,15 @@ func TestRequestBody_Basic(t *testing.T) {
 	// 验证系统消息顺序
 	if request.Messages[0].Role != "system" {
 		t.Errorf("First message should be system, got %s", request.Messages[0].Role)
+	}
+
+	// 验证合并后的内容包含关键信息
+	content := request.Messages[0].Content
+	if !strings.Contains(content, "test-model") {
+		t.Errorf("System message should contain model name, got: %s", content)
+	}
+	if !strings.Contains(content, "You are a helpful assistant") {
+		t.Errorf("System message should contain global prompt, got: %s", content)
 	}
 }
 
@@ -228,10 +237,10 @@ func TestRequestBody_NoAgent(t *testing.T) {
 		t.Fatalf("RequestBody failed: %v", err)
 	}
 
-	// 验证使用了默认代理
+	// 验证使用了默认代理（在合并后的 system 消息中）
 	foundDefaultAgent := false
 	for _, msg := range request.Messages {
-		if msg.Role == "system" && msg.Content == "You are a helpful assistant" {
+		if msg.Role == "system" && strings.Contains(msg.Content, "You are a helpful assistant") {
 			foundDefaultAgent = true
 			break
 		}
@@ -454,8 +463,8 @@ func TestRequestBody_EmptyMessages(t *testing.T) {
 		t.Fatalf("RequestBody failed: %v", err)
 	}
 
-	// 应该只有系统消息
-	expectedMsgCount := 5 // global, global prompt, agent, tools, tools guide
+	// 应该只有 1 个合并后的系统消息
+	expectedMsgCount := 1 // 1 merged system message
 	if len(request.Messages) != expectedMsgCount {
 		t.Errorf("Expected %d messages for empty chat, got %d", expectedMsgCount, len(request.Messages))
 	}

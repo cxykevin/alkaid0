@@ -147,51 +147,48 @@ func RequestBody(chatID uint32, modelID int32, agentCode string, toolsList *[]*p
 			Content: addUserPrompt,
 		})
 	}
-	if addSystemPrompt != "" {
-		responseDeltaList.PushFront(reqStruct.Message{
-			Role:    "system",
-			Content: addUserPrompt,
-		})
+
+	// 合并所有 system 消息
+	var systemContent string
+
+	// 1. global提示词 (GlobalTemplate)
+	systemContent += prompts.Render(prompts.GlobalTemplate, struct {
+		ModelName string
+	}{
+		ModelName: modelConfig.ModelName,
+	}) + "\\n\\n"
+
+	// 2. 用户设置 (GlobalPrompt)
+	if config.GlobalConfig.Agent.GlobalPrompt != "" {
+		systemContent += config.GlobalConfig.Agent.GlobalPrompt + "\\n\\n"
 	}
-	// 放置工具列表
-	responseDeltaList.PushFront(reqStruct.Message{
-		Role: "system",
-		Content: prompts.Render(prompts.ToolsWrapTemplate, struct {
-			Tools string
-		}{
-			Tools: string(toolsLst),
-		}),
-	})
-	// 放置工具使用指引
-	responseDeltaList.PushFront(reqStruct.Message{
-		Role:    "system",
-		Content: prompts.Tools,
-	})
-	// 再放agent提示词
+
+	// 3. agent提示词
 	if agentCode != "" {
-		responseDeltaList.PushFront(reqStruct.Message{
-			Role:    "system",
-			Content: agentCfg.AgentPrompt,
-		})
+		systemContent += agentCfg.AgentPrompt + "\\n\\n"
 	} else {
-		responseDeltaList.PushFront(reqStruct.Message{
-			Role:    "system",
-			Content: prompts.DefaultAgent,
-		})
+		systemContent += prompts.DefaultAgent + "\\n\\n"
 	}
-	// 再放用户设置
+
+	// 4. 工具使用指引
+	systemContent += prompts.Tools + "\\n\\n"
+
+	// 5. 工具列表
+	systemContent += prompts.Render(prompts.ToolsWrapTemplate, struct {
+		Tools string
+	}{
+		Tools: string(toolsLst),
+	}) + "\\n\\n"
+
+	// 6. 额外动态系统信息
+	if addSystemPrompt != "" {
+		systemContent += addSystemPrompt + "\\n\\n"
+	}
+
+	// 放置合并后的 system 消息
 	responseDeltaList.PushFront(reqStruct.Message{
 		Role:    "system",
-		Content: config.GlobalConfig.Agent.GlobalPrompt,
-	})
-	// 再放global提示词
-	responseDeltaList.PushFront(reqStruct.Message{
-		Role: "system",
-		Content: prompts.Render(prompts.GlobalTemplate, struct {
-			ModelName string
-		}{
-			ModelName: modelConfig.ModelName,
-		}),
+		Content: systemContent,
 	})
 
 	// list 转 slice

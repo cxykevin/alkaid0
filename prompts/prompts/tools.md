@@ -76,15 +76,15 @@ Note: Tool calls MUST BE placed inside a `<tools>` tag and must appear at the en
 
 <tools_input>
 [
-    "get_weather": {
+    {
+        "name": "get_weather",
         "description": "Get weather information for a specified city",
-        "parameters": [
-            {
-                "name": "location",
+        "parameters": {
+            "location": {
                 "description": "The name of the city to query",
                 "type": "string"
             }
-        ]
+        }
     }
 ]
 </tools_input>
@@ -100,22 +100,16 @@ Please get the weather for Beijing and Shanghai.
     {
         "name": "get_weather",
         "id":"get_weather_beijing",
-        "parameters": [
-            {
-                "name": "location",
-                "parameter": "Beijing"
-            }
-        ]
+        "parameters": {
+            "location": "Beijing"
+        }
     },
     {
         "name": "get_weather",
         "id":"get_weather_shanghai",
-        "parameters": [
-            {
-                "name": "location",
-                "parameter": "Shanghai"
-            }
-        ]
+        "parameters": {
+            "location": "Shanghai"
+        }
     }
 ]
 </tools>
