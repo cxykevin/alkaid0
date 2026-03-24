@@ -474,6 +474,16 @@ func Start(ctx context.Context, db *gorm.DB) {
 				assert(funcs.SelectModel(&session, int32(modelID)))
 				fmt.Printf("%s✓ Model changed to: %s%s%s\n", ColorGreen, ColorBold, modelInfo.ModelName, ColorReset)
 
+			case "/summary":
+				summary, err := funcs.SummarySession(context.Background(), &session)
+				if err != nil {
+					fmt.Printf("%s❌ Summary failed: %v%s\n", ColorRed, err, ColorReset)
+				} else {
+					fmt.Printf("\n%s%s┌─ Conversation Summary ─┐%s\n", ColorBold, ColorBlue, ColorReset)
+					fmt.Printf("%s\n", summary)
+					fmt.Printf("%s%s└────────────────────────┘%s\n", ColorBold, ColorBlue, ColorReset)
+				}
+
 			case "/approve":
 				if session.State != state.StateWaitApprove {
 					fmt.Printf("%sNo pending tool calls%s\n", ColorYellow, ColorReset)

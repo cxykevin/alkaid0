@@ -454,6 +454,9 @@ func StartServer() {
 
 	waitChan <- true
 	if err := server.ListenAndServe(); err != nil {
+		if strings.Contains(err.Error(), "address already in use") {
+			return
+		}
 		fmt.Printf("Server failed to start: %v\n", err)
 		panic(err)
 	}

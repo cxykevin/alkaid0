@@ -40,9 +40,15 @@ func Summary(ctx context.Context, db *gorm.DB, chatID uint32, agentID string) (s
 	resp := strings.Builder{}
 	err = SimpleOpenAIRequest(ctxn, modelConfig.ProviderURL, modelConfig.ProviderKey, modelConfig.ModelID, *obj, func(ret structs.ChatCompletionResponse) error {
 		if len(ret.Choices) == 0 {
-			return nil // Gemini 喜欢在最后一个消息里返回空内容
+			return nil
 		}
-		resp.WriteString(ret.Choices[0].Delta.Content)
+		if ret.Choices[0].Delta.Content != "" {
+			resp.WriteString(ret.Choices[0].Delta.Content)
+		}
+		if ret.Choices[0].Delta.ReasoningContent != nil {
+			// 如果有推理内容，也可以考虑加入，或者至少确保不漏掉内容
+			// 对于总结来说，通常只需要最终内容
+		}
 		return nil
 	})
 	if err != nil {
