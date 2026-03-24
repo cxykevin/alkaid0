@@ -2,10 +2,10 @@
 package product
 
 // CommitID 提交ID
-const CommitID = "8b47f052d9684973a9c29f4edd2b3c6037bb681d"
+const CommitID = "unknown"
 
 // BuildTime 构建时间
-const BuildTime uint64 = 1769597813
+const BuildTime uint64 =0
 
 // BuildNote 构建备注
 const BuildNote = ""
