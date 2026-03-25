@@ -73,7 +73,7 @@ var parasMan = map[string]parser.ToolParameters{
 		Description: "The path will agent be binded. The subagent instance can only edit files in the path. **Required if the agent instance will be created.**",
 	},
 	"delete": {
-		Type:        parser.ToolTypeBoolen,
+		Type:        parser.ToolTypeBoolean,
 		Required:    false,
 		Description: "Delete the subagent instance. Default is false.",
 	},

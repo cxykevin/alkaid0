@@ -38,12 +38,11 @@ type ToolType string
 
 // 类型枚举
 const (
-	ToolTypeString ToolType = "string"
-	ToolTypeInt    ToolType = "int"
-	ToolTypeFloat  ToolType = "float"
-	ToolTypeBoolen ToolType = "boolen"
-	ToolTypeArray  ToolType = "array"
-	ToolTypeObject ToolType = "object"
+	ToolTypeString  ToolType = "string"
+	ToolTypeNumber  ToolType = "number"
+	ToolTypeBoolean ToolType = "boolean"
+	ToolTypeArray   ToolType = "array"
+	ToolTypeObject  ToolType = "object"
 )
 
 // ToolParameters 工具参数
@@ -209,27 +208,14 @@ func (p *Parser) solveTool() {
 					p.Stop = true
 					return
 				}
-			case ToolTypeInt: // 即使是 IntType，后端获取仍旧是 float64
-				val, ok := (*value).(float64)
-				if !ok {
-					logger.Warn("parameter '%s' for tool '%s' expected int(float64), got %T", key, toolName, *value)
-					p.Stop = true
-					return
-				}
-				// 校验是否为整数
-				if val != float64(int64(val)) {
-					logger.Warn("parameter '%s' for tool '%s' expected integer, got %f", key, toolName, val)
-					p.Stop = true
-					return
-				}
-			case ToolTypeFloat:
+			case ToolTypeNumber:
 				_, ok := (*value).(float64)
 				if !ok {
-					logger.Warn("parameter '%s' for tool '%s' expected float64, got %T", key, toolName, *value)
+					logger.Warn("parameter '%s' for tool '%s' expected number(float64), got %T", key, toolName, *value)
 					p.Stop = true
 					return
 				}
-			case ToolTypeBoolen:
+			case ToolTypeBoolean:
 				_, ok := (*value).(bool)
 				if !ok {
 					logger.Warn("parameter '%s' for tool '%s' expected bool, got %T", key, toolName, *value)

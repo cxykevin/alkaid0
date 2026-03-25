@@ -62,12 +62,10 @@ In responses, you can invoke tools to perform specific tasks. Tool calls are imp
 
 `"name"` MUST BE the first field in a tool call.
 
-Note: Tool calls MUST BE placed inside a `<tools>` tag and must appear at the end of a reply. DO NOT PUT ANYTHING AFTER THE `<tools>` TAG.
-Note: Tool calls MUST BE placed inside a `<tools>` tag and must appear at the end of a reply. DO NOT PUT ANYTHING AFTER THE `<tools>` TAG.
+Note: **ALWAYS prefer using specialized tools (e.g., `edit`, `trace`, `agent`) over using general-purpose tools like `run` with bash commands whenever a specialized tool is available for the task.**
+
 Note: Tool calls MUST BE placed inside a `<tools>` tag and must appear at the end of a reply. DO NOT PUT ANYTHING AFTER THE `<tools>` TAG.
 
-**DO NOT OUTPUT `<tools_return>` OR MAKE UP ANY RESULT IN THE RESPONSE!!!**
-**DO NOT OUTPUT `<tools_return>` OR MAKE UP ANY RESULT IN THE RESPONSE!!!**
 **DO NOT OUTPUT `<tools_return>` OR MAKE UP ANY RESULT IN THE RESPONSE!!!**
 
 #### Example

@@ -43,7 +43,7 @@ func init() {
 
 var paras = map[string]parser.ToolParameters{
 	"untrace": {
-		Type:        parser.ToolTypeBoolen,
+		Type:        parser.ToolTypeBoolean,
 		Required:    false,
 		Description: "Whether to untrace the file. Default is false.",
 	},

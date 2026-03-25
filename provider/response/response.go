@@ -3,6 +3,7 @@ package response
 import (
 	"bytes"
 	"encoding/json"
+	"strings"
 
 	"github.com/cxykevin/alkaid0/log"
 
@@ -49,7 +50,7 @@ func (p *Solver) saveToolResponse(toolName string, toolID string, response map[s
 	p.toolResponses = append(p.toolResponses, toolSaveStruct{
 		Name:   toolName,
 		ID:     toolID,
-		Return: buf.String(),
+		Return: strings.TrimSpace(buf.String()),
 	})
 	logger.Debug("tool response saved: %s (ID: %s)", toolName, toolID)
 	return nil

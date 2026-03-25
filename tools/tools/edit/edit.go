@@ -33,7 +33,7 @@ var paras = map[string]parser.ToolParameters{
 	"path": {
 		Type:        parser.ToolTypeString,
 		Required:    true,
-		Description: "The path of the file or virtual object to be edited. A new file will be created if it does not exist. **must be a RELATIVE path**. '..' is not allowed. Must Be First Parameter",
+		Description: "The path of the file or virtual object (e.g., '@tree') to be edited. A new file will be created if it does not exist. **must be a RELATIVE path**. '..' is not allowed. Must Be First Parameter",
 	},
 	"target": {
 		Type:        parser.ToolTypeString,

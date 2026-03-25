@@ -14,6 +14,11 @@ Enable or disable the tools scopes.
 
 **When to disable a scope**: If you needn't use the tools in the scope in the future of the whole project, you can disable it.
 
+#### Parameters:
+
+- `name` (required): The **exact name** of the scope will be enabled or disabled.
+- `disable` (optional): Disable the scopes. Default is false.
+
 ##### Example Task:
 
 ###### Task One:

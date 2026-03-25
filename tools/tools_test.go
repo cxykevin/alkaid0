@@ -694,13 +694,13 @@ func TestExecToolGetPromptsParameters(t *testing.T) {
 	// 工具初始参数
 	baseParams := map[string]parser.ToolParameters{
 		"a": {Type: parser.ToolTypeString, Required: false, Description: "base a"},
-		"b": {Type: parser.ToolTypeInt, Required: true, Description: "base b"},
+		"b": {Type: parser.ToolTypeNumber, Required: true, Description: "base b"},
 	}
 
 	// 钩子参数：覆盖 a，新增 c
 	hookParams := map[string]parser.ToolParameters{
 		"a": {Type: parser.ToolTypeString, Required: true, Description: "hook a override"},
-		"c": {Type: parser.ToolTypeBoolen, Required: false, Description: "hook c"},
+		"c": {Type: parser.ToolTypeBoolean, Required: false, Description: "hook c"},
 	}
 
 	tool := &toolobj.Tools{
@@ -751,7 +751,7 @@ func TestExecToolGetPromptsParameters(t *testing.T) {
 
 	if val, ok := paras["c"]; !ok {
 		t.Errorf("expected parameter 'c' present")
-	} else if val.Type != parser.ToolTypeBoolen {
+	} else if val.Type != parser.ToolTypeBoolean {
 		t.Errorf("parameter 'c' has wrong type: %+v", val)
 	}
 }

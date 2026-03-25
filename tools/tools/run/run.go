@@ -56,12 +56,12 @@ var paras = map[string]parser.ToolParameters{
 		Description: `Command or program will be run. Must Be Third Parameter`,
 	},
 	"timeout": {
-		Type:        parser.ToolTypeInt,
+		Type:        parser.ToolTypeNumber,
 		Required:    false,
 		Description: "Timeout of the command. Default is 60(seconds). If it will not be run in background(default), it must less than 300(seconds)",
 	},
 	"sandbox": {
-		Type:        parser.ToolTypeBoolen,
+		Type:        parser.ToolTypeBoolean,
 		Required:    false,
 		Description: "Whether run in sandbox. Some type don't support this parameter. Default is true",
 	},
@@ -213,47 +213,65 @@ func updateInfo(session *structs.Chats, mp map[string]*any, cross []*any) (bool,
 func runTask(session *structs.Chats, mp map[string]*any, cross []*any) (bool, []*any, map[string]*any, error) {
 	runTypeObj, ok := mp["type"]
 	if !ok || runTypeObj == nil {
+		boolx := false
+		success := any(boolx)
 		out := any("[System] Parameter Error: type is required")
-		return false, cross, map[string]*any{"output": &out}, nil
+		return false, cross, map[string]*any{"success": &success, "error": &out}, nil
 	}
 	runType, ok := asString(runTypeObj)
 	if !ok {
+		boolx := false
+		success := any(boolx)
 		out := any("[System] Parameter Error: type must be string")
-		return false, cross, map[string]*any{"output": &out}, nil
+		return false, cross, map[string]*any{"success": &success, "error": &out}, nil
 	}
 	if runType != "shell" {
+		boolx := false
+		success := any(boolx)
 		out := any(fmt.Sprintf("[System] Parameter Error: type '%s' not supported, only 'shell' is allowed", runType))
-		return false, cross, map[string]*any{"output": &out}, nil
+		return false, cross, map[string]*any{"success": &success, "error": &out}, nil
 	}
 
 	reasonObj, ok := mp["reason"]
 	if !ok || reasonObj == nil {
+		boolx := false
+		success := any(boolx)
 		out := any("[System] Parameter Error: reason is required")
-		return false, cross, map[string]*any{"output": &out}, nil
+		return false, cross, map[string]*any{"success": &success, "error": &out}, nil
 	}
 	reason, ok := asString(reasonObj)
 	if !ok {
+		boolx := false
+		success := any(boolx)
 		out := any("[System] Parameter Error: reason must be string")
-		return false, cross, map[string]*any{"output": &out}, nil
+		return false, cross, map[string]*any{"success": &success, "error": &out}, nil
 	}
 	if reason == "" {
+		boolx := false
+		success := any(boolx)
 		out := any("[System] Parameter Error: reason is empty")
-		return false, cross, map[string]*any{"output": &out}, nil
+		return false, cross, map[string]*any{"success": &success, "error": &out}, nil
 	}
 
 	cmdObj, ok := mp["command"]
 	if !ok || cmdObj == nil {
+		boolx := false
+		success := any(boolx)
 		out := any("[System] Parameter Error: command is required")
-		return false, cross, map[string]*any{"output": &out}, nil
+		return false, cross, map[string]*any{"success": &success, "error": &out}, nil
 	}
 	command, ok := asString(cmdObj)
 	if !ok {
+		boolx := false
+		success := any(boolx)
 		out := any("[System] Parameter Error: command must be string")
-		return false, cross, map[string]*any{"output": &out}, nil
+		return false, cross, map[string]*any{"success": &success, "error": &out}, nil
 	}
 	if command == "" {
+		boolx := false
+		success := any(boolx)
 		out := any("[System] Parameter Error: command is empty")
-		return false, cross, map[string]*any{"output": &out}, nil
+		return false, cross, map[string]*any{"success": &success, "error": &out}, nil
 	}
 
 	var sandboxFlag bool
@@ -301,8 +319,10 @@ func runTask(session *structs.Chats, mp map[string]*any, cross []*any) (bool, []
 		timeout = 60
 	}
 	if timeout >= 300 {
+		boolx := false
+		success := any(boolx)
 		out := any("[System] Parameter Error: timeout must less than 300")
-		return false, cross, map[string]*any{"output": &out}, nil
+		return false, cross, map[string]*any{"success": &success, "error": &out}, nil
 	}
 
 	logger.Info("run shell \"%s\"(reason: %s)(%ds) sandbox:%v in ID=%d,agentID=%s", command, reason, timeout, sandboxFlag, session.ID, session.CurrentAgentID)
@@ -359,18 +379,24 @@ func runTask(session *structs.Chats, mp map[string]*any, cross []*any) (bool, []
 			if err2 != nil {
 				errString += fmt.Sprintf("[System] Command Execute Error: %v\n", err)
 				outStr := errString + buf.String()
+				boolx := false
+				success := any(boolx)
 				outAny := any(outStr)
 				return false, cross, map[string]*any{
-					"output": &outAny,
+					"success": &success,
+					"error":   &outAny,
 				}, nil
 			}
 			c2, err2 := sand2.Execute(shell, startCmd...)
 			if err2 != nil {
 				errString += fmt.Sprintf("[System] Command Execute Error: %v\n", err2)
 				outStr := errString + buf.String()
+				boolx := false
+				success := any(boolx)
 				outAny := any(outStr)
 				return false, cross, map[string]*any{
-					"output": &outAny,
+					"success": &success,
+					"error":   &outAny,
 				}, nil
 			}
 			var buf2 bytes.Buffer
@@ -382,10 +408,17 @@ func runTask(session *structs.Chats, mp map[string]*any, cross []*any) (bool, []
 				errString += fmt.Sprintf("[System] Command Execute Error: %v\n", err2)
 			}
 			outStr := errString + buf2.String()
+			boolx := err2 == nil
+			success := any(boolx)
 			outAny := any(outStr)
-			return false, cross, map[string]*any{
-				"output": &outAny,
-			}, nil
+			res := map[string]*any{
+				"success": &success,
+				"path":    &outAny,
+			}
+			if !boolx {
+				res["error"] = &outAny
+			}
+			return false, cross, res, nil
 		}
 		errString = fmt.Sprintf("[System] Command Execute Error: %v\n", err)
 	}
@@ -410,11 +443,17 @@ func runTask(session *structs.Chats, mp map[string]*any, cross []*any) (bool, []
 	outPth := "@temp/" + path
 	outAny := any(outPth)
 	reasonAny := any(reason)
-	return false, cross, map[string]*any{
-		// "output": &outAny,
-		"reason": &reasonAny,
-		"path":   &outAny,
-	}, nil
+	boolx := err == nil
+	success := any(boolx)
+	res := map[string]*any{
+		"success": &success,
+		"reason":  &reasonAny,
+		"path":    &outAny,
+	}
+	if !boolx {
+		res["error"] = &outAny
+	}
+	return false, cross, res, nil
 
 }
 

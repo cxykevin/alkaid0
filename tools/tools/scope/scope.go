@@ -27,7 +27,7 @@ var paras = map[string]parser.ToolParameters{
 		Description: "The **exact name** of the scope will be enabled or disabled.",
 	},
 	"disable": {
-		Type:        parser.ToolTypeBoolen,
+		Type:        parser.ToolTypeBoolean,
 		Required:    false,
 		Description: "Disable the scopes. Default is false.",
 	},

@@ -32,7 +32,7 @@ func TestSummary_EchoMock(t *testing.T) {
 	// 插入测试消息
 	chatID := uint32(100)
 	testContent := "This is a test message for summary."
-	
+
 	// 创建 Chat
 	db.Create(&structs.Chats{ID: chatID})
 
@@ -108,4 +108,3 @@ func TestSummary_EchoMock_WithKeepNum(t *testing.T) {
 		t.Fatal("Summary should not be empty")
 	}
 }
-

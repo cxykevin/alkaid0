@@ -762,7 +762,7 @@ func TestSolveToolBasicStringParameter(t *testing.T) {
 					Description: "要计算的表达式",
 				},
 				"precision": {
-					Type:        parser.ToolTypeInt,
+					Type:        parser.ToolTypeNumber,
 					Required:    false,
 					Description: "计算精度",
 				},
