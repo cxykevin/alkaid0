@@ -1,3 +1,8 @@
+// Package loop 提供 Demo Loop
+//
+// Deprecated: 已经弃用，逐步转向 ui/loop 配合中心服务器模式
+//
+//go:deprecated
 package loop
 
 import (
@@ -15,7 +20,9 @@ import (
 	"github.com/cxykevin/alkaid0/config"
 	"github.com/cxykevin/alkaid0/log"
 	"github.com/cxykevin/alkaid0/ui/funcs"
+	"github.com/cxykevin/alkaid0/ui/loop"
 	"github.com/cxykevin/alkaid0/ui/state"
+	u "github.com/cxykevin/alkaid0/utils"
 	"gorm.io/gorm"
 )
 
@@ -46,19 +53,6 @@ func init() {
 	logger = log.New("loop")
 }
 
-func assert(err error) {
-	if err != nil {
-		panic(err)
-	}
-}
-
-func unwrap[T any](args T, err error) T {
-	if err != nil {
-		panic(err)
-	}
-	return args
-}
-
 // printBoxHeader 打印简单的盒子标题
 func printBoxHeader(title string, color string) {
 	fmt.Printf("\n%s%s┌─ %s ─┐%s\n", ColorBold, color, title, ColorReset)
@@ -70,7 +64,7 @@ func Start(ctx context.Context, db *gorm.DB) {
 	logger.Info("loop initing")
 	reader := bufio.NewReader(os.Stdin)
 
-	chats := unwrap(funcs.GetChats(db))
+	chats := u.Unwrap(funcs.GetChats(db))
 
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, os.Interrupt, syscall.SIGINT)
@@ -139,7 +133,7 @@ func Start(ctx context.Context, db *gorm.DB) {
 	for flag {
 		fmt.Printf("\n%s%s┌─ Command ─┐%s\n", ColorBold, ColorPurple, ColorReset)
 		fmt.Printf("%s%s│ DO>%s ", ColorBold, ColorPurple, ColorReset)
-		input = unwrap(reader.ReadString('\n'))
+		input = u.Unwrap(reader.ReadString('\n'))
 		input = strings.TrimSpace(input)
 		logger.Debug("user input: %v", input)
 
@@ -159,8 +153,8 @@ func Start(ctx context.Context, db *gorm.DB) {
 			deletedChat := chats[absNum-1]
 			logger.Info("delete chat %d (ID: %v)", absNum, deletedChat.ID)
 
-			assert(funcs.DeleteChat(db, &deletedChat))
-			chats = unwrap(funcs.GetChats(db))
+			u.Assert(funcs.DeleteChat(db, &deletedChat))
+			chats = u.Unwrap(funcs.GetChats(db))
 
 			fmt.Printf("%s✓ Chat #%d deleted successfully%s\n", ColorGreen, deletedChat.ID, ColorReset)
 			showChatList()
@@ -168,8 +162,8 @@ func Start(ctx context.Context, db *gorm.DB) {
 			// 创建或进入聊天
 			if inputNum == 0 {
 				logger.Info("create new chat")
-				newID := unwrap(funcs.CreateChat(db))
-				chats = unwrap(funcs.GetChats(db))
+				newID := u.Unwrap(funcs.CreateChat(db))
+				chats = u.Unwrap(funcs.GetChats(db))
 				inputNum = len(chats)
 				fmt.Printf("%s✓ New chat created (ID: %d)%s\n", ColorGreen, newID, ColorReset)
 			}
@@ -184,7 +178,7 @@ func Start(ctx context.Context, db *gorm.DB) {
 		}
 	}
 
-	sessionObj := unwrap(funcs.InitChat(db, &chats[chatNum]))
+	sessionObj := u.Unwrap(funcs.InitChat(db, &chats[chatNum]))
 	session := *sessionObj
 	session.Root, _ = os.Getwd()
 	modelName := funcs.GetModelName(session.LastModelID, "unknown")
@@ -209,7 +203,7 @@ func Start(ctx context.Context, db *gorm.DB) {
 	fmt.Printf("%s%s║%s  Conversation History                                      %s%s║%s\n", ColorBold, ColorCyan, ColorReset, ColorBold, ColorCyan, ColorReset)
 	fmt.Printf("%s%s╚════════════════════════════════════════════════════════════╝%s\n", ColorBold, ColorCyan, ColorReset)
 
-	chatMsgs := unwrap(funcs.GetHistory(&session))
+	chatMsgs := u.Unwrap(funcs.GetHistory(&session))
 
 	if len(chatMsgs) == 0 {
 		fmt.Printf("\n%s%sNo messages yet. Start typing to begin!%s\n", ColorYellow, ColorBold, ColorReset)
@@ -251,7 +245,9 @@ func Start(ctx context.Context, db *gorm.DB) {
 	fmt.Printf("%s%s╚════════════════════════════════════════════════════════════╝%s\n", ColorBold, ColorCyan, ColorReset)
 
 	fmt.Printf("%sType /help for available commands or enter your message:%s\n", ColorBlue, ColorReset)
-	var lastInput string
+
+	// Create Loop
+	loopObj := loop.New(&session)
 
 	var runResponseLoop func()
 	runResponseLoop = func() {
@@ -366,15 +362,13 @@ func Start(ctx context.Context, db *gorm.DB) {
 			fmt.Printf("%sUse /approve or type anything to continue.%s\n", ColorYellow, ColorReset)
 		}
 	}
+	go loopObj.Start(ctx)
 
 	// 获取用户输入
 	for {
 		select {
 		case <-interruptCh:
 			fmt.Printf("\n%s%s(Interrupted)%s\n", ColorBold, ColorYellow, ColorReset)
-			mu.Lock()
-			isResponding = false
-			mu.Unlock()
 			continue
 		default:
 		}
@@ -387,20 +381,12 @@ func Start(ctx context.Context, db *gorm.DB) {
 		var input string
 		fmt.Printf("\n%s%s┌─ Input ─┐%s\n", ColorBold, ColorPurple, ColorReset)
 		fmt.Printf("%s%s│ >%s ", ColorBold, ColorPurple, ColorReset)
-		input = unwrap(reader.ReadString('\n'))
+		input = u.Unwrap(reader.ReadString('\n'))
 		input = strings.TrimSpace(input)
 		logger.Debug("user input: %v", input)
 
 		if input == "" {
 			continue
-		}
-
-		// 处理特殊命令
-		if input == "!" {
-			fmt.Printf("%s%s(Repeating)%s\n", ColorBold, ColorYellow, ColorReset)
-			input = lastInput
-		} else {
-			lastInput = input
 		}
 
 		if input[0] == '/' {
@@ -471,7 +457,7 @@ func Start(ctx context.Context, db *gorm.DB) {
 					fmt.Printf("%s❌ Model not found: %d%s\n", ColorRed, modelID, ColorReset)
 					continue
 				}
-				assert(funcs.SelectModel(&session, int32(modelID)))
+				u.Assert(funcs.SelectModel(&session, int32(modelID)))
 				fmt.Printf("%s✓ Model changed to: %s%s%s\n", ColorGreen, ColorBold, modelInfo.ModelName, ColorReset)
 
 			case "/summary":
@@ -528,7 +514,7 @@ func Start(ctx context.Context, db *gorm.DB) {
 					}
 
 				case "used":
-					agents := unwrap(funcs.GetAgents(&session))
+					agents := u.Unwrap(funcs.GetAgents(&session))
 					fmt.Printf("\n%s%s┌─ Used Agents ─┐%s\n", ColorBold, ColorBlue, ColorReset)
 					if len(agents) == 0 {
 						fmt.Printf("  %sNo agents used in this chat%s\n", ColorYellow, ColorReset)

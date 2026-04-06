@@ -39,8 +39,9 @@ func setupTestConfig() {
 			DefaultModelID: 1,
 			Models: map[int32]cfgStruct.ModelConfig{
 				1: {
-					ModelName:         "test-model",
-					ModelID:           "test-model-id",
+					ModelName: "test-model",
+					ModelID:   "test-chat",
+
 					ModelTemperature:  0.7,
 					ModelTopP:         0.9,
 					EnableThinking:    true,
@@ -48,7 +49,7 @@ func setupTestConfig() {
 				},
 				2: {
 					ModelName:         "test-model-no-think",
-					ModelID:           "test-model-id-2",
+					ModelID:           "test-chat",
 					ModelTemperature:  0.7,
 					ModelTopP:         0.9,
 					EnableThinking:    false,
@@ -116,8 +117,8 @@ func TestRequestBody_Basic(t *testing.T) {
 	}
 
 	// 验证请求结构
-	if request.Model != "test-model-id" {
-		t.Errorf("Expected model ID 'test-model-id', got '%s'", request.Model)
+	if request.Model != "test-chat" {
+		t.Errorf("Expected model ID 'test-chat', got '%s'", request.Model)
 	}
 
 	if !request.Stream {

@@ -81,6 +81,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -322,7 +323,7 @@ func handleStreamingChatCompletion(w http.ResponseWriter, _ *http.Request, req C
 			)
 		}
 	} else {
-		responseText += responseText + fmt.Sprintf("This is a mock response from model %s. Your message was received and processed.", req.Model)
+		responseText += fmt.Sprintf("This is a mock response from model %s. Your message was received and processed.", req.Model)
 	}
 	completionTokens := calculateTokens(responseText)
 
@@ -436,7 +437,10 @@ func handleModels(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(resp)
 }
 
-var waitChan chan bool
+var (
+	waitChan   chan bool
+	serverOnce sync.Once
+)
 
 // StartServer 启动服务器
 func StartServer() {
@@ -450,24 +454,27 @@ func StartServer() {
 		Handler: mux,
 	}
 
-	fmt.Println("Mock OpenAI-compatible API server running on http://localhost" + server.Addr)
+	// fmt.Println("Mock OpenAI-compatible API server running on http://localhost" + server.Addr)
 
-	waitChan <- true
+	if waitChan != nil {
+		waitChan <- true
+	}
 	if err := server.ListenAndServe(); err != nil {
 		if strings.Contains(err.Error(), "address already in use") {
 			return
 		}
 		fmt.Printf("Server failed to start: %v\n", err)
-		panic(err)
 	}
 }
 
 // StartServerTask 启动服务器任务
 func StartServerTask() {
-	waitChan = make(chan bool)
-	go StartServer()
-	<-waitChan
-	time.Sleep(100 * time.Millisecond)
+	serverOnce.Do(func() {
+		waitChan = make(chan bool, 1)
+		go StartServer()
+		<-waitChan
+		time.Sleep(100 * time.Millisecond)
+	})
 }
 
 // func main() {

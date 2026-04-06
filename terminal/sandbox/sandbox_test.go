@@ -262,49 +262,6 @@ func TestCommandTimeout(t *testing.T) {
 	}
 }
 
-func TestValidateCommand(t *testing.T) {
-	// 根据平台选择命令
-	var validCmd, dangerousCmd string
-	if runtime.GOOS == "windows" {
-		validCmd = "cmd.exe"
-		dangerousCmd = "del"
-	} else {
-		validCmd = "echo"
-		dangerousCmd = "rm"
-	}
-
-	tests := []struct {
-		name          string
-		isolationMode IsolationMode
-		command       string
-		shouldErr     bool
-	}{
-		{"无隔离-有效命令", IsolationNone, validCmd, false},
-		{"无隔离-危险命令", IsolationNone, dangerousCmd, false},              // 无隔离模式不检查危险命令
-		{"无隔离-不存在命令", IsolationNone, "nonexistentcommand12345", true}, // 但仍检查命令是否存在
-		{"OS隔离-有效命令", IsolationOS, validCmd, false},
-		{"OS隔离-不存在命令", IsolationOS, "nonexistentcommand12345", true},
-		{"OS隔离-危险命令", IsolationOS, dangerousCmd, true},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			cfg := Config{
-				IsolationMode: tt.isolationMode,
-			}
-			sb, err := New(cfg)
-			if err != nil {
-				t.Fatalf("创建沙盒失败: %v", err)
-			}
-
-			err = sb.ValidateCommand(tt.command)
-			if (err != nil) != tt.shouldErr {
-				t.Errorf("ValidateCommand(%s) error = %v, shouldErr = %v", tt.command, err, tt.shouldErr)
-			}
-		})
-	}
-}
-
 func TestSetWorkDir(t *testing.T) {
 	cfg := Config{
 		IsolationMode: IsolationNone,

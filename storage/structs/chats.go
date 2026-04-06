@@ -1,9 +1,20 @@
 package structs
 
 import (
+	"context"
+
 	"github.com/cxykevin/alkaid0/config/structs"
 	"github.com/cxykevin/alkaid0/ui/state"
 	"gorm.io/gorm"
+)
+
+// ChatAlivePolicy 对话存活策略
+type ChatAlivePolicy uint16
+
+// 存活策略枚举
+const (
+	ChatAlivePolicyExitOnClose ChatAlivePolicy = iota
+	ChatAlivePolicyExitOnStop
 )
 
 // Chats 对话列表
@@ -14,7 +25,11 @@ type Chats struct {
 	Root        string
 	TraceID     uint64
 	State       state.State
+	Title       string
+	// AlivePolicy ChatAlivePolicy
 	// === 会话过程参数 ===
+	Context              *context.Context    `gorm:"-" json:"-"`
+	Stop                 bool                `gorm:"-" json:"-"`
 	DB                   *gorm.DB            `gorm:"-" json:"-"`
 	CurrentAgentID       string              `gorm:"-" json:"-"`
 	CurrentAgentConfig   structs.AgentConfig `gorm:"-" json:"-"`
@@ -23,4 +38,5 @@ type Chats struct {
 	TemporyDataOfRequest map[string]any      `gorm:"-" json:"-"`
 	TemporyDataOfSession map[string]any      `gorm:"-" json:"-"`
 	InTestFlag           bool                `gorm:"-" json:"-"`
+	ReferCount           int32               `gorm:"-" json:"-"`
 }

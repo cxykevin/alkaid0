@@ -31,6 +31,13 @@ func GetChats(db *gorm.DB) ([]structs.Chats, error) {
 	return chats, nil
 }
 
+// QueryChat 获取聊天
+func QueryChat(db *gorm.DB, id uint32) (structs.Chats, error) {
+	chats := structs.Chats{}
+	err := db.Where("id = ?", id).First(&chats).Error
+	return chats, err
+}
+
 // DeleteChat 删除聊天
 func DeleteChat(db *gorm.DB, chat *structs.Chats) error {
 	return db.Delete(&structs.Chats{}, chat.ID).Error

@@ -1,6 +1,10 @@
 package structs
 
-import "encoding/gob"
+import (
+	"bytes"
+	"database/sql/driver"
+	"encoding/gob"
+)
 
 // MessagesReferType 消息引用类型
 type MessagesReferType uint8
@@ -42,7 +46,37 @@ type MessagesReferList []MessagesRefer
 
 // 使用gob注册消息引用列表
 func init() {
+	gob.Register(MessagesRefer{})
 	gob.Register(MessagesReferList{})
+}
+
+// Value 实现 driver.Valuer 接口，用于 GORM 写入数据库
+func (m MessagesReferList) Value() (driver.Value, error) {
+	var buf bytes.Buffer
+	enc := gob.NewEncoder(&buf)
+	err := enc.Encode(m)
+	if err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
+
+// Scan 实现 sql.Scanner 接口，用于 GORM 从数据库读取
+func (m *MessagesReferList) Scan(src any) error {
+	switch v := src.(type) {
+	case []byte:
+		dec := gob.NewDecoder(bytes.NewReader(v))
+		return dec.Decode(m)
+	case string:
+		dec := gob.NewDecoder(bytes.NewReader([]byte(v)))
+		return dec.Decode(m)
+	case nil:
+		*m = MessagesReferList{}
+		return nil
+	default:
+		*m = MessagesReferList{}
+		return nil
+	}
 }
 
 // Messages 消息列表

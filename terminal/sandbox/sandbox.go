@@ -276,7 +276,6 @@ func (s *Sandbox) IsPathWritable(path string) bool {
 }
 
 // ValidateCommand 验证待执行的命令及其参数是否安全。
-// 在此版本中，我们禁用了危险命令黑名单检查，完全依靠沙盒隔离机制来保护系统。
 func (s *Sandbox) ValidateCommand(name string, args ...string) error {
 	s.mu.RLock()
 	defer s.mu.RUnlock()

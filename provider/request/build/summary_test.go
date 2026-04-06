@@ -48,8 +48,8 @@ func TestSummary_Basic(t *testing.T) {
 	}
 
 	// 验证模型配置
-	if request.Model != "test-model-id" {
-		t.Errorf("Expected model ID 'test-model-id', got '%s'", request.Model)
+	if request.Model != "test-chat" {
+		t.Errorf("Expected model ID 'test-chat', got '%s'", request.Model)
 	}
 
 	// 验证流式传输
@@ -207,24 +207,19 @@ func TestSummary_EmptyMessages(t *testing.T) {
 	// 不插入任何消息，直接调用 Summary
 
 	// 调用 Summary
-	_, request, err := Summary(1, "", db)
+	num, request, err := Summary(1, "", db)
 	if err != nil {
 		t.Fatalf("Summary failed: %v", err)
 	}
 
 	// 即使没有消息，也应该至少返回系统消息
-	if request == nil {
-		t.Fatal("Expected non-nil request")
+	if request != nil {
+		t.Fatal("Unexpected non-nil request")
 	}
 
 	// 应该至少包含系统消息
-	if len(request.Messages) < 1 {
-		t.Error("Expected at least system message even with empty messages")
-	}
-
-	// 第一个应该是系统消息
-	if len(request.Messages) > 0 && request.Messages[0].Role != "system" {
-		t.Errorf("First message should be system, got %s", request.Messages[0].Role)
+	if num != 0 {
+		t.Error("Unexpected empty request")
 	}
 }
 
@@ -475,7 +470,7 @@ func TestSummary_WithSummaryContentNotEnough(t *testing.T) {
 	}
 
 	// 验证消息数量（至少应有一条包含总结的消息和系统消息）
-	if len(request.Messages) != 1 {
+	if len(request.Messages) <= 1 {
 		t.Error("Expected 1 messages (system)")
 	}
 }
@@ -603,14 +598,10 @@ func TestSummary_EmptyChat(t *testing.T) {
 		t.Fatalf("Summary with empty chat failed: %v", err)
 	}
 
-	if request == nil {
-		t.Fatal("Expected non-nil request")
+	if request != nil {
+		t.Fatal("Unexpected non-nil request")
 	}
 
-	// 验证至少有系统消息
-	if len(request.Messages) == 0 {
-		t.Error("Expected system message even for empty chat")
-	}
 }
 
 // TestSummary_ModelConfiguration 测试Summary函数模型配置

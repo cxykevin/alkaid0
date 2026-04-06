@@ -2,6 +2,7 @@ package run
 
 import (
 	"bytes"
+	"context"
 	_ "embed" // embed
 	"fmt"
 	"os"
@@ -364,7 +365,31 @@ func runTask(session *structs.Chats, mp map[string]*any, cross []*any) (bool, []
 	c.SetStdin(nil)
 	c.SetStdout(&buf)
 	c.SetStderr(&buf)
+
+	// 监听context的Done信号，当context被取消时强制kill进程
+	var ctx context.Context
+	if session.Context != nil {
+		ctx = *session.Context
+	} else {
+		ctx = context.Background()
+	}
+
+	// 启动goroutine监听context取消信号
+	contextDone := make(chan struct{})
+	go func() {
+		select {
+		case <-ctx.Done():
+			logger.Info("Context cancelled, killing command: %s", command)
+			if err := c.Kill(); err != nil {
+				logger.Warn("Failed to kill command: %v", err)
+			}
+		case <-contextDone:
+			// 命令已完成，退出监听
+		}
+	}()
+
 	err = c.Run()
+	close(contextDone)
 
 	errString := ""
 	if err != nil {
@@ -403,7 +428,24 @@ func runTask(session *structs.Chats, mp map[string]*any, cross []*any) (bool, []
 			c2.SetStdin(nil)
 			c2.SetStdout(&buf2)
 			c2.SetStderr(&buf2)
+
+			// 监听context的Done信号，当context被取消时强制kill进程
+			contextDone2 := make(chan struct{})
+			go func() {
+				select {
+				case <-ctx.Done():
+					logger.Info("Context cancelled, killing fallback command: %s", command)
+					if err := c2.Kill(); err != nil {
+						logger.Warn("Failed to kill fallback command: %v", err)
+					}
+				case <-contextDone2:
+					// 命令已完成，退出监听
+				}
+			}()
+
 			err2 = c2.Run()
+			close(contextDone2)
+
 			if err2 != nil {
 				errString += fmt.Sprintf("[System] Command Execute Error: %v\n", err2)
 			}

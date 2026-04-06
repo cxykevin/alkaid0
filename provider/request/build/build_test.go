@@ -12,6 +12,7 @@ import (
 	"github.com/cxykevin/alkaid0/storage"
 	"github.com/cxykevin/alkaid0/storage/structs"
 	"github.com/cxykevin/alkaid0/tools/index"
+	u "github.com/cxykevin/alkaid0/utils"
 	"gorm.io/gorm"
 )
 
@@ -40,7 +41,7 @@ func setupBuildTest(_ *testing.T) *gorm.DB {
 	dbPath := "../../debug_config/dot_alkaid/db.sqlite"
 	os.Remove(dbPath)
 
-	db := storage.InitStorage("", "")
+	db := u.Unwrap(storage.InitStorage("", ""))
 
 	index.Load()
 

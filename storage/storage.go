@@ -24,7 +24,7 @@ func init() {
 var fastSQL string
 
 // InitStorage 初始化 db
-func InitStorage(dataPath string, dbFile string) *gorm.DB {
+func InitStorage(dataPath string, dbFile string) (*gorm.DB, error) {
 	if dataPath == "" {
 		// 读取环境变量：ALKAID_DEBUG_PROJECTPATH 和 ALKAID0_DEBUG_SQLITEFILE
 		dataPath = projectDataPath
@@ -51,7 +51,7 @@ func InitStorage(dataPath string, dbFile string) *gorm.DB {
 	// 确保工作目录存在
 	if err := os.MkdirAll(dataPath, 0755); err != nil {
 		logger.Error("failed to create project data dir %s: %v", dataPath, err)
-		panic(fmt.Errorf("failed to create project data dir %s: %v", dataPath, err))
+		return nil, (fmt.Errorf("failed to create project data dir %s: %v", dataPath, err))
 	}
 
 	dbPath := filepath.Join(dataPath, dbFile)
@@ -59,7 +59,7 @@ func InitStorage(dataPath string, dbFile string) *gorm.DB {
 	var err error
 	if db, err = InitDB(dbPath); err != nil {
 		logger.Error("failed to init db %s: %v", dataPath, err)
-		panic(err)
+		return nil, err
 	}
 
 	for v := range strings.SplitSeq(fastSQL, ";") {
@@ -73,5 +73,5 @@ func InitStorage(dataPath string, dbFile string) *gorm.DB {
 			logger.Error("failed to execute sql \"%s\": %v", vs, err)
 		}
 	}
-	return db
+	return db, nil
 }

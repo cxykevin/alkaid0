@@ -11,3 +11,5 @@ __debug_*
 non_existent*
 
 product/build.go
+
+server/generated

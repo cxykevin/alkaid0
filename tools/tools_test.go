@@ -10,6 +10,7 @@ import (
 	storageStructs "github.com/cxykevin/alkaid0/storage/structs"
 	"github.com/cxykevin/alkaid0/tools/actions"
 	"github.com/cxykevin/alkaid0/tools/toolobj"
+	u "github.com/cxykevin/alkaid0/utils"
 	"gorm.io/gorm"
 )
 
@@ -18,7 +19,7 @@ func initTestEnv() *gorm.DB {
 	toolobj.Scopes = make(map[string]string)
 
 	os.Setenv("ALKAID_DEBUG_SQLITEFILE", ":memory:")
-	db := storage.InitStorage("", "")
+	db := u.Unwrap(storage.InitStorage("", ""))
 
 	// 强制重建 Scopes 表以确保使用最新的结构
 	db.Migrator().DropTable(&storageStructs.Scopes{})

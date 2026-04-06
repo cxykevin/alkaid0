@@ -1,17 +1,22 @@
 package startup
 
 import (
+	"context"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"strings"
+	"syscall"
 
 	"github.com/cxykevin/alkaid0/config"
+	"github.com/cxykevin/alkaid0/demo/loop"
 	"github.com/cxykevin/alkaid0/internal/configutil"
 	"github.com/cxykevin/alkaid0/log"
 	"github.com/cxykevin/alkaid0/mock/openai"
-	"github.com/cxykevin/alkaid0/server"
+	"github.com/cxykevin/alkaid0/storage"
 	"github.com/cxykevin/alkaid0/tools/index"
+	u "github.com/cxykevin/alkaid0/utils"
 )
 
 const alkaid0IgnoreEntry = "\n# alkaid0\n.alkaid0/\n.alk_*\n"
@@ -28,8 +33,8 @@ func Startup() {
 	ensureGlobalGitIgnore()
 	index.Load()
 
-	// ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM)
-	// defer stop()
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM)
+	defer stop()
 
 	// 读取环境变量 ALKAID0_WORKDIR
 	if workdir := os.Getenv("ALKAID0_WORKDIR"); workdir != "" {
@@ -37,17 +42,13 @@ func Startup() {
 		// 设置工作目录
 		_ = os.Chdir(workdir)
 	}
-
-	logger.Info("Start server...")
-	server.Start()
-
-	// logger.Info("initializing storage...")
-	// db := u.Unwrap(storage.InitStorage("", ""))
-	// defer log.Shutdown()
+	logger.Info("initializing storage...")
+	db := u.Unwrap(storage.InitStorage("", ""))
+	defer log.Shutdown()
 
 	// 启动 Demo Loop
-	// logger.Info("starting demo loop...")
-	// loop.Start(ctx, db)
+	logger.Info("starting demo loop...")
+	loop.Start(ctx, db)
 }
 
 func ensureGlobalGitIgnore() {

@@ -2,16 +2,45 @@ package request
 
 import (
 	"context"
+	"sync"
 	"testing"
 
 	cfgStruct "github.com/cxykevin/alkaid0/config/structs"
+	"github.com/cxykevin/alkaid0/library/chancall"
+	"github.com/cxykevin/alkaid0/provider/request/agents/actions"
 	"github.com/cxykevin/alkaid0/storage/structs"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 )
 
+var (
+	testConsumerOnce sync.Once
+)
+
+// initAgentsConsumer 初始化 agents 消费者（用于测试）
+func initAgentsConsumer() {
+	testConsumerOnce.Do(func() {
+		// 注册一个简单的 agents 消费者用于测试
+		actions.Call = chancall.Register(actions.ConsumerName, func(obj any) (any, error) {
+			// 只处理 Deactivate 操作以支持测试
+			if deactivate, ok := obj.(actions.Deactivate); ok {
+				session := deactivate.Session
+				session.CurrentActivatePath = ""
+				session.CurrentAgentID = ""
+				session.CurrentAgentConfig = cfgStruct.AgentConfig{}
+				return nil, nil
+			}
+			// 将其他操作的处理留空（测试中不需要）
+			return nil, nil
+		})
+	})
+}
+
 // setupTestDB 设置测试数据库
 func setupTestDB(t *testing.T) *gorm.DB {
+	// 初始化 agents 消费者
+	initAgentsConsumer()
+
 	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
 	if err != nil {
 		t.Fatalf("Failed to open test database: %v", err)
@@ -75,7 +104,7 @@ func TestUserAddMsg_Basic(t *testing.T) {
 // TestUserAddMsg_WithRefers 测试带引用的消息添加
 // 注意：由于 GORM 的 gob 序列化问题，这个测试被简化
 func TestUserAddMsg_WithRefers(t *testing.T) {
-	t.Skip("Skipping test due to GORM gob serialization issues with MessagesReferList")
+	// t.Skip("Skipping test due to GORM gob serialization issues with MessagesReferList")
 
 	db := setupTestDB(t)
 
@@ -279,9 +308,7 @@ func TestUserAddMsg_InvalidChatID(t *testing.T) {
 }
 
 // TestUserAddMsg_WithCurrentAgent 测试当有当前代理时的行为
-// 注意：这个测试会因为 chancall 未初始化而 panic，所以我们跳过它
 func TestUserAddMsg_WithCurrentAgent(t *testing.T) {
-	t.Skip("Skipping test that requires chancall initialization - DeactivateAgent will panic without registered consumer")
 
 	db := setupTestDB(t)
 
@@ -315,15 +342,14 @@ func TestUserAddMsg_WithCurrentAgent(t *testing.T) {
 		},
 	}
 
-	// 注意：DeactivateAgent 依赖 chancall，在单元测试中会 panic
+	// DeactivateAgent 将通过 chancall 调用
 	err := UserAddMsg(session, "Message with agent", nil)
 
 	if err != nil {
-		t.Logf("Expected: DeactivateAgent may fail without registered consumer: %v", err)
-		return
+		t.Fatalf("UserAddMsg failed: %v", err)
 	}
 
-	// 如果成功，验证消息已添加
+	// 验证消息已添加
 	var messages []structs.Messages
 	db.Where("chat_id = ?", 1).Find(&messages)
 
@@ -472,11 +498,4 @@ func TestSendRequest_ModelNotFound(t *testing.T) {
 	if err.Error() != "model not found" {
 		t.Errorf("Expected 'model not found' error, got: %v", err)
 	}
-}
-
-// TestSendRequest_BuildError 测试 Build 失败的情况
-func TestSendRequest_BuildError(t *testing.T) {
-	// 这个测试需要设置一个会导致 Build 失败的场景
-	// 由于 Build 函数比较复杂，我们跳过这个测试
-	t.Skip("Skipping test that requires complex Build failure scenario")
 }

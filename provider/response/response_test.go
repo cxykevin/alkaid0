@@ -11,14 +11,8 @@ import (
 	"github.com/cxykevin/alkaid0/storage"
 	storageStructs "github.com/cxykevin/alkaid0/storage/structs"
 	"github.com/cxykevin/alkaid0/tools/toolobj"
+	u "github.com/cxykevin/alkaid0/utils"
 )
-
-func unwrap[T any](args T, err error) T {
-	if err != nil {
-		panic(err)
-	}
-	return args
-}
 
 // TestSolver_AddToken 测试 Solver 的 AddToken 方法
 func TestSolver_AddToken(t *testing.T) {
@@ -133,7 +127,7 @@ func TestSolver_ToolCalling_SingleTool(t *testing.T) {
 				},
 				OnHook: toolobj.OnHookFunction{
 					Func: func(chat *storageStructs.Chats, args map[string]*any, passObjs []*any) (bool, []*any, error) {
-						fmt.Printf("Obj: %v\n", string(unwrap(json.Marshal(args))))
+						fmt.Printf("Obj: %v\n", string(u.Unwrap(json.Marshal(args))))
 						return false, passObjs, nil
 					},
 				},
@@ -248,7 +242,7 @@ func TestSolver_ToolCalling_MultipleTools(t *testing.T) {
 				},
 				OnHook: toolobj.OnHookFunction{
 					Func: func(chat *storageStructs.Chats, args map[string]*any, passObjs []*any) (bool, []*any, error) {
-						fmt.Printf("Obj: %v\n", string(unwrap(json.Marshal(args))))
+						fmt.Printf("Obj: %v\n", string(u.Unwrap(json.Marshal(args))))
 						return false, passObjs, nil
 					},
 				},
@@ -288,7 +282,7 @@ func TestSolver_ToolCalling_MultipleTools(t *testing.T) {
 				},
 				OnHook: toolobj.OnHookFunction{
 					Func: func(chat *storageStructs.Chats, args map[string]*any, passObjs []*any) (bool, []*any, error) {
-						fmt.Printf("Obj: %v\n", string(unwrap(json.Marshal(args))))
+						fmt.Printf("Obj: %v\n", string(u.Unwrap(json.Marshal(args))))
 						return false, passObjs, nil
 					},
 				},
