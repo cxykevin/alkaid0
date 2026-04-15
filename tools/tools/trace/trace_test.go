@@ -71,7 +71,7 @@ func TestUpdateInfo(t *testing.T) {
 		"path": func() *any { s := any("test.txt"); return &s }(),
 	}
 
-	pass, cross, err := updateInfo(session, mp, []*any{})
+	pass, cross, err := updateInfo(session, mp, []*any{}, "")
 	if err != nil {
 		t.Fatalf("Unexpected error: %v", err)
 	}
@@ -97,7 +97,7 @@ func TestUpdateInfoWithUntrace(t *testing.T) {
 		"untrace": func() *any { b := any(true); return &b }(),
 	}
 
-	pass, _, err := updateInfo(session, mp, []*any{})
+	pass, _, err := updateInfo(session, mp, []*any{}, "")
 	if err != nil {
 		t.Fatalf("Unexpected error: %v", err)
 	}

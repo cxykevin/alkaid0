@@ -5,6 +5,7 @@ import (
 	"context"
 	stdjson "encoding/json"
 	"errors"
+	"fmt"
 	"reflect"
 	"regexp"
 	"strings"
@@ -77,13 +78,13 @@ func stringDefault(str *string) string {
 	return *str
 }
 
-// toolCallExprEnv 定义了自动审批/拒绝规则表达式的执行环境。
-// 规则可以通过访问 ToolCalls（所有调用）、ToolCall（当前调用）和 Agent 配置来做出决策。
-type toolCallExprEnv struct {
-	ToolCalls []ToolCall
-	ToolCall  ToolCall
-	Agent     cfgStructs.AgentConfig
-}
+// // toolCallExprEnv 定义了自动审批/拒绝规则表达式的执行环境。
+// // 规则可以通过访问 ToolCalls（所有调用）、ToolCall（当前调用）和 Agent 配置来做出决策。
+// type toolCallExprEnv struct {
+// 	ToolCalls []ToolCall
+// 	ToolCall  ToolCall
+// 	Agent     cfgStructs.AgentConfig
+// }
 
 // mergeAutoRuleExpr 将用户定义的规则与系统内置规则合并。
 // 使用逻辑或 (||) 连接，意味着只要任一规则触发（审批或拒绝），该决策即生效。
@@ -159,6 +160,7 @@ type ToolCall struct {
 	Parameters map[string]*any `json:"parameters"`
 }
 
+// AsMap 将 ToolCall 转换为 map[string]any
 func (t ToolCall) AsMap() map[string]any {
 	return map[string]any{
 		"Name":       t.Name,
@@ -457,7 +459,8 @@ func ApplyToolOnHooks(session *storageStructs.Chats, toolCallingJSON string) err
 		return err
 	}
 	for _, call := range toolCalls {
-		if err := tools.ExecToolOnHook(session, call.Name, call.Parameters); err != nil {
+		session.CurrentToolID = fmt.Sprintf("call_%d_%d_%s", session.ID, session.CurrentMessageID, call.ID)
+		if err := tools.ExecToolOnHook(session, call.Name, call.Parameters, call.ID); err != nil {
 			return err
 		}
 	}
@@ -502,7 +505,7 @@ func ExecuteToolCalls(session *storageStructs.Chats, toolCallingJSON string) (bo
 }
 
 // SendRequest 发送请求
-func SendRequest(ctx context.Context, session *storageStructs.Chats, callback func(string, string) error) (bool, error) {
+func SendRequest(ctx context.Context, session *storageStructs.Chats, callback func(string, string, uint64) error) (bool, error) {
 	session.State = state.StateWaiting
 	session.TemporyDataOfRequest = make(map[string]any)
 	db := session.DB
@@ -552,6 +555,8 @@ func SendRequest(ctx context.Context, session *storageStructs.Chats, callback fu
 		return true, tx.Error
 	}
 
+	session.CurrentMessageID = reqObj.ID
+
 	var gDelta strings.Builder
 	var gThinkingDelta strings.Builder
 	var pendingDelta strings.Builder
@@ -596,7 +601,7 @@ func SendRequest(ctx context.Context, session *storageStructs.Chats, callback fu
 			lastFlushThinkingLen = len(gtstring)
 		}
 		// 回调函数通常用于实时推送到 UI 界面
-		if err := callback(delta, thinkingDelta); err != nil {
+		if err := callback(delta, thinkingDelta, msgID); err != nil {
 			return err
 		}
 		return nil
@@ -661,7 +666,7 @@ func SendRequest(ctx context.Context, session *storageStructs.Chats, callback fu
 		}
 		return true, nil
 	}
-	err = callback(delta, thinkingDelta)
+	err = callback(delta, thinkingDelta, msgID)
 	if err != nil {
 		return true, err
 	}

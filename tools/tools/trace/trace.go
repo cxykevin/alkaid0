@@ -17,6 +17,7 @@ import (
 	"github.com/cxykevin/alkaid0/tools/actions"
 	"github.com/cxykevin/alkaid0/tools/index"
 	"github.com/cxykevin/alkaid0/tools/toolobj"
+	u "github.com/cxykevin/alkaid0/utils"
 )
 
 const toolName = "trace"
@@ -63,31 +64,40 @@ type toolCallFlagTempory struct {
 	FlagOutputed bool
 }
 
-func updateInfo(session *structs.Chats, mp map[string]*any, cross []*any) (bool, []*any, error) {
-	// 只在参数存在时输出，支持流式更新
-	tmp, ok := session.TemporyDataOfRequest["tools:trace"]
-	if !ok || tmp == nil {
-		session.TemporyDataOfRequest["tools:trace"] = toolCallFlagTempory{}
-		tmp = session.TemporyDataOfRequest["tools:trace"]
-	}
-	tmpObj := tmp.(toolCallFlagTempory)
+func updateInfo(session *structs.Chats, mp map[string]*any, cross []*any, toolID string) (bool, []*any, error) {
+	toolCallID := fmt.Sprintf("call_%d_%d_%s", session.ID, session.CurrentMessageID, toolID)
+	respString := ""
+	var pathVal *string
+	var untraceVal *bool
 	if pathPtr, ok := mp["path"]; ok && pathPtr != nil {
 		if path, ok := (*pathPtr).(string); ok {
-			if !tmpObj.PathOutputed {
-				fmt.Printf("Trace path: %s\n", path)
-				tmpObj.PathOutputed = true
-			}
+			respString += "Path: " + path + "\n"
+			pathVal = &path
 		}
 	}
-	if untPtr, ok := mp["untrace"]; ok && untPtr != nil {
-		if unt, ok := (*untPtr).(bool); ok {
-			if !tmpObj.FlagOutputed {
-				fmt.Printf("Untrace: %v\n", unt)
-				tmpObj.FlagOutputed = true
-			}
+	if untracePtr, ok := mp["disable"]; ok && untracePtr != nil {
+		if untrace, ok := (*untracePtr).(bool); ok {
+			respString += "Untrace: " + u.Ternary(untrace, "true", "false") + "\n"
+			untraceVal = &untrace
 		}
 	}
-	session.TemporyDataOfRequest["tools:trace"] = tmpObj
+	respObj := []u.H{{
+		"type": "content",
+		"content": u.H{
+			"type": "text",
+			"text": respString,
+		},
+	}, {
+		"type":      "alk.cxykevin.top/calling_info",
+		"name":      toolName,
+		"messageID": session.CurrentMessageID,
+		"args": u.H{
+			"name":    pathVal,
+			"untrace": untraceVal,
+		},
+	}}
+	session.ToolCallingContext[toolCallID] = respObj
+	session.ToolCallingType[toolCallID] = "trace"
 	return true, cross, nil
 }
 

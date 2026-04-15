@@ -6,10 +6,10 @@ import (
 	"fmt"
 	"text/template"
 
-	"github.com/cxykevin/alkaid0/library/json"
 	"github.com/cxykevin/alkaid0/log"
 	"github.com/cxykevin/alkaid0/prompts"
 	"github.com/cxykevin/alkaid0/provider/parser"
+	u "github.com/cxykevin/alkaid0/utils"
 
 	agents "github.com/cxykevin/alkaid0/provider/request/agents/actions"
 	agentconfig "github.com/cxykevin/alkaid0/provider/request/agents/config"
@@ -79,17 +79,6 @@ var parasMan = map[string]parser.ToolParameters{
 	},
 }
 
-type activateToolCallFlagTempory struct {
-	NameOutputed      bool
-	PromptOutputedLen int32
-}
-type toolCallFlagTempory struct {
-	NameOutputed bool
-	TagOutputed  bool
-	PathOutputed bool
-	FlagOutputed bool
-}
-
 // func buildPrompt(session *structs.Chats) (string, error) {
 // 	return promptIn, nil
 // }
@@ -97,91 +86,88 @@ type toolCallFlagTempory struct {
 // 	return promptOut, nil
 // }
 
-func updateAgentInfo(session *structs.Chats, mp map[string]*any, cross []*any) (bool, []*any, error) {
-	// 只在参数存在时输出，支持流式更新
-	tmp, ok := session.TemporyDataOfRequest["tools:agent:edit"]
-	if !ok || tmp == nil {
-		session.TemporyDataOfRequest["tools:agent:edit"] = toolCallFlagTempory{}
-		tmp = session.TemporyDataOfRequest["tools:agent:edit"]
-	}
-	tmpObj := tmp.(toolCallFlagTempory)
+func updateAgentInfo(session *structs.Chats, mp map[string]*any, cross []*any, toolID string) (bool, []*any, error) {
+
+	toolCallID := fmt.Sprintf("call_%d_%d_%s", session.ID, session.CurrentMessageID, toolID)
+	respString := ""
+	var nameVal *string
+	var tagVal *string
+	var deleteVal *bool
 	if namePtr, ok := mp["name"]; ok && namePtr != nil {
 		if name, ok := (*namePtr).(string); ok {
-			if !tmpObj.NameOutputed {
-				fmt.Printf("Edit agent name: %s\n", name)
-				tmpObj.NameOutputed = true
-			}
+			respString += "Name: " + name + "\n"
+			nameVal = &name
 		}
 	}
-
 	if tagPtr, ok := mp["tag"]; ok && tagPtr != nil {
 		if tag, ok := (*tagPtr).(string); ok {
-			if !tmpObj.TagOutputed {
-				fmt.Printf("Edit agent tag: %s\n", tag)
-				tmpObj.TagOutputed = true
-			}
+			respString += "Tag: " + tag + "\n"
+			tagVal = &tag
 		}
 	}
-
-	if pathPtr, ok := mp["path"]; ok && pathPtr != nil {
-		if path, ok := (*pathPtr).(string); ok {
-			if !tmpObj.PathOutputed {
-				fmt.Printf("Edit agent path: %s\n", path)
-				tmpObj.PathOutputed = true
-			}
+	if detelePtr, ok := mp["delete"]; ok && detelePtr != nil {
+		if deletev, ok := (*detelePtr).(bool); ok {
+			respString += "Delete: " + u.Ternary(deletev, "true", "false") + "\n"
+			deleteVal = &deletev
 		}
 	}
+	respObj := []u.H{{
+		"type": "content",
+		"content": u.H{
+			"type": "text",
+			"text": respString,
+		},
+	}, {
+		"type":      "alk.cxykevin.top/calling_info",
+		"name":      "agent",
+		"messageID": session.CurrentMessageID,
+		"args": u.H{
+			"name":   nameVal,
+			"tag":    tagVal,
+			"delete": deleteVal,
+		},
+	}}
+	session.ToolCallingContext[toolCallID] = respObj
+	session.ToolCallingType[toolCallID] = "agent"
 
-	if untPtr, ok := mp["delete"]; ok && untPtr != nil {
-		if unt, ok := (*untPtr).(bool); ok {
-			if !tmpObj.FlagOutputed {
-				fmt.Printf("Delete agent: %v\n", unt)
-				tmpObj.FlagOutputed = true
-			}
-		}
-	}
-
-	session.TemporyDataOfRequest["tools:agent:edit"] = tmpObj
 	return true, cross, nil
 }
-func updateInfo(session *structs.Chats, mp map[string]*any, cross []*any) (bool, []*any, error) {
-	// 只在参数存在时输出，支持流式更新
-	tmp, ok := session.TemporyDataOfRequest["tools:agent"]
-	if !ok || tmp == nil {
-		session.TemporyDataOfRequest["tools:agent"] = activateToolCallFlagTempory{}
-		tmp = session.TemporyDataOfRequest["tools:agent"]
-	}
-	tmpObj := tmp.(activateToolCallFlagTempory)
+
+func updateInfo(session *structs.Chats, mp map[string]*any, cross []*any, toolID string) (bool, []*any, error) {
+	currToolName := u.Ternary(session.CurrentAgentID != "", "activate_agent", "deactivate_agent")
+	toolCallID := fmt.Sprintf("call_%d_%d_%s", session.ID, session.CurrentMessageID, toolID)
+	respString := ""
+	var nameVal *string
+	var promptVal *string
 	if namePtr, ok := mp["name"]; ok && namePtr != nil {
 		if name, ok := (*namePtr).(string); ok {
-			if !tmpObj.NameOutputed {
-				fmt.Printf("Activate agent: %s\n", name)
-				tmpObj.NameOutputed = true
-			}
+			respString += "Name: " + name + "\n"
+			nameVal = &name
 		}
 	}
-
-	if textPtr, ok := mp["prompt"]; ok && textPtr != nil {
-		var textOut string
-		if text, ok := (*textPtr).(string); ok {
-			textOut = text
-		}
-		if text, ok := (*textPtr).(json.StringSlot); ok {
-			textOut = string(text)
-		}
-		if textOut != "" && int(tmpObj.PromptOutputedLen) == 0 {
-			activateStr := "Activate"
-			if session.CurrentAgentID != "" {
-				activateStr = "Dectivate"
-			}
-			fmt.Printf("%s prompt: ", activateStr)
-		}
-		if textOut != "" && int(tmpObj.PromptOutputedLen) < len(textOut) {
-			fmt.Print(textOut[tmpObj.PromptOutputedLen:])
-			tmpObj.PromptOutputedLen = int32(len(textOut))
+	if promptPtr, ok := mp["prompt"]; ok && promptPtr != nil {
+		if prompt, ok := (*promptPtr).(string); ok {
+			respString += "Prompt: " + prompt + "\n"
+			promptVal = &prompt
 		}
 	}
-	session.TemporyDataOfRequest["tools:agent"] = tmpObj
+	respObj := []u.H{{
+		"type": "content",
+		"content": u.H{
+			"type": "text",
+			"text": respString,
+		},
+	}, {
+		"type":      "alk.cxykevin.top/calling_info",
+		"name":      currToolName,
+		"messageID": session.CurrentMessageID,
+		"args": u.H{
+			"name":   nameVal,
+			"prompt": promptVal,
+		},
+	}}
+	session.ToolCallingContext[toolCallID] = respObj
+	session.ToolCallingType[toolCallID] = currToolName
 	return true, cross, nil
 }
 

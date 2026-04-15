@@ -8,14 +8,14 @@ import (
 	"gorm.io/gorm"
 )
 
-// ChatAlivePolicy 对话存活策略
-type ChatAlivePolicy uint16
+// // ChatAlivePolicy 对话存活策略
+// type ChatAlivePolicy uint16
 
-// 存活策略枚举
-const (
-	ChatAlivePolicyExitOnClose ChatAlivePolicy = iota
-	ChatAlivePolicyExitOnStop
-)
+// // 存活策略枚举
+// const (
+// 	ChatAlivePolicyExitOnClose ChatAlivePolicy = iota
+// 	ChatAlivePolicyExitOnStop
+// )
 
 // Chats 对话列表
 type Chats struct {
@@ -39,4 +39,9 @@ type Chats struct {
 	TemporyDataOfSession map[string]any      `gorm:"-" json:"-"`
 	InTestFlag           bool                `gorm:"-" json:"-"`
 	ReferCount           int32               `gorm:"-" json:"-"`
+	ToolCallingContext   map[string]any      `gorm:"-" json:"-"`
+	ToolCallingType      map[string]string   `gorm:"-" json:"-"`
+	CurrentToolID        string              `gorm:"-" json:"-"`
+	CurrentMessageID     uint64              `gorm:"-" json:"-"`
+	ToolState            uint64              `gorm:"-" json:"-"`
 }

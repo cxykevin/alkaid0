@@ -72,3 +72,11 @@ func ReApply[T any](v T) (H, error) {
 	err = json.Unmarshal(bts, &res)
 	return res, err
 }
+
+// Ternary 三元运算
+func Ternary[T any](v bool, a, b T) T {
+	if v {
+		return a
+	}
+	return b
+}

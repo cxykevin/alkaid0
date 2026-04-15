@@ -19,7 +19,7 @@ type PostHookFunction struct {
 
 // OnHookFunction 钩子函数
 type OnHookFunction struct {
-	Func     func(*structs.Chats, map[string]*any, []*any) (bool, []*any, error)
+	Func     func(*structs.Chats, map[string]*any, []*any, string) (bool, []*any, error)
 	Priority int32
 }
 

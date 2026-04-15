@@ -75,7 +75,7 @@ func buildPrompt(session *structs.Chats) (string, error) {
 	return prompt, nil
 }
 
-func updateInfo(session *structs.Chats, mp map[string]*any, cross []*any) (bool, []*any, error) {
+func updateInfo(session *structs.Chats, mp map[string]*any, cross []*any, _ string) (bool, []*any, error) {
 	ret := any(edit.PassInfo{
 		From:        "tree",
 		Description: "File Tree Manager",

@@ -107,7 +107,7 @@ func (p *Parser) solveTool() {
 	if len(pObjects) == 0 {
 		return
 	}
-	// 遍历数组，处理新出现的工具调用对象。
+	// 遍历数组，处理新出现的工具调用对象
 	for idx, pObject := range pObjects {
 		if idx < p.toolSolveTmp.toolNum {
 			continue

@@ -2,7 +2,8 @@
     // "go.testEnvFile": "${workspaceFolder}/.env",
     "go.testEnvVars": {
         "ALKAID0_LOG_PATH": "${workspaceFolder}/debug_config/log.log",
-        "ALKAID0_CONFIG_PATH": "${workspaceFolder}/debug_config/config.json"
+        "ALKAID0_CONFIG_PATH": "${workspaceFolder}/debug_config/config.json",
+        "ALKAID0_DEBUG_MOCKSERVER": "true"
     },
     "go.testFlags": [
         "-count=1"

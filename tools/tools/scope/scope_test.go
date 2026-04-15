@@ -94,7 +94,7 @@ func TestUpdateInfo(t *testing.T) {
 		"name": func() *any { s := any("test_scope"); return &s }(),
 	}
 
-	pass, cross, err := updateInfo(session, mp, []*any{})
+	pass, cross, err := updateInfo(session, mp, []*any{}, "")
 	if err != nil {
 		t.Fatalf("Unexpected error: %v", err)
 	}
@@ -111,7 +111,7 @@ func TestUpdateInfo(t *testing.T) {
 	}
 
 	// 测试第二次调用（应该不再输出）
-	pass, cross, err = updateInfo(session, mp, []*any{})
+	pass, cross, err = updateInfo(session, mp, []*any{}, "")
 	if err != nil {
 		t.Fatalf("Unexpected error: %v", err)
 	}
@@ -130,7 +130,7 @@ func TestUpdateInfoWithDisable(t *testing.T) {
 		"disable": func() *any { b := any(true); return &b }(),
 	}
 
-	pass, _, err := updateInfo(session, mp, []*any{})
+	pass, _, err := updateInfo(session, mp, []*any{}, "")
 	if err != nil {
 		t.Fatalf("Unexpected error: %v", err)
 	}

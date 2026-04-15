@@ -1,6 +1,7 @@
 package actions
 
 import (
+	"fmt"
 	"testing"
 )
 
@@ -66,10 +67,10 @@ func TestSessionID2Cwd(t *testing.T) {
 // TestCwd2SessionID 测试会话ID生成功能
 func TestCwd2SessionID(t *testing.T) {
 	tests := []struct {
-		name      string
-		cwd       string
-		id        uint32
-		wantResp  string
+		name     string
+		cwd      string
+		id       uint32
+		wantResp string
 	}{
 		{
 			name:     "基础会话ID生成",
@@ -131,21 +132,21 @@ func TestToolNameToType(t *testing.T) {
 // TestSessionNewValidation 测试SessionNew的参数验证
 func TestSessionNewValidation(t *testing.T) {
 	tests := []struct {
-		name      string
-		cwd       string
-		wantErr   bool
+		name        string
+		cwd         string
+		wantErr     bool
 		errContains string
 	}{
 		{
-			name:      "空的cwd",
-			cwd:       "",
-			wantErr:   true,
+			name:        "空的cwd",
+			cwd:         "",
+			wantErr:     true,
 			errContains: "cwd is empty",
 		},
 		{
-			name:      "不存在的目录",
-			cwd:       "/nonexistent/path/12345",
-			wantErr:   true,
+			name:        "不存在的目录",
+			cwd:         "/nonexistent/path/12345",
+			wantErr:     true,
 			errContains: "not found",
 		},
 	}
@@ -167,21 +168,21 @@ func TestSessionNewValidation(t *testing.T) {
 // TestSessionListValidation 测试SessionList的参数验证
 func TestSessionListValidation(t *testing.T) {
 	tests := []struct {
-		name      string
-		cwd       string
-		wantErr   bool
+		name        string
+		cwd         string
+		wantErr     bool
 		errContains string
 	}{
 		{
-			name:      "不存在的工作目录",
-			cwd:       "/nonexistent/path/98765",
-			wantErr:    true,
+			name:        "不存在的工作目录",
+			cwd:         "/nonexistent/path/98765",
+			wantErr:     true,
 			errContains: "not found",
 		},
 		{
-			name:      "未初始化的工作目录",
-			cwd:       "/tmp",
-			wantErr:   true,
+			name:        "未初始化的工作目录",
+			cwd:         "/tmp",
+			wantErr:     true,
 			errContains: "not inited",
 		},
 	}
@@ -203,24 +204,24 @@ func TestSessionListValidation(t *testing.T) {
 // TestSessionLoadValidation 测试SessionLoad的参数验证
 func TestSessionLoadValidation(t *testing.T) {
 	tests := []struct {
-		name       string
-		cwd        string
-		sessionID  string
-		wantErr    bool
+		name        string
+		cwd         string
+		sessionID   string
+		wantErr     bool
 		errContains string
 	}{
 		{
-			name:      "无效的会话ID",
-			cwd:       "/tmp",
-			sessionID: "invalid",
-			wantErr:   true,
+			name:        "无效的会话ID",
+			cwd:         "/tmp",
+			sessionID:   "invalid",
+			wantErr:     true,
 			errContains: "short",
 		},
 		{
-			name:      "cwd不匹配",
-			cwd:       "/tmp",
-			sessionID: "sess_123:/home/test",
-			wantErr:   true,
+			name:        "cwd不匹配",
+			cwd:         "/tmp",
+			sessionID:   "sess_123:/home/test",
+			wantErr:     true,
 			errContains: "not match",
 		},
 	}
@@ -243,19 +244,19 @@ func TestSessionLoadValidation(t *testing.T) {
 func TestBindedSessionOnConnCleanup(t *testing.T) {
 	// 重置全局状态
 	bindedSessionOnConn = map[uint64][]string{}
-	
+
 	const connID uint64 = 12345
-	
+
 	// 模拟会话绑定
 	bindedSessionOnConn[connID] = []string{"sess_1:/tmp", "sess_2:/tmp"}
-	
+
 	if len(bindedSessionOnConn[connID]) != 2 {
 		t.Errorf("Expected 2 sessions bound to connection, got %d", len(bindedSessionOnConn[connID]))
 	}
-	
+
 	// 模拟连接关闭（Close函数行为）
 	delete(bindedSessionOnConn, connID)
-	
+
 	if _, ok := bindedSessionOnConn[connID]; ok {
 		t.Errorf("Expected connection to be cleaned up, but it still exists")
 	}
@@ -266,20 +267,124 @@ func TestSessionIDFormat(t *testing.T) {
 	cwd := "/home/user/project"
 	id := uint32(42)
 	sessionID := cwd2SessionID(cwd, id)
-	
+
 	// 验证往返转换
 	parsedCwd, parsedID, err := sessionID2Cwd(sessionID)
 	if err != nil {
 		t.Errorf("Failed to parse session ID: %v", err)
 		return
 	}
-	
+
 	if parsedCwd != cwd {
 		t.Errorf("cwd mismatch: got %s, want %s", parsedCwd, cwd)
 	}
-	
+
 	if parsedID != id {
 		t.Errorf("id mismatch: got %d, want %d", parsedID, id)
+	}
+}
+
+// TestSessionSetConfigOptionValidation 测试SessionSetConfigOption的参数验证
+func TestSessionSetConfigOptionValidation(t *testing.T) {
+	tests := []struct {
+		name        string
+		sessionID   string
+		configID    string
+		value       string
+		wantErr     bool
+		errContains string
+	}{
+		{
+			name:        "空的sessionId",
+			sessionID:   "",
+			configID:    "model",
+			value:       "0/model1",
+			wantErr:     true,
+			errContains: "empty",
+		},
+		{
+			name:        "空的configId",
+			sessionID:   "sess_123:/tmp",
+			configID:    "",
+			value:       "0/model1",
+			wantErr:     true,
+			errContains: "empty",
+		},
+		{
+			name:        "空的value",
+			sessionID:   "sess_123:/tmp",
+			configID:    "model",
+			value:       "",
+			wantErr:     true,
+			errContains: "empty",
+		},
+		{
+			name:        "无效的sessionId格式",
+			sessionID:   "invalid",
+			configID:    "model",
+			value:       "0/model1",
+			wantErr:     true,
+			errContains: "invalid",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := SessionSetConfigOption(SessionSetConfigOptionRequest{
+				SessionID: tt.sessionID,
+				ConfigID:  tt.configID,
+				Value:     tt.value,
+			}, nil, 1)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("SessionSetConfigOption() error = %v, wantErr %v", err, tt.wantErr)
+				return
+			}
+			if tt.wantErr && err != nil && !contains(err.Error(), tt.errContains) {
+				t.Errorf("SessionSetConfigOption() error message = %v, want contains %v", err.Error(), tt.errContains)
+			}
+		})
+	}
+}
+
+// TestSessionSetModelValidation 测试SessionSetModel的参数验证
+func TestSessionSetModelValidation(t *testing.T) {
+	tests := []struct {
+		name        string
+		sessionID   string
+		modelID     int32
+		wantErr     bool
+		errContains string
+	}{
+		{
+			name:        "空的sessionId",
+			sessionID:   "",
+			modelID:     0,
+			wantErr:     true,
+			errContains: "empty",
+		},
+		{
+			name:        "无效的sessionId格式",
+			sessionID:   "invalid",
+			modelID:     0,
+			wantErr:     true,
+			errContains: "invalid",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := SessionSetModel(SessionSetModelRequest{
+				SessionID: tt.sessionID,
+				ModelID:   fmt.Sprintf("%d/model", tt.modelID),
+			}, nil, 1)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("SessionSetModel() error = %v, wantErr %v", err, tt.wantErr)
+				return
+			}
+			if tt.wantErr && err != nil && !contains(err.Error(), tt.errContains) {
+				t.Errorf("SessionSetModel() error message = %v, want contains %v", err.Error(), tt.errContains)
+			}
+		})
 	}
 }
 

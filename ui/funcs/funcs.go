@@ -57,6 +57,8 @@ func CreateChat(db *gorm.DB) (uint32, error) {
 func InitChat(db *gorm.DB, chat *structs.Chats) (*structs.Chats, error) {
 	session := *chat
 	session.DB = db
+	session.ToolCallingContext = make(map[string]any)
+	session.ToolCallingType = make(map[string]string)
 	session.TemporyDataOfSession = make(map[string]any)
 	actions.Load(&session)
 	storage.GlobalConfig.LastChatID = session.ID
@@ -79,74 +81,75 @@ func GetModelName(modelID uint32, defaultName string) string {
 }
 
 // PendingToolCall 待审批工具调用
-// 约定：最近一次带 ToolCallingJSONString 的消息即待审批内容
-func PendingToolCall(session *structs.Chats) ([]ToolCall, *structs.Messages, error) {
+// 最近一次带 ToolCallingJSONString 的消息即待审批内容
+func PendingToolCall(session *structs.Chats) ([]ToolCall, *structs.Messages, uint64, error) {
 	if session.State != state.StateWaitApprove {
-		return nil, nil, nil
+		return nil, nil, 0, nil
 	}
 	var msg structs.Messages
 	err := session.DB.Where("chat_id = ? AND tool_calling_json_string != ''", session.ID).Order("id DESC").First(&msg).Error
 	if err != nil {
 		if err == gorm.ErrRecordNotFound {
-			return nil, nil, nil
+			return nil, nil, msg.ID, nil
 		}
-		return nil, nil, err
+		return nil, nil, msg.ID, err
 	}
 	if session.TemporyDataOfRequest == nil {
 		session.TemporyDataOfRequest = make(map[string]any)
 	}
 	if err := request.ApplyToolOnHooks(session, msg.ToolCallingJSONString); err != nil {
-		return nil, nil, err
+		return nil, nil, msg.ID, err
 	}
 	tools, err := request.ParseToolsFromJSON(msg.ToolCallingJSONString)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, msg.ID, err
 	}
-	return tools, &msg, nil
+	return tools, &msg, msg.ID, nil
 }
 
 // AutoHandlePendingToolCalls 自动处理待审批工具调用
-func AutoHandlePendingToolCalls(session *structs.Chats) (bool, bool, []ToolCall, error) {
+func AutoHandlePendingToolCalls(session *structs.Chats) (bool, bool, []ToolCall, uint64, error) {
 	if session.State != state.StateWaitApprove {
-		return false, false, nil, nil
+		return false, false, nil, 0, nil
 	}
-	tools, msg, err := PendingToolCall(session)
+	tools, msg, msgID, err := PendingToolCall(session)
 	if err != nil || msg == nil || len(tools) == 0 {
-		return false, false, tools, err
+		return false, false, tools, msgID, err
 	}
 	approved, reason, err := request.CanAutoApprove(session, tools, msg)
 	if err != nil {
-		return false, false, tools, err
+		return false, false, tools, msgID, err
 	}
 	if approved {
 		_, err = request.ExecuteToolCalls(session, msg.ToolCallingJSONString)
-		return true, true, nil, err
+		return true, true, nil, msgID, err
 	}
 	if session.CurrentAgentID != "" || session.NowAgent != "" {
 		err = request.RejectToolCallsNoDeactivate(session, reason, nil)
-		return true, false, nil, err
+		return true, false, nil, msgID, err
 	}
-	return false, false, tools, nil
+	return false, false, tools, msgID, nil
 }
 
 // ApproveToolCalls 允许执行待审批工具调用
-func ApproveToolCalls(session *structs.Chats) error {
+func ApproveToolCalls(session *structs.Chats) (uint64, error) {
 	if session.State != state.StateWaitApprove {
-		return nil
+		return 0, nil
 	}
 	var msg structs.Messages
 	err := session.DB.Where("chat_id = ? AND tool_calling_json_string != ''", session.ID).Order("id DESC").First(&msg).Error
 	if err != nil {
 		if err == gorm.ErrRecordNotFound {
-			return nil
+			return msg.ID, nil
 		}
-		return err
+		return msg.ID, err
 	}
 	if session.TemporyDataOfRequest == nil {
 		session.TemporyDataOfRequest = make(map[string]any)
 	}
+	session.CurrentMessageID = msg.ID
 	_, err = request.ExecuteToolCalls(session, msg.ToolCallingJSONString)
-	return err
+	return msg.ID, err
 }
 
 // ToolCall 工具调用
@@ -284,6 +287,6 @@ func UserAddMsg(session *structs.Chats, msg string, refers *structs.MessagesRefe
 }
 
 // SendRequest 发送请求
-func SendRequest(ctx context.Context, session *structs.Chats, callback func(string, string) error) (bool, error) {
+func SendRequest(ctx context.Context, session *structs.Chats, callback func(string, string, uint64) error) (bool, error) {
 	return request.SendRequest(ctx, session, callback)
 }

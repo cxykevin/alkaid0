@@ -1,6 +1,8 @@
 package build
 
 import (
+	"fmt"
+
 	"github.com/cxykevin/alkaid0/prompts"
 	"github.com/cxykevin/alkaid0/provider/parser"
 	"github.com/cxykevin/alkaid0/storage/structs"
@@ -116,7 +118,8 @@ func ToolsSolver(session *structs.Chats, callback func(string, string, map[strin
 			Name: k,
 			Func: func(ID string, arg map[string]*any, ok bool) error {
 				if !ok {
-					err := tools.ExecToolOnHook(session, toolKey, arg)
+					session.CurrentToolID = fmt.Sprintf("call_%d_%d_%s", session.ID, session.CurrentMessageID, ID)
+					err := tools.ExecToolOnHook(session, toolKey, arg, ID)
 					if err != nil {
 						return err
 					}

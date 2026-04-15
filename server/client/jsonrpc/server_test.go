@@ -305,3 +305,147 @@ func TestServerResponseFormat(t *testing.T) {
 		}
 	}
 }
+
+// TestNotificationNoResponse 测试通知请求不返回响应
+func TestNotificationNoResponse(t *testing.T) {
+	srv := New()
+
+	Set(srv, "notify_test", func(p u.H, call func(string, any) error, connID uint64) (any, error) {
+		return "result", nil
+	})
+
+	// 通知请求（ID为nil）
+	req := Request{
+		Version: JSONRPCVersion,
+		ID:      nil,
+		Method:  "notify_test",
+		Params:  map[string]any{},
+	}
+
+	reqData, _ := json.Marshal(req)
+	outputs := []string{}
+
+	_, _ = srv.handle(string(reqData), func(s string) error {
+		outputs = append(outputs, s)
+		return nil
+	}, 1)
+
+	// 通知请求不应该返回任何响应
+	if len(outputs) != 0 {
+		t.Errorf("通知请求应该不返回响应，但得到: %v", outputs)
+	}
+}
+
+// TestParseErrorIDHandling 测试解析错误时ID处理
+func TestParseErrorIDHandling(t *testing.T) {
+	srv := New()
+
+	// 无效的JSON
+	invalidJSON := `{ invalid json }`
+	outputs := []string{}
+
+	returnStr, _ := srv.handle(invalidJSON, func(s string) error {
+		outputs = append(outputs, s)
+		return nil
+	}, 1)
+
+	// 检查直接返回值或输出
+	if returnStr == "" && len(outputs) == 0 {
+		t.Error("解析错误应该返回响应")
+		return
+	}
+
+	result := returnStr
+	if result == "" && len(outputs) > 0 {
+		result = outputs[0]
+	}
+
+	t.Logf("解析错误响应: %s", result)
+
+	var resp Response
+	if err := json.Unmarshal([]byte(result), &resp); err != nil {
+		t.Fatalf("响应JSON解析失败: %v", err)
+	}
+
+	// 解析失败时，ID应为null
+	if resp.ID != nil {
+		t.Errorf("解析错误时ID应为null，但得到: %v", resp.ID)
+	}
+
+	if resp.Error == nil || resp.Error.Code != JRPCParseError {
+		t.Errorf("应该返回ParseError，但得到: %v", resp.Error)
+	}
+}
+
+// TestBatchWithNotifications 测试批量请求中包含通知
+func TestBatchWithNotifications(t *testing.T) {
+	srv := New()
+
+	Set(srv, "add", func(p u.H, call func(string, any) error, connID uint64) (any, error) {
+		a, _ := u.GetH[float64](p, "a")
+		b, _ := u.GetH[float64](p, "b")
+		return a + b, nil
+	})
+
+	batch := []Request{
+		{
+			Version: JSONRPCVersion,
+			ID:      1,
+			Method:  "add",
+			Params:  map[string]any{"a": 1.0, "b": 2.0},
+		},
+		{
+			Version: JSONRPCVersion,
+			ID:      nil, // 通知请求
+			Method:  "add",
+			Params:  map[string]any{"a": 3.0, "b": 4.0},
+		},
+		{
+			Version: JSONRPCVersion,
+			ID:      2,
+			Method:  "add",
+			Params:  map[string]any{"a": 5.0, "b": 6.0},
+		},
+	}
+
+	batchData, _ := json.Marshal(batch)
+	outputs := []string{}
+
+	returnStr, _ := srv.handle(string(batchData), func(s string) error {
+		outputs = append(outputs, s)
+		return nil
+	}, 1)
+
+	// 检查直接返回值或输出
+	result := returnStr
+	if result == "" && len(outputs) > 0 {
+		result = outputs[0]
+	}
+
+	if result == "" {
+		t.Error("批量请求应该返回响应")
+		return
+	}
+
+	t.Logf("批量请求响应: %s", result)
+
+	var resps []Response
+	if err := json.Unmarshal([]byte(result), &resps); err != nil {
+		t.Fatalf("响应JSON解析失败: %v", err)
+	}
+
+	// 应该只有2个响应（ID为1和2的请求），通知请求不返回响应
+	if len(resps) != 2 {
+		t.Errorf("应该返回2个响应，但得到%d个", len(resps))
+	}
+
+	// 检查返回的响应ID
+	if len(resps) >= 2 {
+		if resps[0].ID != float64(1) {
+			t.Errorf("第一个响应ID应为1，但得到:%v", resps[0].ID)
+		}
+		if resps[1].ID != float64(2) {
+			t.Errorf("第二个响应ID应为2，但得到:%v", resps[1].ID)
+		}
+	}
+}

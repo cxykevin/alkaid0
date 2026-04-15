@@ -218,7 +218,7 @@ func TestExecToolOnHook(t *testing.T) {
 			{
 				Scope: "scope1",
 				OnHook: toolobj.OnHookFunction{
-					Func: func(chat *storageStructs.Chats, args map[string]*any, pass []*any) (bool, []*any, error) {
+					Func: func(chat *storageStructs.Chats, args map[string]*any, pass []*any, _ string) (bool, []*any, error) {
 						return true, pass, nil
 					},
 				},
@@ -232,7 +232,7 @@ func TestExecToolOnHook(t *testing.T) {
 
 	v := any("value")
 	args := map[string]*any{"key": &v}
-	err := ExecToolOnHook(testChat, "tool1", args)
+	err := ExecToolOnHook(testChat, "tool1", args, "")
 
 	if err != nil {
 		t.Errorf("ExecToolOnHook failed: expected no error, got %v", err)
@@ -253,7 +253,7 @@ func TestExecToolOnHookWithDisabledScope(t *testing.T) {
 			{
 				Scope: "scope1",
 				OnHook: toolobj.OnHookFunction{
-					Func: func(chat *storageStructs.Chats, args map[string]*any, pass []*any) (bool, []*any, error) {
+					Func: func(chat *storageStructs.Chats, args map[string]*any, pass []*any, _ string) (bool, []*any, error) {
 						return true, pass, nil
 					},
 				},
@@ -265,7 +265,7 @@ func TestExecToolOnHookWithDisabledScope(t *testing.T) {
 
 	v := any("value")
 	args := map[string]*any{"key": &v}
-	err := ExecToolOnHook(testChat, "tool1", args)
+	err := ExecToolOnHook(testChat, "tool1", args, "")
 
 	if err != nil {
 		t.Errorf("ExecToolOnHook failed when scope disabled: expected no error, got %v", err)
@@ -526,7 +526,7 @@ func TestOnHookPrioritySorting(t *testing.T) {
 				Scope: "scope1",
 				OnHook: toolobj.OnHookFunction{
 					Priority: 1,
-					Func: func(chat *storageStructs.Chats, args map[string]*any, pass []*any) (bool, []*any, error) {
+					Func: func(chat *storageStructs.Chats, args map[string]*any, pass []*any, _ string) (bool, []*any, error) {
 						order = append(order, "low")
 						return true, pass, nil
 					},
@@ -536,7 +536,7 @@ func TestOnHookPrioritySorting(t *testing.T) {
 				Scope: "scope1",
 				OnHook: toolobj.OnHookFunction{
 					Priority: 3,
-					Func: func(chat *storageStructs.Chats, args map[string]*any, pass []*any) (bool, []*any, error) {
+					Func: func(chat *storageStructs.Chats, args map[string]*any, pass []*any, _ string) (bool, []*any, error) {
 						order = append(order, "high")
 						return true, pass, nil
 					},
@@ -546,7 +546,7 @@ func TestOnHookPrioritySorting(t *testing.T) {
 				Scope: "scope1",
 				OnHook: toolobj.OnHookFunction{
 					Priority: 2,
-					Func: func(chat *storageStructs.Chats, args map[string]*any, pass []*any) (bool, []*any, error) {
+					Func: func(chat *storageStructs.Chats, args map[string]*any, pass []*any, _ string) (bool, []*any, error) {
 						order = append(order, "mid")
 						return true, pass, nil
 					},
@@ -557,7 +557,7 @@ func TestOnHookPrioritySorting(t *testing.T) {
 	actions.AddTool(tool)
 	v := any("value")
 	args := map[string]*any{"key": &v}
-	err := ExecToolOnHook(testChat, "tool1", args)
+	err := ExecToolOnHook(testChat, "tool1", args, "")
 
 	if err != nil {
 		t.Fatalf("ExecToolOnHook returned error: %v", err)

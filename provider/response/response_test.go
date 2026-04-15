@@ -126,7 +126,7 @@ func TestSolver_ToolCalling_SingleTool(t *testing.T) {
 					},
 				},
 				OnHook: toolobj.OnHookFunction{
-					Func: func(chat *storageStructs.Chats, args map[string]*any, passObjs []*any) (bool, []*any, error) {
+					Func: func(chat *storageStructs.Chats, args map[string]*any, passObjs []*any, _ string) (bool, []*any, error) {
 						fmt.Printf("Obj: %v\n", string(u.Unwrap(json.Marshal(args))))
 						return false, passObjs, nil
 					},
@@ -241,7 +241,7 @@ func TestSolver_ToolCalling_MultipleTools(t *testing.T) {
 					},
 				},
 				OnHook: toolobj.OnHookFunction{
-					Func: func(chat *storageStructs.Chats, args map[string]*any, passObjs []*any) (bool, []*any, error) {
+					Func: func(chat *storageStructs.Chats, args map[string]*any, passObjs []*any, _ string) (bool, []*any, error) {
 						fmt.Printf("Obj: %v\n", string(u.Unwrap(json.Marshal(args))))
 						return false, passObjs, nil
 					},
@@ -281,7 +281,7 @@ func TestSolver_ToolCalling_MultipleTools(t *testing.T) {
 					},
 				},
 				OnHook: toolobj.OnHookFunction{
-					Func: func(chat *storageStructs.Chats, args map[string]*any, passObjs []*any) (bool, []*any, error) {
+					Func: func(chat *storageStructs.Chats, args map[string]*any, passObjs []*any, _ string) (bool, []*any, error) {
 						fmt.Printf("Obj: %v\n", string(u.Unwrap(json.Marshal(args))))
 						return false, passObjs, nil
 					},
@@ -333,7 +333,7 @@ func TestSolver_ToolCalling_MultipleTools(t *testing.T) {
 	}
 
 	// 解析保存的toolResponses
-	var savedResponses []map[string]interface{}
+	var savedResponses []map[string]any
 	if err := json.Unmarshal([]byte(msg.Delta), &savedResponses); err != nil {
 		t.Fatalf("failed to unmarshal toolResponses: %v", err)
 	}

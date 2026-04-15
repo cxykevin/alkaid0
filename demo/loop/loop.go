@@ -266,7 +266,7 @@ func Start(ctx context.Context, db *gorm.DB) {
 			cancelResponse = responseCancel
 			mu.Unlock()
 
-			finish, err := funcs.SendRequest(responseCtx, &session, func(delta string, thinkingDelta string) error {
+			finish, err := funcs.SendRequest(responseCtx, &session, func(delta string, thinkingDelta string, _ uint64) error {
 				select {
 				case <-responseCtx.Done():
 					return responseCtx.Err()
@@ -311,7 +311,7 @@ func Start(ctx context.Context, db *gorm.DB) {
 
 			if finish {
 				if session.State == state.StateWaitApprove {
-					autoHandled, approved, pendingTools, pErr := funcs.AutoHandlePendingToolCalls(&session)
+					autoHandled, approved, pendingTools, _, pErr := funcs.AutoHandlePendingToolCalls(&session)
 					if pErr != nil {
 						fmt.Printf("%s❌ Failed to load pending tool calls: %v%s\n", ColorRed, pErr, ColorReset)
 					} else if autoHandled {
@@ -345,7 +345,7 @@ func Start(ctx context.Context, db *gorm.DB) {
 
 	// 启动时如有待审批，尝试自动处理并提示用户
 	if session.State == state.StateWaitApprove {
-		autoHandled, approved, pendingTools, err := funcs.AutoHandlePendingToolCalls(&session)
+		autoHandled, approved, pendingTools, _, err := funcs.AutoHandlePendingToolCalls(&session)
 		if err != nil {
 			fmt.Printf("%s❌ Failed to load pending tool calls: %v%s\n", ColorRed, err, ColorReset)
 		} else if autoHandled {
@@ -475,7 +475,7 @@ func Start(ctx context.Context, db *gorm.DB) {
 					fmt.Printf("%sNo pending tool calls%s\n", ColorYellow, ColorReset)
 					continue
 				}
-				if err := funcs.ApproveToolCalls(&session); err != nil {
+				if _, err := funcs.ApproveToolCalls(&session); err != nil {
 					fmt.Printf("%s❌ Approve failed: %v%s\n", ColorRed, err, ColorReset)
 				} else {
 					fmt.Printf("%s✓ Tool calls approved%s\n", ColorGreen, ColorReset)

@@ -12,7 +12,6 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/cxykevin/alkaid0/library/json"
 	"github.com/cxykevin/alkaid0/log"
 	"github.com/cxykevin/alkaid0/provider/parser"
 	"github.com/cxykevin/alkaid0/storage/structs"
@@ -20,6 +19,7 @@ import (
 	"github.com/cxykevin/alkaid0/tools/index"
 	"github.com/cxykevin/alkaid0/tools/toolobj"
 	"github.com/cxykevin/alkaid0/tools/tools/trace"
+	u "github.com/cxykevin/alkaid0/utils"
 )
 
 const toolName = "edit"
@@ -58,52 +58,60 @@ type PassInfo struct {
 // 	return prompt, nil
 // }
 
-type toolCallFlagTempory struct {
-	PathOutputed    bool
-	TargetOutputed  bool
-	TextOutputedLen int32
-}
+// type toolCallFlagTempory struct {
+// 	PathOutputed    bool
+// 	TargetOutputed  bool
+// 	TextOutputedLen int32
+// }
 
-func updateInfo(session *structs.Chats, mp map[string]*any, cross []*any) (bool, []*any, error) {
-	tmp, ok := session.TemporyDataOfRequest["tools:edit"]
-	if !ok || tmp == nil {
-		session.TemporyDataOfRequest["tools:edit"] = toolCallFlagTempory{}
-		tmp = session.TemporyDataOfRequest["tools:edit"]
-	}
-	tmpObj := tmp.(toolCallFlagTempory)
+func updateInfo(session *structs.Chats, mp map[string]*any, cross []*any, toolID string) (bool, []*any, error) {
+	toolCallID := fmt.Sprintf("call_%d_%d_%s", session.ID, session.CurrentMessageID, toolID)
+	respString := ""
+	// tmp, ok := session.TemporyDataOfRequest["tools:edit"]
+	// if !ok || tmp == nil {
+	// 	session.TemporyDataOfRequest["tools:edit"] = toolCallFlagTempory{}
+	// 	tmp = session.TemporyDataOfRequest["tools:edit"]
+	// }
+	// tmpObj := tmp.(toolCallFlagTempory)
+	var pathVal *string
+	var targetVal *string
+	var textVal *string
 	if pathPtr, ok := mp["path"]; ok && pathPtr != nil {
 		if path, ok := (*pathPtr).(string); ok {
-			if !tmpObj.PathOutputed {
-				fmt.Printf("Edit path: %s\n", path)
-				tmpObj.PathOutputed = true
-			}
+			respString += "Path: " + path + "\n"
+			pathVal = &path
 		}
 	}
 	if targetPtr, ok := mp["target"]; ok && targetPtr != nil {
 		if target, ok := (*targetPtr).(string); ok {
-			if !tmpObj.TargetOutputed {
-				fmt.Printf("Edit target: %s\n", target)
-				tmpObj.TargetOutputed = true
-			}
+			respString += "Target: " + target + "\n"
+			targetVal = &target
 		}
 	}
 	if textPtr, ok := mp["text"]; ok && textPtr != nil {
-		var textOut string
 		if text, ok := (*textPtr).(string); ok {
-			textOut = text
-		}
-		if text, ok := (*textPtr).(json.StringSlot); ok {
-			textOut = string(text)
-		}
-		if textOut != "" && int(tmpObj.TextOutputedLen) == 0 {
-			fmt.Print("Edit text: ")
-		}
-		if textOut != "" && int(tmpObj.TextOutputedLen) < len(textOut) {
-			fmt.Print(textOut[tmpObj.TextOutputedLen:])
-			tmpObj.TextOutputedLen = int32(len(textOut))
+			respString += "=== Text ===\n" + text + "\n"
+			textVal = &text
 		}
 	}
-	session.TemporyDataOfRequest["tools:edit"] = tmpObj
+	respObj := []u.H{{
+		"type": "content",
+		"content": u.H{
+			"type": "text",
+			"text": respString,
+		},
+	}, {
+		"type":      "alk.cxykevin.top/calling_info",
+		"name":      toolName,
+		"messageID": session.CurrentMessageID,
+		"args": u.H{
+			"path":   pathVal,
+			"target": targetVal,
+			"text":   textVal,
+		},
+	}}
+	session.ToolCallingContext[toolCallID] = respObj
+	session.ToolCallingType[toolCallID] = "edit"
 	return true, cross, nil
 }
 

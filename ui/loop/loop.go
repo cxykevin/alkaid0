@@ -32,12 +32,14 @@ const (
 
 // AIResponse AI 响应
 type AIResponse struct {
+	MsgID           uint64
 	ThinkingContext string
 	Content         string
 	Error           error
 	SummaryText     string
 	PendingTool     *[]funcs.ToolCall
 	StopReason      StopReason
+	ToolCallContent map[string]any
 }
 
 // msgAction 停止原因
@@ -59,14 +61,15 @@ type msgObj struct {
 
 // Object 循环对象
 type Object struct {
-	sendQueue    chan msgObj
-	recvQueue    chan AIResponse
-	lock         sync.Mutex
-	isResponding bool
-	cancelFunc   context.CancelFunc
-	ctxCancel    context.CancelFunc
-	session      *structs.Chats
-	ctx          context.Context
+	sendQueue     chan msgObj
+	recvQueue     chan AIResponse
+	recvSyncQueue chan struct{}
+	lock          sync.Mutex
+	isResponding  bool
+	cancelFunc    context.CancelFunc
+	ctxCancel     context.CancelFunc
+	session       *structs.Chats
+	ctx           context.Context
 }
 
 const queueSize = 100
@@ -74,10 +77,11 @@ const queueSize = 100
 // New 创建一个新的循环对象
 func New(session *structs.Chats) *Object {
 	return &Object{
-		sendQueue: make(chan msgObj, queueSize),
-		recvQueue: make(chan AIResponse, queueSize),
-		lock:      sync.Mutex{},
-		session:   session,
+		sendQueue:     make(chan msgObj, queueSize),
+		recvQueue:     make(chan AIResponse, queueSize),
+		recvSyncQueue: make(chan struct{}),
+		lock:          sync.Mutex{},
+		session:       session,
 	}
 
 }
@@ -93,6 +97,7 @@ func (p *Object) Start(ctx context.Context) {
 	session := p.session
 	call := func(resp AIResponse) {
 		p.recvQueue <- resp
+		<-p.recvSyncQueue
 	}
 
 	var runResponseLoop func()
@@ -109,7 +114,7 @@ func (p *Object) Start(ctx context.Context) {
 			p.cancelFunc = responseCancel
 			p.lock.Unlock()
 
-			finish, err := funcs.SendRequest(responseCtx, session, func(delta string, thinkingDelta string) error {
+			finish, err := funcs.SendRequest(responseCtx, session, func(delta string, thinkingDelta string, id uint64) error {
 				select {
 				case <-responseCtx.Done():
 					return responseCtx.Err()
@@ -128,11 +133,12 @@ func (p *Object) Start(ctx context.Context) {
 					if !responseStarted {
 						responseStarted = true
 					}
-					call(AIResponse{
-						ThinkingContext: thinkingDelta,
-						Content:         delta,
-					})
 				}
+				call(AIResponse{
+					MsgID:           id,
+					ThinkingContext: thinkingDelta,
+					Content:         delta,
+				})
 				return nil
 			})
 
@@ -154,7 +160,7 @@ func (p *Object) Start(ctx context.Context) {
 
 			if finish {
 				if session.State == state.StateWaitApprove {
-					autoHandled, approved, pendingTools, pErr := funcs.AutoHandlePendingToolCalls(session)
+					autoHandled, approved, pendingTools, msgID, pErr := funcs.AutoHandlePendingToolCalls(session)
 					if pErr != nil {
 						call(AIResponse{
 							Error:      fmt.Errorf("loop error in pending tool calls: %v", pErr),
@@ -168,6 +174,7 @@ func (p *Object) Start(ctx context.Context) {
 						break
 					} else if len(pendingTools) > 0 {
 						call(AIResponse{
+							MsgID:       msgID,
 							PendingTool: &pendingTools,
 							StopReason:  StopReasonError,
 						})
@@ -199,24 +206,35 @@ func (p *Object) Start(ctx context.Context) {
 
 	// 启动时如有待审批，尝试自动处理并提示用户
 	if session.State == state.StateWaitApprove {
-		autoHandled, approved, pendingTools, err := funcs.AutoHandlePendingToolCalls(session)
+		session.ToolState = 1
+		autoHandled, approved, pendingTools, msgID, err := funcs.AutoHandlePendingToolCalls(session)
 		if err != nil {
+			session.ToolState = 0
 			call(AIResponse{
 				Error:      fmt.Errorf("loop error in pending tool calls: %v", err),
 				StopReason: StopReasonError,
 			})
 		} else if autoHandled {
 			if approved {
+				call(AIResponse{
+					MsgID:           msgID,
+					ThinkingContext: "",
+					Content:         "",
+				})
 				func() {
 					runResponseLoop()
 				}()
 			}
+			session.ToolState = 0
 		} else if len(pendingTools) > 0 {
+			session.ToolState = 0
 			call(AIResponse{
+				MsgID:       msgID,
 				PendingTool: &pendingTools,
 				StopReason:  StopReasonPendingTool,
 			})
 		}
+		session.ToolState = 0
 	}
 
 	// 获取用户输入
@@ -256,13 +274,20 @@ func (p *Object) Start(ctx context.Context) {
 				StopReason:  StopReasonUser,
 			})
 		case msgActionApprove:
-			err := funcs.ApproveToolCalls(session)
+			session.ToolState = 1
+			msgID, err := funcs.ApproveToolCalls(session)
 			if err != nil {
 				call(AIResponse{
 					Error:      fmt.Errorf("loop error when approve %v", err),
 					StopReason: StopReasonUser,
 				})
 			}
+			call(AIResponse{
+				MsgID:           msgID,
+				ThinkingContext: "",
+				Content:         "",
+			})
+			session.ToolState = 0
 
 			// 显示 AI 响应
 			runResponseLoop()
@@ -369,6 +394,7 @@ func (p *Object) SetCallback(callFunc func(AIResponse)) {
 			select {
 			case call := <-p.recvQueue:
 				callFunc(call)
+				p.recvSyncQueue <- struct{}{}
 			default:
 				if p.ctx != nil {
 					select {

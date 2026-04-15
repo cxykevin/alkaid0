@@ -8,7 +8,7 @@ const JSONRPCVersion = "2.0"
 // Request JSON-RPC 请求结构体
 type Request struct {
 	Version string `json:"jsonrpc"`
-	ID      any    `json:"id"`
+	ID      any    `json:"id,omitempty"`
 	Method  string `json:"method"`
 	Params  u.H    `json:"params"`
 }

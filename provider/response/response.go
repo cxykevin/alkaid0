@@ -27,6 +27,7 @@ func init() {
 	logger = log.New("response")
 }
 
+// Solver 解析器
 type Solver struct {
 	parser        *parser.Parser
 	toolResponses []toolSaveStruct

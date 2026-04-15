@@ -12,6 +12,7 @@ import (
 	"github.com/cxykevin/alkaid0/tools/actions"
 	"github.com/cxykevin/alkaid0/tools/index"
 	"github.com/cxykevin/alkaid0/tools/toolobj"
+	u "github.com/cxykevin/alkaid0/utils"
 )
 
 const toolName = "test"
@@ -27,8 +28,25 @@ func buildPrompt(session *structs.Chats) (string, error) {
 	return prompt, nil
 }
 
-func updateInfo(session *structs.Chats, mp map[string]*any, cross []*any) (bool, []*any, error) {
+func updateInfo(session *structs.Chats, mp map[string]*any, cross []*any, toolID string) (bool, []*any, error) {
 	fmt.Printf("Test Tool Update: %v\n", mp)
+
+	toolCallID := fmt.Sprintf("call_%d_%d_%s", session.ID, session.CurrentMessageID, toolID)
+	respObj := []u.H{{
+		"type": "content",
+		"content": u.H{
+			"type": "text",
+			"text": "",
+		},
+	}, {
+		"type":      "alk.cxykevin.top/calling_info",
+		"name":      toolName,
+		"messageID": session.CurrentMessageID,
+		"args":      u.H{},
+	}}
+	session.ToolCallingContext[toolCallID] = respObj
+	session.ToolCallingType[toolCallID] = toolName
+
 	return true, cross, nil
 }
 

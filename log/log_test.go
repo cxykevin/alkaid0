@@ -261,13 +261,13 @@ func TestSolvePanic_NoPanic(t *testing.T) {
 	_ = 1 + 1
 }
 
-// TestSolvePanic_WithPanic 测试有 panic 的情况
-// 注意：这个测试会导致进程退出，所以我们跳过它
-func TestSolvePanic_WithPanic(t *testing.T) {
-	t.Skip("Skipping test that causes process exit")
+// // TestSolvePanic_WithPanic 测试有 panic 的情况
+// // 注意：这个测试会导致进程退出，所以我们跳过它
+// func TestSolvePanic_WithPanic(t *testing.T) {
+// 	t.Skip("Skipping test that causes process exit")
 
-	// 如果要测试，需要在子进程中运行
-	// 这里只是展示如何使用 SolvePanic
-	defer SolvePanic()
-	panic("test panic")
-}
+// 	// 如果要测试，需要在子进程中运行
+// 	// 这里只是展示如何使用 SolvePanic
+// 	defer SolvePanic()
+// 	panic("test panic")
+// }

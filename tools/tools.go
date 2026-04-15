@@ -44,7 +44,7 @@ func ExecOneToolGetPrompts(session *structs.Chats, name string) ([]string, []str
 
 	prehooks := make([]string, 0)
 	// 检查工具是否存在
-	if toolobj.ToolsList[name] == nil {
+	if val, ok := toolobj.ToolsList[name]; !ok || val == nil {
 		return unusedHooks, prehooks, make(map[string]parser.ToolParameters)
 	}
 
@@ -81,7 +81,7 @@ func ExecOneToolGetPrompts(session *structs.Chats, name string) ([]string, []str
 }
 
 // ExecToolOnHook 执行工具
-func ExecToolOnHook(session *structs.Chats, name string, args map[string]*any) error {
+func ExecToolOnHook(session *structs.Chats, name string, args map[string]*any, toolID string) error {
 	passObjs := make([]*any, 0)
 
 	// 检查工具是否存在
@@ -104,7 +104,7 @@ func ExecToolOnHook(session *structs.Chats, name string, args map[string]*any) e
 			continue
 		}
 		if hook.OnHook.Func != nil {
-			pass, passObj, err := hook.OnHook.Func(session, args, passObjs)
+			pass, passObj, err := hook.OnHook.Func(session, args, passObjs, toolID)
 			passObjs = passObj
 			if err != nil {
 				logger.Error("hook post hook error: %v", err)

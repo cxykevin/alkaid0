@@ -11,6 +11,7 @@ import (
 	"github.com/cxykevin/alkaid0/tools/actions"
 	"github.com/cxykevin/alkaid0/tools/index"
 	"github.com/cxykevin/alkaid0/tools/toolobj"
+	u "github.com/cxykevin/alkaid0/utils"
 )
 
 const toolName = "scope"
@@ -42,31 +43,40 @@ type toolCallFlagTempory struct {
 // 	return prompt, nil
 // }
 
-func updateInfo(session *structs.Chats, mp map[string]*any, cross []*any) (bool, []*any, error) {
-	// 只在参数存在时输出，支持流式更新
-	tmp, ok := session.TemporyDataOfRequest["tools:scope"]
-	if !ok || tmp == nil {
-		session.TemporyDataOfRequest["tools:scope"] = toolCallFlagTempory{}
-		tmp = session.TemporyDataOfRequest["tools:scope"]
-	}
-	tmpObj := tmp.(toolCallFlagTempory)
+func updateInfo(session *structs.Chats, mp map[string]*any, cross []*any, toolID string) (bool, []*any, error) {
+	toolCallID := fmt.Sprintf("call_%d_%d_%s", session.ID, session.CurrentMessageID, toolID)
+	respString := ""
+	var nameVal *string
+	var disable *bool
 	if namePtr, ok := mp["name"]; ok && namePtr != nil {
 		if name, ok := (*namePtr).(string); ok {
-			if !tmpObj.NameOutputed {
-				fmt.Printf("Use scope: %s\n", name)
-				tmpObj.NameOutputed = true
-			}
+			respString += "Name: " + name + "\n"
+			nameVal = &name
 		}
 	}
-	if untPtr, ok := mp["disable"]; ok && untPtr != nil {
-		if unt, ok := (*untPtr).(bool); ok {
-			if !tmpObj.FlagOutputed {
-				fmt.Printf("Disable scope: %v\n", unt)
-				tmpObj.FlagOutputed = true
-			}
+	if disablePtr, ok := mp["disable"]; ok && disablePtr != nil {
+		if sandbox, ok := (*disablePtr).(bool); ok {
+			respString += "Disable: " + u.Ternary(sandbox, "true", "false") + "\n"
+			disable = &sandbox
 		}
 	}
-	session.TemporyDataOfRequest["tools:scope"] = tmpObj
+	respObj := []u.H{{
+		"type": "content",
+		"content": u.H{
+			"type": "text",
+			"text": respString,
+		},
+	}, {
+		"type":      "alk.cxykevin.top/calling_info",
+		"name":      toolName,
+		"messageID": session.CurrentMessageID,
+		"args": u.H{
+			"name":    nameVal,
+			"disable": disable,
+		},
+	}}
+	session.ToolCallingContext[toolCallID] = respObj
+	session.ToolCallingType[toolCallID] = "scope"
 	return true, cross, nil
 }
 

@@ -23,6 +23,7 @@ import (
 	"github.com/cxykevin/alkaid0/tools/index"
 	"github.com/cxykevin/alkaid0/tools/toolobj"
 	"github.com/cxykevin/alkaid0/tools/tools/trace"
+	u "github.com/cxykevin/alkaid0/utils"
 	"github.com/shirou/gopsutil/v4/host"
 )
 
@@ -80,12 +81,12 @@ type PassInfo struct {
 	Parameters  map[string]any
 }
 
-type toolCallFlagTempory struct {
-	TypeOutputedLen    int32
-	CommandOutputedLen int32
-	ReasonOutputedLen  int32
-	SandboxOutputed    bool
-}
+// type toolCallFlagTempory struct {
+// 	TypeOutputedLen    int32
+// 	CommandOutputedLen int32
+// 	ReasonOutputedLen  int32
+// 	SandboxOutputed    bool
+// }
 
 func asInt32(p *any) (int32, bool) {
 	if p == nil {
@@ -143,71 +144,57 @@ func asString(p *any) (string, bool) {
 	}
 }
 
-func updateInfo(session *structs.Chats, mp map[string]*any, cross []*any) (bool, []*any, error) {
-	tmp, ok := session.TemporyDataOfRequest["tools:run"]
-	if !ok || tmp == nil {
-		session.TemporyDataOfRequest["tools:run"] = toolCallFlagTempory{}
-		tmp = session.TemporyDataOfRequest["tools:run"]
-	}
-	tmpObj := tmp.(toolCallFlagTempory)
-
+func updateInfo(session *structs.Chats, mp map[string]*any, cross []*any, toolID string) (bool, []*any, error) {
+	toolCallID := fmt.Sprintf("call_%d_%d_%s", session.ID, session.CurrentMessageID, toolID)
+	respString := ""
+	var typeVal *string
+	var reasonVal *string
+	var commandVal *string
+	var sandboxVal *bool
 	if typePtr, ok := mp["type"]; ok && typePtr != nil {
-		var typeOut string
-		if text, ok := (*typePtr).(string); ok {
-			typeOut = text
-		}
-		if text, ok := (*typePtr).(json.StringSlot); ok {
-			typeOut = string(text)
-		}
-		if typeOut != "" && int(tmpObj.TypeOutputedLen) == 0 {
-			fmt.Print("Run type: ")
-		}
-		if typeOut != "" && int(tmpObj.TypeOutputedLen) < len(typeOut) {
-			fmt.Print(typeOut[tmpObj.TypeOutputedLen:])
-			tmpObj.TypeOutputedLen = int32(len(typeOut))
+		if typev, ok := (*typePtr).(string); ok {
+			respString += "Type: " + typev + "\n"
+			typeVal = &typev
 		}
 	}
 	if reasonPtr, ok := mp["reason"]; ok && reasonPtr != nil {
-		var reasonOut string
-		if text, ok := (*reasonPtr).(string); ok {
-			reasonOut = text
-		}
-		if text, ok := (*reasonPtr).(json.StringSlot); ok {
-			reasonOut = string(text)
-		}
-		if reasonOut != "" && int(tmpObj.ReasonOutputedLen) == 0 {
-			fmt.Print("\nRun reason: ")
-		}
-		if reasonOut != "" && int(tmpObj.ReasonOutputedLen) < len(reasonOut) {
-			fmt.Print(reasonOut[tmpObj.ReasonOutputedLen:])
-			tmpObj.ReasonOutputedLen = int32(len(reasonOut))
+		if reason, ok := (*reasonPtr).(string); ok {
+			respString += "Reason: " + reason + "\n"
+			reasonVal = &reason
 		}
 	}
-	if cmdPtr, ok := mp["command"]; ok && cmdPtr != nil {
-		var cmdOut string
-		if text, ok := (*cmdPtr).(string); ok {
-			cmdOut = text
-		}
-		if text, ok := (*cmdPtr).(json.StringSlot); ok {
-			cmdOut = string(text)
-		}
-		if cmdOut != "" && int(tmpObj.CommandOutputedLen) == 0 {
-			fmt.Print("\nRun command: ")
-		}
-		if cmdOut != "" && int(tmpObj.CommandOutputedLen) < len(cmdOut) {
-			fmt.Print(cmdOut[tmpObj.CommandOutputedLen:])
-			tmpObj.CommandOutputedLen = int32(len(cmdOut))
+	if commandPtr, ok := mp["command"]; ok && commandPtr != nil {
+		if command, ok := (*commandPtr).(string); ok {
+			respString += "Command: " + command + "\n"
+			commandVal = &command
 		}
 	}
-	if sandPtr, ok := mp["sandbox"]; ok && sandPtr != nil {
-		if sandbox, ok := (*sandPtr).(bool); ok {
-			if !tmpObj.SandboxOutputed {
-				fmt.Printf("\nRun in sandbox: %v\n", sandbox)
-				tmpObj.SandboxOutputed = true
-			}
+	if sandboxPtr, ok := mp["sandbox"]; ok && sandboxPtr != nil {
+		if sandbox, ok := (*sandboxPtr).(bool); ok {
+			respString += "Sandbox: " + u.Ternary(sandbox, "true", "false") + "\n"
+			sandboxVal = &sandbox
 		}
 	}
-	session.TemporyDataOfRequest["tools:run"] = tmpObj
+	respObj := []u.H{{
+		"type": "content",
+		"content": u.H{
+			"type": "text",
+			"text": respString,
+		},
+	}, {
+		"type":      "alk.cxykevin.top/calling_info",
+		"name":      toolName,
+		"messageID": session.CurrentMessageID,
+		"args": u.H{
+			"type":    typeVal,
+			"reason":  reasonVal,
+			"command": commandVal,
+			"sandbox": sandboxVal,
+		},
+	}}
+	session.ToolCallingContext[toolCallID] = respObj
+	session.ToolCallingType[toolCallID] = "run"
+
 	return true, cross, nil
 }
 
