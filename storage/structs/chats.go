@@ -28,20 +28,22 @@ type Chats struct {
 	Title       string
 	// AlivePolicy ChatAlivePolicy
 	// === 会话过程参数 ===
-	Context              *context.Context    `gorm:"-" json:"-"`
-	Stop                 bool                `gorm:"-" json:"-"`
-	DB                   *gorm.DB            `gorm:"-" json:"-"`
-	CurrentAgentID       string              `gorm:"-" json:"-"`
-	CurrentAgentConfig   structs.AgentConfig `gorm:"-" json:"-"`
-	CurrentActivatePath  string              `gorm:"-" json:"-"`
-	EnableScopes         map[string]bool     `gorm:"-" json:"-"`
-	TemporyDataOfRequest map[string]any      `gorm:"-" json:"-"`
-	TemporyDataOfSession map[string]any      `gorm:"-" json:"-"`
-	InTestFlag           bool                `gorm:"-" json:"-"`
-	ReferCount           int32               `gorm:"-" json:"-"`
-	ToolCallingContext   map[string]any      `gorm:"-" json:"-"`
-	ToolCallingType      map[string]string   `gorm:"-" json:"-"`
-	CurrentToolID        string              `gorm:"-" json:"-"`
-	CurrentMessageID     uint64              `gorm:"-" json:"-"`
-	ToolState            uint64              `gorm:"-" json:"-"`
+	Context                  *context.Context    `gorm:"-" json:"-"`
+	Stop                     bool                `gorm:"-" json:"-"`
+	DB                       *gorm.DB            `gorm:"-" json:"-"`
+	CurrentAgentID           string              `gorm:"-" json:"-"`
+	CurrentAgentConfig       structs.AgentConfig `gorm:"-" json:"-"`
+	CurrentActivatePath      string              `gorm:"-" json:"-"`
+	EnableScopes             map[string]bool     `gorm:"-" json:"-"`
+	TemporyDataOfRequest     map[string]any      `gorm:"-" json:"-"`
+	TemporyDataOfSession     map[string]any      `gorm:"-" json:"-"`
+	InTestFlag               bool                `gorm:"-" json:"-"`
+	ReferCount               int32               `gorm:"-" json:"-"`
+	ToolCallingContext       map[string]any      `gorm:"-" json:"-"`
+	ToolCallingType          map[string]string   `gorm:"-" json:"-"`
+	CurrentToolID            string              `gorm:"-" json:"-"`
+	CurrentMessageID         uint64              `gorm:"-" json:"-"`
+	ToolState                uint64              `gorm:"-" json:"-"`
+	LatestToolCallingContext map[string]any      `gorm:"-" json:"-"`
+	LatestToolCallingType    map[string]string   `gorm:"-" json:"-"`
 }

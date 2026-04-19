@@ -9,10 +9,13 @@ import (
 	"time"
 
 	"github.com/cxykevin/alkaid0/config"
+	"github.com/cxykevin/alkaid0/log"
 	"github.com/cxykevin/alkaid0/storage/structs"
 	"github.com/cxykevin/alkaid0/ui/funcs"
 	"github.com/cxykevin/alkaid0/ui/state"
 )
+
+var logger = log.New("loop")
 
 // StopReason 停止原因
 type StopReason uint8
@@ -88,6 +91,7 @@ func New(session *structs.Chats) *Object {
 
 // Start 启动 Demo Loop
 func (p *Object) Start(ctx context.Context) {
+	logger.Info("start loop in session %d", p.session.ID)
 	var cancel context.CancelFunc
 	p.ctx, cancel = context.WithCancel(ctx)
 	p.ctxCancel = cancel
@@ -218,6 +222,7 @@ func (p *Object) Start(ctx context.Context) {
 
 	// 启动时如有待审批，尝试自动处理并提示用户
 	if session.State == state.StateWaitApprove {
+		logger.Info("waiting approve in session=%d", session.ID)
 		session.ToolState = 1
 		autoHandled, approved, pendingTools, msgID, err := funcs.AutoHandlePendingToolCalls(session)
 		if err != nil {
@@ -273,6 +278,7 @@ func (p *Object) Start(ctx context.Context) {
 		}
 		switch callObj.Command {
 		case msgActionSummary:
+			logger.Info("start summary in session=%d", session.ID)
 			summaryText, err := funcs.SummarySession(p.ctx, session)
 			if err != nil {
 				call(AIResponse{
@@ -287,6 +293,7 @@ func (p *Object) Start(ctx context.Context) {
 			})
 		case msgActionApprove:
 			session.ToolState = 1
+			logger.Info("approve tools in session=%d", session.ID)
 			msgID, err := funcs.ApproveToolCalls(session)
 			if err != nil {
 				call(AIResponse{
@@ -294,6 +301,7 @@ func (p *Object) Start(ctx context.Context) {
 					StopReason: StopReasonUser,
 				})
 			}
+			session.CurrentMessageID = msgID
 			call(AIResponse{
 				MsgID:           msgID,
 				ThinkingContext: "",
@@ -305,6 +313,7 @@ func (p *Object) Start(ctx context.Context) {
 			runResponseLoop()
 		default:
 			input = strings.TrimSpace(input)
+			logger.Info("run in session=%d with input \"%s\"", session.ID, input)
 
 			if input == "" {
 				continue

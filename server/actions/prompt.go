@@ -16,7 +16,7 @@ type SessionPromptRequest struct {
 // SessionPromptResponse prompt turn 的响应，包含stopReason
 type SessionPromptResponse struct {
 	StopReason string  `json:"stopReason"`
-	ErrorMsg   *string `json:"alk.cxykevin.top/errorMsg,omitempty"`
+	ErrorMsg   *string `json:"alk.cxykevin.top/error_msg,omitempty"`
 }
 
 // ContentBlock 内容块

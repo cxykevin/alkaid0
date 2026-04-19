@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"os"
 	"path"
 	"slices"
@@ -62,7 +63,7 @@ type SessionLoadRequest struct {
 type AvailableModel struct {
 	ModelID string `json:"modelId"`
 	Name    string `json:"name"`
-	RealID  int32  `json:"alk.cxykevin.top/modelRealID"`
+	RealID  int32  `json:"alk.cxykevin.top/model_real_id"`
 }
 
 // ModelConfig 模型配置
@@ -180,6 +181,7 @@ func getDefaultModel() string {
 		return "0/UnconfiguredAnyModel"
 	}
 	id, obj, _ := getMinValueByKey(cfg)
+	logger.Debug("default model: %s", fmt.Sprintf("%d/%s", id, obj.ModelID))
 	return fmt.Sprintf("%d/%s", id, obj.ModelID)
 }
 
@@ -267,6 +269,9 @@ func unregisterConnCall(connID uint64, sessionID string) {
 // broadcastSessionUpdate 向所有连接到该会话的客户端广播更新
 // 如果broadcastConnID != 0，则排除该连接（不向自己发送）
 func broadcastSessionUpdate(sessionID string, update any, excludeConnID uint64) error {
+
+	logger.Debug("broadcast \"%#v\" in session %s exclude %d", update, sessionID, excludeConnID)
+
 	sessionConnLock.Lock()
 	connIDs := make([]uint64, len(sessionConnMap[sessionID]))
 	copy(connIDs, sessionConnMap[sessionID])
@@ -322,11 +327,13 @@ func loadDB(pathx string) (*gorm.DB, error) {
 
 // closeDB 关闭数据库连接，引用计数递减，处理资源清理
 func closeDB(path string) {
+	logger.Debug("close db %s", path)
 	dbLock.Lock()
 	defer dbLock.Unlock()
 	if obj, ok := dbs[path]; ok {
 		obj.referCnt--
-		if obj.referCnt == 0 {
+		if obj.referCnt <= 0 {
+			logger.Info("release db %s", path)
 			delete(dbs, path)
 			db, _ := obj.db.DB()
 			db.Close()
@@ -337,6 +344,7 @@ func closeDB(path string) {
 // loadSession 加载或创建会话，支持引用计数生命周期管理
 // knowID为true时表示使用已知的会话ID，否则创建新会话
 func loadSession(cwd string, id *uint32, knowID bool) (*structs.Chats, error) {
+	logger.Info("load session cwd=%s id=%d knowID=%t", cwd, *id, knowID)
 	sessID := ""
 	if knowID {
 		sessID = cwd2SessionID(cwd, *id)
@@ -387,9 +395,10 @@ func loadSession(cwd string, id *uint32, knowID bool) (*structs.Chats, error) {
 		obj.waitStopChan = make(chan *chan StopMsg, 20)
 		// 设置回调接收流式响应
 		obj.loop.SetCallback(func(resp loop.AIResponse) {
+			logger.Debug("callback respose ID=%d", resp.MsgID)
 			// 处理thinking内容
 			if resp.ThinkingContext != "" {
-				_ = broadcastSessionUpdate(sessID, SessionUpdate{
+				err = broadcastSessionUpdate(sessID, SessionUpdate{
 					SessionID: sessID,
 					Update: SessionUpdateUpdate{
 						SessionUpdate: "agent_thought_chunk",
@@ -399,11 +408,14 @@ func loadSession(cwd string, id *uint32, knowID bool) (*structs.Chats, error) {
 						},
 					},
 				}, 0)
+				if err != nil {
+					logger.Warn("failed to broadcast session update: %v", err)
+				}
 			}
 
 			// 处理内容delta
 			if resp.Content != "" {
-				_ = broadcastSessionUpdate(sessID, SessionUpdate{
+				err = broadcastSessionUpdate(sessID, SessionUpdate{
 					SessionID: sessID,
 					Update: SessionUpdateUpdate{
 						SessionUpdate: "agent_message_chunk",
@@ -413,11 +425,21 @@ func loadSession(cwd string, id *uint32, knowID bool) (*structs.Chats, error) {
 						},
 					},
 				}, 0)
+				if err != nil {
+					logger.Warn("failed to broadcast session update: %v", err)
+				}
 			}
 
 			toolStatus := "pending"
 			if sess.ToolState == 1 {
 				toolStatus = "completed"
+				sess.LatestToolCallingContext = make(map[string]any)
+				sess.LatestToolCallingType = make(map[string]string)
+			}
+
+			if sess.LatestToolCallingContext == nil {
+				sess.LatestToolCallingContext = make(map[string]any)
+				sess.LatestToolCallingType = make(map[string]string)
 			}
 
 			if len(sess.ToolCallingContext) != 0 {
@@ -427,7 +449,7 @@ func loadSession(cwd string, id *uint32, knowID bool) (*structs.Chats, error) {
 					if len(stx) == 4 {
 						s = stx[3]
 					}
-					_ = broadcastSessionUpdate(sessID, SessionUpdate{
+					err = broadcastSessionUpdate(sessID, SessionUpdate{
 						SessionID: sessID,
 						Update: SessionUpdateUpdate{
 							SessionUpdate: "tool_call",
@@ -438,13 +460,19 @@ func loadSession(cwd string, id *uint32, knowID bool) (*structs.Chats, error) {
 							Content:       val,
 						},
 					}, 0)
+					if err != nil {
+						logger.Warn("failed to broadcast session update: %v", err)
+					}
 				}
+				maps.Copy(sess.LatestToolCallingContext, sess.ToolCallingContext)
+				maps.Copy(sess.LatestToolCallingType, sess.ToolCallingType)
 				sess.ToolCallingContext = make(map[string]any)
 				sess.ToolCallingType = make(map[string]string)
 			}
 
 			// 处理错误
 			if resp.Error != nil {
+				logger.Warn("callback respose error in Session=%d, ID=%d error=%s", sess.ID, resp.MsgID, resp.Error.Error())
 				for {
 					select {
 					case i := <-obj.waitStopChan:
@@ -465,6 +493,7 @@ func loadSession(cwd string, id *uint32, knowID bool) (*structs.Chats, error) {
 					}
 				}
 			} else if resp.StopReason == loop.StopReasonPendingTool {
+				logger.Info("request pending tool call to Session=%d, ID=%d", sess.ID, resp.MsgID)
 				// for _, tool := range *resp.PendingTool {
 				// 	_ = broadcastSessionUpdate(sessID, SessionUpdate{
 				// 		SessionID: sessID,
@@ -485,6 +514,7 @@ func loadSession(cwd string, id *uint32, knowID bool) (*structs.Chats, error) {
 		go obj.loop.Start(context.Background())
 
 		obj.session = sess
+		sess.ReferCount = 1
 		sessions[sessID] = obj
 		return sess, nil
 	}
@@ -498,7 +528,9 @@ func closeSession(sessionID string) {
 	defer sessLock.Unlock()
 	if obj, ok := sessions[sessionID]; ok {
 		obj.session.ReferCount--
-		if obj.session.ReferCount == 0 {
+		logger.Debug("close session ID=%s count=%d", sessionID, obj.session.ReferCount)
+		if obj.session.ReferCount <= int32(0) {
+			logger.Info("release session ID=%s", sessionID)
 			obj.loop.Cancel()
 			closeDB(obj.cwd)
 			delete(sessions, sessionID)
@@ -551,6 +583,22 @@ func SessionNew(req SessionNewRequest, call func(string, any) error, connID uint
 	// 手动切换一遍模型，确保新会话的模型被正确初始化
 	err = funcs.SelectModel(sess, int32(currentModelID))
 
+	err = broadcastSessionUpdate(sessionID, u.H{
+		"sessionId": sessionID,
+		"update": u.H{
+			"sessionUpdate": "available_commands_update",
+			"availableCommands": []any{
+				u.H{
+					"name":        "approve",
+					"description": "Approve tool calls",
+					"input":       u.H{},
+				},
+			},
+		}}, 0)
+	if err != nil {
+		logger.Warn("failed to broadcast session update: %v", err)
+	}
+
 	return SessionNewResponse{
 		SessionID: sessionID,
 		Models: ModelConfig{
@@ -569,7 +617,7 @@ type SessionUpdateUpdate struct {
 	Title          string `json:"title,omitempty"`
 	Kind           string `json:"kind,omitempty"`
 	Status         string `json:"status,omitempty"`
-	ExpandErrorMsg string `json:"alk.cxykevin.top/errorMsg,omitempty"`
+	ExpandErrorMsg string `json:"alk.cxykevin.top/error_msg,omitempty"`
 }
 
 // SessionUpdate 更新会话的请求
@@ -604,6 +652,7 @@ func SessionLoad(req SessionLoadRequest, call func(string, any) error, connID ui
 	msgs, err := funcs.GetHistory(sess)
 	previousToolJSON := ""
 	prevMsgID := uint64(0)
+	logger.Info("replay session: %s", req.SessionID)
 	for _, val := range msgs {
 		switch val.Type {
 		case structs.MessagesRoleUser:
@@ -656,15 +705,18 @@ func SessionLoad(req SessionLoadRequest, call func(string, any) error, connID ui
 				jsonObj := []u.H{}
 				err := json.Unmarshal([]byte(strings.TrimSpace(previousToolJSON)), &jsonObj)
 				if err != nil {
+					logger.Warn("error when replay session marshal json: %v", err)
 					continue
 				}
 				for _, obj := range jsonObj {
 					toolName, ok := u.GetH[string](obj, "name")
 					if !ok {
+						logger.Warn("error when replay session without tool name: %v", err)
 						continue
 					}
 					toolID, ok := u.GetH[string](obj, "id")
 					if !ok {
+						logger.Warn("error when replay session without tool id: %v", err)
 						continue
 					}
 					err = call("session/update", SessionUpdate{
@@ -684,7 +736,48 @@ func SessionLoad(req SessionLoadRequest, call func(string, any) error, connID ui
 			}
 		}
 	}
+
+	if sess.LatestToolCallingContext != nil && sess.LatestToolCallingType != nil {
+		for id, val := range sess.LatestToolCallingContext {
+			stx := strings.SplitN(id, "_", 4)
+			s := ""
+			if len(stx) == 4 {
+				s = stx[3]
+			}
+			err = broadcastSessionUpdate(req.SessionID, SessionUpdate{
+				SessionID: req.SessionID,
+				Update: SessionUpdateUpdate{
+					SessionUpdate: "tool_call",
+					ToolCallID:    id,
+					Kind:          ToolNameToTypeMap[sess.LatestToolCallingType[id]],
+					Status:        "pending",
+					Title:         fmt.Sprintf("[Call %s]%s", sess.LatestToolCallingType[id], s),
+					Content:       val,
+				},
+			}, 0)
+			if err != nil {
+				logger.Warn("failed to broadcast session update: %v", err)
+			}
+		}
+	}
 	modelID := sess.LastModelID
+
+	err = broadcastSessionUpdate(req.SessionID, u.H{
+		"sessionId": req.SessionID,
+		"update": u.H{
+			"sessionUpdate": "available_commands_update",
+			"availableCommands": []any{
+				u.H{
+					"name":        "approve",
+					"description": "Approve tool calls",
+					"input":       u.H{},
+				},
+			},
+		}}, 0)
+	if err != nil {
+		logger.Warn("failed to broadcast session update: %v", err)
+	}
+
 	return SessionLoadResponse{
 		Models: ModelConfig{
 			AvailableModels: buildModelList(),
@@ -740,6 +833,7 @@ func SessionSetConfigOption(req SessionSetConfigOptionRequest, call func(string,
 	// 根据 configId 处理相应的配置更新
 	switch req.ConfigID {
 	case "model":
+		logger.Info("set model %s in session=%s", req.Value, req.SessionID)
 		// 解析模型值格式："index/modelId"
 		parts := strings.SplitN(req.Value, "/", 2)
 		if len(parts) != 2 {
@@ -780,8 +874,7 @@ func SessionSetConfigOption(req SessionSetConfigOptionRequest, call func(string,
 	}, 0) // 不排除任何连接，所有客户端都需要知道配置更新
 
 	if err != nil {
-		// 日志记录广播失败，但不要返回错误，因为配置已经更新了
-		// 返回给请求者的配置仍然是最新的
+		logger.Warn("failed to broadcast session update: %v", err)
 	}
 
 	return SessionSetConfigOptionResponse{

@@ -94,6 +94,7 @@ func PendingToolCall(session *structs.Chats) ([]ToolCall, *structs.Messages, uin
 		}
 		return nil, nil, msg.ID, err
 	}
+	session.CurrentMessageID = msg.ID
 	if session.TemporyDataOfRequest == nil {
 		session.TemporyDataOfRequest = make(map[string]any)
 	}
