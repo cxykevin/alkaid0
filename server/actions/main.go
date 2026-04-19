@@ -1,12 +1,16 @@
 package actions
 
 import (
+	"github.com/cxykevin/alkaid0/log"
 	"github.com/cxykevin/alkaid0/server/client/jsonrpc"
 	u "github.com/cxykevin/alkaid0/utils"
 )
 
+var logger = log.New("actions")
+
 // InitFuncs 初始化函数
 func InitFuncs(srv *jsonrpc.Server) {
+	logger.Info("init functions")
 	jsonrpc.Set(srv, "initialize", Initialize)
 	jsonrpc.Set(srv, "session/new", SessionNew)
 	jsonrpc.Set(srv, "session/load", SessionLoad)

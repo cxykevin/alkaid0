@@ -68,6 +68,44 @@ Note: Tool calls MUST BE placed inside a `<tools>` tag and must appear at the en
 
 **DO NOT OUTPUT `<tools_return>` OR MAKE UP ANY RESULT IN THE RESPONSE!!!**
 
+#### **WRONG — Do NOT do these**
+
+##### Wrong 1 — mixed text after JSON:
+
+<toolss>...</tools> I hope this helps.
+
+##### Wrong 2 — function-call syntax:
+
+Grep({"pattern": "token"})
+
+##### Wrong 3 — missing `<tools>` wrapper:
+
+[
+    {
+        "name": "...",
+        "id": "..."
+        "parameters": {
+            ...
+        }
+    }
+]
+
+##### Wrong 4 — Markdown code fences:
+
+```xml
+<tools>...</tools>
+```
+
+##### Wrong 5 — native tool tokens:
+
+<｜Tool｜>call_some_tool{"param":1}<｜Tool｜>
+
+##### Wrong 6 — role markers in response:
+
+<｜Assistant｜> Here is the result...
+
+> Remember: **The ONLY valid way to use tools is the <tool_calls> block at the end of your response.**
+
 #### Example
 
 **System prompt**：

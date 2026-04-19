@@ -6,11 +6,16 @@ import (
 	"io"
 	"os"
 	"strings"
+
+	"github.com/cxykevin/alkaid0/log"
 )
+
+var loggerStdio = log.New("connect(stdio)")
 
 // StartStdio 从 stdio 启动 JSON-RPC
 func StartStdio(handler func(string, func(string) error, uint64) (returnString string, exit bool), closeConn func(uint64)) {
 	reader := bufio.NewReader(os.Stdin)
+	loggerStdio.Info("connect start(ConnID 1)")
 
 	for {
 		// 从 stdin 读取一行
@@ -47,5 +52,6 @@ func StartStdio(handler func(string, func(string) error, uint64) (returnString s
 			}
 		}()
 	}
+	loggerStdio.Info("connect end(ConnID 1)")
 	closeConn(1)
 }

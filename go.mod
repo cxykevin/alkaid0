@@ -1,6 +1,6 @@
 module github.com/cxykevin/alkaid0
 
-go 1.25.4
+go 1.26.2
 
 require (
 	github.com/expr-lang/expr v1.17.8

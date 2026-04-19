@@ -15,7 +15,8 @@ type SessionPromptRequest struct {
 
 // SessionPromptResponse prompt turn 的响应，包含stopReason
 type SessionPromptResponse struct {
-	StopReason string `json:"stopReason"`
+	StopReason string  `json:"stopReason"`
+	ErrorMsg   *string `json:"alk.cxykevin.top/errorMsg,omitempty"`
 }
 
 // ContentBlock 内容块
@@ -72,6 +73,15 @@ func SessionPrompt(req SessionPromptRequest, call func(string, any) error, connI
 			},
 		},
 	}, connID)
+
+	broadcastSessionUpdate(req.SessionID, SessionUpdate{ // 空内容触发 Client 状态更新
+		SessionID: req.SessionID,
+		Update: SessionUpdateUpdate{
+			SessionUpdate: "alk.cxykevin.top/sessionStart",
+			Content:       u.H{},
+		},
+	}, 0)
+
 	if err != nil {
 		return SessionPromptResponse{}, fmt.Errorf("failed to broadcast user message: %v", err)
 	}
@@ -92,7 +102,8 @@ func SessionPrompt(req SessionPromptRequest, call func(string, any) error, connI
 	// 返回停止原因
 	return SessionPromptResponse{
 		StopReason: ret.StopReason,
-	}, nil
+		ErrorMsg:   ret.ErrorMsg,
+	}, err
 }
 
 // // mapStopReason 将loop.StopReason映射到ACP协议中的stopReason字符串

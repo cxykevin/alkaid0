@@ -80,6 +80,7 @@ type SessionLoadResponse struct {
 // StopMsg 停止会话的消息
 type StopMsg struct {
 	StopReason string
+	ErrorMsg   *string
 }
 
 // sessionObj 会话对象，包含会话的核心信息和生命周期管理
@@ -431,7 +432,7 @@ func loadSession(cwd string, id *uint32, knowID bool) (*structs.Chats, error) {
 						Update: SessionUpdateUpdate{
 							SessionUpdate: "tool_call",
 							ToolCallID:    id,
-							Kind:          ToolNameToType[sess.ToolCallingType[id]],
+							Kind:          ToolNameToTypeMap[sess.ToolCallingType[id]],
 							Status:        toolStatus,
 							Title:         fmt.Sprintf("[Call %s]%s", sess.ToolCallingType[id], s),
 							Content:       val,
@@ -444,24 +445,21 @@ func loadSession(cwd string, id *uint32, knowID bool) (*structs.Chats, error) {
 
 			// 处理错误
 			if resp.Error != nil {
-				// TODO: 处理错误
-				return
+				for {
+					select {
+					case i := <-obj.waitStopChan:
+						*i <- StopMsg{StopReason: ReasonMap[resp.StopReason], ErrorMsg: new(resp.Error.Error())}
+					default:
+						return
+					}
+				}
 			}
 
-			reasonMap := map[loop.StopReason]string{
-				loop.StopReasonNone:        "end_turn",
-				loop.StopReasonModel:       "end_turn",
-				loop.StopReasonUser:        "cancelled",
-				loop.StopReasonError:       "refusal",
-				loop.StopReasonPendingTool: "_ignore",
-			}
-
-			// 判断是否完成
 			if resp.StopReason != loop.StopReasonNone && resp.StopReason != loop.StopReasonPendingTool {
 				for {
 					select {
 					case i := <-obj.waitStopChan:
-						*i <- StopMsg{StopReason: reasonMap[resp.StopReason]}
+						*i <- StopMsg{StopReason: ReasonMap[resp.StopReason]}
 					default:
 						return
 					}
@@ -482,6 +480,7 @@ func loadSession(cwd string, id *uint32, knowID bool) (*structs.Chats, error) {
 
 				// TODO: 使用 request permission API
 			}
+
 		})
 		go obj.loop.Start(context.Background())
 
@@ -564,12 +563,13 @@ func SessionNew(req SessionNewRequest, call func(string, any) error, connID uint
 
 // SessionUpdateUpdate 更新会话的参数
 type SessionUpdateUpdate struct {
-	SessionUpdate string `json:"sessionUpdate"`
-	Content       any    `json:"content,omitempty"`
-	ToolCallID    string `json:"toolCallId,omitempty"`
-	Title         string `json:"title,omitempty"`
-	Kind          string `json:"kind,omitempty"`
-	Status        string `json:"status,omitempty"`
+	SessionUpdate  string `json:"sessionUpdate"`
+	Content        any    `json:"content,omitempty"`
+	ToolCallID     string `json:"toolCallId,omitempty"`
+	Title          string `json:"title,omitempty"`
+	Kind           string `json:"kind,omitempty"`
+	Status         string `json:"status,omitempty"`
+	ExpandErrorMsg string `json:"alk.cxykevin.top/errorMsg,omitempty"`
 }
 
 // SessionUpdate 更新会话的请求
@@ -582,17 +582,6 @@ type SessionUpdate struct {
 type SessionRequestPermission struct {
 	SessionID string `json:"sessionId"`
 	Update    any    `json:"update"`
-}
-
-// ToolNameToType 工具名称到类型的映射，用于规范化工具调用类型
-var ToolNameToType = map[string]string{
-	"agent":            "other",
-	"scope":            "other",
-	"activate_agent":   "other",
-	"deactivate_agent": "other",
-	"edit":             "edit",
-	"trace":            "read",
-	"run":              "execute",
 }
 
 // SessionLoad 加载会话并发送历史回放
@@ -684,7 +673,7 @@ func SessionLoad(req SessionLoadRequest, call func(string, any) error, connID ui
 							SessionUpdate: "tool_call",
 							ToolCallID:    fmt.Sprintf("call_%d_%d_%s", sess.ID, prevMsgID, toolID),
 							Title:         fmt.Sprintf("[Call %s]%s", toolName, toolID),
-							Kind:          u.Default(ToolNameToType, toolName, "other"),
+							Kind:          u.Default(ToolNameToTypeMap, toolName, "other"),
 							Status:        "completed",
 						},
 					})

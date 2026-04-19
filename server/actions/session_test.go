@@ -118,7 +118,7 @@ func TestToolNameToType(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			typ, ok := ToolNameToType[tt.toolName]
+			typ, ok := ToolNameToTypeMap[tt.toolName]
 			if !ok {
 				typ = "other" // 模拟Default行为
 			}

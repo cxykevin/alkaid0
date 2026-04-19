@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/cxykevin/alkaid0/config"
+	"github.com/cxykevin/alkaid0/helper"
 	"github.com/cxykevin/alkaid0/internal/configutil"
 	"github.com/cxykevin/alkaid0/log"
 	"github.com/cxykevin/alkaid0/mock/openai"
@@ -20,11 +21,17 @@ var logger = log.New("startup")
 
 // Startup 启动程序
 func Startup() {
+	if len(os.Args) >= 2 && os.Args[1] == "acp" {
+		helper.StartHelper(os.Args[1:])
+	}
+
 	logger.Info("starting alkaid0...")
 	openai.Start()
 	config.Load()
 	log.Load()
-	defer log.SolvePanic()
+	if os.Getenv("ALKAID0_DEBUG") != "true" {
+		defer log.SolvePanic()
+	}
 	ensureGlobalGitIgnore()
 	index.Load()
 
@@ -40,14 +47,6 @@ func Startup() {
 
 	logger.Info("Start server...")
 	server.Start()
-
-	// logger.Info("initializing storage...")
-	// db := u.Unwrap(storage.InitStorage("", ""))
-	// defer log.Shutdown()
-
-	// 启动 Demo Loop
-	// logger.Info("starting demo loop...")
-	// loop.Start(ctx, db)
 }
 
 func ensureGlobalGitIgnore() {
@@ -115,6 +114,7 @@ func gitInitMarkerPath() (string, error) {
 }
 
 func writeGitInitMarker(path string) error {
+	logger.Info("write git init marker: %s", path)
 	file, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
 	if err != nil {
 		return err
@@ -132,11 +132,13 @@ func getGitGlobalExcludePath() (string, bool, error) {
 		expanded := configutil.ExpandPath(defaultPath)
 		if expanded != "" {
 			if _, err := os.Stat(expanded); err == nil {
+				logger.Info("git core.excludesfile: %s", defaultPath)
 				return defaultPath, false, nil
 			}
 		}
 	}
 
+	logger.Info("git core.excludesfile: ~/.gitignore(default)")
 	return "~/.gitignore", false, nil
 }
 
@@ -184,6 +186,7 @@ func ensureIgnoreFile(path string) error {
 	if err != nil {
 		return err
 	}
+	logger.Info("write gitignore file: %s", path)
 	return file.Close()
 }
 
@@ -198,5 +201,6 @@ func appendIgnoreIfMissing(path string) error {
 	}
 
 	content = strings.TrimRight(content, "\n") + alkaid0IgnoreEntry
+	logger.Info("append gitignore file")
 	return os.WriteFile(path, []byte(content), 0644)
 }

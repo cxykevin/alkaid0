@@ -3,9 +3,14 @@ package jsonrpc
 import (
 	"encoding/json"
 
+	"github.com/cxykevin/alkaid0/config"
+	"github.com/cxykevin/alkaid0/log"
+
 	"github.com/cxykevin/alkaid0/server/client/jsonrpc/connect"
 	u "github.com/cxykevin/alkaid0/utils"
 )
+
+var logger = log.New("server")
 
 // Server jsonrpc 服务器
 type Server struct {
@@ -38,6 +43,7 @@ func (s *Server) handle(arg string, call func(string) error, connID uint64) (ret
 	// var req Request
 	var retByte []byte
 	solveSingleRequest := func(req Request) (returns *Response, exit bool) {
+		logger.Info("handle %s in ConnID %d", req.Method, connID)
 		// 检查是否为通知请求
 		isNotif := isNotification(req.ID)
 
@@ -174,19 +180,19 @@ func (s *Server) handle(arg string, call func(string) error, connID uint64) (ret
 
 // Start 启动 jsonrpc 服务器（使用 stdio）
 func (s *Server) Start() {
-	connect.StartStdio(s.handle, s.closeConn)
+	if !config.GlobalConfig.Server.DisableStdioServer {
+		connect.StartStdio(s.handle, s.closeConn)
+	}
 }
 
 // StartWs 启动 WebSocket JSON-RPC 服务器
-// addr: 监听地址，例如 "localhost:8080"
-// path: WebSocket 路径，例如 "/jsonrpc"
-// 支持多会话，为每个连接自动分配不同的 connID
-func (s *Server) StartWs(addr, path string) error {
-	return connect.StartWs(addr, path, s.handle, s.closeConn)
+func (s *Server) StartWs() error {
+	return connect.StartWs(s.handle, s.closeConn)
 }
 
 // Set 设置方法
 func Set[T any, T2 any](s *Server, method string, function func(T, func(string, any) error, uint64) (T2, error)) {
+	logger.Debug("set method %s", method)
 	s.Methods[method] = func(v u.H, f func(string, any) error, id uint64) (any, error) {
 		ret, err := function(u.Unwrap(u.Apply[T](v)), f, id)
 		_, ok := any(ret).(IgnoreReply)

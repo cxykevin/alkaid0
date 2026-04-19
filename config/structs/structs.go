@@ -6,4 +6,5 @@ type Config struct {
 	Model   ModelsConfig
 	Agent   AgentsConfig
 	ThemeID int32
+	Server  RPCConfig
 }

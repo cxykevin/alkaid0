@@ -149,6 +149,9 @@ func (p *Object) Start(ctx context.Context) {
 
 			if err != nil {
 				if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+					call(AIResponse{
+						StopReason: StopReasonUser,
+					})
 					break
 				}
 				call(AIResponse{
@@ -171,6 +174,10 @@ func (p *Object) Start(ctx context.Context) {
 							runResponseLoop()
 							return
 						}
+
+						call(AIResponse{
+							StopReason: StopReasonModel,
+						})
 						break
 					} else if len(pendingTools) > 0 {
 						call(AIResponse{
@@ -178,7 +185,11 @@ func (p *Object) Start(ctx context.Context) {
 							PendingTool: &pendingTools,
 							StopReason:  StopReasonError,
 						})
+						break
 					}
+					call(AIResponse{
+						StopReason: StopReasonModel,
+					})
 					break
 				}
 				if !responseStarted && !thinkingFlag {
@@ -186,7 +197,11 @@ func (p *Object) Start(ctx context.Context) {
 						Error:      errors.New("no response"),
 						StopReason: StopReasonError,
 					})
+					break
 				}
+				call(AIResponse{
+					StopReason: StopReasonModel,
+				})
 				break
 			}
 
@@ -199,9 +214,6 @@ func (p *Object) Start(ctx context.Context) {
 				break
 			}
 		}
-		call(AIResponse{
-			StopReason: StopReasonModel,
-		})
 	}
 
 	// 启动时如有待审批，尝试自动处理并提示用户
