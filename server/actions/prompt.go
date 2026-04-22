@@ -77,7 +77,7 @@ func SessionPrompt(req SessionPromptRequest, call func(string, any) error, connI
 	broadcastSessionUpdate(req.SessionID, SessionUpdate{ // 空内容触发 Client 状态更新
 		SessionID: req.SessionID,
 		Update: SessionUpdateUpdate{
-			SessionUpdate: "alk.cxykevin.top/sessionStart",
+			SessionUpdate: "alk.cxykevin.top/session_start",
 			Content:       u.H{},
 		},
 	}, 0)
@@ -98,6 +98,17 @@ func SessionPrompt(req SessionPromptRequest, call func(string, any) error, connI
 
 	// 等待结束
 	ret := <-stopChan
+
+	broadcastSessionUpdate(req.SessionID, SessionUpdate{ // 空内容触发 Client 状态更新
+		SessionID: req.SessionID,
+		Update: SessionUpdateUpdate{
+			SessionUpdate: "alk.cxykevin.top/session_stop",
+			Content: u.H{
+				"stopReason":                 ret.StopReason,
+				"alk.cxykevin.top/error_msg": ret.ErrorMsg,
+			},
+		},
+	}, 0)
 
 	// 返回停止原因
 	return SessionPromptResponse{
