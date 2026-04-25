@@ -114,6 +114,16 @@ func Trace(session *structs.Chats, mp map[string]*any, push []*any) (bool, []*an
 			"error":   &errMsg,
 		}, nil
 	}
+	nowpath := session.Root
+	if nowpath == "" {
+		nowpath = "."
+	}
+	activatePath := session.CurrentActivatePath
+	if activatePath == "" {
+		activatePath = "."
+	}
+	nowpath = filepath.Join(nowpath, activatePath)
+	nowpath, err := filepath.Abs(nowpath)
 	path, ok := (*pathPtr).(string)
 	if !ok || path == "" {
 		boolx := false
@@ -124,7 +134,7 @@ func Trace(session *structs.Chats, mp map[string]*any, push []*any) (bool, []*an
 			"error":   &errMsg,
 		}, nil
 	}
-	path = filepath.Join(session.CurrentActivatePath, path)
+	path = filepath.Join(nowpath, path)
 
 	// 检查并获取untrace参数
 	untracePtr, ok := mp["untrace"]
@@ -309,7 +319,7 @@ func Trace(session *structs.Chats, mp map[string]*any, push []*any) (bool, []*an
 		session.TemporyDataOfSession["tools:trace"] = traceCache{}
 	}
 	traces := []structs.Traces{}
-	err := session.DB.Where("chat_id = ? AND agent_id = ?", session.ID, session.NowAgent).Find(&traces).Error
+	err = session.DB.Where("chat_id = ? AND agent_id = ?", session.ID, session.NowAgent).Find(&traces).Error
 	if err != nil {
 		logger.Warn("read trace failed: %v", err)
 		boolx := false

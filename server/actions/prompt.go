@@ -83,16 +83,61 @@ func SessionPrompt(req SessionPromptRequest, call func(string, any) error, connI
 	}, 0)
 
 	if err != nil {
+		broadcastSessionUpdate(req.SessionID, SessionUpdate{ // 空内容触发 Client 状态更新
+			SessionID: req.SessionID,
+			Update: SessionUpdateUpdate{
+				SessionUpdate: "alk.cxykevin.top/session_stop",
+				Content: u.H{
+					"stopReason":                 "refusal",
+					"alk.cxykevin.top/error_msg": fmt.Sprintf("failed to broadcast user message: %v", err),
+				},
+			},
+		}, 0)
 		return SessionPromptResponse{}, fmt.Errorf("failed to broadcast user message: %v", err)
 	}
 
 	stopChan := make(chan StopMsg, 1)
 	sessObj.waitStopChan <- &stopChan
 
-	if strings.TrimSpace(userMessage) == "/approve" {
-		err = sessObj.loop.Approve()
+	if len(userMessage) >= 1 && userMessage[0:1] == "/" {
+		cmds := strings.SplitN(userMessage, " ", 2)
+		cmdArgs := ""
+		if len(cmds) == 0 {
+			broadcastSessionUpdate(req.SessionID, SessionUpdate{ // 空内容触发 Client 状态更新
+				SessionID: req.SessionID,
+				Update: SessionUpdateUpdate{
+					SessionUpdate: "alk.cxykevin.top/session_stop",
+					Content: u.H{
+						"stopReason":                 "refusal",
+						"alk.cxykevin.top/error_msg": "invalid command",
+					},
+				},
+			}, 0)
+			return SessionPromptResponse{}, fmt.Errorf("invalid command")
+		}
+		if len(cmds) == 2 {
+			cmdArgs = cmds[1]
+		}
+		obj, ok := commandMaps[cmds[0]]
+		if !ok {
+			broadcastSessionUpdate(req.SessionID, SessionUpdate{ // 空内容触发 Client 状态更新
+				SessionID: req.SessionID,
+				Update: SessionUpdateUpdate{
+					SessionUpdate: "alk.cxykevin.top/session_stop",
+					Content: u.H{
+						"stopReason":                 "refusal",
+						"alk.cxykevin.top/error_msg": "invalid command",
+					},
+				},
+			}, 0)
+			return SessionPromptResponse{}, fmt.Errorf("invalid command")
+		}
+		if obj != nil {
+			err = obj.Function(sessObj, cmdArgs)
+		} else {
+			err = fmt.Errorf("invalid command")
+		}
 	} else {
-		// 发送用户消息
 		err = sessObj.loop.Chat(userMessage, nil)
 	}
 

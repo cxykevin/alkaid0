@@ -404,7 +404,7 @@ func loadSession(cwd string, id *uint32, knowID bool) (*structs.Chats, error) {
 						SessionUpdate: "agent_thought_chunk",
 						Content: u.H{
 							"type": "text",
-							"text": resp.Content,
+							"text": resp.ThinkingContext,
 						},
 					},
 				}, 0)
@@ -583,17 +583,29 @@ func SessionNew(req SessionNewRequest, call func(string, any) error, connID uint
 	// 手动切换一遍模型，确保新会话的模型被正确初始化
 	err = funcs.SelectModel(sess, int32(currentModelID))
 
+	availableCommands := make([]any, len(commandMaps))
+	idx := 0
+	for i, v := range commandMaps {
+		availableCommands[idx] = u.H{
+			"name":        strings.TrimLeft(i, "/"),
+			"description": v.Description,
+			"input": u.H{
+				"hint": v.Hint,
+			},
+		}
+		idx++
+	}
+	slices.SortFunc(availableCommands, func(a, b any) int {
+		nameA := a.(u.H)["name"].(string)
+		nameB := b.(u.H)["name"].(string)
+		return strings.Compare(nameA, nameB)
+	})
+
 	err = broadcastSessionUpdate(sessionID, u.H{
 		"sessionId": sessionID,
 		"update": u.H{
-			"sessionUpdate": "available_commands_update",
-			"availableCommands": []any{
-				u.H{
-					"name":        "approve",
-					"description": "Approve tool calls",
-					"input":       u.H{},
-				},
-			},
+			"sessionUpdate":     "available_commands_update",
+			"availableCommands": availableCommands,
 		}}, 0)
 	if err != nil {
 		logger.Warn("failed to broadcast session update: %v", err)
@@ -677,7 +689,7 @@ func SessionLoad(req SessionLoadRequest, call func(string, any) error, connID ui
 						SessionUpdate: "agent_thought_chunk",
 						Content: []u.H{{
 							"type": "text",
-							"text": val.Delta,
+							"text": val.ThinkingDelta,
 						}},
 					},
 				})
@@ -762,21 +774,41 @@ func SessionLoad(req SessionLoadRequest, call func(string, any) error, connID ui
 	}
 	modelID := sess.LastModelID
 
+	availableCommands := make([]any, len(commandMaps))
+	idx := 0
+	for i, v := range commandMaps {
+		availableCommands[idx] = u.H{
+			"name":        strings.TrimLeft(i, "/"),
+			"description": v.Description,
+			"input": u.H{
+				"hint": v.Hint,
+			},
+		}
+		idx++
+	}
+	slices.SortFunc(availableCommands, func(a, b any) int {
+		nameA := a.(u.H)["name"].(string)
+		nameB := b.(u.H)["name"].(string)
+		return strings.Compare(nameA, nameB)
+	})
+
 	err = broadcastSessionUpdate(req.SessionID, u.H{
 		"sessionId": req.SessionID,
 		"update": u.H{
-			"sessionUpdate": "available_commands_update",
-			"availableCommands": []any{
-				u.H{
-					"name":        "approve",
-					"description": "Approve tool calls",
-					"input":       u.H{},
-				},
-			},
+			"sessionUpdate":     "available_commands_update",
+			"availableCommands": availableCommands,
 		}}, 0)
 	if err != nil {
 		logger.Warn("failed to broadcast session update: %v", err)
 	}
+
+	err = broadcastSessionUpdate(req.SessionID, SessionUpdate{
+		SessionID: req.SessionID,
+		Update: SessionUpdateUpdate{
+			SessionUpdate: "config_option_update",
+			Content:       buildConfigOptions(uint32(modelID)),
+		},
+	}, 0)
 
 	return SessionLoadResponse{
 		Models: ModelConfig{

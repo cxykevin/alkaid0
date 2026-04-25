@@ -42,10 +42,15 @@ func buildGlobalPrompt(session *structs.Chats) (string, error) {
 		session.TemporyDataOfRequest = make(map[string]any)
 	}
 	treeID := int32(0)
-	nowpath := session.CurrentActivatePath
+	nowpath := session.Root
 	if nowpath == "" {
 		nowpath = "."
 	}
+	activatePath := session.CurrentActivatePath
+	if activatePath == "" {
+		activatePath = "."
+	}
+	nowpath = filepath.Join(nowpath, activatePath)
 	nowpath, err := filepath.Abs(nowpath)
 	if err != nil {
 		logger.Warn("tree get abs error: %v", err)

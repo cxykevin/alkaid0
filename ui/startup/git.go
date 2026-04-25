@@ -1,55 +1,14 @@
 package startup
 
 import (
-	"context"
 	"os"
 	"os/exec"
-	"os/signal"
 	"path/filepath"
 	"strings"
-	"syscall"
 
 	"github.com/cxykevin/alkaid0/config"
-	"github.com/cxykevin/alkaid0/demo/loop"
 	"github.com/cxykevin/alkaid0/internal/configutil"
-	"github.com/cxykevin/alkaid0/log"
-	"github.com/cxykevin/alkaid0/mock/openai"
-	"github.com/cxykevin/alkaid0/storage"
-	"github.com/cxykevin/alkaid0/tools/index"
-	u "github.com/cxykevin/alkaid0/utils"
 )
-
-const alkaid0IgnoreEntry = "\n# alkaid0\n.alkaid0/\n.alk_*\n"
-
-var logger = log.New("startup")
-
-// Startup 启动程序
-func Startup() {
-	logger.Info("starting alkaid0...")
-	openai.Start()
-	config.Load()
-	log.Load()
-	defer log.SolvePanic()
-	ensureGlobalGitIgnore()
-	index.Load()
-
-	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM)
-	defer stop()
-
-	// 读取环境变量 ALKAID0_WORKDIR
-	if workdir := os.Getenv("ALKAID0_WORKDIR"); workdir != "" {
-		logger.Info("changing workdir to: %s", workdir)
-		// 设置工作目录
-		_ = os.Chdir(workdir)
-	}
-	logger.Info("initializing storage...")
-	db := u.Unwrap(storage.InitStorage("", ""))
-	defer log.Shutdown()
-
-	// 启动 Demo Loop
-	logger.Info("starting demo loop...")
-	loop.Start(ctx, db)
-}
 
 func ensureGlobalGitIgnore() {
 	markerPath, err := gitInitMarkerPath()
@@ -116,6 +75,7 @@ func gitInitMarkerPath() (string, error) {
 }
 
 func writeGitInitMarker(path string) error {
+	logger.Info("write git init marker: %s", path)
 	file, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
 	if err != nil {
 		return err
@@ -133,11 +93,13 @@ func getGitGlobalExcludePath() (string, bool, error) {
 		expanded := configutil.ExpandPath(defaultPath)
 		if expanded != "" {
 			if _, err := os.Stat(expanded); err == nil {
+				logger.Info("git core.excludesfile: %s", defaultPath)
 				return defaultPath, false, nil
 			}
 		}
 	}
 
+	logger.Info("git core.excludesfile: ~/.gitignore(default)")
 	return "~/.gitignore", false, nil
 }
 
@@ -185,6 +147,7 @@ func ensureIgnoreFile(path string) error {
 	if err != nil {
 		return err
 	}
+	logger.Info("write gitignore file: %s", path)
 	return file.Close()
 }
 
@@ -199,5 +162,6 @@ func appendIgnoreIfMissing(path string) error {
 	}
 
 	content = strings.TrimRight(content, "\n") + alkaid0IgnoreEntry
+	logger.Info("append gitignore file")
 	return os.WriteFile(path, []byte(content), 0644)
 }

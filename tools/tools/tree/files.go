@@ -150,14 +150,24 @@ func BuildString(node *Node) string {
 		  ... (100 files)
 	*/
 	var builder strings.Builder
-	buildStringRecursive(node, "", &builder)
+	var nodeCount int32
+	buildStringRecursive(node, "", &builder, &nodeCount)
+	if nodeCount >= MaxNodeCount {
+		return "<System: Too many files, please use \"shell\" tool to explore files>"
+	}
 	return builder.String()
 }
 
+// MaxNodeCount 最大节点个数 (真实案例：递归扫用户目录 OOM)
+const MaxNodeCount = 1000
+
 const indentString = "    "
 
-func buildStringRecursive(node *Node, prefix string, builder *strings.Builder) {
-
+func buildStringRecursive(node *Node, prefix string, builder *strings.Builder, nodeCount *int32) {
+	*nodeCount++
+	if *nodeCount >= MaxNodeCount {
+		return
+	}
 	// 写入当前节点名称
 	builder.WriteString(prefix)
 	if !node.IsDir && node.ID > 0 {
@@ -209,7 +219,10 @@ func buildStringRecursive(node *Node, prefix string, builder *strings.Builder) {
 			}
 
 			// 递归构建子节点字符串
-			buildStringRecursive(child, childPrefix, builder)
+			buildStringRecursive(child, childPrefix, builder, nodeCount)
+			if *nodeCount >= MaxNodeCount {
+				return
+			}
 		}
 	}
 }
