@@ -46,16 +46,20 @@ Indent: `4 spaces`
     {
         "name": "edit",
         "id": "edit_tree_copy",
-        "path": "@tree",
-        "target": "hello\n",
-        "text": "hello\n    - bar_copy '1'"
+        "parameters": {
+            "path": "@tree",
+            "target": "hello\n",
+            "text": "hello\n    - bar_copy '1'"
+        }
     },
     {
         "name": "edit",
         "id": "edit_tree_remove_world",
-        "path": "@tree",
-        "target": "@ln:1-1",
-        "text": ""
+        "parameters": {
+            "path": "@tree",
+            "target": "@ln:1-1",
+            "text": ""
+        }
     }
 ]
 </tools>

@@ -19,13 +19,14 @@ import (
 
 // Chats 对话列表
 type Chats struct {
-	ID          uint32 `gorm:"primaryKey;autoIncrement"`
-	LastModelID uint32
-	NowAgent    string
-	Root        string
-	TraceID     uint64
-	State       state.State
-	Title       string
+	ID              uint32 `gorm:"primaryKey;autoIncrement"`
+	LastModelID     uint32
+	NowAgent        string
+	Root            string
+	TraceID         uint64
+	State           state.State
+	Title           string
+	ReasoningEffort string
 	// AlivePolicy ChatAlivePolicy
 	// === 会话过程参数 ===
 	Context                  *context.Context    `gorm:"-" json:"-"`

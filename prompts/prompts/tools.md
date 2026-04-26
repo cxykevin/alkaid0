@@ -66,6 +66,8 @@ Note: **ALWAYS prefer using specialized tools (e.g., `edit`, `trace`, `agent`) o
 
 Note: Tool calls MUST BE placed inside a `<tools>` tag and must appear at the end of a reply. DO NOT PUT ANYTHING AFTER THE `<tools>` TAG.
 
+Note: **DO NOT CALLING TOOLS IN THINKING STAGE!**
+
 **DO NOT OUTPUT `<tools_return>` OR MAKE UP ANY RESULT IN THE RESPONSE!!!**
 
 #### **WRONG — Do NOT do these**
@@ -90,17 +92,29 @@ Grep({"pattern": "token"})
     }
 ]
 
-##### Wrong 4 — Markdown code fences:
+##### Wrong 4 — missing `"parameters"`:
+
+<tools>
+[
+    {
+        "name": "get_weather",
+        "id":"get_weather_shanghai",
+        "location": "Shanghai"
+    }
+]
+</tools>
+
+##### Wrong 5 — Markdown code fences:
 
 ```xml
 <tools>...</tools>
 ```
 
-##### Wrong 5 — native tool tokens:
+##### Wrong 6 — native tool tokens:
 
 <｜Tool｜>call_some_tool{"param":1}<｜Tool｜>
 
-##### Wrong 6 — role markers in response:
+##### Wrong 7 — role markers in response:
 
 <｜Assistant｜> Here is the result...
 

@@ -99,6 +99,9 @@ func SessionPrompt(req SessionPromptRequest, call func(string, any) error, connI
 	stopChan := make(chan StopMsg, 1)
 	sessObj.waitStopChan <- &stopChan
 
+	var wait = true
+	err = nil
+
 	if len(userMessage) >= 1 && userMessage[0:1] == "/" {
 		cmds := strings.SplitN(userMessage, " ", 2)
 		cmdArgs := ""
@@ -133,7 +136,7 @@ func SessionPrompt(req SessionPromptRequest, call func(string, any) error, connI
 			return SessionPromptResponse{}, fmt.Errorf("invalid command")
 		}
 		if obj != nil {
-			err = obj.Function(sessObj, cmdArgs)
+			wait, err = obj.Function(sessObj, cmdArgs)
 		} else {
 			err = fmt.Errorf("invalid command")
 		}
@@ -141,8 +144,17 @@ func SessionPrompt(req SessionPromptRequest, call func(string, any) error, connI
 		err = sessObj.loop.Chat(userMessage, nil)
 	}
 
-	// 等待结束
-	ret := <-stopChan
+	var ret StopMsg
+	if wait {
+		// 等待结束
+		ret = <-stopChan
+	} else {
+		if err != nil {
+			ret = StopMsg{StopReason: "refusal", ErrorMsg: new(fmt.Sprintf("error: %v", err))}
+		} else {
+			ret = StopMsg{StopReason: "end_turn"}
+		}
+	}
 
 	broadcastSessionUpdate(req.SessionID, SessionUpdate{ // 空内容触发 Client 状态更新
 		SessionID: req.SessionID,

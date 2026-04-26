@@ -10,6 +10,7 @@ import (
 	"github.com/cxykevin/alkaid0/provider/parser"
 	reqStruct "github.com/cxykevin/alkaid0/provider/request/structs"
 	"github.com/cxykevin/alkaid0/storage/structs"
+	storageStructs "github.com/cxykevin/alkaid0/storage/structs"
 	"gorm.io/gorm"
 )
 
@@ -25,7 +26,7 @@ var msgRole = map[structs.MessagesRole]string{
 }
 
 // RequestBody 构建请求
-func RequestBody(chatID uint32, modelID int32, agentCode string, toolsList *[]*parser.ToolsDefine, db *gorm.DB, addSystemPrompt string, addUserPrompt string, agentCfg cfgStruct.AgentConfig) (*reqStruct.ChatCompletionRequest, error) {
+func RequestBody(chatID uint32, modelID int32, agentCode string, toolsList *[]*parser.ToolsDefine, db *gorm.DB, addSystemPrompt string, addUserPrompt string, agentCfg cfgStruct.AgentConfig, chatLn storageStructs.Chats) (*reqStruct.ChatCompletionRequest, error) {
 	toolsLst, err := json.Marshal(*toolsList)
 	if err != nil {
 		return nil, err
@@ -41,14 +42,29 @@ func RequestBody(chatID uint32, modelID int32, agentCode string, toolsList *[]*p
 	// 配置模型信息
 	response.Model = modelConfig.ModelID
 	response.Stream = true
-	if modelConfig.ModelTemperature != -1 && modelConfig.ModelTemperature != 0 {
+	if modelConfig.ProviderSpecificConfig.EnableTemperature && modelConfig.ModelTemperature != -1 && modelConfig.ModelTemperature != 0 {
 		response.Temperature = &modelConfig.ModelTemperature
 	}
-	if modelConfig.ModelTopP != -1 && modelConfig.ModelTopP != 0 {
+	if modelConfig.ProviderSpecificConfig.EnableTopP && modelConfig.ModelTopP != -1 && modelConfig.ModelTopP != 0 {
 		response.TopP = &modelConfig.ModelTopP
 	}
 	var maxTokenObj int = maxToken
 	response.MaxTokens = &maxTokenObj
+	if modelConfig.ProviderSpecificConfig.EnableDeepseekThinking {
+		if modelConfig.EnableThinking {
+			response.Thinking = &reqStruct.ChatCompletionThinkingType{
+				Type: "enabled",
+			}
+		} else {
+			response.Thinking = &reqStruct.ChatCompletionThinkingType{
+				Type: "disabled",
+			}
+		}
+	}
+	if modelConfig.ProviderSpecificConfig.EnableReasoningEffort && chatLn.ReasoningEffort != "" {
+		reasoning := chatLn.ReasoningEffort
+		response.ReasoningEffort = &reasoning
+	}
 
 	// 生成 messages
 	responseDeltaList := list.New()

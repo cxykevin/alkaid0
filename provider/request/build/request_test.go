@@ -111,7 +111,7 @@ func TestRequestBody_Basic(t *testing.T) {
 	}
 
 	// 调用 RequestBody
-	request, err := RequestBody(1, 1, "", &toolsList, db, "", "", cfgStruct.AgentConfig{})
+	request, err := RequestBody(1, 1, "", &toolsList, db, "", "", cfgStruct.AgentConfig{}, structs.Chats{})
 	if err != nil {
 		t.Fatalf("RequestBody failed: %v", err)
 	}
@@ -202,7 +202,7 @@ func TestRequestBody_Real(t *testing.T) {
 
 	// 调用 RequestBody
 	agentCfg, _ := agentconfig.GetAgentConfig("test-agent")
-	request, err := RequestBody(1, 1, "test-agent", &toolsList, db, "", "", agentCfg)
+	request, err := RequestBody(1, 1, "test-agent", &toolsList, db, "", "", agentCfg, structs.Chats{})
 	if err != nil {
 		t.Fatalf("RequestBody failed: %v", err)
 	}
@@ -233,7 +233,7 @@ func TestRequestBody_NoAgent(t *testing.T) {
 	toolsList := []*parser.ToolsDefine{}
 
 	// 调用 RequestBody，不指定代理
-	request, err := RequestBody(2, 1, "", &toolsList, db, "", "", cfgStruct.AgentConfig{})
+	request, err := RequestBody(2, 1, "", &toolsList, db, "", "", cfgStruct.AgentConfig{}, structs.Chats{})
 	if err != nil {
 		t.Fatalf("RequestBody failed: %v", err)
 	}
@@ -271,7 +271,7 @@ func TestRequestBody_WithThinking(t *testing.T) {
 
 	toolsList := []*parser.ToolsDefine{}
 
-	request, err := RequestBody(3, 1, "", &toolsList, db, "", "", cfgStruct.AgentConfig{})
+	request, err := RequestBody(3, 1, "", &toolsList, db, "", "", cfgStruct.AgentConfig{}, structs.Chats{})
 	if err != nil {
 		t.Fatalf("RequestBody failed: %v", err)
 	}
@@ -323,7 +323,7 @@ func TestRequestBody_WithSummary(t *testing.T) {
 
 	toolsList := []*parser.ToolsDefine{}
 
-	request, err := RequestBody(4, 1, "", &toolsList, db, "", "", cfgStruct.AgentConfig{})
+	request, err := RequestBody(4, 1, "", &toolsList, db, "", "", cfgStruct.AgentConfig{}, structs.Chats{})
 	if err != nil {
 		t.Fatalf("RequestBody failed: %v", err)
 	}
@@ -389,7 +389,7 @@ func TestRequestBody_InvalidModel(t *testing.T) {
 
 	// 使用不存在的模型ID
 	agentCfg, _ := agentconfig.GetAgentConfig("test-agent")
-	_, err := RequestBody(1, 999, "test-agent", &toolsList, db, "", "", agentCfg)
+	_, err := RequestBody(1, 999, "test-agent", &toolsList, db, "", "", agentCfg, structs.Chats{})
 	if err == nil {
 		t.Error("Expected error for invalid model ID")
 	}
@@ -459,7 +459,7 @@ func TestRequestBody_EmptyMessages(t *testing.T) {
 
 	// 不插入任何消息
 	agentCfg, _ := agentconfig.GetAgentConfig("test-agent")
-	request, err := RequestBody(5, 1, "test-agent", &toolsList, db, "", "", agentCfg)
+	request, err := RequestBody(5, 1, "test-agent", &toolsList, db, "", "", agentCfg, structs.Chats{})
 	if err != nil {
 		t.Fatalf("RequestBody failed: %v", err)
 	}
@@ -495,7 +495,7 @@ func TestRequestBody_ManyMessages(t *testing.T) {
 	toolsList := []*parser.ToolsDefine{}
 
 	agentCfg, _ := agentconfig.GetAgentConfig("test-agent")
-	request, err := RequestBody(6, 1, "test-agent", &toolsList, db, "", "", agentCfg)
+	request, err := RequestBody(6, 1, "test-agent", &toolsList, db, "", "", agentCfg, structs.Chats{})
 	if err != nil {
 		t.Fatalf("RequestBody failed: %v", err)
 	}
@@ -524,7 +524,7 @@ func TestRequestBody_ToolMessage(t *testing.T) {
 
 	toolsList := []*parser.ToolsDefine{}
 
-	request, err := RequestBody(7, 1, "", &toolsList, db, "", "", cfgStruct.AgentConfig{})
+	request, err := RequestBody(7, 1, "", &toolsList, db, "", "", cfgStruct.AgentConfig{}, structs.Chats{})
 	if err != nil {
 		t.Fatalf("RequestBody failed: %v", err)
 	}

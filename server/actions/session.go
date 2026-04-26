@@ -33,6 +33,7 @@ type ConfigOptionValue struct {
 	Value       string `json:"value"`
 	Name        string `json:"name"`
 	Description string `json:"description,omitempty"`
+	RealID      int32  `json:"alk.cxykevin.top/model_real_id"`
 }
 
 // ConfigOption 配置选项
@@ -195,8 +196,13 @@ func buildConfigOptions(currentModelID uint32) []ConfigOption {
 			Value:       fmt.Sprintf("%d/%s", i, model.ModelID),
 			Name:        model.ModelName,
 			Description: "",
+			RealID:      i,
 		})
 	}
+
+	slices.SortFunc(options, func(a, b ConfigOptionValue) int {
+		return int(a.RealID - b.RealID)
+	})
 
 	// 确保当前模型值格式正确
 	currentValue := fmt.Sprintf("%d/%s", currentModelID, u.Default(cfg, int32(currentModelID), cfgStructs.ModelConfig{
@@ -687,10 +693,10 @@ func SessionLoad(req SessionLoadRequest, call func(string, any) error, connID ui
 					SessionID: req.SessionID,
 					Update: SessionUpdateUpdate{
 						SessionUpdate: "agent_thought_chunk",
-						Content: []u.H{{
+						Content: u.H{
 							"type": "text",
 							"text": val.ThinkingDelta,
-						}},
+						},
 					},
 				})
 				if err != nil {

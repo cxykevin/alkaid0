@@ -134,7 +134,6 @@ func Trace(session *structs.Chats, mp map[string]*any, push []*any) (bool, []*an
 			"error":   &errMsg,
 		}, nil
 	}
-	path = filepath.Join(nowpath, path)
 
 	// 检查并获取untrace参数
 	untracePtr, ok := mp["untrace"]
@@ -217,8 +216,10 @@ func Trace(session *structs.Chats, mp map[string]*any, push []*any) (bool, []*an
 			session.DB.Where("chat_id = ?", session.ID).Where("path = ?", vpath).First(&fileObj)
 			str = fileObj.Content
 		} else {
+			path2 := filepath.Join(nowpath, path)
+			path2 = filepath.Clean(path2)
 			// 检查文件是否存在
-			stat, err := os.Stat(path)
+			stat, err := os.Stat(path2)
 			if err != nil {
 				boolx := false
 				success := any(boolx)
@@ -239,7 +240,7 @@ func Trace(session *structs.Chats, mp map[string]*any, push []*any) (bool, []*an
 				}, nil
 			}
 			// 读取文件内容
-			content, err := os.ReadFile(path)
+			content, err := os.ReadFile(path2)
 			if err != nil {
 				boolx := false
 				success := any(boolx)
@@ -349,6 +350,19 @@ type templateStruct struct {
 type traceCache map[string]([]structs.Traces)
 
 func buildTrace(session *structs.Chats) (string, error) {
+	nowpath := session.Root
+	if nowpath == "" {
+		nowpath = "."
+	}
+	activatePath := session.CurrentActivatePath
+	if activatePath == "" {
+		activatePath = "."
+	}
+	nowpath = filepath.Join(nowpath, activatePath)
+	nowpath, err := filepath.Abs(nowpath)
+	if err != nil {
+		return "", errors.New("failed to get absolute path")
+	}
 	if session.TemporyDataOfSession == nil {
 		session.TemporyDataOfSession = make(map[string]any)
 	}
@@ -379,14 +393,13 @@ func buildTrace(session *structs.Chats) (string, error) {
 		var size int64
 		var originLen int
 
-		path := filepath.Join(session.Root, traceObj.Path)
-
 		if vpath, ok := strings.CutPrefix(traceObj.Path, "@temp/"); ok {
 			// 查db
 			var fileObj structs.ReferFiles
 			session.DB.Where("chat_id = ?", session.ID).Where("path = ?", vpath).First(&fileObj)
 			str = fileObj.Content
 		} else {
+			path := filepath.Join(nowpath, traceObj.Path)
 			// 读取文件Stat
 			stat, err := os.Stat(path)
 			if err != nil {
@@ -399,12 +412,12 @@ func buildTrace(session *structs.Chats) (string, error) {
 				continue
 			}
 			// 读取文件内容
-			content, err := os.ReadFile(traceObj.Path)
+			content, err := os.ReadFile(path)
 			if err != nil {
 				logger.Warn("trace warning: \"%s\" read error: %v", traceObj.Path, err)
 				continue
 			}
-			str := fileContentToString(content)
+			str = fileContentToString(content)
 			if len(str) == 0 {
 				// logger.Warn("trace warning: \"%s\" empty", traceObj.Path)
 				continue

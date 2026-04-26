@@ -63,7 +63,7 @@ func ensureGlobalGitIgnore() {
 }
 
 func gitInitMarkerPath() (string, error) {
-	configPath := config.ConfigPath()
+	configPath := config.Path()
 	if configPath == "" {
 		return "", nil
 	}

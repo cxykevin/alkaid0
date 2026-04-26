@@ -14,6 +14,8 @@ import (
 	"github.com/cxykevin/alkaid0/internal/configutil"
 )
 
+var globalLogLevel = 1
+
 // GlobalConfig 配置文件对象
 var GlobalConfig = &structs.Config{}
 
@@ -46,6 +48,18 @@ var isShutdown uint32
 func Load() {
 	if loggerInited {
 		return
+	}
+	if v := os.Getenv("ALKAID0_LOG_LEVEL"); v != "" {
+		switch v {
+		case "debug":
+			globalLogLevel = 0
+		case "info":
+			globalLogLevel = 1
+		case "warn":
+			globalLogLevel = 2
+		case "error":
+			globalLogLevel = 3
+		}
 	}
 	// logLck.Lock()
 	// 读取环境变量
@@ -112,6 +126,7 @@ func flushLogs() {
 	logWaitGroup.Wait()
 }
 
+// Shutdown 关闭日志模块
 func Shutdown() {
 	if !loggerInited {
 		return
@@ -121,6 +136,7 @@ func Shutdown() {
 	close(logChannel)
 }
 
+// LogsObj 日志对象
 type LogsObj struct {
 	moduleName string
 }
@@ -174,25 +190,33 @@ func (l *LogsObj) logSync(level string, msg string, v ...any) {
 
 // Info 打印日志
 func (l *LogsObj) Info(msg string, v ...any) {
-	l.log("INFO", msg, v...)
+	if globalLogLevel <= 1 {
+		l.log("INFO", msg, v...)
+	}
 }
 
 // Warn 打印警告
 func (l *LogsObj) Warn(msg string, v ...any) {
-	l.log("WARN", msg, v...)
+	if globalLogLevel <= 2 {
+		l.log("WARN", msg, v...)
+	}
 }
 
 // Error 打印错误 - 强制同步写入
 func (l *LogsObj) Error(msg string, v ...any) {
-	// 先flush所有pending的日志
-	flushLogs()
-	// 然后同步写入error日志
-	l.logSync("ERROR", msg, v...)
+	if globalLogLevel <= 3 {
+		// 先flush所有pending的日志
+		flushLogs()
+		// 然后同步写入error日志
+		l.logSync("ERROR", msg, v...)
+	}
 }
 
 // Debug 打印调试
 func (l *LogsObj) Debug(msg string, v ...any) {
-	l.log("DEBUG", msg, v...)
+	if globalLogLevel <= 0 {
+		l.log("DEBUG", msg, v...)
+	}
 }
 
 // New 创建日志对象

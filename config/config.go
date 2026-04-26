@@ -18,8 +18,8 @@ const envConfigName = "ALKAID0_CONFIG_PATH"
 
 var configPath string
 
-// ConfigPath 返回当前配置文件路径（可能是默认路径或环境变量指定路径）
-func ConfigPath() string {
+// Path 返回当前配置文件路径（可能是默认路径或环境变量指定路径）
+func Path() string {
 	if configPath == "" {
 		if path := os.Getenv(envConfigName); path != "" {
 			configPath = path
@@ -102,4 +102,22 @@ func Save() {
 
 	// 写入配置文件
 	os.WriteFile(expandedPath, data, 0644)
+	for _, hook := range reloadHooks {
+		hook()
+	}
+}
+
+var reloadHooks []func()
+
+// AddReloadHook 添加重新加载配置文件的钩子
+func AddReloadHook(hook func()) {
+	reloadHooks = append(reloadHooks, hook)
+}
+
+// Reload 重新加载配置文件
+func Reload() {
+	Load()
+	for _, hook := range reloadHooks {
+		hook()
+	}
 }

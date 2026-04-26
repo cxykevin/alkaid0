@@ -37,7 +37,9 @@ Adds a specified code file to the vector database or boosts its retrieval priori
     {
         "name": "trace",
         "id": "trace_helloworld",
-        "path": "helloworld.py"
+        "parameters": {
+            "path": "helloworld.py"
+        }
     }
 ]
 </tools>

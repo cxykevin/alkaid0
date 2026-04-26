@@ -34,10 +34,10 @@ func SummaryWithKeepNumber(chatID uint32, agentID string, db *gorm.DB, keepNum i
 	// 配置模型信息
 	response.Model = modelConfig.ModelID
 	response.Stream = true
-	if modelConfig.ModelTemperature != -1 {
+	if modelConfig.ProviderSpecificConfig.EnableTemperature && modelConfig.ModelTemperature != -1 && modelConfig.ModelTemperature != 0 {
 		response.Temperature = &modelConfig.ModelTemperature
 	}
-	if modelConfig.ModelTopP != -1 {
+	if modelConfig.ProviderSpecificConfig.EnableTopP && modelConfig.ModelTopP != -1 && modelConfig.ModelTopP != 0 {
 		response.TopP = &modelConfig.ModelTopP
 	}
 	var maxTokenObj int = maxToken
@@ -180,5 +180,14 @@ func SummaryWithKeepNumber(chatID uint32, agentID string, db *gorm.DB, keepNum i
 	})
 
 	response.Messages = messages
+
+	if modelConfig.ProviderSpecificConfig.EnableReasoningEffort {
+		response.ReasoningEffort = new("low")
+	}
+	if modelConfig.ProviderSpecificConfig.EnableDeepseekThinking {
+		response.Thinking = &reqStruct.ChatCompletionThinkingType{
+			Type: "disabled",
+		}
+	}
 	return lastMsgID, response, nil
 }

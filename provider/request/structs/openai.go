@@ -7,15 +7,22 @@ const (
 	RoleSystem    = "system"
 )
 
+// ChatCompletionThinkingType 设置thinking类型
+type ChatCompletionThinkingType struct {
+	Type string `json:"type"`
+}
+
 // ChatCompletionRequest OpenAI ChatCompletion 请求结构体
 type ChatCompletionRequest struct {
-	Model       string    `json:"model"`
-	Messages    []Message `json:"messages"`
-	Temperature *float32  `json:"temperature,omitempty"`
-	TopP        *float32  `json:"top_p,omitempty"`
-	MaxTokens   *int      `json:"max_tokens,omitempty"`
-	User        string    `json:"user,omitempty"`
-	Stream      bool      `json:"stream"`
+	Model           string                      `json:"model"`
+	Messages        []Message                   `json:"messages"`
+	Temperature     *float32                    `json:"temperature,omitempty"`
+	TopP            *float32                    `json:"top_p,omitempty"`
+	MaxTokens       *int                        `json:"max_tokens,omitempty"`
+	User            string                      `json:"user,omitempty"`
+	Stream          bool                        `json:"stream"`
+	Thinking        *ChatCompletionThinkingType `json:"thinking,omitempty"`         // enabled | disabled
+	ReasoningEffort *string                     `json:"reasoning_effort,omitempty"` // low | medium | high | max | xhigh
 }
 
 // Message 消息结构体

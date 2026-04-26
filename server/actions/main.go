@@ -12,6 +12,7 @@ var logger = log.New("actions")
 func InitFuncs(srv *jsonrpc.Server) {
 	logger.Info("init functions")
 	jsonrpc.Set(srv, "initialize", Initialize)
+	jsonrpc.Set(srv, "alk.cxykevin.top/reload_config", reloadFunc)
 	jsonrpc.Set(srv, "session/new", SessionNew)
 	jsonrpc.Set(srv, "session/load", SessionLoad)
 	jsonrpc.Set(srv, "session/list", SessionList)

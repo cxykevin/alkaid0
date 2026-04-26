@@ -29,7 +29,14 @@ Alkaid0 是一个模块化的 AI Coding 工具 与 Agent 框架，专为构建�
                 "ModelID": "模型ID",
                 "ProviderURL": "https://模型供应商/v1",
                 "ProviderKey": "sk-模型密钥",
-                "EnableThinking": true
+                "EnableThinking": true, 
+                "ProviderSpecificConfig": {
+                    "EnableDeepseekThinking": false,
+                    "EnableReasoningEffort": true,
+                    "EnableTopP": false,
+                    "EnableTopK": false,
+                    "EnableTemperature": false
+                }
             }
         }
     },
