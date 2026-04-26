@@ -42,6 +42,11 @@ func RequestBody(chatID uint32, modelID int32, agentCode string, toolsList *[]*p
 	// 配置模型信息
 	response.Model = modelConfig.ModelID
 	response.Stream = true
+	if modelConfig.ProviderSpecificConfig.EnableUsage {
+		response.StreamOptions = &reqStruct.ChatCompletionStreamOptions{
+			IncludeUsage: true,
+		}
+	}
 	if modelConfig.ProviderSpecificConfig.EnableTemperature && modelConfig.ModelTemperature != -1 && modelConfig.ModelTemperature != 0 {
 		response.Temperature = &modelConfig.ModelTemperature
 	}

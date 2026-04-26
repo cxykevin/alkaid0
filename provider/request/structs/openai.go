@@ -12,17 +12,23 @@ type ChatCompletionThinkingType struct {
 	Type string `json:"type"`
 }
 
+// ChatCompletionStreamOptions 流式响应选项
+type ChatCompletionStreamOptions struct {
+	IncludeUsage bool `json:"include_usage"`
+}
+
 // ChatCompletionRequest OpenAI ChatCompletion 请求结构体
 type ChatCompletionRequest struct {
-	Model           string                      `json:"model"`
-	Messages        []Message                   `json:"messages"`
-	Temperature     *float32                    `json:"temperature,omitempty"`
-	TopP            *float32                    `json:"top_p,omitempty"`
-	MaxTokens       *int                        `json:"max_tokens,omitempty"`
-	User            string                      `json:"user,omitempty"`
-	Stream          bool                        `json:"stream"`
-	Thinking        *ChatCompletionThinkingType `json:"thinking,omitempty"`         // enabled | disabled
-	ReasoningEffort *string                     `json:"reasoning_effort,omitempty"` // low | medium | high | max | xhigh
+	Model           string                       `json:"model"`
+	Messages        []Message                    `json:"messages"`
+	Temperature     *float32                     `json:"temperature,omitempty"`
+	TopP            *float32                     `json:"top_p,omitempty"`
+	MaxTokens       *int                         `json:"max_tokens,omitempty"`
+	User            string                       `json:"user,omitempty"`
+	Stream          bool                         `json:"stream"`
+	StreamOptions   *ChatCompletionStreamOptions `json:"stream_options,omitempty"`
+	Thinking        *ChatCompletionThinkingType  `json:"thinking,omitempty"`         // enabled | disabled
+	ReasoningEffort *string                      `json:"reasoning_effort,omitempty"` // low | medium | high | max | xhigh
 }
 
 // Message 消息结构体
@@ -39,7 +45,7 @@ type ChatCompletionResponse struct {
 	Created int64    `json:"created"`
 	Model   string   `json:"model"`
 	Choices []Choice `json:"choices"`
-	Usage   Usage    `json:"usage"`
+	Usage   *Usage   `json:"usage,omitempty"`
 }
 
 // Choice 选择项
@@ -51,9 +57,11 @@ type Choice struct {
 
 // Usage 令牌使用统计
 type Usage struct {
-	PromptTokens     int `json:"prompt_tokens"`
-	CompletionTokens int `json:"completion_tokens"`
-	TotalTokens      int `json:"total_tokens"`
+	PromptTokens        uint32 `json:"prompt_tokens"`
+	CompletionTokens    uint32 `json:"completion_tokens"`
+	TotalTokens         uint32 `json:"total_tokens"`
+	CachedTokens        uint32 `json:"cached_tokens"`
+	DeepseekCachedToken uint32 `json:"prompt_cache_hit_tokens,omitempty"`
 }
 
 // ChatCompletionStream 流式响应块
@@ -63,6 +71,7 @@ type ChatCompletionStream struct {
 	Created int64          `json:"created"`
 	Model   string         `json:"model"`
 	Choices []StreamChoice `json:"choices"`
+	Usage   *Usage         `json:"usage,omitempty"`
 }
 
 // StreamChoice 流式选择项

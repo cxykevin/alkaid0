@@ -26,7 +26,7 @@ type ContentBlock struct {
 }
 
 // SessionPrompt 处理 prompt turn 请求
-func SessionPrompt(req SessionPromptRequest, call func(string, any) error, connID uint64) (SessionPromptResponse, error) {
+func SessionPrompt(req SessionPromptRequest, call func(string, any, *string) error, connID uint64) (SessionPromptResponse, error) {
 	if req.SessionID == "" {
 		return SessionPromptResponse{}, fmt.Errorf("sessionId is empty")
 	}
@@ -197,7 +197,7 @@ type SessionCancelRequest struct {
 
 // SessionCancel 处理 session/cancel 请求
 // 取消正在进行的 prompt turn
-func SessionCancel(req SessionCancelRequest, call func(string, any) error, connID uint64) (any, error) {
+func SessionCancel(req SessionCancelRequest, call func(string, any, *string) error, connID uint64) (any, error) {
 	if req.SessionID == "" {
 		return nil, fmt.Errorf("sessionId is empty")
 	}

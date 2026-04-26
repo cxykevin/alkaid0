@@ -50,7 +50,7 @@ var AgentInfo = u.H{
 var clientConnCaps = map[uint64]u.H{}
 
 // Initialize 初始化
-func Initialize(req InitializeRequest, call func(string, any) error, connID uint64) (InitializeResponse, error) {
+func Initialize(req InitializeRequest, call func(string, any, *string) error, connID uint64) (InitializeResponse, error) {
 	if req.ProtocolVersion != protoVersion {
 		return InitializeResponse{}, fmt.Errorf("protocol version not match")
 	}
@@ -59,5 +59,6 @@ func Initialize(req InitializeRequest, call func(string, any) error, connID uint
 		ProtocolVersion:   protoVersion,
 		AgentCapabilities: AgentCapabilities,
 		AgentInfo:         AgentInfo,
+		AuthMethods:       []u.H{},
 	}, nil
 }

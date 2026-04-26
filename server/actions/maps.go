@@ -8,7 +8,7 @@ var ReasonMap = map[loop.StopReason]string{
 	loop.StopReasonModel:       "end_turn",
 	loop.StopReasonUser:        "cancelled",
 	loop.StopReasonError:       "refusal",
-	loop.StopReasonPendingTool: "_ignore",
+	loop.StopReasonPendingTool: "end_turn",
 }
 
 // ToolNameToTypeMap 工具名称到类型的映射，用于规范化工具调用类型

@@ -10,6 +10,7 @@ import (
 
 	"github.com/cxykevin/alkaid0/config"
 	"github.com/cxykevin/alkaid0/log"
+	reqStructs "github.com/cxykevin/alkaid0/provider/request/structs"
 	"github.com/cxykevin/alkaid0/storage/structs"
 	"github.com/cxykevin/alkaid0/ui/funcs"
 	"github.com/cxykevin/alkaid0/ui/state"
@@ -43,6 +44,7 @@ type AIResponse struct {
 	PendingTool     *[]funcs.ToolCall
 	StopReason      StopReason
 	ToolCallContent map[string]any
+	Usage           *reqStructs.Usage
 }
 
 // msgAction 停止原因
@@ -118,7 +120,7 @@ func (p *Object) Start(ctx context.Context) {
 			p.cancelFunc = responseCancel
 			p.lock.Unlock()
 
-			finish, err := funcs.SendRequest(responseCtx, session, func(delta string, thinkingDelta string, id uint64) error {
+			finish, err := funcs.SendRequest(responseCtx, session, func(delta string, thinkingDelta string, id uint64, usage reqStructs.Usage) error {
 				select {
 				case <-responseCtx.Done():
 					return responseCtx.Err()
@@ -142,6 +144,7 @@ func (p *Object) Start(ctx context.Context) {
 					MsgID:           id,
 					ThinkingContext: thinkingDelta,
 					Content:         delta,
+					Usage:           &usage,
 				})
 				return nil
 			})
@@ -182,12 +185,11 @@ func (p *Object) Start(ctx context.Context) {
 						call(AIResponse{
 							StopReason: StopReasonModel,
 						})
-						break
 					} else if len(pendingTools) > 0 {
 						call(AIResponse{
 							MsgID:       msgID,
 							PendingTool: &pendingTools,
-							StopReason:  StopReasonError,
+							StopReason:  StopReasonPendingTool,
 						})
 						break
 					}

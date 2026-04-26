@@ -12,7 +12,7 @@ func TestServerMethodRegistration(t *testing.T) {
 	srv := New()
 
 	// 注册一个简单的测试方法
-	Set(srv, "test_method", func(p u.H, call func(string, any) error, connID uint64) (any, error) {
+	Set(srv, "test_method", func(p u.H, call func(string, any, *string) error, connID uint64) (any, error) {
 		return "success", nil
 	})
 
@@ -26,7 +26,7 @@ func TestServerInvoke(t *testing.T) {
 	srv := New()
 
 	// 注册一个返回特定值的方法
-	Set(srv, "echo", func(p u.H, call func(string, any) error, connID uint64) (any, error) {
+	Set(srv, "echo", func(p u.H, call func(string, any, *string) error, connID uint64) (any, error) {
 		msg, ok := u.GetH[string](p, "message")
 		if !ok {
 			msg = "empty"
@@ -46,7 +46,7 @@ func TestServerInvoke(t *testing.T) {
 
 	reqData, _ := json.Marshal(req)
 	outputs := []string{}
-	
+
 	// 调用handle方法
 	_, _ = srv.handle(string(reqData), func(s string) error {
 		outputs = append(outputs, s)
@@ -152,7 +152,7 @@ func TestServerBatchRequest(t *testing.T) {
 	srv := New()
 
 	// 注册一个方法
-	Set(srv, "multiply", func(p u.H, call func(string, any) error, connID uint64) (any, error) {
+	Set(srv, "multiply", func(p u.H, call func(string, any, *string) error, connID uint64) (any, error) {
 		a, _ := u.GetH[float64](p, "a")
 		b, _ := u.GetH[float64](p, "b")
 		return a * b, nil
@@ -246,7 +246,7 @@ func TestServerInvalidVersion(t *testing.T) {
 func TestServerWithoutID(t *testing.T) {
 	srv := New()
 
-	Set(srv, "notify", func(p u.H, call func(string, any) error, connID uint64) (any, error) {
+	Set(srv, "notify", func(p u.H, call func(string, any, *string) error, connID uint64) (any, error) {
 		return nil, nil
 	})
 
@@ -267,7 +267,7 @@ func TestServerWithoutID(t *testing.T) {
 func TestServerResponseFormat(t *testing.T) {
 	srv := New()
 
-	Set(srv, "test", func(p u.H, call func(string, any) error, connID uint64) (any, error) {
+	Set(srv, "test", func(p u.H, call func(string, any, *string) error, connID uint64) (any, error) {
 		return map[string]any{"status": "ok"}, nil
 	})
 
@@ -310,7 +310,7 @@ func TestServerResponseFormat(t *testing.T) {
 func TestNotificationNoResponse(t *testing.T) {
 	srv := New()
 
-	Set(srv, "notify_test", func(p u.H, call func(string, any) error, connID uint64) (any, error) {
+	Set(srv, "notify_test", func(p u.H, call func(string, any, *string) error, connID uint64) (any, error) {
 		return "result", nil
 	})
 
@@ -381,7 +381,7 @@ func TestParseErrorIDHandling(t *testing.T) {
 func TestBatchWithNotifications(t *testing.T) {
 	srv := New()
 
-	Set(srv, "add", func(p u.H, call func(string, any) error, connID uint64) (any, error) {
+	Set(srv, "add", func(p u.H, call func(string, any, *string) error, connID uint64) (any, error) {
 		a, _ := u.GetH[float64](p, "a")
 		b, _ := u.GetH[float64](p, "b")
 		return a + b, nil

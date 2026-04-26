@@ -15,6 +15,7 @@ import (
 
 	"github.com/cxykevin/alkaid0/config"
 	cfgStructs "github.com/cxykevin/alkaid0/config/structs"
+	reqStructs "github.com/cxykevin/alkaid0/provider/request/structs"
 	"github.com/cxykevin/alkaid0/storage"
 	"github.com/cxykevin/alkaid0/storage/structs"
 	"github.com/cxykevin/alkaid0/ui/funcs"
@@ -111,7 +112,7 @@ var dbLock = &sync.Mutex{}
 var bindedSessionOnConn = map[uint64][]string{}
 
 // 连接ID到call函数的映射，用于发送跨conn通知
-var connCallMap = map[uint64]func(string, any) error{}
+var connCallMap = map[uint64]func(string, any, *string) error{}
 var connCallLock = &sync.Mutex{}
 
 // 会话ID到连接ID列表的反向映射，用于广播更新
@@ -127,6 +128,8 @@ type promptCtx struct {
 
 var activePrompts = map[string]*promptCtx{}
 var activePromptsLock = &sync.Mutex{}
+
+var agentCallList = map[string]map[string]func(){}
 
 // cwd2SessionID 将工作目录和会话ID转换为规范化的会话ID格式
 func cwd2SessionID(cwd string, id uint32) string {
@@ -238,7 +241,7 @@ func sessionID2Cwd(sessionID string) (string, uint32, error) {
 }
 
 // registerConnCall 注册连接的call函数和会话绑定
-func registerConnCall(connID uint64, sessionID string, callFunc func(string, any) error) {
+func registerConnCall(connID uint64, sessionID string, callFunc func(string, any, *string) error) {
 	connCallLock.Lock()
 	defer connCallLock.Unlock()
 	connCallMap[connID] = callFunc
@@ -284,7 +287,7 @@ func broadcastSessionUpdate(sessionID string, update any, excludeConnID uint64) 
 	sessionConnLock.Unlock()
 
 	connCallLock.Lock()
-	callFuncs := make(map[uint64]func(string, any) error)
+	callFuncs := make(map[uint64]func(string, any, *string) error)
 	for _, cid := range connIDs {
 		if cid != excludeConnID {
 			if fn, ok := connCallMap[cid]; ok {
@@ -296,13 +299,41 @@ func broadcastSessionUpdate(sessionID string, update any, excludeConnID uint64) 
 
 	var lastErr error
 	for _, fn := range callFuncs {
-		err := fn("session/update", update)
+		err := fn("session/update", update, nil)
 		if err != nil {
 			lastErr = err
 		}
 	}
 	return lastErr
 }
+
+// // broadcastCallRequest 向所有连接到该会话的客户端广播更新
+// func broadcastCallRequest(sessionID string, funcName string, update any) error {
+// 	logger.Debug("broadcast call \"%s\" in session %s", funcName, sessionID)
+
+// 	sessionConnLock.Lock()
+// 	connIDs := make([]uint64, len(sessionConnMap[sessionID]))
+// 	copy(connIDs, sessionConnMap[sessionID])
+// 	sessionConnLock.Unlock()
+
+// 	connCallLock.Lock()
+// 	callFuncs := make(map[uint64]func(string, any, *string) error)
+// 	for _, cid := range connIDs {
+// 		if fn, ok := connCallMap[cid]; ok {
+// 			callFuncs[cid] = fn
+// 		}
+// 	}
+// 	connCallLock.Unlock()
+
+// 	var lastErr error
+// 	for _, fn := range callFuncs {
+// 		err := fn(funcName, update, nil)
+// 		if err != nil {
+// 			lastErr = err
+// 		}
+// 	}
+// 	return lastErr
+// }
 
 // loadDB 加载数据库连接，支持连接复用和引用计数
 func loadDB(pathx string) (*gorm.DB, error) {
@@ -489,6 +520,18 @@ func loadSession(cwd string, id *uint32, knowID bool) (*structs.Chats, error) {
 				}
 			}
 
+			if resp.Usage != nil {
+				if resp.Usage.TotalTokens != 0 || resp.Usage.PromptTokens != 0 || resp.Usage.CompletionTokens != 0 || resp.Usage.CachedTokens != 0 {
+					err = broadcastSessionUpdate(sessID, SessionUpdate{
+						SessionID: sessID,
+						Update: SessionUpdateUpdate{
+							SessionUpdate: "alk.cxykevin.top/usage",
+							Content:       *resp.Usage,
+						},
+					}, 0)
+				}
+			}
+
 			if resp.StopReason != loop.StopReasonNone && resp.StopReason != loop.StopReasonPendingTool {
 				for {
 					select {
@@ -500,20 +543,51 @@ func loadSession(cwd string, id *uint32, knowID bool) (*structs.Chats, error) {
 				}
 			} else if resp.StopReason == loop.StopReasonPendingTool {
 				logger.Info("request pending tool call to Session=%d, ID=%d", sess.ID, resp.MsgID)
-				// for _, tool := range *resp.PendingTool {
-				// 	_ = broadcastSessionUpdate(sessID, SessionUpdate{
-				// 		SessionID: sessID,
-				// 		Update: SessionUpdateUpdate{
-				// 			SessionUpdate: "tool_call",
-				// 			ToolCallID:    fmt.Sprintf("call_%d_%d_%s", sess.ID, resp.MsgID, tool.ID),
-				// 			Title:         fmt.Sprintf("[Call %s]%s", tool.Name, tool.ID),
-				// 			Kind:          u.Default(ToolNameToType, tool.Name, "other"),
-				// 			Status:        "pending",
-				// 		},
-				// 	}, 0)
-				// }
+				// _ = broadcastSessionUpdate(sessID, SessionUpdate{
+				// 	SessionID: sessID,
+				// 	Update: SessionUpdateUpdate{
+				// 		SessionUpdate: "tool_call",
+				// 		ToolCallID:    fmt.Sprintf("call_%d_%d_%s", sess.ID, resp.MsgID, tool.ID),
+				// 		Title:         fmt.Sprintf("[Call %s]%s", tool.Name, tool.ID),
+				// 		Kind:          u.Default(ToolNameToType, tool.Name, "other"),
+				// 		Status:        "pending",
+				// 	},
+				// }, 0)
 
-				// TODO: 使用 request permission API
+				// 应使用 request permission API，但 ACP 协议设计有问题
+				if sess.LatestToolCallingContext != nil && sess.LatestToolCallingType != nil {
+					var waitApproveSessionString strings.Builder
+					waitApproveSessionString.WriteString("---\n### ***[System]*** Waiting Approve Tools:\n```text")
+					for id := range sess.LatestToolCallingContext {
+						stx := strings.SplitN(id, "_", 4)
+						s := ""
+						if len(stx) == 4 {
+							s = stx[3]
+						}
+						fmt.Fprintf(&waitApproveSessionString, "\n%s", fmt.Sprintf("[Call %s]%s", sess.LatestToolCallingType[id], s))
+					}
+					waitApproveSessionString.WriteString("\n```\n> Using `/approve` command to approve or type anything else to reject.\n")
+					err = broadcastSessionUpdate(sessID, SessionUpdate{
+						SessionID: sessID,
+						Update: SessionUpdateUpdate{
+							SessionUpdate: "agent_message_chunk",
+							Content: u.H{
+								"type": "text",
+								"text": waitApproveSessionString.String(),
+							},
+							CompabiltyIgnore: "true",
+						},
+					}, 0)
+				}
+
+				for {
+					select {
+					case i := <-obj.waitStopChan:
+						*i <- StopMsg{StopReason: "end_turn"}
+					default:
+						return
+					}
+				}
 			}
 
 		})
@@ -522,6 +596,7 @@ func loadSession(cwd string, id *uint32, knowID bool) (*structs.Chats, error) {
 		obj.session = sess
 		sess.ReferCount = 1
 		sessions[sessID] = obj
+		agentCallList[sessID] = make(map[string]func())
 		return sess, nil
 	}
 	sessions[sessID].referCnt++
@@ -540,12 +615,13 @@ func closeSession(sessionID string) {
 			obj.loop.Cancel()
 			closeDB(obj.cwd)
 			delete(sessions, sessionID)
+			delete(agentCallList, sessionID)
 		}
 	}
 }
 
 // SessionNew 创建新会话
-func SessionNew(req SessionNewRequest, call func(string, any) error, connID uint64) (SessionNewResponse, error) {
+func SessionNew(req SessionNewRequest, call func(string, any, *string) error, connID uint64) (SessionNewResponse, error) {
 	if req.Cwd == "" {
 		return SessionNewResponse{}, fmt.Errorf("cwd is empty")
 	}
@@ -629,13 +705,14 @@ func SessionNew(req SessionNewRequest, call func(string, any) error, connID uint
 
 // SessionUpdateUpdate 更新会话的参数
 type SessionUpdateUpdate struct {
-	SessionUpdate  string `json:"sessionUpdate"`
-	Content        any    `json:"content,omitempty"`
-	ToolCallID     string `json:"toolCallId,omitempty"`
-	Title          string `json:"title,omitempty"`
-	Kind           string `json:"kind,omitempty"`
-	Status         string `json:"status,omitempty"`
-	ExpandErrorMsg string `json:"alk.cxykevin.top/error_msg,omitempty"`
+	SessionUpdate    string `json:"sessionUpdate"`
+	Content          any    `json:"content,omitempty"`
+	ToolCallID       string `json:"toolCallId,omitempty"`
+	Title            string `json:"title,omitempty"`
+	Kind             string `json:"kind,omitempty"`
+	Status           string `json:"status,omitempty"`
+	ExpandErrorMsg   string `json:"alk.cxykevin.top/error_msg,omitempty"`
+	CompabiltyIgnore string `json:"alk.cxykevin.top/ignore,omitempty"`
 }
 
 // SessionUpdate 更新会话的请求
@@ -651,7 +728,7 @@ type SessionRequestPermission struct {
 }
 
 // SessionLoad 加载会话并发送历史回放
-func SessionLoad(req SessionLoadRequest, call func(string, any) error, connID uint64) (SessionLoadResponse, error) {
+func SessionLoad(req SessionLoadRequest, call func(string, any, *string) error, connID uint64) (SessionLoadResponse, error) {
 	req.Cwd = path.Clean(req.Cwd)
 	cwd, sid, err := sessionID2Cwd(req.SessionID)
 	if err != nil {
@@ -683,7 +760,7 @@ func SessionLoad(req SessionLoadRequest, call func(string, any) error, connID ui
 						"text": val.Delta,
 					},
 				},
-			})
+			}, nil)
 			if err != nil {
 				return SessionLoadResponse{}, err
 			}
@@ -698,7 +775,7 @@ func SessionLoad(req SessionLoadRequest, call func(string, any) error, connID ui
 							"text": val.ThinkingDelta,
 						},
 					},
-				})
+				}, nil)
 				if err != nil {
 					return SessionLoadResponse{}, err
 				}
@@ -712,11 +789,25 @@ func SessionLoad(req SessionLoadRequest, call func(string, any) error, connID ui
 						"text": val.Delta,
 					},
 				},
-			})
+			}, nil)
 			previousToolJSON = val.ToolCallingJSONString
 			prevMsgID = val.ID
 			if err != nil {
 				return SessionLoadResponse{}, err
+			}
+			if val.TotalTokens != 0 || val.CachedTokens != 0 || val.PromptTokens != 0 || val.CompletionTokens != 0 {
+				err = broadcastSessionUpdate(req.SessionID, SessionUpdate{
+					SessionID: req.SessionID,
+					Update: SessionUpdateUpdate{
+						SessionUpdate: "alk.cxykevin.top/usage",
+						Content: &reqStructs.Usage{
+							TotalTokens:      val.TotalTokens,
+							CachedTokens:     val.CachedTokens,
+							PromptTokens:     val.PromptTokens,
+							CompletionTokens: val.CompletionTokens,
+						},
+					},
+				}, 0)
 			}
 		case structs.MessagesRoleTool:
 			if previousToolJSON != "" {
@@ -746,7 +837,7 @@ func SessionLoad(req SessionLoadRequest, call func(string, any) error, connID ui
 							Kind:          u.Default(ToolNameToTypeMap, toolName, "other"),
 							Status:        "completed",
 						},
-					})
+					}, nil)
 					if err != nil {
 						return SessionLoadResponse{}, err
 					}
@@ -777,6 +868,28 @@ func SessionLoad(req SessionLoadRequest, call func(string, any) error, connID ui
 				logger.Warn("failed to broadcast session update: %v", err)
 			}
 		}
+		// var waitApproveSessionString strings.Builder
+		// waitApproveSessionString.WriteString("---\n### ***[System]*** Waiting Approve Tools:\n```text")
+		// for id := range sess.LatestToolCallingContext {
+		// 	stx := strings.SplitN(id, "_", 4)
+		// 	s := ""
+		// 	if len(stx) == 4 {
+		// 		s = stx[3]
+		// 	}
+		// 	fmt.Fprintf(&waitApproveSessionString, "\n%s", fmt.Sprintf("[Call %s]%s", sess.LatestToolCallingType[id], s))
+		// }
+		// waitApproveSessionString.WriteString("\n```\n> Using `/approve` command to approve or type anything else to reject.\n")
+		// err = broadcastSessionUpdate(req.SessionID, SessionUpdate{
+		// 	SessionID: req.SessionID,
+		// 	Update: SessionUpdateUpdate{
+		// 		SessionUpdate: "agent_message_chunk",
+		// 		Content: u.H{
+		// 			"type": "text",
+		// 			"text": waitApproveSessionString.String(),
+		// 		},
+		// 		CompabiltyIgnore: "true",
+		// 	},
+		// }, 0)
 	}
 	modelID := sess.LastModelID
 
@@ -840,7 +953,7 @@ type SessionSetConfigOptionResponse struct {
 }
 
 // SessionSetConfigOption 设置配置选项（如模型选择）
-func SessionSetConfigOption(req SessionSetConfigOptionRequest, call func(string, any) error, connID uint64) (SessionSetConfigOptionResponse, error) {
+func SessionSetConfigOption(req SessionSetConfigOptionRequest, call func(string, any, *string) error, connID uint64) (SessionSetConfigOptionResponse, error) {
 	if req.SessionID == "" {
 		return SessionSetConfigOptionResponse{}, fmt.Errorf("sessionId is empty")
 	}
@@ -934,7 +1047,7 @@ type SessionSetModelResponse struct {
 
 // SessionSetModel 设置会话模型
 // 这个接口提供与 session/set_config_option 相同的功能
-func SessionSetModel(req SessionSetModelRequest, call func(string, any) error, connID uint64) (SessionSetModelResponse, error) {
+func SessionSetModel(req SessionSetModelRequest, call func(string, any, *string) error, connID uint64) (SessionSetModelResponse, error) {
 	if req.SessionID == "" {
 		return SessionSetModelResponse{}, fmt.Errorf("sessionId is empty")
 	}
@@ -1022,7 +1135,7 @@ type SessionListResponse struct {
 }
 
 // SessionList 列出工作目录中的所有会话
-func SessionList(req SessionListRequest, call func(string, any) error, connID uint64) (SessionListResponse, error) {
+func SessionList(req SessionListRequest, call func(string, any, *string) error, connID uint64) (SessionListResponse, error) {
 	req.Cwd = path.Clean(req.Cwd)
 	info, err := os.Stat(req.Cwd)
 	if err != nil || !info.IsDir() {

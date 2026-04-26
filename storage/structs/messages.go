@@ -92,8 +92,12 @@ type Messages struct {
 	Refers                MessagesReferList `gorm:"type:bytes;serialize:gob"`
 	ToolCallingJSONString string            `gorm:"type:text"`
 	// ToolFinished          bool              `gorm:"default:false"`
-	Time      uint64 `gorm:"autoCreateTime"`
-	ModelName string
-	ModelID   uint32
-	Type      MessagesRole
+	Time             uint64 `gorm:"autoCreateTime"`
+	ModelName        string
+	ModelID          uint32
+	Type             MessagesRole
+	PromptTokens     uint32
+	CompletionTokens uint32
+	TotalTokens      uint32
+	CachedTokens     uint32
 }

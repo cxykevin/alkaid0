@@ -27,7 +27,7 @@ func init() {
 	config.AddReloadHook(updateCfgsToConns)
 }
 
-func reloadFunc(_ any, _ func(string, any) error, _ uint64) (any, error) {
+func reloadFunc(_ any, _ func(string, any, *string) error, _ uint64) (any, error) {
 	go updateCfgsToConns()
 	return nil, nil
 }

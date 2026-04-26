@@ -16,6 +16,7 @@ import (
 	"github.com/cxykevin/alkaid0/prompts"
 	"github.com/cxykevin/alkaid0/provider/request/agents/actions"
 	"github.com/cxykevin/alkaid0/provider/request/build"
+	"github.com/cxykevin/alkaid0/provider/request/structs"
 	reqStruct "github.com/cxykevin/alkaid0/provider/request/structs"
 	"github.com/cxykevin/alkaid0/provider/response"
 	storageStructs "github.com/cxykevin/alkaid0/storage/structs"
@@ -505,7 +506,7 @@ func ExecuteToolCalls(session *storageStructs.Chats, toolCallingJSON string) (bo
 }
 
 // SendRequest 发送请求
-func SendRequest(ctx context.Context, session *storageStructs.Chats, callback func(string, string, uint64) error) (bool, error) {
+func SendRequest(ctx context.Context, session *storageStructs.Chats, callback func(string, string, uint64, structs.Usage) error) (bool, error) {
 	session.State = state.StateWaiting
 	session.TemporyDataOfRequest = make(map[string]any)
 	db := session.DB
@@ -568,6 +569,13 @@ func SendRequest(ctx context.Context, session *storageStructs.Chats, callback fu
 	// 在流式响应中，如果每收到一个 token 就写入数据库，会对磁盘 I/O 造成巨大压力。
 	// 通过累积一定数量的 token（此处为 256）再统一更新，可以显著提升性能，同时保证用户在刷新页面时能看到大部分内容。
 	const tokenFlushThreshold = 256
+
+	// Usage 信息
+	var promptUsage uint32
+	var completionUsage uint32
+	var totalUsage uint32
+	var cachedUsage uint32
+
 	solveFunc := func(body reqStruct.ChatCompletionResponse) error {
 		if session.State == state.StateRequesting {
 			session.State = state.StateReciving
@@ -584,14 +592,27 @@ func SendRequest(ctx context.Context, session *storageStructs.Chats, callback fu
 		if err != nil {
 			return err
 		}
+
+		if body.Usage != nil {
+			promptUsage = max(promptUsage, body.Usage.PromptTokens)
+			completionUsage = max(completionUsage, body.Usage.CompletionTokens)
+			totalUsage = max(totalUsage, body.Usage.TotalTokens)
+			cachedUsage = max(cachedUsage, body.Usage.CachedTokens)
+			cachedUsage = max(cachedUsage, body.Usage.DeepseekCachedToken)
+		}
+
 		// 达到阈值时执行数据库更新
 		shouldFlush := pendingDelta.Len()+pendingThinkingDelta.Len() >= tokenFlushThreshold
 		if shouldFlush {
 			gstring := gDelta.String()
 			gtstring := gThinkingDelta.String()
 			if err := db.Model(&storageStructs.Messages{}).Where("id = ?", msgID).Updates(storageStructs.Messages{
-				Delta:         gstring,
-				ThinkingDelta: gtstring,
+				Delta:            gstring,
+				ThinkingDelta:    gtstring,
+				PromptTokens:     promptUsage,
+				CompletionTokens: completionUsage,
+				TotalTokens:      totalUsage,
+				CachedTokens:     cachedUsage,
 			}).Error; err != nil {
 				return err
 			}
@@ -601,7 +622,12 @@ func SendRequest(ctx context.Context, session *storageStructs.Chats, callback fu
 			lastFlushThinkingLen = len(gtstring)
 		}
 		// 回调函数通常用于实时推送到 UI 界面
-		if err := callback(delta, thinkingDelta, msgID); err != nil {
+		if err := callback(delta, thinkingDelta, msgID, structs.Usage{
+			PromptTokens:     promptUsage,
+			CompletionTokens: completionUsage,
+			TotalTokens:      totalUsage,
+			CachedTokens:     cachedUsage,
+		}); err != nil {
 			return err
 		}
 		return nil
@@ -646,8 +672,12 @@ func SendRequest(ctx context.Context, session *storageStructs.Chats, callback fu
 		finalThinkingDelta := gThinkingDelta.String()
 		if len(finalDelta) != lastFlushLen || len(finalThinkingDelta) != lastFlushThinkingLen {
 			err = db.Model(&storageStructs.Messages{}).Where("id = ?", msgID).Updates(storageStructs.Messages{
-				Delta:         finalDelta,
-				ThinkingDelta: finalThinkingDelta,
+				Delta:            finalDelta,
+				ThinkingDelta:    finalThinkingDelta,
+				PromptTokens:     promptUsage,
+				CompletionTokens: completionUsage,
+				TotalTokens:      totalUsage,
+				CachedTokens:     cachedUsage,
 			}).Error
 		}
 		if err == nil {
@@ -666,7 +696,12 @@ func SendRequest(ctx context.Context, session *storageStructs.Chats, callback fu
 		}
 		return true, nil
 	}
-	err = callback(delta, thinkingDelta, msgID)
+	err = callback(delta, thinkingDelta, msgID, structs.Usage{
+		PromptTokens:     promptUsage,
+		CompletionTokens: completionUsage,
+		TotalTokens:      totalUsage,
+		CachedTokens:     cachedUsage,
+	})
 	if err != nil {
 		return true, err
 	}

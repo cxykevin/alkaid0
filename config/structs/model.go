@@ -7,6 +7,7 @@ type ProviderSpecificConfig struct {
 	EnableTopP             bool `default:"false"`
 	EnableTemperature      bool `default:"false"`
 	EnableTopK             bool `default:"false"`
+	EnableUsage            bool `default:"true"`
 }
 
 // ModelConfig 单个模型配置结构
@@ -23,6 +24,7 @@ type ModelConfig struct {
 	ProviderKey            string                 `default:"sk-or-xxx"`                     // 复写模型提供者Key
 	EnableThinking         bool                   `default:"false"`                         // 是否启用思考
 	EnableToolCalling      bool                   `default:"false"`                         // 是否启用工具调用（只影响 delta 拼接）
+	CompressSize           int32                  `default:"128000"`                        // 压缩大小
 	ProviderSpecificConfig ProviderSpecificConfig // 特定模型提供方配置
 
 }

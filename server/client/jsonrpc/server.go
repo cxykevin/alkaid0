@@ -14,7 +14,7 @@ var logger = log.New("server")
 
 // Server jsonrpc 服务器
 type Server struct {
-	Methods map[string]func(u.H, func(string, any) error, uint64) (any, error)
+	Methods map[string]func(u.H, func(string, any, *string) error, uint64) (any, error)
 }
 
 // // ConnIdx 连接 ID 索引
@@ -90,13 +90,23 @@ func (s *Server) handle(arg string, call func(string) error, connID uint64) (ret
 				},
 			}, false
 		}
-		obj, err := fn(req.Params, func(meth string, v any) error {
-			returnByte, err := json.Marshal(Request{
-				Version: JSONRPCVersion,
-				ID:      nil,
-				Method:  meth,
-				Params:  u.Unwrap(u.ReApply(v)),
-			})
+		obj, err := fn(req.Params, func(meth string, v any, id *string) error {
+			var returnByte []byte
+			var err error
+			if id == nil {
+				returnByte, err = json.Marshal(RequestWithoutID{
+					Version: JSONRPCVersion,
+					Method:  meth,
+					Params:  u.Unwrap(u.ReApply(v)),
+				})
+			} else {
+				returnByte, err = json.Marshal(Request{
+					Version: JSONRPCVersion,
+					ID:      *id,
+					Method:  meth,
+					Params:  u.Unwrap(u.ReApply(v)),
+				})
+			}
 			if err != nil {
 				return err
 			}
@@ -191,9 +201,9 @@ func (s *Server) StartWs() error {
 }
 
 // Set 设置方法
-func Set[T any, T2 any](s *Server, method string, function func(T, func(string, any) error, uint64) (T2, error)) {
+func Set[T any, T2 any](s *Server, method string, function func(T, func(string, any, *string) error, uint64) (T2, error)) {
 	logger.Debug("set method %s", method)
-	s.Methods[method] = func(v u.H, f func(string, any) error, id uint64) (any, error) {
+	s.Methods[method] = func(v u.H, f func(string, any, *string) error, id uint64) (any, error) {
 		ret, err := function(u.Unwrap(u.Apply[T](v)), f, id)
 		_, ok := any(ret).(IgnoreReply)
 		if ok {
@@ -206,6 +216,6 @@ func Set[T any, T2 any](s *Server, method string, function func(T, func(string, 
 // New 创建一个 jsonrpc 服务器
 func New() *Server {
 	return &Server{
-		Methods: make(map[string]func(u.H, func(string, any) error, uint64) (any, error)),
+		Methods: make(map[string]func(u.H, func(string, any, *string) error, uint64) (any, error)),
 	}
 }

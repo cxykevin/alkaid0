@@ -52,7 +52,7 @@ func TestSessionPromptValidation(t *testing.T) {
 			_, err := SessionPrompt(SessionPromptRequest{
 				SessionID: tt.sessionID,
 				Prompt:    tt.prompt,
-			}, func(string, any) error { return nil }, 1)
+			}, func(string, any, *string) error { return nil }, 1)
 
 			if (err != nil) != tt.wantErr {
 				t.Errorf("SessionPrompt() error = %v, wantErr %v", err, tt.wantErr)
@@ -79,7 +79,7 @@ func TestBroadcastSessionUpdate(t *testing.T) {
 	for _, cid := range testConns {
 		connID := cid
 		connCallLock.Lock()
-		connCallMap[connID] = func(method string, update any) error {
+		connCallMap[connID] = func(method string, update any, _ *string) error {
 			mu.Lock()
 			defer mu.Unlock()
 			if method == "session/update" {
@@ -179,7 +179,7 @@ func TestConnCallRegistration(t *testing.T) {
 	connID := uint64(100)
 
 	// 创建 call 函数
-	callFunc := func(method string, v any) error {
+	callFunc := func(method string, v any, _ *string) error {
 		return nil
 	}
 
@@ -251,7 +251,7 @@ func TestSessionCancelValidation(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			_, err := SessionCancel(SessionCancelRequest{
 				SessionID: tt.sessionID,
-			}, func(string, any) error { return nil }, 1)
+			}, func(string, any, *string) error { return nil }, 1)
 
 			if (err != nil) != tt.wantErr {
 				t.Errorf("SessionCancel() error = %v, wantErr %v", err, tt.wantErr)
@@ -360,12 +360,12 @@ func TestConcurrentBroadcast(t *testing.T) {
 	// 创建多个 call 函数
 	var mu sync.Mutex
 	updateCounts := make(map[uint64]int)
-	callFuncs := make(map[uint64]func(string, any) error)
+	callFuncs := make(map[uint64]func(string, any, *string) error)
 
 	for i := 0; i < numConn; i++ {
 		cid := uint64(i + 1)
-		fn := func(conn uint64) func(string, any) error {
-			return func(method string, v any) error {
+		fn := func(conn uint64) func(string, any, *string) error {
+			return func(method string, v any, _ *string) error {
 				mu.Lock()
 				defer mu.Unlock()
 				if method == "session/update" {

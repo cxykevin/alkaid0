@@ -9,6 +9,7 @@ import (
 	cfgStructs "github.com/cxykevin/alkaid0/config/structs"
 	"github.com/cxykevin/alkaid0/provider/request"
 	"github.com/cxykevin/alkaid0/provider/request/agents"
+	reqStructs "github.com/cxykevin/alkaid0/provider/request/structs"
 	"github.com/cxykevin/alkaid0/storage"
 	"github.com/cxykevin/alkaid0/storage/structs"
 	"github.com/cxykevin/alkaid0/tools/actions"
@@ -288,6 +289,6 @@ func UserAddMsg(session *structs.Chats, msg string, refers *structs.MessagesRefe
 }
 
 // SendRequest 发送请求
-func SendRequest(ctx context.Context, session *structs.Chats, callback func(string, string, uint64) error) (bool, error) {
+func SendRequest(ctx context.Context, session *structs.Chats, callback func(string, string, uint64, reqStructs.Usage) error) (bool, error) {
 	return request.SendRequest(ctx, session, callback)
 }

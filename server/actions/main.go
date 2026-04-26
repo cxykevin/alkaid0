@@ -26,7 +26,7 @@ func InitFuncs(srv *jsonrpc.Server) {
 }
 
 // Close 关闭连接
-func Close(req any, call func(string, any) error, connID uint64) (any, error) {
+func Close(req any, call func(string, any, *string) error, connID uint64) (any, error) {
 	for _, sessionID := range u.Default(bindedSessionOnConn, connID, []string{}) {
 		closeSession(sessionID)
 		// 注销该连接与会话的绑定

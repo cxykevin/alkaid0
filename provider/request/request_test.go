@@ -8,7 +8,8 @@ import (
 	cfgStruct "github.com/cxykevin/alkaid0/config/structs"
 	"github.com/cxykevin/alkaid0/library/chancall"
 	"github.com/cxykevin/alkaid0/provider/request/agents/actions"
-	"github.com/cxykevin/alkaid0/storage/structs"
+	"github.com/cxykevin/alkaid0/provider/request/structs"
+	storageStructs "github.com/cxykevin/alkaid0/storage/structs"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 )
@@ -48,9 +49,9 @@ func setupTestDB(t *testing.T) *gorm.DB {
 
 	// 迁移所有需要的表
 	if err := db.AutoMigrate(
-		&structs.Chats{},
-		&structs.Messages{},
-		&structs.SubAgents{},
+		&storageStructs.Chats{},
+		&storageStructs.Messages{},
+		&storageStructs.SubAgents{},
 	); err != nil {
 		t.Fatalf("Failed to migrate: %v", err)
 	}
@@ -63,7 +64,7 @@ func TestUserAddMsg_Basic(t *testing.T) {
 	db := setupTestDB(t)
 
 	// 创建一个聊天会话
-	chat := structs.Chats{
+	chat := storageStructs.Chats{
 		ID:          1,
 		LastModelID: 1,
 	}
@@ -72,7 +73,7 @@ func TestUserAddMsg_Basic(t *testing.T) {
 	}
 
 	// 设置会话
-	session := &structs.Chats{
+	session := &storageStructs.Chats{
 		ID:             1,
 		DB:             db,
 		CurrentAgentID: "",
@@ -85,7 +86,7 @@ func TestUserAddMsg_Basic(t *testing.T) {
 	}
 
 	// 验证消息已添加
-	var messages []structs.Messages
+	var messages []storageStructs.Messages
 	db.Where("chat_id = ?", 1).Find(&messages)
 
 	if len(messages) != 1 {
@@ -96,7 +97,7 @@ func TestUserAddMsg_Basic(t *testing.T) {
 		t.Errorf("Expected message 'Hello, world!', got '%s'", messages[0].Delta)
 	}
 
-	if messages[0].Type != structs.MessagesRoleUser {
+	if messages[0].Type != storageStructs.MessagesRoleUser {
 		t.Errorf("Expected message type User, got %d", messages[0].Type)
 	}
 }
@@ -109,7 +110,7 @@ func TestUserAddMsg_WithRefers(t *testing.T) {
 	db := setupTestDB(t)
 
 	// 创建一个聊天会话
-	chat := structs.Chats{
+	chat := storageStructs.Chats{
 		ID:          1,
 		LastModelID: 1,
 	}
@@ -118,17 +119,17 @@ func TestUserAddMsg_WithRefers(t *testing.T) {
 	}
 
 	// 设置会话
-	session := &structs.Chats{
+	session := &storageStructs.Chats{
 		ID:             1,
 		DB:             db,
 		CurrentAgentID: "",
 	}
 
 	// 创建引用列表
-	refers := &structs.MessagesReferList{
+	refers := &storageStructs.MessagesReferList{
 		{
 			FilePath:     "/test/file.go",
-			FileType:     structs.MessagesReferTypeFile,
+			FileType:     storageStructs.MessagesReferTypeFile,
 			FileFromLine: 10,
 			FileToLine:   20,
 			Origin:       []byte("test content"),
@@ -142,7 +143,7 @@ func TestUserAddMsg_WithRefers(t *testing.T) {
 	}
 
 	// 验证消息已添加
-	var messages []structs.Messages
+	var messages []storageStructs.Messages
 	db.Where("chat_id = ?", 1).Find(&messages)
 
 	if len(messages) != 1 {
@@ -167,7 +168,7 @@ func TestUserAddMsg_NilRefers(t *testing.T) {
 	db := setupTestDB(t)
 
 	// 创建一个聊天会话
-	chat := structs.Chats{
+	chat := storageStructs.Chats{
 		ID:          1,
 		LastModelID: 1,
 	}
@@ -176,7 +177,7 @@ func TestUserAddMsg_NilRefers(t *testing.T) {
 	}
 
 	// 设置会话
-	session := &structs.Chats{
+	session := &storageStructs.Chats{
 		ID:             1,
 		DB:             db,
 		CurrentAgentID: "",
@@ -189,7 +190,7 @@ func TestUserAddMsg_NilRefers(t *testing.T) {
 	}
 
 	// 验证消息已添加
-	var messages []structs.Messages
+	var messages []storageStructs.Messages
 	db.Where("chat_id = ?", 1).Find(&messages)
 
 	if len(messages) != 1 {
@@ -206,7 +207,7 @@ func TestUserAddMsg_MultipleMessages(t *testing.T) {
 	db := setupTestDB(t)
 
 	// 创建一个聊天会话
-	chat := structs.Chats{
+	chat := storageStructs.Chats{
 		ID:          1,
 		LastModelID: 1,
 	}
@@ -215,7 +216,7 @@ func TestUserAddMsg_MultipleMessages(t *testing.T) {
 	}
 
 	// 设置会话
-	session := &structs.Chats{
+	session := &storageStructs.Chats{
 		ID:             1,
 		DB:             db,
 		CurrentAgentID: "",
@@ -231,7 +232,7 @@ func TestUserAddMsg_MultipleMessages(t *testing.T) {
 	}
 
 	// 验证所有消息已添加
-	var dbMessages []structs.Messages
+	var dbMessages []storageStructs.Messages
 	db.Where("chat_id = ?", 1).Order("id ASC").Find(&dbMessages)
 
 	if len(dbMessages) != 3 {
@@ -250,7 +251,7 @@ func TestUserAddMsg_EmptyMessage(t *testing.T) {
 	db := setupTestDB(t)
 
 	// 创建一个聊天会话
-	chat := structs.Chats{
+	chat := storageStructs.Chats{
 		ID:          1,
 		LastModelID: 1,
 	}
@@ -259,7 +260,7 @@ func TestUserAddMsg_EmptyMessage(t *testing.T) {
 	}
 
 	// 设置会话
-	session := &structs.Chats{
+	session := &storageStructs.Chats{
 		ID:             1,
 		DB:             db,
 		CurrentAgentID: "",
@@ -272,7 +273,7 @@ func TestUserAddMsg_EmptyMessage(t *testing.T) {
 	}
 
 	// 验证消息已添加
-	var messages []structs.Messages
+	var messages []storageStructs.Messages
 	db.Where("chat_id = ?", 1).Find(&messages)
 
 	if len(messages) != 1 {
@@ -289,7 +290,7 @@ func TestUserAddMsg_InvalidChatID(t *testing.T) {
 	db := setupTestDB(t)
 
 	// 不创建聊天会话，直接使用不存在的ID
-	session := &structs.Chats{
+	session := &storageStructs.Chats{
 		ID:             999, // 不存在的ID
 		DB:             db,
 		CurrentAgentID: "",
@@ -313,7 +314,7 @@ func TestUserAddMsg_WithCurrentAgent(t *testing.T) {
 	db := setupTestDB(t)
 
 	// 创建一个聊天会话
-	chat := structs.Chats{
+	chat := storageStructs.Chats{
 		ID:          1,
 		LastModelID: 1,
 	}
@@ -322,7 +323,7 @@ func TestUserAddMsg_WithCurrentAgent(t *testing.T) {
 	}
 
 	// 创建一个子代理
-	subAgent := structs.SubAgents{
+	subAgent := storageStructs.SubAgents{
 		ID:       "test-agent",
 		AgentID:  "test-agent-id",
 		BindPath: "/test/path",
@@ -333,7 +334,7 @@ func TestUserAddMsg_WithCurrentAgent(t *testing.T) {
 	}
 
 	// 设置会话，带有当前代理
-	session := &structs.Chats{
+	session := &storageStructs.Chats{
 		ID:             1,
 		DB:             db,
 		CurrentAgentID: "test-agent",
@@ -350,7 +351,7 @@ func TestUserAddMsg_WithCurrentAgent(t *testing.T) {
 	}
 
 	// 验证消息已添加
-	var messages []structs.Messages
+	var messages []storageStructs.Messages
 	db.Where("chat_id = ?", 1).Find(&messages)
 
 	if len(messages) != 1 {
@@ -363,7 +364,7 @@ func TestCanAutoApprove(t *testing.T) {
 	db := setupTestDB(t)
 
 	// 设置基础环境
-	session := &structs.Chats{
+	session := &storageStructs.Chats{
 		ID: 1,
 		DB: db,
 		CurrentAgentConfig: cfgStruct.AgentConfig{
@@ -371,7 +372,7 @@ func TestCanAutoApprove(t *testing.T) {
 			AutoReject:  "ToolCall.Name == \"reject_me\"",
 		},
 	}
-	msg := &structs.Messages{}
+	msg := &storageStructs.Messages{}
 
 	// 1. 测试拒绝规则触发
 	callsReject := []ToolCall{
@@ -469,7 +470,7 @@ func TestSendRequest_ModelNotFound(t *testing.T) {
 	db := setupTestDB(t)
 
 	// 创建聊天会话
-	chat := structs.Chats{
+	chat := storageStructs.Chats{
 		ID:          1,
 		LastModelID: 999, // 不存在的模型ID
 	}
@@ -478,7 +479,7 @@ func TestSendRequest_ModelNotFound(t *testing.T) {
 	}
 
 	// 设置会话
-	session := &structs.Chats{
+	session := &storageStructs.Chats{
 		ID:             1,
 		DB:             db,
 		LastModelID:    999,
@@ -486,7 +487,7 @@ func TestSendRequest_ModelNotFound(t *testing.T) {
 	}
 
 	// 尝试发送请求
-	_, err := SendRequest(context.Background(), session, func(delta, thinking string, _ uint64) error {
+	_, err := SendRequest(context.Background(), session, func(delta, thinking string, _ uint64, _ structs.Usage) error {
 		return nil
 	})
 
