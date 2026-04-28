@@ -1,0 +1,68 @@
+name: Build and Package
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout 代码
+        uses: actions/checkout@v4
+
+      - name: 安装 Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.2'
+          check-latest: true
+
+      - name: 安装交叉编译工具链和 UPX
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y upx-ucl gcc-mingw-w64-x86-64 gcc-aarch64-linux-gnu
+
+      - name: 执行代码生成
+        run: |
+          go generate ./...
+          go generate product/gen.go
+
+      - name: 构建 Linux amd64 (本机 CGO)
+        run: |
+          CGO_ENABLED=1 GOOS=linux GOARCH=amd64 \
+            go build -trimpath -ldflags="-s -w" \
+            -o alkaid0-linux-amd64 .
+
+      - name: 构建 Windows amd64 (交叉编译)
+        env:
+          CC: x86_64-w64-mingw32-gcc
+        run: |
+          CGO_ENABLED=1 GOOS=windows GOARCH=amd64 \
+            go build -trimpath -ldflags="-s -w" \
+            -o alkaid0-windows-amd64.exe .
+
+      - name: 构建 Linux arm64 (交叉编译)
+        env:
+          CC: aarch64-linux-gnu-gcc
+        run: |
+          CGO_ENABLED=1 GOOS=linux GOARCH=arm64 \
+            go build -trimpath -ldflags="-s -w" \
+            -o alkaid0-linux-arm64 .
+
+      - name: UPX 极限压缩
+        run: |
+          upx --best --lzma alkaid0-linux-amd64
+          upx --best --lzma alkaid0-windows-amd64.exe
+          upx --best --lzma alkaid0-linux-arm64
+
+      - name: 上传构建产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: alkaid0-binaries
+          path: |
+            alkaid0-linux-amd64
+            alkaid0-windows-amd64.exe
+            alkaid0-linux-arm64
