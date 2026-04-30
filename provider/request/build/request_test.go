@@ -46,6 +46,13 @@ func setupTestConfig() {
 					ModelTopP:         0.9,
 					EnableThinking:    true,
 					EnableToolCalling: true,
+					ProviderSpecificConfig: cfgStruct.ProviderSpecificConfig{
+						EnableDeepseekThinking: true,
+						EnableReasoningEffort:  true,
+						EnableTopP:             true,
+						EnableTopK:             true,
+						EnableTemperature:      true,
+					},
 				},
 				2: {
 					ModelName:         "test-model-no-think",
@@ -54,6 +61,13 @@ func setupTestConfig() {
 					ModelTopP:         0.9,
 					EnableThinking:    false,
 					EnableToolCalling: true,
+					ProviderSpecificConfig: cfgStruct.ProviderSpecificConfig{
+						EnableDeepseekThinking: true,
+						EnableReasoningEffort:  true,
+						EnableTopP:             true,
+						EnableTopK:             true,
+						EnableTemperature:      true,
+					},
 				},
 			},
 		},

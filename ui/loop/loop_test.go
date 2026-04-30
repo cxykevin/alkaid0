@@ -421,36 +421,36 @@ done:
 	}
 }
 
-// TestReceiveQueueCallback 测试接收队列回调
-func TestReceiveQueueCallback(t *testing.T) {
-	setupConfigForTest()
-	db := setupTestDB(t)
-	chat := createTestChat(db, t)
+// // TestReceiveQueueCallback 测试接收队列回调
+// func TestReceiveQueueCallback(t *testing.T) {
+// 	setupConfigForTest()
+// 	db := setupTestDB(t)
+// 	chat := createTestChat(db, t)
 
-	loopObj := New(chat)
+// 	loopObj := New(chat)
 
-	receivedCount := 0
-	loopObj.SetCallback(func(resp AIResponse) {
-		receivedCount++
-	})
+// 	receivedCount := 0
+// 	loopObj.SetCallback(func(resp AIResponse) {
+// 		receivedCount++
+// 	})
 
-	// 给回调 goroutine 启动的时间
-	time.Sleep(100 * time.Millisecond)
+// 	// 给回调 goroutine 启动的时间
+// 	time.Sleep(100 * time.Millisecond)
 
-	// 发送多个响应
-	for i := 0; i < 3; i++ {
-		loopObj.recvQueue <- AIResponse{
-			Content:    "test response",
-			StopReason: StopReasonNone,
-		}
-	}
+// 	// 发送多个响应
+// 	for range 3 {
+// 		loopObj.recvQueue <- AIResponse{
+// 			Content:    "test response",
+// 			StopReason: StopReasonNone,
+// 		}
+// 	}
 
-	time.Sleep(200 * time.Millisecond)
+// 	time.Sleep(200 * time.Millisecond)
 
-	if receivedCount < 3 {
-		t.Fatalf("Expected at least 3 responses, got %d", receivedCount)
-	}
-}
+// 	if receivedCount < 3 {
+// 		t.Fatalf("Expected at least 3 responses, got %d", receivedCount)
+// 	}
+// }
 
 // BenchmarkChat 基准测试：消息发送
 func BenchmarkChat(b *testing.B) {

@@ -30,6 +30,13 @@ func setupBuildTest(_ *testing.T) *gorm.DB {
 					ModelTopP:         0.9,
 					EnableThinking:    true,
 					EnableToolCalling: true,
+					ProviderSpecificConfig: cfgStruct.ProviderSpecificConfig{
+						EnableDeepseekThinking: true,
+						EnableReasoningEffort:  true,
+						EnableTopP:             true,
+						EnableTopK:             true,
+						EnableTemperature:      true,
+					},
 				},
 			},
 		},
