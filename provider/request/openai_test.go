@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/cxykevin/alkaid0/mock/openai"
 	"github.com/cxykevin/alkaid0/provider/request/structs"
@@ -173,5 +174,50 @@ func TestEmbeddingInvalidBaseURL(t *testing.T) {
 	_, err := SimpleOpenAIEmbedding(context.Background(), baseURL, apiKey, model, body)
 	if err == nil {
 		t.Fatal("Expected error for invalid baseURL, got nil")
+	}
+}
+
+// TestConcurrentRequests 测试并发请求
+func TestConcurrentRequests(t *testing.T) {
+	baseURL := "http://localhost:56108/v1"
+	apiKey := "sk-abc"
+	model := "test-chat-flash-thinking"
+
+	const numGoroutines = 5
+	done := make(chan bool, numGoroutines)
+
+	for i := 0; i < numGoroutines; i++ {
+		go func(id int) {
+			body := structs.ChatCompletionRequest{
+				Messages: []structs.Message{
+					{Role: structs.RoleUser, Content: fmt.Sprintf("Hello from goroutine %d", id)},
+				},
+				Temperature: &[]float32{0.7}[0],
+			}
+
+			var responses []structs.ChatCompletionResponse
+			err := SimpleOpenAIRequest(context.Background(), baseURL, apiKey, model, body, func(resp structs.ChatCompletionResponse) error {
+				responses = append(responses, resp)
+				return nil
+			})
+
+			if err != nil {
+				t.Errorf("Goroutine %d failed: %v", id, err)
+			}
+
+			if len(responses) == 0 {
+				t.Errorf("Goroutine %d received no responses", id)
+			}
+
+			done <- true
+		}(i)
+	}
+
+	for i := 0; i < numGoroutines; i++ {
+		select {
+		case <-done:
+		case <-time.After(10 * time.Second):
+			t.Fatal("Timeout waiting for concurrent requests")
+		}
 	}
 }

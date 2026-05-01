@@ -119,10 +119,10 @@ func buildHelperConfig(args []string) (structs.RPCConfig, error) {
 	flags := flag.NewFlagSet("helper", flag.ContinueOnError)
 	flags.SetOutput(os.Stderr)
 	configPathFlag := flags.String("config", configPath, "path to config file")
-	hostFlag := flags.String("host", "127.0.0.1", "websocket host")
-	portFlag := flags.Uint("port", 7433, "websocket port")
-	pathFlag := flags.String("path", "/acp", "websocket path")
-	keyFlag := flags.String("key", "", "websocket key")
+	hostFlag := flags.String("host", cfg.Host, "websocket host")
+	portFlag := flags.Uint("port", uint(cfg.Port), "websocket port")
+	pathFlag := flags.String("path", cfg.Path, "websocket path")
+	keyFlag := flags.String("key", cfg.Key, "websocket key")
 	flags.Usage = func() {
 		fmt.Fprintf(os.Stderr, "Usage of alkaid0 helper:\n")
 		flags.PrintDefaults()
@@ -161,18 +161,19 @@ func buildHelperConfig(args []string) (structs.RPCConfig, error) {
 		cfg.Key = envKey
 	}
 
-	if *hostFlag != "" {
-		cfg.Host = *hostFlag
-	}
-	if *portFlag != 0 {
-		cfg.Port = uint16(*portFlag)
-	}
-	if *pathFlag != "" {
-		cfg.Path = *pathFlag
-	}
-	if *keyFlag != "" {
-		cfg.Key = *keyFlag
-	}
+	// Apply flags if they were provided
+	flags.Visit(func(f *flag.Flag) {
+		switch f.Name {
+		case "host":
+			cfg.Host = *hostFlag
+		case "port":
+			cfg.Port = uint16(*portFlag)
+		case "path":
+			cfg.Path = *pathFlag
+		case "key":
+			cfg.Key = *keyFlag
+		}
+	})
 
 	if cfg.Port == 0 {
 		return cfg, fmt.Errorf("port must be set")
@@ -213,11 +214,6 @@ func loadConfigFile(path string) (structs.RPCConfig, error) {
 	var full structs.Config
 	if err := json.Unmarshal(data, &full); err == nil {
 		return full.Server, nil
-	}
-
-	var simple structs.RPCConfig
-	if err := json.Unmarshal(data, &simple); err == nil {
-		return simple, nil
 	}
 
 	return structs.RPCConfig{}, fmt.Errorf("invalid config file format")

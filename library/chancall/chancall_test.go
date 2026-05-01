@@ -103,37 +103,45 @@ func TestConsumerError(t *testing.T) {
 }
 
 func TestConcurrentCalls(t *testing.T) {
-	// 注册一个消费者
-	counter := Register("counter", func(obj any) (any, error) {
-		if n, ok := obj.(int); ok {
-			time.Sleep(10 * time.Millisecond) // 模拟一些处理时间
-			return n * 2, nil
+	// 注册消费者
+	counterFunc := Register("counter", func(obj any) (any, error) {
+		if num, ok := obj.(int); ok {
+			return num * 2, nil
 		}
 		return nil, errors.New("invalid input")
 	})
 
 	// 并发调用
-	done := make(chan bool)
-	for i := 0; i < 10; i++ {
-		go func(n int) {
-			result, err := counter(n)
-			if err != nil {
-				t.Errorf("Unexpected error: %v", err)
+	const numGoroutines = 10
+	const callsPerGoroutine = 100
+	results := make(chan int, numGoroutines*callsPerGoroutine)
+
+	for i := 0; i < numGoroutines; i++ {
+		go func(id int) {
+			for j := 0; j < callsPerGoroutine; j++ {
+				result, err := counterFunc(id*callsPerGoroutine + j)
+				if err != nil {
+					t.Errorf("Error in goroutine %d: %v", id, err)
+					return
+				}
+				results <- result.(int)
 			}
-			if result != n*2 {
-				t.Errorf("Expected %d, got %v", n*2, result)
-			}
-			done <- true
 		}(i)
 	}
 
-	// 等待所有goroutine完成
-	for i := 0; i < 10; i++ {
-		select {
-		case <-done:
-		case <-time.After(2 * time.Second):
-			t.Fatal("Timeout waiting for concurrent calls")
-		}
+	// 收集结果
+	expectedSum := 0
+	for i := 0; i < numGoroutines*callsPerGoroutine; i++ {
+		expectedSum += i * 2
+	}
+
+	actualSum := 0
+	for i := 0; i < numGoroutines*callsPerGoroutine; i++ {
+		actualSum += <-results
+	}
+
+	if actualSum != expectedSum {
+		t.Errorf("Expected sum %d, got %d", expectedSum, actualSum)
 	}
 }
 

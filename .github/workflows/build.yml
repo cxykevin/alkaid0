@@ -17,7 +17,7 @@ jobs:
       - name: 安装 Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.26.2'
+          go-version: "1.26.2"
           check-latest: true
 
       - name: 安装交叉编译工具链和 UPX
@@ -66,3 +66,22 @@ jobs:
             alkaid0-linux-amd64
             alkaid0-windows-amd64.exe
             alkaid0-linux-arm64
+
+  test:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ ubuntu-latest, macos-latest, windows-latest ]
+    steps:
+      - name: Checkout 代码
+        uses: actions/checkout@v4
+
+      - name: 安装 Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.26.2"
+          check-latest: true
+
+      - name: 运行测试
+        run: |
+          go test -v ./...

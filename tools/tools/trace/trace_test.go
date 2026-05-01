@@ -1,8 +1,10 @@
 package trace
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/cxykevin/alkaid0/storage/structs"
@@ -17,7 +19,7 @@ func setupTestDB(t *testing.T) *gorm.DB {
 		t.Fatalf("Failed to open test database: %v", err)
 	}
 
-	if err := db.AutoMigrate(&structs.Traces{}, &structs.Chats{}); err != nil {
+	if err := db.AutoMigrate(&structs.Traces{}, &structs.Chats{}, &structs.ReferFiles{}); err != nil {
 		t.Fatalf("Failed to migrate: %v", err)
 	}
 
@@ -208,7 +210,7 @@ func TestTraceFileNotExist(t *testing.T) {
 		TemporyDataOfRequest: make(map[string]any),
 		TemporyDataOfSession: make(map[string]any),
 		CurrentActivatePath:  tmpDir,
-		CurrentAgentID:       "test_agent",
+		NowAgent:       "test_agent",
 		ToolCallingContext:   make(map[string]any),
 		ToolCallingType:      make(map[string]string),
 	}
@@ -257,7 +259,7 @@ func TestTraceSuccess(t *testing.T) {
 		TemporyDataOfRequest: make(map[string]any),
 		TemporyDataOfSession: make(map[string]any),
 		CurrentActivatePath:  tmpDir,
-		CurrentAgentID:       "test_agent",
+		NowAgent:       "test_agent",
 		TraceID:              0,
 	}
 
@@ -317,7 +319,7 @@ func TestTraceFileTooLarge(t *testing.T) {
 		TemporyDataOfRequest: make(map[string]any),
 		TemporyDataOfSession: make(map[string]any),
 		CurrentActivatePath:  tmpDir,
-		CurrentAgentID:       "test_agent",
+		NowAgent:       "test_agent",
 	}
 
 	mp := map[string]*any{
@@ -362,7 +364,7 @@ func TestUntraceSuccess(t *testing.T) {
 		TemporyDataOfRequest: make(map[string]any),
 		TemporyDataOfSession: make(map[string]any),
 		CurrentActivatePath:  tmpDir,
-		CurrentAgentID:       "test_agent",
+		NowAgent:       "test_agent",
 	}
 
 	// 初始化 traceCache
@@ -390,7 +392,7 @@ func TestUntraceSuccess(t *testing.T) {
 
 	// 验证数据库记录（可能已删除或未找到）
 	var count int64
-	db.Model(&structs.Traces{}).Where("chat_id = ? AND path = ? AND agent_id = ?", session.ID, testFile, session.CurrentAgentID).Count(&count)
+	db.Model(&structs.Traces{}).Where("chat_id = ? AND path = ? AND agent_id = ?", session.ID, testFile, session.NowAgent).Count(&count)
 	// 不强制要求为0，因为可能路径匹配问题
 	_ = count
 }
@@ -406,7 +408,7 @@ func TestUntraceNotFound(t *testing.T) {
 		TemporyDataOfRequest: make(map[string]any),
 		TemporyDataOfSession: make(map[string]any),
 		CurrentActivatePath:  tmpDir,
-		CurrentAgentID:       "test_agent",
+		NowAgent:       "test_agent",
 	}
 
 	// 初始化 traceCache
@@ -456,7 +458,7 @@ func TestBuildTrace(t *testing.T) {
 	session := &structs.Chats{
 		ID:             1,
 		DB:             db,
-		CurrentAgentID: "test_agent",
+		NowAgent: "test_agent",
 	}
 
 	result, err := buildTrace(session)
@@ -475,7 +477,7 @@ func TestBuildTraceEmptyCache(t *testing.T) {
 	session := &structs.Chats{
 		ID:             1,
 		DB:             db,
-		CurrentAgentID: "test_agent",
+		NowAgent: "test_agent",
 	}
 
 	result, err := buildTrace(session)
@@ -532,7 +534,7 @@ func TestTraceEmptyFile(t *testing.T) {
 		TemporyDataOfRequest: make(map[string]any),
 		TemporyDataOfSession: make(map[string]any),
 		CurrentActivatePath:  tmpDir,
-		CurrentAgentID:       "test_agent",
+		NowAgent:       "test_agent",
 	}
 
 	session.TemporyDataOfSession["tools:trace"] = traceCache{}
@@ -553,5 +555,507 @@ func TestTraceEmptyFile(t *testing.T) {
 		t.Fatal("Expected success in result")
 	} else if success, ok := (*successPtr).(bool); !ok || success {
 		t.Error("Expected success to be false for empty file")
+	}
+}
+
+func TestTraceFileTooLong(t *testing.T) {
+	db := setupTestDB(t)
+
+	tmpDir := t.TempDir()
+	testFile := filepath.Join(tmpDir, "long.txt")
+
+	// 创建一个超过MaxFileLine行的文件
+	longContent := ""
+	for i := 0; i < MaxFileLine+1; i++ {
+		longContent += fmt.Sprintf("line %d\n", i)
+	}
+	if err := os.WriteFile(testFile, []byte(longContent), 0644); err != nil {
+		t.Fatalf("Failed to create test file: %v", err)
+	}
+
+	session := &structs.Chats{
+		ID:                   1,
+		DB:                   db,
+		TemporyDataOfRequest: make(map[string]any),
+		TemporyDataOfSession: make(map[string]any),
+		CurrentActivatePath:  tmpDir,
+		NowAgent:       "test_agent",
+	}
+
+	session.TemporyDataOfSession["tools:trace"] = traceCache{}
+
+	mp := map[string]*any{
+		"path": func() *any { s := any("long.txt"); return &s }(),
+	}
+
+	pass, _, result, err := Trace(session, mp, []*any{})
+	if err != nil {
+		t.Fatalf("Unexpected error: %v", err)
+	}
+	if pass {
+		t.Error("Expected pass to be false")
+	}
+
+	if successPtr, ok := result["success"]; !ok || successPtr == nil {
+		t.Fatal("Expected success in result")
+	} else if success, ok := (*successPtr).(bool); !ok || success {
+		t.Error("Expected success to be false for too long file")
+	}
+}
+
+func TestTraceTempFile(t *testing.T) {
+	db := setupTestDB(t)
+
+	// 创建ReferFiles记录
+	referFile := structs.ReferFiles{
+		ChatID:   1,
+		Path:     "temp_test.txt",
+		Content:  "temp content",
+		ReadOnly: false,
+	}
+	if err := db.Create(&referFile).Error; err != nil {
+		t.Fatalf("Failed to create refer file: %v", err)
+	}
+
+	// 创建chat记录
+	chat := structs.Chats{
+		ID:      1,
+		TraceID: 0,
+	}
+	if err := db.Create(&chat).Error; err != nil {
+		t.Fatalf("Failed to create chat: %v", err)
+	}
+
+	session := &structs.Chats{
+		ID:                   1,
+		DB:                   db,
+		TemporyDataOfRequest: make(map[string]any),
+		TemporyDataOfSession: make(map[string]any),
+		CurrentActivatePath:  "/tmp",
+		NowAgent:       "test_agent",
+		TraceID:              0,
+	}
+
+	session.TemporyDataOfSession["tools:trace"] = traceCache{}
+
+	mp := map[string]*any{
+		"path": func() *any { s := any("@temp/temp_test.txt"); return &s }(),
+	}
+
+	pass, _, result, err := Trace(session, mp, []*any{})
+	if err != nil {
+		t.Fatalf("Unexpected error: %v", err)
+	}
+	if pass {
+		t.Error("Expected pass to be false")
+	}
+
+	if successPtr, ok := result["success"]; ok && successPtr != nil {
+		if success, ok := (*successPtr).(bool); ok && success {
+			// 成功的情况下验证TraceID增加
+			if session.TraceID != 1 {
+				t.Errorf("Expected TraceID to be 1, got %d", session.TraceID)
+			}
+		}
+	}
+}
+
+func TestBuildTraceWithTempFile(t *testing.T) {
+	db := setupTestDB(t)
+
+	// 创建ReferFiles记录
+	referFile := structs.ReferFiles{
+		ChatID:   1,
+		Path:     "temp_test.txt",
+		Content:  "temp content\nline 2",
+		ReadOnly: false,
+	}
+	if err := db.Create(&referFile).Error; err != nil {
+		t.Fatalf("Failed to create refer file: %v", err)
+	}
+
+	// 创建trace记录
+	trace := structs.Traces{
+		ChatID:  1,
+		Path:    "@temp/temp_test.txt",
+		TraceID: 1,
+		AgentID: "test_agent",
+	}
+	if err := db.Create(&trace).Error; err != nil {
+		t.Fatalf("Failed to create trace: %v", err)
+	}
+
+	session := &structs.Chats{
+		ID:             1,
+		DB:             db,
+		NowAgent: "test_agent",
+	}
+
+	result, err := buildTrace(session)
+	if err != nil {
+		t.Fatalf("Unexpected error: %v", err)
+	}
+
+	if result == "" {
+		t.Error("Expected non-empty result")
+	}
+
+	// 检查结果包含临时文件内容
+	if !strings.Contains(result, "temp content") {
+		t.Error("Expected result to contain temp file content")
+	}
+}
+
+func TestBuildTraceFileNotExist(t *testing.T) {
+	db := setupTestDB(t)
+
+	tmpDir := t.TempDir()
+
+	// 创建trace记录指向不存在的文件
+	trace := structs.Traces{
+		ChatID:  1,
+		Path:    "nonexistent.txt",
+		TraceID: 1,
+		AgentID: "test_agent",
+	}
+	if err := db.Create(&trace).Error; err != nil {
+		t.Fatalf("Failed to create trace: %v", err)
+	}
+
+	session := &structs.Chats{
+		ID:                   1,
+		DB:                   db,
+		NowAgent:       "test_agent",
+		CurrentActivatePath:  tmpDir,
+		TemporyDataOfSession: make(map[string]any),
+	}
+
+	result, err := buildTrace(session)
+	if err != nil {
+		t.Fatalf("Unexpected error: %v", err)
+	}
+
+	// 应该返回空字符串，因为文件不存在会被跳过
+	_ = result
+}
+
+func TestBuildTraceFileTooLarge(t *testing.T) {
+	db := setupTestDB(t)
+
+	tmpDir := t.TempDir()
+	testFile := filepath.Join(tmpDir, "large.txt")
+
+	// 创建超过MaxFileSize的文件
+	largeContent := make([]byte, MaxFileSize+1)
+	for i := range largeContent {
+		largeContent[i] = 'a'
+	}
+	if err := os.WriteFile(testFile, largeContent, 0644); err != nil {
+		t.Fatalf("Failed to create test file: %v", err)
+	}
+
+	// 创建trace记录
+	trace := structs.Traces{
+		ChatID:  1,
+		Path:    "large.txt",
+		TraceID: 1,
+		AgentID: "test_agent",
+	}
+	if err := db.Create(&trace).Error; err != nil {
+		t.Fatalf("Failed to create trace: %v", err)
+	}
+
+	session := &structs.Chats{
+		ID:                   1,
+		DB:                   db,
+		NowAgent:       "test_agent",
+		CurrentActivatePath:  tmpDir,
+		TemporyDataOfSession: make(map[string]any),
+	}
+
+	result, err := buildTrace(session)
+	if err != nil {
+		t.Fatalf("Unexpected error: %v", err)
+	}
+
+	// 应该返回空字符串，因为文件过大会被跳过
+	_ = result
+}
+
+func TestBuildTraceFileTooLong(t *testing.T) {
+	db := setupTestDB(t)
+
+	tmpDir := t.TempDir()
+	testFile := filepath.Join(tmpDir, "long.txt")
+
+	// 创建超过MaxFileLine行的文件
+	longContent := ""
+	for i := 0; i < MaxFileLine+1; i++ {
+		longContent += fmt.Sprintf("line %d\n", i)
+	}
+	if err := os.WriteFile(testFile, []byte(longContent), 0644); err != nil {
+		t.Fatalf("Failed to create test file: %v", err)
+	}
+
+	// 创建trace记录
+	trace := structs.Traces{
+		ChatID:  1,
+		Path:    "long.txt",
+		TraceID: 1,
+		AgentID: "test_agent",
+	}
+	if err := db.Create(&trace).Error; err != nil {
+		t.Fatalf("Failed to create trace: %v", err)
+	}
+
+	session := &structs.Chats{
+		ID:                   1,
+		DB:                   db,
+		NowAgent:       "test_agent",
+		CurrentActivatePath:  tmpDir,
+		TemporyDataOfSession: make(map[string]any),
+	}
+
+	result, err := buildTrace(session)
+	if err != nil {
+		t.Fatalf("Unexpected error: %v", err)
+	}
+
+	// 应该返回空字符串，因为文件过长会被跳过
+	_ = result
+}
+
+func TestAddTempObject(t *testing.T) {
+	db := setupTestDB(t)
+
+	// 创建chat记录
+	chat := structs.Chats{
+		ID:      1,
+		TraceID: 0,
+	}
+	if err := db.Create(&chat).Error; err != nil {
+		t.Fatalf("Failed to create chat: %v", err)
+	}
+
+	session := &structs.Chats{
+		ID:                   1,
+		DB:                   db,
+		TemporyDataOfSession: make(map[string]any),
+		NowAgent:       "test_agent",
+		TraceID:              0,
+	}
+
+	err := AddTempObject(session, "test_temp.txt", "test content", false)
+	if err != nil {
+		t.Fatalf("Unexpected error: %v", err)
+	}
+
+	// 验证TraceID增加
+	if session.TraceID != 1 {
+		t.Errorf("Expected TraceID to be 1, got %d", session.TraceID)
+	}
+
+	// 验证ReferFiles记录
+	var referFile structs.ReferFiles
+	if err := db.Where("chat_id = ? AND path = ?", session.ID, "test_temp.txt").First(&referFile).Error; err != nil {
+		t.Fatalf("Failed to find refer file: %v", err)
+	}
+
+	if referFile.Content != "test content" {
+		t.Errorf("Expected content 'test content', got '%s'", referFile.Content)
+	}
+
+	// 验证Traces记录
+	var trace structs.Traces
+	if err := db.Where("chat_id = ? AND path = ? AND agent_id = ?", session.ID, "@temp/test_temp.txt", session.NowAgent).First(&trace).Error; err != nil {
+		t.Fatalf("Failed to find trace: %v", err)
+	}
+}
+
+func TestAddTempObjectLongContent(t *testing.T) {
+	db := setupTestDB(t)
+
+	// 创建chat记录
+	chat := structs.Chats{
+		ID:      1,
+		TraceID: 0,
+	}
+	if err := db.Create(&chat).Error; err != nil {
+		t.Fatalf("Failed to create chat: %v", err)
+	}
+
+	session := &structs.Chats{
+		ID:                   1,
+		DB:                   db,
+		TemporyDataOfSession: make(map[string]any),
+		NowAgent:       "test_agent",
+		TraceID:              0,
+	}
+
+	// 创建超过2000行的内容
+	longContent := ""
+	for i := 0; i < 2010; i++ {
+		longContent += fmt.Sprintf("line %d\n", i)
+	}
+
+	err := AddTempObject(session, "long_temp.txt", longContent, false)
+	if err != nil {
+		t.Fatalf("Unexpected error: %v", err)
+	}
+
+	// 验证内容被截断
+	var referFile structs.ReferFiles
+	if err := db.Where("chat_id = ? AND path = ?", session.ID, "long_temp.txt").First(&referFile).Error; err != nil {
+		t.Fatalf("Failed to find refer file: %v", err)
+	}
+
+	lines := strings.Split(referFile.Content, "\n")
+	if len(lines) > 2000 {
+		t.Errorf("Expected content to be truncated to <=2000 lines, got %d lines", len(lines))
+	}
+
+	if !strings.Contains(referFile.Content, "(omitted)") {
+		t.Error("Expected content to contain '(omitted)' marker")
+	}
+}
+
+func TestTraceConcurrent(t *testing.T) {
+	db := setupTestDB(t)
+
+	tmpDir := t.TempDir()
+
+	// 创建多个测试文件
+	for i := 0; i < 5; i++ {
+		testFile := filepath.Join(tmpDir, fmt.Sprintf("test%d.txt", i))
+		content := fmt.Sprintf("content %d", i)
+		if err := os.WriteFile(testFile, []byte(content), 0644); err != nil {
+			t.Fatalf("Failed to create test file: %v", err)
+		}
+	}
+
+	// 创建chat记录
+	chat := structs.Chats{
+		ID:      1,
+		TraceID: 0,
+	}
+	if err := db.Create(&chat).Error; err != nil {
+		t.Fatalf("Failed to create chat: %v", err)
+	}
+
+	// 并发执行Trace - 只测试不panic，不验证数据库状态
+	done := make(chan bool, 5)
+	for i := 0; i < 5; i++ {
+		go func(idx int) {
+			// 为每个goroutine创建独立的数据库连接
+			testDB := setupTestDB(t)
+			testChat := structs.Chats{
+				ID:      uint32(idx + 10),
+				TraceID: 0,
+			}
+			if err := testDB.Create(&testChat).Error; err != nil {
+				t.Errorf("Failed to create test chat: %v", err)
+				done <- false
+				return
+			}
+
+			session := &structs.Chats{
+				ID:                   uint32(idx + 10),
+				DB:                   testDB,
+				TemporyDataOfRequest: make(map[string]any),
+				TemporyDataOfSession: make(map[string]any),
+				CurrentActivatePath:  tmpDir,
+				NowAgent:             "test_agent",
+				TraceID:              0,
+			}
+
+			session.TemporyDataOfSession["tools:trace"] = traceCache{}
+
+			mp := map[string]*any{
+				"path": func() *any { s := any(fmt.Sprintf("test%d.txt", idx)); return &s }(),
+			}
+
+			_, _, _, err := Trace(session, mp, []*any{})
+			if err != nil {
+				t.Errorf("Concurrent trace failed: %v", err)
+				done <- false
+			} else {
+				done <- true
+			}
+		}(i)
+	}
+
+	// 等待所有goroutine完成
+	allPassed := true
+	for i := 0; i < 5; i++ {
+		if !<-done {
+			allPassed = false
+		}
+	}
+
+	if !allPassed {
+		t.Error("Some concurrent traces failed")
+	}
+}
+
+func TestBuildTraceConcurrent(t *testing.T) {
+	// 并发执行buildTrace - 只测试不panic
+	done := make(chan bool, 3)
+	for i := 0; i < 3; i++ {
+		go func(idx int) {
+			// 为每个goroutine创建独立的数据库和数据
+			testDB := setupTestDB(t)
+			tmpDir := t.TempDir()
+
+			testFile := filepath.Join(tmpDir, fmt.Sprintf("test%d.txt", idx))
+			content := fmt.Sprintf("content %d", idx)
+			if err := os.WriteFile(testFile, []byte(content), 0644); err != nil {
+				t.Errorf("Failed to create test file: %v", err)
+				done <- false
+				return
+			}
+
+			trace := structs.Traces{
+				ChatID:  uint32(idx + 20),
+				Path:    fmt.Sprintf("test%d.txt", idx),
+				TraceID: uint64(idx + 1),
+				AgentID: "test_agent",
+			}
+			if err := testDB.Create(&trace).Error; err != nil {
+				t.Errorf("Failed to create trace: %v", err)
+				done <- false
+				return
+			}
+
+			session := &structs.Chats{
+				ID:                   uint32(idx + 20),
+				DB:                   testDB,
+				NowAgent:             "test_agent",
+				CurrentActivatePath:  tmpDir,
+				TemporyDataOfSession: make(map[string]any),
+			}
+
+			result, err := buildTrace(session)
+			if err != nil {
+				t.Errorf("Concurrent buildTrace failed: %v", err)
+				done <- false
+			} else if result == "" {
+				t.Error("Expected non-empty result from buildTrace")
+				done <- false
+			} else {
+				done <- true
+			}
+		}(i)
+	}
+
+	// 等待所有goroutine完成
+	allPassed := true
+	for i := 0; i < 3; i++ {
+		if !<-done {
+			allPassed = false
+		}
+	}
+
+	if !allPassed {
+		t.Error("Some concurrent buildTrace calls failed")
 	}
 }
