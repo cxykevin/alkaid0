@@ -1,0 +1,234 @@
+{
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "title": "alkaid0 Config",
+    "description": "alkaid0 配置文件",
+    "type": "object",
+    "required": [
+        "Version",
+        "Model",
+        "Agent",
+        "ThemeID",
+        "Server"
+    ],
+    "properties": {
+        "Version": {
+            "type": "integer",
+            "description": "配置版本号",
+            "minimum": 1,
+            "default": 1
+        },
+        "Model": {
+            "type": "object",
+            "description": "模型相关配置",
+            "required": [
+                "DefaultModelID",
+                "Models"
+            ],
+            "properties": {
+                "ProviderURL": {
+                    "type": "string",
+                    "description": "默认供应商URL（备用字段）",
+                    "format": "uri"
+                },
+                "ProviderKey": {
+                    "type": "string",
+                    "description": "默认供应商密钥（备用字段）"
+                },
+                "DefaultModelID": {
+                    "type": "integer",
+                    "description": "默认使用的模型ID，对应 Models 中的键"
+                },
+                "Models": {
+                    "type": "object",
+                    "description": "模型定义集合，键为模型ID（整数字符串）",
+                    "additionalProperties": {
+                        "type": "object",
+                        "required": [
+                            "ModelName",
+                            "ModelID",
+                            "ProviderURL",
+                            "ProviderKey"
+                        ],
+                        "properties": {
+                            "ModelName": {
+                                "type": "string",
+                                "description": "模型显示名称",
+                                "minLength": 1
+                            },
+                            "ModelID": {
+                                "type": "string",
+                                "description": "模型在供应商处的ID"
+                            },
+                            "ProviderURL": {
+                                "type": "string",
+                                "description": "模型供应商API地址",
+                                "format": "uri"
+                            },
+                            "ProviderKey": {
+                                "type": "string",
+                                "description": "模型供应商API密钥"
+                            },
+                            "EnableThinking": {
+                                "type": "boolean",
+                                "description": "是否启用思考模式",
+                                "default": false
+                            },
+                            "CompressSize": {
+                                "type": "integer",
+                                "description": "上下文压缩阈值（token数）",
+                                "minimum": 0,
+                                "default": 128000
+                            },
+                            "ProviderSpecificConfig": {
+                                "type": "object",
+                                "description": "供应商特定功能开关（可选，省略时使用以下默认值）",
+                                "properties": {
+                                    "EnableDeepseekThinking": {
+                                        "type": "boolean",
+                                        "default": false
+                                    },
+                                    "EnableReasoningEffort": {
+                                        "type": "boolean",
+                                        "default": true
+                                    },
+                                    "EnableTopP": {
+                                        "type": "boolean",
+                                        "default": false
+                                    },
+                                    "EnableTopK": {
+                                        "type": "boolean",
+                                        "default": false
+                                    },
+                                    "EnableTemperature": {
+                                        "type": "boolean",
+                                        "default": false
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "Agent": {
+            "type": "object",
+            "description": "Agent 系统配置",
+            "required": [
+                "Agents",
+                "GlobalPrompt",
+                "SummaryModel",
+                "MaxCallCount"
+            ],
+            "properties": {
+                "Agents": {
+                    "type": "object",
+                    "description": "Agent 定义集合",
+                    "additionalProperties": {
+                        "type": "object",
+                        "required": [
+                            "AgentName",
+                            "AgentDescription",
+                            "AgentPrompt",
+                            "AgentModel"
+                        ],
+                        "properties": {
+                            "AgentName": {
+                                "type": "string",
+                                "description": "Agent 名称",
+                                "minLength": 1
+                            },
+                            "AgentDescription": {
+                                "type": "string",
+                                "description": "Agent 功能描述"
+                            },
+                            "AgentPrompt": {
+                                "type": "string",
+                                "description": "Agent 系统提示词"
+                            },
+                            "AgentModel": {
+                                "type": "integer",
+                                "description": "Agent 使用的模型ID，引用 Model.Models 中的键"
+                            },
+                            "AutoApprove": {
+                                "type": "string",
+                                "description": "expr-lang 表达式，满足条件时自动批准操作",
+                                "default": ""
+                            },
+                            "AutoReject": {
+                                "type": "string",
+                                "description": "expr-lang 表达式，满足条件时自动拒绝操作",
+                                "default": ""
+                            }
+                        }
+                    }
+                },
+                "GlobalPrompt": {
+                    "type": "string",
+                    "description": "全局系统提示词，会附加到所有对话中",
+                    "default": "始终使用中文回答"
+                },
+                "SummaryModel": {
+                    "type": "integer",
+                    "description": "用于对话摘要的模型ID"
+                },
+                "MaxCallCount": {
+                    "type": "integer",
+                    "description": "单次会话最大调用次数",
+                    "minimum": 1,
+                    "default": 50
+                },
+                "AutoApprove": {
+                    "type": "string",
+                    "description": "全局 expr-lang 自动批准表达式",
+                    "default": ""
+                },
+                "AutoReject": {
+                    "type": "string",
+                    "description": "全局 expr-lang 自动拒绝表达式",
+                    "default": ""
+                }
+            }
+        },
+        "ThemeID": {
+            "type": "integer",
+            "description": "UI 主题ID",
+            "default": 0
+        },
+        "Server": {
+            "type": "object",
+            "description": "服务器配置",
+            "required": [
+                "Key"
+            ],
+            "properties": {
+                "Key": {
+                    "type": "string",
+                    "description": "WebSocket 通信密钥"
+                },
+                "Path": {
+                    "type": "string",
+                    "description": "WebSocket 路径",
+                    "pattern": "^/",
+                    "default": "/acp"
+                },
+                "Host": {
+                    "type": "string",
+                    "description": "监听地址",
+                    "default": "127.0.0.1"
+                },
+                "Port": {
+                    "type": "integer",
+                    "description": "监听端口",
+                    "minimum": 1,
+                    "maximum": 65535,
+                    "default": 7433
+                },
+                "DisableStdioServer": {
+                    "type": "boolean",
+                    "description": "是否禁用 Stdio 服务器模式",
+                    "default": false
+                }
+            }
+        }
+    }
+}
