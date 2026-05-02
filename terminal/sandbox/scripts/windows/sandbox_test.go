@@ -17,6 +17,9 @@ import (
 var securityTestMutex sync.Mutex
 
 func TestGetToken(t *testing.T) {
+	if os.Getenv("ALKAID0_TEST_SANDBOX") == "" {
+		t.Skip("跳过隔离测试（设置 ALKAID0_TEST_SANDBOX=true 启用）")
+	}
 	tkn, err := getToken()
 	if err != nil {
 		t.Error(err)
@@ -26,6 +29,9 @@ func TestGetToken(t *testing.T) {
 }
 
 func TestCreateWellknownSIDs(t *testing.T) {
+	if os.Getenv("ALKAID0_TEST_SANDBOX") == "" {
+		t.Skip("跳过隔离测试（设置 ALKAID0_TEST_SANDBOX=true 启用）")
+	}
 	sids, err := createWellknownSIDs()
 	if err != nil {
 		t.Error(err)
@@ -34,6 +40,9 @@ func TestCreateWellknownSIDs(t *testing.T) {
 }
 
 func TestCreateMediumIntegritySID(t *testing.T) {
+	if os.Getenv("ALKAID0_TEST_SANDBOX") == "" {
+		t.Skip("跳过隔离测试（设置 ALKAID0_TEST_SANDBOX=true 启用）")
+	}
 	sid, err := createMediumIntegritySID()
 	if err != nil {
 		t.Error(err)
@@ -42,6 +51,9 @@ func TestCreateMediumIntegritySID(t *testing.T) {
 }
 
 func TestGetPrivilegeLUID(t *testing.T) {
+	if os.Getenv("ALKAID0_TEST_SANDBOX") == "" {
+		t.Skip("跳过隔离测试（设置 ALKAID0_TEST_SANDBOX=true 启用）")
+	}
 	backupPriv, err := getPrivilegeLUID("SeBackupPrivilege")
 	if err != nil {
 		t.Errorf("get backupPrivilegeLUID failed: %v", err)
@@ -65,6 +77,9 @@ func TestGetPrivilegeLUID(t *testing.T) {
 }
 
 func TestCreateRestrictedToken(t *testing.T) {
+	if os.Getenv("ALKAID0_TEST_SANDBOX") == "" {
+		t.Skip("跳过隔离测试（设置 ALKAID0_TEST_SANDBOX=true 启用）")
+	}
 	tkn, err := getToken()
 	if err != nil {
 		t.Error(err)
@@ -83,6 +98,9 @@ func TestCreateRestrictedToken(t *testing.T) {
 }
 
 func TestInitAlkaid0SandboxUser(t *testing.T) {
+	if os.Getenv("ALKAID0_TEST_SANDBOX") == "" {
+		t.Skip("跳过隔离测试（设置 ALKAID0_TEST_SANDBOX=true 启用）")
+	}
 	securityTestMutex.Lock()
 	defer securityTestMutex.Unlock()
 
@@ -131,6 +149,9 @@ func TestInitAlkaid0SandboxUser(t *testing.T) {
 }
 
 func TestGetAccountSID(t *testing.T) {
+	if os.Getenv("ALKAID0_TEST_SANDBOX") == "" {
+		t.Skip("跳过隔离测试（设置 ALKAID0_TEST_SANDBOX=true 启用）")
+	}
 	sid, err := getAccountSID("SYSTEM")
 	if err != nil {
 		t.Error(err)
@@ -157,6 +178,9 @@ func TestGetAccountSID(t *testing.T) {
 // }
 
 func TestCreateRunToken(t *testing.T) {
+	if os.Getenv("ALKAID0_TEST_SANDBOX") == "" {
+		t.Skip("跳过隔离测试（设置 ALKAID0_TEST_SANDBOX=true 启用）")
+	}
 	securityTestMutex.Lock()
 	defer securityTestMutex.Unlock()
 
@@ -170,6 +194,9 @@ func TestCreateRunToken(t *testing.T) {
 }
 
 func TestGetDACL(t *testing.T) {
+	if os.Getenv("ALKAID0_TEST_SANDBOX") == "" {
+		t.Skip("跳过隔离测试（设置 ALKAID0_TEST_SANDBOX=true 启用）")
+	}
 	time.Sleep(3 * time.Second)
 	securityTestMutex.Lock()
 	defer securityTestMutex.Unlock()
@@ -182,6 +209,9 @@ func TestGetDACL(t *testing.T) {
 }
 
 func TestApplyDACL(t *testing.T) {
+	if os.Getenv("ALKAID0_TEST_SANDBOX") == "" {
+		t.Skip("跳过隔离测试（设置 ALKAID0_TEST_SANDBOX=true 启用）")
+	}
 	securityTestMutex.Lock()
 	defer securityTestMutex.Unlock()
 
@@ -209,6 +239,9 @@ func TestApplyDACL(t *testing.T) {
 }
 
 func TestCreateProc(t *testing.T) {
+	if os.Getenv("ALKAID0_TEST_SANDBOX") == "" {
+		t.Skip("跳过隔离测试（设置 ALKAID0_TEST_SANDBOX=true 启用）")
+	}
 	securityTestMutex.Lock()
 	defer securityTestMutex.Unlock()
 

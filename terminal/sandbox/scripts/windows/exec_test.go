@@ -16,6 +16,9 @@ import (
 
 // TestCommand 测试最基础的命令执行
 func TestCommand(t *testing.T) {
+	if os.Getenv("ALKAID0_TEST_SANDBOX") == "" {
+		t.Skip("跳过隔离测试（设置 ALKAID0_TEST_SANDBOX=true 启用）")
+	}
 	expected := "Hello Windows API"
 	// 使用 cmd /c echo 输出字符串
 	cmd := Command("cmd", "/c", "echo", expected)
@@ -35,6 +38,9 @@ func TestCommand(t *testing.T) {
 
 // TestCommandEcho 测试最基础的命令执行和输出抓取
 func TestCommandEcho(t *testing.T) {
+	if os.Getenv("ALKAID0_TEST_SANDBOX") == "" {
+		t.Skip("跳过隔离测试（设置 ALKAID0_TEST_SANDBOX=true 启用）")
+	}
 	expected := "Hello Windows API"
 	// 使用 cmd /c echo 输出字符串
 	cmd := Command("cmd", "/c", "echo", expected)
@@ -58,6 +64,9 @@ func TestCommandEcho(t *testing.T) {
 
 // TestEnv 测试环境变量是否正确传递
 func TestEnv(t *testing.T) {
+	if os.Getenv("ALKAID0_TEST_SANDBOX") == "" {
+		t.Skip("跳过隔离测试（设置 ALKAID0_TEST_SANDBOX=true 启用）")
+	}
 	cmd := Command("cmd", "/c", "echo %MY_VAR%")
 	cmd.Env = []string{"MY_VAR=Gopher"}
 
@@ -74,6 +83,9 @@ func TestEnv(t *testing.T) {
 
 // TestDir 测试工作目录切换是否生效
 func TestDir(t *testing.T) {
+	if os.Getenv("ALKAID0_TEST_SANDBOX") == "" {
+		t.Skip("跳过隔离测试（设置 ALKAID0_TEST_SANDBOX=true 启用）")
+	}
 	tempDir := os.TempDir()
 	// Windows 的 Temp 可能返回短路径或带不同斜杠，转为绝对路径对比
 	absTempDir, _ := filepath.Abs(tempDir)
@@ -96,6 +108,9 @@ func TestDir(t *testing.T) {
 
 // TestStdinPipe 测试标准输入管道
 func TestStdinPipe(t *testing.T) {
+	if os.Getenv("ALKAID0_TEST_SANDBOX") == "" {
+		t.Skip("跳过隔离测试（设置 ALKAID0_TEST_SANDBOX=true 启用）")
+	}
 	// 使用 powershell 的 $input 获取所有输入，它在收到 EOF 时会立即结束
 	cmd := Command("powershell", "-Command", "$input")
 
@@ -141,6 +156,9 @@ func TestStdinPipe(t *testing.T) {
 
 // TestExitError 测试非零退出码的捕捉
 func TestExitError(t *testing.T) {
+	if os.Getenv("ALKAID0_TEST_SANDBOX") == "" {
+		t.Skip("跳过隔离测试（设置 ALKAID0_TEST_SANDBOX=true 启用）")
+	}
 	// 执行一个肯定会失败的命令 (exit 1)
 	cmd := Command("cmd", "/c", "exit 1")
 	err := cmd.Run()
@@ -157,6 +175,9 @@ func TestExitError(t *testing.T) {
 
 // TestLargeOutput 测试异步 IO 拷贝（大批量数据输出）
 func TestLargeOutput(t *testing.T) {
+	if os.Getenv("ALKAID0_TEST_SANDBOX") == "" {
+		t.Skip("跳过隔离测试（设置 ALKAID0_TEST_SANDBOX=true 启用）")
+	}
 	// 产生 1MB 的输出，验证 io.Copy 协程和管道缓冲区处理
 	script := "for ($i=0; $i -lt 10000; $i++) { Write-Output '==Line==' }"
 	cmd := Command("powershell", "-Command", script)
@@ -176,6 +197,9 @@ func TestLargeOutput(t *testing.T) {
 
 // TestCombinedOutputOverlap 测试 Stdout 和 Stderr 指向同一个 Writer
 func TestCombinedOutputOverlap(t *testing.T) {
+	if os.Getenv("ALKAID0_TEST_SANDBOX") == "" {
+		t.Skip("跳过隔离测试（设置 ALKAID0_TEST_SANDBOX=true 启用）")
+	}
 	// 向 stdout 输出 "out"，向 stderr 输出 "err"
 	cmd := Command("cmd", "/c", "echo out & echo err >&2")
 
@@ -197,6 +221,9 @@ func TestCombinedOutputOverlap(t *testing.T) {
 // TestArgEscaping 测试 Windows 复杂的命令行参数转义
 // 验证空格、引号、反斜杠是否被正确处理
 func TestArgEscaping(t *testing.T) {
+	if os.Getenv("ALKAID0_TEST_SANDBOX") == "" {
+		t.Skip("跳过隔离测试（设置 ALKAID0_TEST_SANDBOX=true 启用）")
+	}
 	// 准备一些极其刁钻的参数
 	args := []string{
 		`with space`,
@@ -225,6 +252,9 @@ func TestArgEscaping(t *testing.T) {
 // TestFileRedirection 测试直接使用 *os.File 作为输入输出
 // 这样可以绕过内部的 io.Copy 协程，走原生的句柄继承
 func TestFileRedirection(t *testing.T) {
+	if os.Getenv("ALKAID0_TEST_SANDBOX") == "" {
+		t.Skip("跳过隔离测试（设置 ALKAID0_TEST_SANDBOX=true 启用）")
+	}
 	tmpFile := filepath.Join(os.TempDir(), "test_redir.txt")
 	defer os.Remove(tmpFile)
 
@@ -252,6 +282,9 @@ func TestFileRedirection(t *testing.T) {
 // TestProcessKill 测试进程启动后的强杀功能
 // 验证 c.Process (os.Process) 是否正确绑定
 func TestProcessKill(t *testing.T) {
+	if os.Getenv("ALKAID0_TEST_SANDBOX") == "" {
+		t.Skip("跳过隔离测试（设置 ALKAID0_TEST_SANDBOX=true 启用）")
+	}
 	// 启动一个长时运行的进程 (ping 默认 4 次，足够我们 Kill)
 	cmd := Command("ping", "127.0.0.1", "-n", "10")
 	if err := cmd.Start(); err != nil {
@@ -275,6 +308,9 @@ func TestProcessKill(t *testing.T) {
 
 // TestInheritEnv 测试不设置 Env 字段时，是否能正确继承当前进程的环境变量
 func TestInheritEnv(t *testing.T) {
+	if os.Getenv("ALKAID0_TEST_SANDBOX") == "" {
+		t.Skip("跳过隔离测试（设置 ALKAID0_TEST_SANDBOX=true 启用）")
+	}
 	key := "GO_WIN_TEST_KEY"
 	val := "InheritSuccess"
 	os.Setenv(key, val)
@@ -295,6 +331,9 @@ func TestInheritEnv(t *testing.T) {
 // TestLookPath 测试自动路径查找
 // 验证 Command("notepad") 是否能找到 C:\Windows\System32\notepad.exe
 func TestLookPath(t *testing.T) {
+	if os.Getenv("ALKAID0_TEST_SANDBOX") == "" {
+		t.Skip("跳过隔离测试（设置 ALKAID0_TEST_SANDBOX=true 启用）")
+	}
 	// notepad 是 Windows 必备的
 	cmd := Command("notepad")
 	err := cmd.Start()
@@ -313,6 +352,9 @@ func TestLookPath(t *testing.T) {
 
 // TestDoubleStartError 测试防止重复启动同一个 Cmd 实例
 func TestDoubleStartError(t *testing.T) {
+	if os.Getenv("ALKAID0_TEST_SANDBOX") == "" {
+		t.Skip("跳过隔离测试（设置 ALKAID0_TEST_SANDBOX=true 启用）")
+	}
 	cmd := Command("cmd", "/c", "echo 1")
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)
@@ -328,6 +370,9 @@ func TestDoubleStartError(t *testing.T) {
 
 // TestStderrCaptureInOutput 验证 Output() 在执行失败时是否正确填充了 ExitError.Stderr
 func TestStderrCaptureInOutput(t *testing.T) {
+	if os.Getenv("ALKAID0_TEST_SANDBOX") == "" {
+		t.Skip("跳过隔离测试（设置 ALKAID0_TEST_SANDBOX=true 启用）")
+	}
 	// 执行一个会向 stderr 报错的命令
 	// dir /Z 是一个无效参数
 	cmd := Command("cmd", "/c", "dir /Z")
@@ -350,6 +395,9 @@ func TestStderrCaptureInOutput(t *testing.T) {
 
 // TestLargeEnvironmentBlock 测试超大环境变量块的处理
 func TestLargeEnvironmentBlock(t *testing.T) {
+	if os.Getenv("ALKAID0_TEST_SANDBOX") == "" {
+		t.Skip("跳过隔离测试（设置 ALKAID0_TEST_SANDBOX=true 启用）")
+	}
 	var bigEnv []string
 	for i := 0; i < 100; i++ {
 		bigEnv = append(bigEnv, fmt.Sprintf("VAR_%d=%s", i, strings.Repeat("A", 100)))

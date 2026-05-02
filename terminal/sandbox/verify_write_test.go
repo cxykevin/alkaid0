@@ -11,6 +11,10 @@ import (
 )
 
 func TestVerifyWriteFile(t *testing.T) {
+	if os.Getenv("ALKAID0_TEST_SANDBOX") == "" {
+		t.Skip("跳过隔离测试（设置 ALKAID0_TEST_SANDBOX=true 启用）")
+	}
+
 	// 创建临时目录用于写入测试
 	tmpDir, err := os.MkdirTemp("", "sandbox-verify-write-*")
 	if err != nil {

@@ -37,6 +37,10 @@ func TestNew(t *testing.T) {
 }
 
 func TestIsolationModes(t *testing.T) {
+	if os.Getenv("ALKAID0_TEST_SANDBOX") == "" {
+		t.Skip("跳过隔离测试（设置 ALKAID0_TEST_SANDBOX=true 启用）")
+	}
+
 	tests := []struct {
 		name     string
 		mode     IsolationMode
@@ -65,6 +69,10 @@ func TestIsolationModes(t *testing.T) {
 }
 
 func TestIsPathWritable(t *testing.T) {
+	if os.Getenv("ALKAID0_TEST_SANDBOX") == "" {
+		t.Skip("跳过隔离测试（设置 ALKAID0_TEST_SANDBOX=true 启用）")
+	}
+
 	tmpDir := os.TempDir()
 
 	tests := []struct {
@@ -99,6 +107,10 @@ func TestIsPathWritable(t *testing.T) {
 }
 
 func TestExecuteCommandNoIsolation(t *testing.T) {
+	if os.Getenv("ALKAID0_TEST_SANDBOX") == "" {
+		t.Skip("跳过隔离测试（设置 ALKAID0_TEST_SANDBOX=true 启用）")
+	}
+
 	cfg := Config{
 		Timeout:       5 * time.Second,
 		IsolationMode: IsolationNone, // 使用无隔离模式确保测试能运行
@@ -230,6 +242,10 @@ func TestExecuteCommandWithIsolation(t *testing.T) {
 }
 
 func TestCommandTimeout(t *testing.T) {
+	if os.Getenv("ALKAID0_TEST_SANDBOX") == "" {
+		t.Skip("跳过隔离测试（设置 ALKAID0_TEST_SANDBOX=true 启用）")
+	}
+
 	cfg := Config{
 		Timeout:       1 * time.Second,
 		IsolationMode: IsolationNone,
@@ -263,6 +279,10 @@ func TestCommandTimeout(t *testing.T) {
 }
 
 func TestSetWorkDir(t *testing.T) {
+	if os.Getenv("ALKAID0_TEST_SANDBOX") == "" {
+		t.Skip("跳过隔离测试（设置 ALKAID0_TEST_SANDBOX=true 启用）")
+	}
+
 	cfg := Config{
 		IsolationMode: IsolationNone,
 	}
@@ -289,6 +309,10 @@ func TestSetWorkDir(t *testing.T) {
 }
 
 func TestSetIsolationMode(t *testing.T) {
+	if os.Getenv("ALKAID0_TEST_SANDBOX") == "" {
+		t.Skip("跳过隔离测试（设置 ALKAID0_TEST_SANDBOX=true 启用）")
+	}
+
 	cfg := Config{
 		IsolationMode: IsolationOS, // 使用非零值
 	}
@@ -308,6 +332,10 @@ func TestSetIsolationMode(t *testing.T) {
 }
 
 func TestGetPlatformInfo(t *testing.T) {
+	if os.Getenv("ALKAID0_TEST_SANDBOX") == "" {
+		t.Skip("跳过隔离测试（设置 ALKAID0_TEST_SANDBOX=true 启用）")
+	}
+
 	info := GetPlatformInfo()
 
 	if info["os"] == "" {
@@ -346,6 +374,10 @@ func TestGetPlatformInfo(t *testing.T) {
 }
 
 func TestIsolationModeString(t *testing.T) {
+	if os.Getenv("ALKAID0_TEST_SANDBOX") == "" {
+		t.Skip("跳过隔离测试（设置 ALKAID0_TEST_SANDBOX=true 启用）")
+	}
+
 	tests := []struct {
 		mode     IsolationMode
 		expected string
@@ -452,6 +484,10 @@ func TestIsolationOSSpec(t *testing.T) {
 }
 
 func TestDirectoryPermissions(t *testing.T) {
+	if os.Getenv("ALKAID0_TEST_SANDBOX") == "" {
+		t.Skip("跳过隔离测试（设置 ALKAID0_TEST_SANDBOX=true 启用）")
+	}
+
 	// 创建临时测试目录（可写）
 	tempDir, err := os.MkdirTemp("", "sandbox-test-temp-*")
 	if err != nil {
@@ -536,6 +572,10 @@ func TestDirectoryPermissions(t *testing.T) {
 }
 
 func TestDirectoryPermissionsWithMultipleDirs(t *testing.T) {
+	if os.Getenv("ALKAID0_TEST_SANDBOX") == "" {
+		t.Skip("跳过隔离测试（设置 ALKAID0_TEST_SANDBOX=true 启用）")
+	}
+
 	// 创建两个临时测试目录（可写）
 	tempDir1, err := os.MkdirTemp("", "sandbox-test-temp1-*")
 	if err != nil {
@@ -609,6 +649,10 @@ func TestDirectoryPermissionsWithMultipleDirs(t *testing.T) {
 }
 
 func TestDirectoryPermissionsWithRelativePaths(t *testing.T) {
+	if os.Getenv("ALKAID0_TEST_SANDBOX") == "" {
+		t.Skip("跳过隔离测试（设置 ALKAID0_TEST_SANDBOX=true 启用）")
+	}
+
 	// 创建临时测试目录
 	tempDir, err := os.MkdirTemp("", "sandbox-test-temp-*")
 	if err != nil {

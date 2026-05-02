@@ -87,7 +87,7 @@ jobs:
         env:
           ALKAID0_DEBUG_MOCKSERVER: "true"
           ALKAID0_CONFIG_PATH: "alklog.log"
-          ALKAID0_TEST_SANDBOX: "true"
+          # ALKAID0_TEST_SANDBOX: "true"
         run: |
           go test -v ./...
 

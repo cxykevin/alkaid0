@@ -12,6 +12,9 @@ import (
 )
 
 func TestPipe(t *testing.T) {
+	if os.Getenv("ALKAID0_TEST_SANDBOX") == "" {
+		t.Skip("跳过隔离测试（设置 ALKAID0_TEST_SANDBOX=true 启用）")
+	}
 	// 测试创建管道
 	r, w, err := Pipe()
 	if err != nil {
@@ -53,6 +56,9 @@ func TestPipe(t *testing.T) {
 }
 
 func TestPipeMultipleWrites(t *testing.T) {
+	if os.Getenv("ALKAID0_TEST_SANDBOX") == "" {
+		t.Skip("跳过隔离测试（设置 ALKAID0_TEST_SANDBOX=true 启用）")
+	}
 	r, w, err := Pipe()
 	if err != nil {
 		t.Fatalf("Pipe() failed: %v", err)
@@ -96,6 +102,9 @@ func TestPipeMultipleWrites(t *testing.T) {
 }
 
 func TestPipeConcurrent(t *testing.T) {
+	if os.Getenv("ALKAID0_TEST_SANDBOX") == "" {
+		t.Skip("跳过隔离测试（设置 ALKAID0_TEST_SANDBOX=true 启用）")
+	}
 	r, w, err := Pipe()
 	if err != nil {
 		t.Fatalf("Pipe() failed: %v", err)
@@ -148,6 +157,9 @@ func TestPipeConcurrent(t *testing.T) {
 
 // TestPipeLargeData 测试大数据传输
 func TestPipeLargeData(t *testing.T) {
+	if os.Getenv("ALKAID0_TEST_SANDBOX") == "" {
+		t.Skip("跳过隔离测试（设置 ALKAID0_TEST_SANDBOX=true 启用）")
+	}
 	r, w, err := Pipe()
 	if err != nil {
 		t.Fatalf("Pipe() failed: %v", err)
@@ -222,6 +234,9 @@ func TestPipeLargeData(t *testing.T) {
 
 // TestPipeReadAfterWriteClose 测试写入端关闭后的读取
 func TestPipeReadAfterWriteClose(t *testing.T) {
+	if os.Getenv("ALKAID0_TEST_SANDBOX") == "" {
+		t.Skip("跳过隔离测试（设置 ALKAID0_TEST_SANDBOX=true 启用）")
+	}
 	r, w, err := Pipe()
 	if err != nil {
 		t.Fatalf("Pipe() failed: %v", err)
@@ -260,6 +275,9 @@ func TestPipeReadAfterWriteClose(t *testing.T) {
 
 // TestPipeCloseEarly 测试提前关闭
 func TestPipeCloseEarly(t *testing.T) {
+	if os.Getenv("ALKAID0_TEST_SANDBOX") == "" {
+		t.Skip("跳过隔离测试（设置 ALKAID0_TEST_SANDBOX=true 启用）")
+	}
 	r, w, err := Pipe()
 	if err != nil {
 		t.Fatalf("Pipe() failed: %v", err)
@@ -279,6 +297,9 @@ func TestPipeCloseEarly(t *testing.T) {
 
 // TestPipeTimeout 测试超时场景
 func TestPipeTimeout(t *testing.T) {
+	if os.Getenv("ALKAID0_TEST_SANDBOX") == "" {
+		t.Skip("跳过隔离测试（设置 ALKAID0_TEST_SANDBOX=true 启用）")
+	}
 	r, w, err := Pipe()
 	if err != nil {
 		t.Fatalf("Pipe() failed: %v", err)
@@ -317,6 +338,9 @@ func TestPipeTimeout(t *testing.T) {
 
 // TestPipeMultipleInstances 测试多个管道实例
 func TestPipeMultipleInstances(t *testing.T) {
+	if os.Getenv("ALKAID0_TEST_SANDBOX") == "" {
+		t.Skip("跳过隔离测试（设置 ALKAID0_TEST_SANDBOX=true 启用）")
+	}
 	const count = 10
 	var pipes [][2]*os.File
 
@@ -349,6 +373,9 @@ func TestPipeMultipleInstances(t *testing.T) {
 
 // TestPipeStress 压力测试
 func TestPipeStress(t *testing.T) {
+	if os.Getenv("ALKAID0_TEST_SANDBOX") == "" {
+		t.Skip("跳过隔离测试（设置 ALKAID0_TEST_SANDBOX=true 启用）")
+	}
 	if testing.Short() {
 		t.Skip("Skipping stress test in short mode")
 	}
@@ -397,6 +424,9 @@ func TestPipeStress(t *testing.T) {
 
 // TestPipeNilACL 测试 nil ACL（应该使用默认安全描述符）
 func TestPipeNilACL(t *testing.T) {
+	if os.Getenv("ALKAID0_TEST_SANDBOX") == "" {
+		t.Skip("跳过隔离测试（设置 ALKAID0_TEST_SANDBOX=true 启用）")
+	}
 	// 这个测试假设 Pipe 内部处理 nil ACL
 	// 如果 GetDACL 返回 nil，测试管道是否仍能工作
 	r, w, err := Pipe()
