@@ -88,6 +88,7 @@ jobs:
           ALKAID0_DEBUG_MOCKSERVER: "true"
           ALKAID0_CONFIG_PATH: "alklog.log"
           # ALKAID0_TEST_SANDBOX: "true"
+          ALKAID0_TEST_LESS_MEMORY_MODE: "true"
         run: |
           go test -v ./...
 

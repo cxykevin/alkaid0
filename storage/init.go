@@ -5,12 +5,15 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 
 	"github.com/cxykevin/alkaid0/log"
 	"github.com/cxykevin/alkaid0/storage/structs"
 	"github.com/glebarez/sqlite"
 	"gorm.io/gorm"
 )
+
+var lessMemModeDBID int32
 
 // InitDB 初始化数据库，返回 error 便于调用方处理
 func InitDB(dbPath string) (*gorm.DB, error) {
@@ -24,11 +27,15 @@ func InitDB(dbPath string) (*gorm.DB, error) {
 
 	// 支持内存数据库
 	if strings.HasSuffix(dbPath, ":memory:") {
-		dir := filepath.Dir(dbPath)
-		if dir != "." {
-			// 创建父目录（如果不存在）
-			if err := os.MkdirAll(dir, 0755); err != nil {
-				return nil, fmt.Errorf("failed to create db directory %s: %w", dir, err)
+		if os.Getenv("ALKAID0_TEST_LESS_MEMORY_MODE") != "" {
+			dbPath = strings.ReplaceAll(dbPath, ":memory:", fmt.Sprintf("__lessmem_%d.db", atomic.AddInt32(&lessMemModeDBID, 1)))
+		} else {
+			dir := filepath.Dir(dbPath)
+			if dir != "." {
+				// 创建父目录（如果不存在）
+				if err := os.MkdirAll(dir, 0755); err != nil {
+					return nil, fmt.Errorf("failed to create db directory %s: %w", dir, err)
+				}
 			}
 		}
 	}
