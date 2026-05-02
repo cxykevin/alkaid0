@@ -91,7 +91,3 @@ jobs:
           ALKAID0_TEST_LESS_MEMORY_MODE: "true"
         run: |
           go test -v ./...
-
-      - name: 输出 Log
-        run: |
-          cat alklog.log || true
