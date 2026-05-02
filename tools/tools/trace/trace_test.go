@@ -9,6 +9,7 @@ import (
 
 	"github.com/cxykevin/alkaid0/storage/structs"
 	"github.com/cxykevin/alkaid0/tools/toolobj"
+	u "github.com/cxykevin/alkaid0/utils"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 )
@@ -201,6 +202,7 @@ func TestTraceInvalidPath(t *testing.T) {
 
 func TestTraceFileNotExist(t *testing.T) {
 	db := setupTestDB(t)
+	defer u.Unwrap(db.DB()).Close()
 
 	tmpDir := t.TempDir()
 
@@ -210,7 +212,7 @@ func TestTraceFileNotExist(t *testing.T) {
 		TemporyDataOfRequest: make(map[string]any),
 		TemporyDataOfSession: make(map[string]any),
 		CurrentActivatePath:  tmpDir,
-		NowAgent:       "test_agent",
+		NowAgent:             "test_agent",
 		ToolCallingContext:   make(map[string]any),
 		ToolCallingType:      make(map[string]string),
 	}
@@ -236,6 +238,7 @@ func TestTraceFileNotExist(t *testing.T) {
 
 func TestTraceSuccess(t *testing.T) {
 	db := setupTestDB(t)
+	defer u.Unwrap(db.DB()).Close()
 
 	tmpDir := t.TempDir()
 	testFile := filepath.Join(tmpDir, "test.txt")
@@ -259,7 +262,7 @@ func TestTraceSuccess(t *testing.T) {
 		TemporyDataOfRequest: make(map[string]any),
 		TemporyDataOfSession: make(map[string]any),
 		CurrentActivatePath:  tmpDir,
-		NowAgent:       "test_agent",
+		NowAgent:             "test_agent",
 		TraceID:              0,
 	}
 
@@ -300,6 +303,7 @@ func TestTraceSuccess(t *testing.T) {
 
 func TestTraceFileTooLarge(t *testing.T) {
 	db := setupTestDB(t)
+	defer u.Unwrap(db.DB()).Close()
 
 	tmpDir := t.TempDir()
 	testFile := filepath.Join(tmpDir, "large.txt")
@@ -319,7 +323,7 @@ func TestTraceFileTooLarge(t *testing.T) {
 		TemporyDataOfRequest: make(map[string]any),
 		TemporyDataOfSession: make(map[string]any),
 		CurrentActivatePath:  tmpDir,
-		NowAgent:       "test_agent",
+		NowAgent:             "test_agent",
 	}
 
 	mp := map[string]*any{
@@ -343,6 +347,7 @@ func TestTraceFileTooLarge(t *testing.T) {
 
 func TestUntraceSuccess(t *testing.T) {
 	db := setupTestDB(t)
+	defer u.Unwrap(db.DB()).Close()
 
 	tmpDir := t.TempDir()
 	testFile := filepath.Join(tmpDir, "test.txt")
@@ -364,7 +369,7 @@ func TestUntraceSuccess(t *testing.T) {
 		TemporyDataOfRequest: make(map[string]any),
 		TemporyDataOfSession: make(map[string]any),
 		CurrentActivatePath:  tmpDir,
-		NowAgent:       "test_agent",
+		NowAgent:             "test_agent",
 	}
 
 	// 初始化 traceCache
@@ -399,6 +404,7 @@ func TestUntraceSuccess(t *testing.T) {
 
 func TestUntraceNotFound(t *testing.T) {
 	db := setupTestDB(t)
+	defer u.Unwrap(db.DB()).Close()
 
 	tmpDir := t.TempDir()
 
@@ -408,7 +414,7 @@ func TestUntraceNotFound(t *testing.T) {
 		TemporyDataOfRequest: make(map[string]any),
 		TemporyDataOfSession: make(map[string]any),
 		CurrentActivatePath:  tmpDir,
-		NowAgent:       "test_agent",
+		NowAgent:             "test_agent",
 	}
 
 	// 初始化 traceCache
@@ -436,6 +442,7 @@ func TestUntraceNotFound(t *testing.T) {
 
 func TestBuildTrace(t *testing.T) {
 	db := setupTestDB(t)
+	defer u.Unwrap(db.DB()).Close()
 
 	tmpDir := t.TempDir()
 	testFile := filepath.Join(tmpDir, "test.txt")
@@ -456,8 +463,8 @@ func TestBuildTrace(t *testing.T) {
 	}
 
 	session := &structs.Chats{
-		ID:             1,
-		DB:             db,
+		ID:       1,
+		DB:       db,
 		NowAgent: "test_agent",
 	}
 
@@ -473,10 +480,11 @@ func TestBuildTrace(t *testing.T) {
 
 func TestBuildTraceEmptyCache(t *testing.T) {
 	db := setupTestDB(t)
+	defer u.Unwrap(db.DB()).Close()
 
 	session := &structs.Chats{
-		ID:             1,
-		DB:             db,
+		ID:       1,
+		DB:       db,
 		NowAgent: "test_agent",
 	}
 
@@ -521,6 +529,7 @@ func TestLoad(t *testing.T) {
 
 func TestTraceEmptyFile(t *testing.T) {
 	db := setupTestDB(t)
+	defer u.Unwrap(db.DB()).Close()
 
 	tmpDir := t.TempDir()
 	testFile := filepath.Join(tmpDir, "empty.txt")
@@ -534,7 +543,7 @@ func TestTraceEmptyFile(t *testing.T) {
 		TemporyDataOfRequest: make(map[string]any),
 		TemporyDataOfSession: make(map[string]any),
 		CurrentActivatePath:  tmpDir,
-		NowAgent:       "test_agent",
+		NowAgent:             "test_agent",
 	}
 
 	session.TemporyDataOfSession["tools:trace"] = traceCache{}
@@ -560,6 +569,7 @@ func TestTraceEmptyFile(t *testing.T) {
 
 func TestTraceFileTooLong(t *testing.T) {
 	db := setupTestDB(t)
+	defer u.Unwrap(db.DB()).Close()
 
 	tmpDir := t.TempDir()
 	testFile := filepath.Join(tmpDir, "long.txt")
@@ -579,7 +589,7 @@ func TestTraceFileTooLong(t *testing.T) {
 		TemporyDataOfRequest: make(map[string]any),
 		TemporyDataOfSession: make(map[string]any),
 		CurrentActivatePath:  tmpDir,
-		NowAgent:       "test_agent",
+		NowAgent:             "test_agent",
 	}
 
 	session.TemporyDataOfSession["tools:trace"] = traceCache{}
@@ -605,6 +615,7 @@ func TestTraceFileTooLong(t *testing.T) {
 
 func TestTraceTempFile(t *testing.T) {
 	db := setupTestDB(t)
+	defer u.Unwrap(db.DB()).Close()
 
 	// 创建ReferFiles记录
 	referFile := structs.ReferFiles{
@@ -632,7 +643,7 @@ func TestTraceTempFile(t *testing.T) {
 		TemporyDataOfRequest: make(map[string]any),
 		TemporyDataOfSession: make(map[string]any),
 		CurrentActivatePath:  "/tmp",
-		NowAgent:       "test_agent",
+		NowAgent:             "test_agent",
 		TraceID:              0,
 	}
 
@@ -662,6 +673,7 @@ func TestTraceTempFile(t *testing.T) {
 
 func TestBuildTraceWithTempFile(t *testing.T) {
 	db := setupTestDB(t)
+	defer u.Unwrap(db.DB()).Close()
 
 	// 创建ReferFiles记录
 	referFile := structs.ReferFiles{
@@ -686,8 +698,8 @@ func TestBuildTraceWithTempFile(t *testing.T) {
 	}
 
 	session := &structs.Chats{
-		ID:             1,
-		DB:             db,
+		ID:       1,
+		DB:       db,
 		NowAgent: "test_agent",
 	}
 
@@ -708,6 +720,7 @@ func TestBuildTraceWithTempFile(t *testing.T) {
 
 func TestBuildTraceFileNotExist(t *testing.T) {
 	db := setupTestDB(t)
+	defer u.Unwrap(db.DB()).Close()
 
 	tmpDir := t.TempDir()
 
@@ -725,7 +738,7 @@ func TestBuildTraceFileNotExist(t *testing.T) {
 	session := &structs.Chats{
 		ID:                   1,
 		DB:                   db,
-		NowAgent:       "test_agent",
+		NowAgent:             "test_agent",
 		CurrentActivatePath:  tmpDir,
 		TemporyDataOfSession: make(map[string]any),
 	}
@@ -741,6 +754,7 @@ func TestBuildTraceFileNotExist(t *testing.T) {
 
 func TestBuildTraceFileTooLarge(t *testing.T) {
 	db := setupTestDB(t)
+	defer u.Unwrap(db.DB()).Close()
 
 	tmpDir := t.TempDir()
 	testFile := filepath.Join(tmpDir, "large.txt")
@@ -768,7 +782,7 @@ func TestBuildTraceFileTooLarge(t *testing.T) {
 	session := &structs.Chats{
 		ID:                   1,
 		DB:                   db,
-		NowAgent:       "test_agent",
+		NowAgent:             "test_agent",
 		CurrentActivatePath:  tmpDir,
 		TemporyDataOfSession: make(map[string]any),
 	}
@@ -784,6 +798,7 @@ func TestBuildTraceFileTooLarge(t *testing.T) {
 
 func TestBuildTraceFileTooLong(t *testing.T) {
 	db := setupTestDB(t)
+	defer u.Unwrap(db.DB()).Close()
 
 	tmpDir := t.TempDir()
 	testFile := filepath.Join(tmpDir, "long.txt")
@@ -811,7 +826,7 @@ func TestBuildTraceFileTooLong(t *testing.T) {
 	session := &structs.Chats{
 		ID:                   1,
 		DB:                   db,
-		NowAgent:       "test_agent",
+		NowAgent:             "test_agent",
 		CurrentActivatePath:  tmpDir,
 		TemporyDataOfSession: make(map[string]any),
 	}
@@ -827,6 +842,7 @@ func TestBuildTraceFileTooLong(t *testing.T) {
 
 func TestAddTempObject(t *testing.T) {
 	db := setupTestDB(t)
+	defer u.Unwrap(db.DB()).Close()
 
 	// 创建chat记录
 	chat := structs.Chats{
@@ -841,7 +857,7 @@ func TestAddTempObject(t *testing.T) {
 		ID:                   1,
 		DB:                   db,
 		TemporyDataOfSession: make(map[string]any),
-		NowAgent:       "test_agent",
+		NowAgent:             "test_agent",
 		TraceID:              0,
 	}
 
@@ -874,6 +890,7 @@ func TestAddTempObject(t *testing.T) {
 
 func TestAddTempObjectLongContent(t *testing.T) {
 	db := setupTestDB(t)
+	defer u.Unwrap(db.DB()).Close()
 
 	// 创建chat记录
 	chat := structs.Chats{
@@ -888,7 +905,7 @@ func TestAddTempObjectLongContent(t *testing.T) {
 		ID:                   1,
 		DB:                   db,
 		TemporyDataOfSession: make(map[string]any),
-		NowAgent:       "test_agent",
+		NowAgent:             "test_agent",
 		TraceID:              0,
 	}
 
@@ -921,6 +938,7 @@ func TestAddTempObjectLongContent(t *testing.T) {
 
 func TestTraceConcurrent(t *testing.T) {
 	db := setupTestDB(t)
+	defer u.Unwrap(db.DB()).Close()
 
 	tmpDir := t.TempDir()
 
@@ -948,6 +966,7 @@ func TestTraceConcurrent(t *testing.T) {
 		go func(idx int) {
 			// 为每个goroutine创建独立的数据库连接
 			testDB := setupTestDB(t)
+			defer u.Unwrap(testDB.DB()).Close()
 			testChat := structs.Chats{
 				ID:      uint32(idx + 10),
 				TraceID: 0,
@@ -1004,6 +1023,7 @@ func TestBuildTraceConcurrent(t *testing.T) {
 		go func(idx int) {
 			// 为每个goroutine创建独立的数据库和数据
 			testDB := setupTestDB(t)
+			defer u.Unwrap(testDB.DB()).Close()
 			tmpDir := t.TempDir()
 
 			testFile := filepath.Join(tmpDir, fmt.Sprintf("test%d.txt", idx))

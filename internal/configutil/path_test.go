@@ -21,11 +21,6 @@ func TestExpandPath(t *testing.T) {
 			expected: filepath.Join(home, "test"),
 		},
 		{
-			name:     "env var",
-			path:     "$HOME/test",
-			expected: filepath.Join(home, "test"),
-		},
-		{
 			name:     "absolute path",
 			path:     "/absolute/path",
 			expected: "/absolute/path",

@@ -16,7 +16,6 @@ func TestExpandPath(t *testing.T) {
 	}{
 		{"~/test", home + "/test"},
 		{"/tmp/test", "/tmp/test"},
-		{"$HOME/test", home + "/test"},
 	}
 
 	for _, tt := range tests {

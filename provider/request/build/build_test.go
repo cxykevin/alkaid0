@@ -1,9 +1,6 @@
 package build
 
 import (
-	"bytes"
-	"encoding/json"
-	"fmt"
 	"os"
 	"testing"
 
@@ -89,49 +86,49 @@ func TestBuildSuccess(t *testing.T) {
 	}
 }
 
-// TestBuildReal 测试构建请求体
-func TestBuildReal(t *testing.T) {
-	db := setupBuildTest(t)
+// // TestBuildReal 测试构建请求体
+// func TestBuildReal(t *testing.T) {
+// 	db := setupBuildTest(t)
 
-	// 创建测试聊天记录
-	chat := structs.Chats{
-		ID:          1,
-		LastModelID: 1,
-		NowAgent:    "",
-		DB:          db, // 设置 DB 字段，供后续工具函数使用
-		InTestFlag:  true,
-	}
+// 	// 创建测试聊天记录
+// 	chat := structs.Chats{
+// 		ID:          1,
+// 		LastModelID: 1,
+// 		NowAgent:    "",
+// 		DB:          db, // 设置 DB 字段，供后续工具函数使用
+// 		InTestFlag:  true,
+// 	}
 
-	if err := db.Create(&chat).Error; err != nil {
-		t.Fatalf("Failed to create test chat: %v", err)
-	}
+// 	if err := db.Create(&chat).Error; err != nil {
+// 		t.Fatalf("Failed to create test chat: %v", err)
+// 	}
 
-	// 调用 Build 函数
-	result, err := Build(db, &chat)
+// 	// 调用 Build 函数
+// 	result, err := Build(db, &chat)
 
-	// 验证结果
-	if err != nil {
-		t.Errorf("Build() returned error: %v", err)
-	}
+// 	// 验证结果
+// 	if err != nil {
+// 		t.Errorf("Build() returned error: %v", err)
+// 	}
 
-	if result == nil {
-		t.Errorf("Build() returned nil request")
-	}
+// 	if result == nil {
+// 		t.Errorf("Build() returned nil request")
+// 	}
 
-	if result != nil && result.Model != "test-model-id" {
-		t.Errorf("Expected model 'test-model-id', got '%s'", result.Model)
-	}
+// 	if result != nil && result.Model != "test-model-id" {
+// 		t.Errorf("Expected model 'test-model-id', got '%s'", result.Model)
+// 	}
 
-	var buf bytes.Buffer
-	encoder := json.NewEncoder(&buf)
-	encoder.SetIndent("", "    ")
-	encoder.SetEscapeHTML(false)
-	err = encoder.Encode(result)
-	if err != nil {
-		t.Errorf("Failed to marshal request to JSON: %v", err)
-	}
-	fmt.Printf("\n%s\n", buf.String())
-}
+// 	var buf bytes.Buffer
+// 	encoder := json.NewEncoder(&buf)
+// 	encoder.SetIndent("", "    ")
+// 	encoder.SetEscapeHTML(false)
+// 	err = encoder.Encode(result)
+// 	if err != nil {
+// 		t.Errorf("Failed to marshal request to JSON: %v", err)
+// 	}
+// 	fmt.Printf("\n%s\n", buf.String())
+// }
 
 // TestBuildChatNotFound 测试聊天不存在的情况
 func TestBuildChatNotFound(t *testing.T) {

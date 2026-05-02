@@ -7,6 +7,7 @@ import (
 	"github.com/cxykevin/alkaid0/config"
 	cfgStruct "github.com/cxykevin/alkaid0/config/structs"
 	"github.com/cxykevin/alkaid0/storage/structs"
+	u "github.com/cxykevin/alkaid0/utils"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 )
@@ -33,6 +34,7 @@ func setupSummaryTestDB(t *testing.T) *gorm.DB {
 // TestSummary_InvalidModel 测试无效的模型配置
 func TestSummary_InvalidModel(t *testing.T) {
 	db := setupSummaryTestDB(t)
+	defer u.Unwrap(db.DB()).Close()
 
 	// 设置一个无效的summary模型ID
 	*config.GlobalConfig = cfgStruct.Config{
@@ -62,6 +64,7 @@ func TestSummary_InvalidModel(t *testing.T) {
 // TestSummary_EmptyChat 测试空聊天会话
 func TestSummary_EmptyChat(t *testing.T) {
 	db := setupSummaryTestDB(t)
+	defer u.Unwrap(db.DB()).Close()
 
 	// 设置有效的模型配置
 	*config.GlobalConfig = cfgStruct.Config{
@@ -104,6 +107,7 @@ func TestSummary_EmptyChat(t *testing.T) {
 // TestSummary_NonExistentChat 测试不存在的聊天会话
 func TestSummary_NonExistentChat(t *testing.T) {
 	db := setupSummaryTestDB(t)
+	defer u.Unwrap(db.DB()).Close()
 
 	// 设置有效的模型配置
 	*config.GlobalConfig = cfgStruct.Config{
@@ -136,6 +140,7 @@ func TestSummary_NonExistentChat(t *testing.T) {
 // TestSummarySession 测试 SummarySession 函数
 func TestSummarySession(t *testing.T) {
 	db := setupSummaryTestDB(t)
+	defer u.Unwrap(db.DB()).Close()
 
 	// 设置有效的模型配置
 	*config.GlobalConfig = cfgStruct.Config{
@@ -186,6 +191,7 @@ func TestSummarySession(t *testing.T) {
 // TestSummarySession_WithAgent 测试带代理的会话总结
 func TestSummarySession_WithAgent(t *testing.T) {
 	db := setupSummaryTestDB(t)
+	defer u.Unwrap(db.DB()).Close()
 
 	// 设置有效的模型配置
 	*config.GlobalConfig = cfgStruct.Config{

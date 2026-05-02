@@ -6,6 +6,7 @@ import (
 	"github.com/cxykevin/alkaid0/provider/parser"
 	"github.com/cxykevin/alkaid0/storage/structs"
 	"github.com/cxykevin/alkaid0/tools/toolobj"
+	u "github.com/cxykevin/alkaid0/utils"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 )
@@ -90,6 +91,7 @@ func TestEnableScope(t *testing.T) {
 	toolobj.Scopes = make(map[string]string)
 
 	db := setupTestDB(t)
+	defer u.Unwrap(db.DB()).Close()
 
 	AddScope("test_scope", "test prompt")
 
@@ -124,6 +126,7 @@ func TestEnableScopeNotFound(t *testing.T) {
 	toolobj.Scopes = make(map[string]string)
 
 	db := setupTestDB(t)
+	defer u.Unwrap(db.DB()).Close()
 
 	session := &structs.Chats{
 		ID:           1,
@@ -153,6 +156,7 @@ func TestDisableScope(t *testing.T) {
 	toolobj.Scopes = make(map[string]string)
 
 	db := setupTestDB(t)
+	defer u.Unwrap(db.DB()).Close()
 
 	AddScope("test_scope", "test prompt")
 
@@ -191,6 +195,7 @@ func TestDisableScopeNotFound(t *testing.T) {
 	toolobj.Scopes = make(map[string]string)
 
 	db := setupTestDB(t)
+	defer u.Unwrap(db.DB()).Close()
 
 	session := &structs.Chats{
 		ID:           1,
@@ -217,6 +222,7 @@ func TestDisableScopeEmpty(t *testing.T) {
 
 func TestSetScopeEnabled(t *testing.T) {
 	db := setupTestDB(t)
+	defer u.Unwrap(db.DB()).Close()
 
 	// 测试创建新记录
 	err := SetScopeEnabled(db, 1, "test_scope", true)
@@ -258,6 +264,7 @@ func TestSetScopeEnabledNilDB(t *testing.T) {
 
 func TestLoad(t *testing.T) {
 	db := setupTestDB(t)
+	defer u.Unwrap(db.DB()).Close()
 
 	// 在数据库中创建一些scope记录
 	scopes := []structs.Scopes{
@@ -313,6 +320,7 @@ func TestLoadNilDB(t *testing.T) {
 
 func TestLoadWithExistingScopes(t *testing.T) {
 	db := setupTestDB(t)
+	defer u.Unwrap(db.DB()).Close()
 
 	// 在数据库中创建scope记录
 	scope := structs.Scopes{Name: "scope1", Enabled: true, ChatID: 1}
@@ -343,6 +351,7 @@ func TestLoadWithExistingScopes(t *testing.T) {
 
 func TestGetAllScopes(t *testing.T) {
 	db := setupTestDB(t)
+	defer u.Unwrap(db.DB()).Close()
 
 	// 创建测试数据
 	scopes := []structs.Scopes{

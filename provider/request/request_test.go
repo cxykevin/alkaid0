@@ -10,6 +10,7 @@ import (
 	"github.com/cxykevin/alkaid0/provider/request/agents/actions"
 	"github.com/cxykevin/alkaid0/provider/request/structs"
 	storageStructs "github.com/cxykevin/alkaid0/storage/structs"
+	u "github.com/cxykevin/alkaid0/utils"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 )
@@ -62,6 +63,7 @@ func setupTestDB(t *testing.T) *gorm.DB {
 // TestUserAddMsg_Basic 测试基本的消息添加
 func TestUserAddMsg_Basic(t *testing.T) {
 	db := setupTestDB(t)
+	defer u.Unwrap(db.DB()).Close()
 
 	// 创建一个聊天会话
 	chat := storageStructs.Chats{
@@ -108,6 +110,7 @@ func TestUserAddMsg_WithRefers(t *testing.T) {
 	// t.Skip("Skipping test due to GORM gob serialization issues with MessagesReferList")
 
 	db := setupTestDB(t)
+	defer u.Unwrap(db.DB()).Close()
 
 	// 创建一个聊天会话
 	chat := storageStructs.Chats{
@@ -166,6 +169,7 @@ func TestUserAddMsg_WithRefers(t *testing.T) {
 // TestUserAddMsg_NilRefers 测试 nil 引用
 func TestUserAddMsg_NilRefers(t *testing.T) {
 	db := setupTestDB(t)
+	defer u.Unwrap(db.DB()).Close()
 
 	// 创建一个聊天会话
 	chat := storageStructs.Chats{
@@ -205,6 +209,7 @@ func TestUserAddMsg_NilRefers(t *testing.T) {
 // TestUserAddMsg_MultipleMessages 测试添加多条消息
 func TestUserAddMsg_MultipleMessages(t *testing.T) {
 	db := setupTestDB(t)
+	defer u.Unwrap(db.DB()).Close()
 
 	// 创建一个聊天会话
 	chat := storageStructs.Chats{
@@ -249,6 +254,7 @@ func TestUserAddMsg_MultipleMessages(t *testing.T) {
 // TestUserAddMsg_EmptyMessage 测试空消息
 func TestUserAddMsg_EmptyMessage(t *testing.T) {
 	db := setupTestDB(t)
+	defer u.Unwrap(db.DB()).Close()
 
 	// 创建一个聊天会话
 	chat := storageStructs.Chats{
@@ -288,6 +294,7 @@ func TestUserAddMsg_EmptyMessage(t *testing.T) {
 // TestUserAddMsg_InvalidChatID 测试无效的聊天ID
 func TestUserAddMsg_InvalidChatID(t *testing.T) {
 	db := setupTestDB(t)
+	defer u.Unwrap(db.DB()).Close()
 
 	// 不创建聊天会话，直接使用不存在的ID
 	session := &storageStructs.Chats{
@@ -312,6 +319,7 @@ func TestUserAddMsg_InvalidChatID(t *testing.T) {
 func TestUserAddMsg_WithCurrentAgent(t *testing.T) {
 
 	db := setupTestDB(t)
+	defer u.Unwrap(db.DB()).Close()
 
 	// 创建一个聊天会话
 	chat := storageStructs.Chats{
@@ -362,6 +370,7 @@ func TestUserAddMsg_WithCurrentAgent(t *testing.T) {
 // TestCanAutoApprove 测试自动审批和拒绝逻辑
 func TestCanAutoApprove(t *testing.T) {
 	db := setupTestDB(t)
+	defer u.Unwrap(db.DB()).Close()
 
 	// 设置基础环境
 	session := &storageStructs.Chats{
@@ -468,6 +477,7 @@ func TestStringDefault(t *testing.T) {
 // TestSendRequest_ModelNotFound 测试模型不存在的情况
 func TestSendRequest_ModelNotFound(t *testing.T) {
 	db := setupTestDB(t)
+	defer u.Unwrap(db.DB()).Close()
 
 	// 创建聊天会话
 	chat := storageStructs.Chats{

@@ -11,6 +11,7 @@ import (
 	"github.com/cxykevin/alkaid0/mock/openai"
 	storageStructs "github.com/cxykevin/alkaid0/storage/structs"
 	"github.com/cxykevin/alkaid0/ui/state"
+	u "github.com/cxykevin/alkaid0/utils"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 )
@@ -92,6 +93,7 @@ func createTestChat(db *gorm.DB, t *testing.T) *storageStructs.Chats {
 // TestNew 测试创建新的 loop 对象
 func TestNew(t *testing.T) {
 	db := setupTestDB(t)
+	defer u.Unwrap(db.DB()).Close()
 	chat := createTestChat(db, t)
 
 	loopObj := New(chat)
@@ -117,6 +119,7 @@ func TestNew(t *testing.T) {
 func TestChangeModel(t *testing.T) {
 	setupConfigForTest()
 	db := setupTestDB(t)
+	defer u.Unwrap(db.DB()).Close()
 	chat := createTestChat(db, t)
 
 	loopObj := New(chat)
@@ -137,6 +140,7 @@ func TestChangeModel(t *testing.T) {
 func TestChangeModelNotExists(t *testing.T) {
 	setupConfigForTest()
 	db := setupTestDB(t)
+	defer u.Unwrap(db.DB()).Close()
 	chat := createTestChat(db, t)
 
 	loopObj := New(chat)
@@ -152,6 +156,7 @@ func TestChangeModelNotExists(t *testing.T) {
 func TestChat(t *testing.T) {
 	setupConfigForTest()
 	db := setupTestDB(t)
+	defer u.Unwrap(db.DB()).Close()
 	chat := createTestChat(db, t)
 
 	loopObj := New(chat)
@@ -176,6 +181,7 @@ func TestChat(t *testing.T) {
 func TestChatQueueFull(t *testing.T) {
 	setupConfigForTest()
 	db := setupTestDB(t)
+	defer u.Unwrap(db.DB()).Close()
 	chat := createTestChat(db, t)
 
 	loopObj := New(chat)
@@ -196,6 +202,7 @@ func TestChatQueueFull(t *testing.T) {
 func TestSummary(t *testing.T) {
 	setupConfigForTest()
 	db := setupTestDB(t)
+	defer u.Unwrap(db.DB()).Close()
 	chat := createTestChat(db, t)
 
 	loopObj := New(chat)
@@ -220,6 +227,7 @@ func TestSummary(t *testing.T) {
 func TestApprove(t *testing.T) {
 	setupConfigForTest()
 	db := setupTestDB(t)
+	defer u.Unwrap(db.DB()).Close()
 	chat := createTestChat(db, t)
 
 	loopObj := New(chat)
@@ -244,6 +252,7 @@ func TestApprove(t *testing.T) {
 func TestStop(t *testing.T) {
 	setupConfigForTest()
 	db := setupTestDB(t)
+	defer u.Unwrap(db.DB()).Close()
 	chat := createTestChat(db, t)
 
 	loopObj := New(chat)
@@ -264,6 +273,7 @@ func TestStop(t *testing.T) {
 func TestSetCallback(t *testing.T) {
 	setupConfigForTest()
 	db := setupTestDB(t)
+	defer u.Unwrap(db.DB()).Close()
 	chat := createTestChat(db, t)
 
 	loopObj := New(chat)
@@ -292,6 +302,7 @@ func TestSetCallback(t *testing.T) {
 func TestStartWithContext(t *testing.T) {
 	setupConfigForTest()
 	db := setupTestDB(t)
+	defer u.Unwrap(db.DB()).Close()
 	chat := createTestChat(db, t)
 
 	loopObj := New(chat)
@@ -338,6 +349,7 @@ func TestStreamingChatIntegration(t *testing.T) {
 	}()
 
 	db := setupTestDB(t)
+	defer u.Unwrap(db.DB()).Close()
 	chat := createTestChat(db, t)
 
 	loopObj := New(chat)
@@ -391,6 +403,7 @@ func TestStreamingChatIntegration(t *testing.T) {
 func TestLoopConcurrency(t *testing.T) {
 	setupConfigForTest()
 	db := setupTestDB(t)
+	defer u.Unwrap(db.DB()).Close()
 	chat := createTestChat(db, t)
 
 	loopObj := New(chat)
@@ -456,6 +469,7 @@ done:
 func BenchmarkChat(b *testing.B) {
 	setupConfigForTest()
 	db := setupTestDB(&testing.T{})
+	defer u.Unwrap(db.DB()).Close()
 	chat := createTestChat(db, &testing.T{})
 
 	loopObj := New(chat)
@@ -470,6 +484,7 @@ func BenchmarkChat(b *testing.B) {
 func BenchmarkChangeModel(b *testing.B) {
 	setupConfigForTest()
 	db := setupTestDB(&testing.T{})
+	defer u.Unwrap(db.DB()).Close()
 	chat := createTestChat(db, &testing.T{})
 
 	loopObj := New(chat)
@@ -507,6 +522,7 @@ func TestAIResponseStopReason(t *testing.T) {
 func TestInitializeSessionContext(t *testing.T) {
 	setupConfigForTest()
 	db := setupTestDB(t)
+	defer u.Unwrap(db.DB()).Close()
 	chat := createTestChat(db, t)
 
 	loopObj := New(chat)
@@ -528,6 +544,7 @@ func TestInitializeSessionContext(t *testing.T) {
 func TestMessageWithReferences(t *testing.T) {
 	setupConfigForTest()
 	db := setupTestDB(t)
+	defer u.Unwrap(db.DB()).Close()
 	chat := createTestChat(db, t)
 
 	loopObj := New(chat)

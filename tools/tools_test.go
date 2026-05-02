@@ -29,7 +29,8 @@ func initTestEnv() *gorm.DB {
 }
 
 func TestAddScope(t *testing.T) {
-	initTestEnv()
+	db := initTestEnv()
+	defer u.Unwrap(db.DB()).Close()
 	actions.AddScope("scope1", "This is scope 1")
 	if val, ok := toolobj.Scopes["scope1"]; !ok || val != "This is scope 1" {
 		t.Errorf("AddScope failed: expected 'This is scope 1', got '%v'", val)
@@ -37,7 +38,8 @@ func TestAddScope(t *testing.T) {
 }
 
 func TestAddTool(t *testing.T) {
-	initTestEnv()
+	db := initTestEnv()
+	defer u.Unwrap(db.DB()).Close()
 	tool := &toolobj.Tools{
 		Name:            "TestTool",
 		ID:              "tool1",
@@ -54,7 +56,9 @@ func TestAddTool(t *testing.T) {
 }
 
 func TestHookTool(t *testing.T) {
-	initTestEnv()
+	db := initTestEnv()
+
+	defer u.Unwrap(db.DB()).Close()
 	tool := &toolobj.Tools{
 		Name:            "TestTool",
 		ID:              "tool1",
@@ -83,6 +87,7 @@ func TestHookTool(t *testing.T) {
 
 func TestEnableScope(t *testing.T) {
 	db := initTestEnv()
+	defer u.Unwrap(db.DB()).Close()
 	actions.AddScope("scope1", "Test scope 1")
 	testChat := &storageStructs.Chats{ID: 1, DB: db, EnableScopes: make(map[string]bool)}
 	// 先创建 Chats 记录
@@ -98,6 +103,7 @@ func TestEnableScope(t *testing.T) {
 
 func TestDisableScope(t *testing.T) {
 	db := initTestEnv()
+	defer u.Unwrap(db.DB()).Close()
 	actions.AddScope("scope1", "Test scope 1")
 	testChat := &storageStructs.Chats{ID: 2, DB: db, EnableScopes: make(map[string]bool)}
 	// 先创建 Chats 记录
@@ -117,6 +123,7 @@ func TestDisableScope(t *testing.T) {
 
 func TestExecToolGetPrompts(t *testing.T) {
 	db := initTestEnv()
+	defer u.Unwrap(db.DB()).Close()
 	// actions.Load(db)
 
 	actions.AddScope("scope1", "Scope 1 prompt")
@@ -168,7 +175,8 @@ func TestExecToolGetPrompts(t *testing.T) {
 }
 
 func TestExecToolGetPromptsWithInvalidScope(t *testing.T) {
-	initTestEnv()
+	db := initTestEnv()
+	defer u.Unwrap(db.DB()).Close()
 
 	actions.AddScope("scope1", "Scope 1 prompt")
 
@@ -188,8 +196,9 @@ func TestExecToolGetPromptsWithInvalidScope(t *testing.T) {
 		},
 	}
 	actions.AddTool(tool)
-	db := initTestEnv()
-	testChat := &storageStructs.Chats{ID: 1, DB: db, EnableScopes: make(map[string]bool)}
+	db2 := initTestEnv()
+	defer u.Unwrap(db2.DB()).Close()
+	testChat := &storageStructs.Chats{ID: 1, DB: db2, EnableScopes: make(map[string]bool)}
 	actions.EnableScope(testChat, "scope1")
 
 	unusedHooks, prehooks, _ := ExecOneToolGetPrompts(testChat, "tool1")
@@ -206,7 +215,8 @@ func TestExecToolGetPromptsWithInvalidScope(t *testing.T) {
 }
 
 func TestExecToolOnHook(t *testing.T) {
-	initTestEnv()
+	db1 := initTestEnv()
+	defer u.Unwrap(db1.DB()).Close()
 
 	actions.AddScope("scope1", "Scope 1 prompt")
 
@@ -240,7 +250,8 @@ func TestExecToolOnHook(t *testing.T) {
 }
 
 func TestExecToolOnHookWithDisabledScope(t *testing.T) {
-	initTestEnv()
+	db1 := initTestEnv()
+	defer u.Unwrap(db1.DB()).Close()
 	testChat := &storageStructs.Chats{ID: 1, LastModelID: 1}
 
 	actions.AddScope("scope1", "Scope 1 prompt")
@@ -274,6 +285,7 @@ func TestExecToolOnHookWithDisabledScope(t *testing.T) {
 
 func TestExecToolPostHook(t *testing.T) {
 	db := initTestEnv()
+	defer u.Unwrap(db.DB()).Close()
 
 	actions.AddScope("scope1", "Scope 1 prompt")
 
@@ -317,6 +329,7 @@ func TestExecToolPostHook(t *testing.T) {
 
 func TestExecToolPostHookAllPass(t *testing.T) {
 	db := initTestEnv()
+	defer u.Unwrap(db.DB()).Close()
 
 	actions.AddScope("scope1", "Scope 1 prompt")
 
@@ -354,6 +367,7 @@ func TestExecToolPostHookAllPass(t *testing.T) {
 
 func TestExecToolPostHookError(t *testing.T) {
 	db := initTestEnv()
+	defer u.Unwrap(db.DB()).Close()
 
 	actions.AddScope("scope1", "Scope 1 prompt")
 
@@ -391,6 +405,7 @@ func TestExecToolPostHookError(t *testing.T) {
 
 func TestMultipleScopes(t *testing.T) {
 	db := initTestEnv()
+	defer u.Unwrap(db.DB()).Close()
 
 	actions.AddScope("scope1", "Scope 1 prompt")
 	actions.AddScope("scope2", "Scope 2 prompt")
@@ -449,6 +464,7 @@ func TestMultipleScopes(t *testing.T) {
 
 func TestPreHookPrioritySorting(t *testing.T) {
 	db := initTestEnv()
+	defer u.Unwrap(db.DB()).Close()
 
 	actions.AddScope("scope1", "Scope 1 prompt")
 	testChat := &storageStructs.Chats{ID: 1, DB: db, EnableScopes: make(map[string]bool)}
@@ -510,6 +526,7 @@ func TestPreHookPrioritySorting(t *testing.T) {
 
 func TestOnHookPrioritySorting(t *testing.T) {
 	db := initTestEnv()
+	defer u.Unwrap(db.DB()).Close()
 
 	actions.AddScope("scope1", "Scope 1 prompt")
 	testChat := &storageStructs.Chats{ID: 1, DB: db, EnableScopes: make(map[string]bool)}
@@ -574,6 +591,7 @@ func TestOnHookPrioritySorting(t *testing.T) {
 
 func TestPostHookPrioritySorting(t *testing.T) {
 	db := initTestEnv()
+	defer u.Unwrap(db.DB()).Close()
 
 	actions.AddScope("scope1", "Scope 1 prompt")
 	testChat := &storageStructs.Chats{ID: 1, DB: db, EnableScopes: make(map[string]bool)}
@@ -638,6 +656,7 @@ func TestPostHookPrioritySorting(t *testing.T) {
 
 func TestZeroPriority(t *testing.T) {
 	db := initTestEnv()
+	defer u.Unwrap(db.DB()).Close()
 
 	actions.AddScope("scope1", "Scope 1 prompt")
 	testChat := &storageStructs.Chats{ID: 1, DB: db, EnableScopes: make(map[string]bool)}
@@ -687,6 +706,7 @@ func TestZeroPriority(t *testing.T) {
 
 func TestExecToolGetPromptsParameters(t *testing.T) {
 	db := initTestEnv()
+	defer u.Unwrap(db.DB()).Close()
 
 	actions.AddScope("scope1", "Scope 1 prompt")
 	testChat := &storageStructs.Chats{ID: 1, DB: db, EnableScopes: make(map[string]bool)}

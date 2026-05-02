@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/cxykevin/alkaid0/log"
 	"github.com/cxykevin/alkaid0/storage/structs"
@@ -22,7 +23,7 @@ func InitDB(dbPath string) (*gorm.DB, error) {
 	logger.Info("initializing database at: %s", dbPath)
 
 	// 支持内存数据库
-	if dbPath != ":memory:" {
+	if strings.HasSuffix(dbPath, ":memory:") {
 		dir := filepath.Dir(dbPath)
 		if dir != "." {
 			// 创建父目录（如果不存在）

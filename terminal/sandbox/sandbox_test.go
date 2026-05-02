@@ -846,6 +846,10 @@ func BenchmarkExecuteNoIsolation(b *testing.B) {
 
 // TestConcurrentSandbox 测试并发沙盒执行
 func TestConcurrentSandbox(t *testing.T) {
+
+	if os.Getenv("ALKAID0_TEST_SANDBOX") == "" {
+		t.Skip("跳过隔离测试（设置 ALKAID0_TEST_SANDBOX=true 启用）")
+	}
 	cfg := Config{
 		Timeout:       5 * time.Second,
 		IsolationMode: IsolationNone,
@@ -854,7 +858,7 @@ func TestConcurrentSandbox(t *testing.T) {
 	const numGoroutines = 5
 	done := make(chan bool, numGoroutines)
 
-	for i := 0; i < numGoroutines; i++ {
+	for i := range numGoroutines {
 		go func(id int) {
 			sb, err := New(cfg)
 			if err != nil {

@@ -18,6 +18,7 @@ import (
 func TestSolver_AddToken(t *testing.T) {
 	// 初始化内存数据库，便于 DoneToken 写入时不报错
 	db, err := storage.InitDB(":memory:")
+	defer u.Unwrap(db.DB()).Close()
 	if err != nil {
 		t.Fatalf("InitDB failed: %v", err)
 	}
@@ -94,6 +95,7 @@ func TestSolver_AddToken(t *testing.T) {
 // TestSolver_ToolCalling_SingleTool 测试单个工具调用的完整流程
 func TestSolver_ToolCalling_SingleTool(t *testing.T) {
 	db, err := storage.InitDB(":memory:")
+	defer u.Unwrap(db.DB()).Close()
 	if err != nil {
 		t.Fatalf("InitDB failed: %v", err)
 	}
@@ -209,6 +211,7 @@ func TestSolver_ToolCalling_SingleTool(t *testing.T) {
 // TestSolver_ToolCalling_MultipleTools 测试多个工具调用的完整流程
 func TestSolver_ToolCalling_MultipleTools(t *testing.T) {
 	db, err := storage.InitDB(":memory:")
+	defer u.Unwrap(db.DB()).Close()
 	if err != nil {
 		t.Fatalf("InitDB failed: %v", err)
 	}

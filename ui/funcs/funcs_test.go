@@ -6,6 +6,7 @@ import (
 
 	"github.com/cxykevin/alkaid0/storage"
 	"github.com/cxykevin/alkaid0/storage/structs"
+	u "github.com/cxykevin/alkaid0/utils"
 	"gorm.io/gorm"
 )
 
@@ -20,6 +21,7 @@ func setupTestDB(t *testing.T) *gorm.DB {
 
 func TestGetChats(t *testing.T) {
 	db := setupTestDB(t)
+	defer u.Unwrap(db.DB()).Close()
 	chats, err := GetChats(db)
 	if err != nil {
 		t.Fatalf("GetChats failed: %v", err)
@@ -43,6 +45,7 @@ func TestGetChats(t *testing.T) {
 
 func TestQueryChat(t *testing.T) {
 	db := setupTestDB(t)
+	defer u.Unwrap(db.DB()).Close()
 
 	chat := &structs.Chats{Title: "Test Chat"}
 	db.Create(chat)
@@ -58,6 +61,7 @@ func TestQueryChat(t *testing.T) {
 
 func TestCreateChat(t *testing.T) {
 	db := setupTestDB(t)
+	defer u.Unwrap(db.DB()).Close()
 
 	id, err := CreateChat(db)
 	if err != nil {
@@ -70,6 +74,7 @@ func TestCreateChat(t *testing.T) {
 
 func TestDeleteChat(t *testing.T) {
 	db := setupTestDB(t)
+	defer u.Unwrap(db.DB()).Close()
 
 	chat := &structs.Chats{Title: "To Delete"}
 	db.Create(chat)

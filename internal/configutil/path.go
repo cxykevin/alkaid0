@@ -1,6 +1,9 @@
 package configutil
 
-import "os"
+import (
+	"os"
+	"path/filepath"
+)
 
 // ExpandPath 展开路径中的 ~ 和环境变量
 func ExpandPath(path string) string {
@@ -12,5 +15,5 @@ func ExpandPath(path string) string {
 		}
 	}
 	// 展开环境变量
-	return os.ExpandEnv(path)
+	return filepath.Clean(os.ExpandEnv(path))
 }

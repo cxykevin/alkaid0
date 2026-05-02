@@ -5,6 +5,7 @@ import (
 
 	"github.com/cxykevin/alkaid0/storage/structs"
 	"github.com/cxykevin/alkaid0/tools/toolobj"
+	u "github.com/cxykevin/alkaid0/utils"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 )
@@ -163,6 +164,7 @@ func TestUpdateInfoWithDisable(t *testing.T) {
 
 func TestUseScope(t *testing.T) {
 	db := setupTestDB(t)
+	defer u.Unwrap(db.DB()).Close()
 
 	// 初始化全局状态
 	toolobj.Scopes = map[string]string{
@@ -206,6 +208,7 @@ func TestUseScope(t *testing.T) {
 
 func TestUseScopeDisable(t *testing.T) {
 	db := setupTestDB(t)
+	defer u.Unwrap(db.DB()).Close()
 
 	// 初始化全局状态
 	toolobj.Scopes = map[string]string{
@@ -299,6 +302,7 @@ func TestUseScopeEmptyName(t *testing.T) {
 
 func TestUseScopeNotFound(t *testing.T) {
 	db := setupTestDB(t)
+	defer u.Unwrap(db.DB()).Close()
 
 	// 清空全局状态
 	toolobj.Scopes = make(map[string]string)
@@ -358,6 +362,7 @@ func TestLoad(t *testing.T) {
 
 func TestUseScopeWithInvalidDisableType(t *testing.T) {
 	db := setupTestDB(t)
+	defer u.Unwrap(db.DB()).Close()
 
 	toolobj.Scopes = map[string]string{
 		"test_scope": "test prompt",
