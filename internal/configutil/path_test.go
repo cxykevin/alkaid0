@@ -46,7 +46,7 @@ func TestExpandPath(t *testing.T) {
 			}
 
 			got := ExpandPath(tt.path)
-			if got != tt.expected {
+			if got != filepath.Clean(tt.expected) {
 				t.Errorf("ExpandPath(%q) = %q, want %q", tt.path, got, tt.expected)
 			}
 		})

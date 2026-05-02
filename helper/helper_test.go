@@ -209,7 +209,7 @@ func TestExpandPath(t *testing.T) {
 				return
 			}
 			if !tt.wantErr && got != tt.want {
-				t.Errorf("expandPath() = %v, want %v", got, tt.want)
+				t.Errorf("expandPath() = %v, want %v", got, filepath.Clean(tt.want))
 			}
 		})
 	}

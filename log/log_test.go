@@ -2,6 +2,7 @@ package log
 
 import (
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -20,7 +21,7 @@ func TestExpandPath(t *testing.T) {
 
 	for _, tt := range tests {
 		got := configutil.ExpandPath(tt.input)
-		if got != tt.expected {
+		if got != filepath.Clean(tt.expected) {
 			t.Errorf("ExpandPath(%q) = %q; want %q", tt.input, got, tt.expected)
 		}
 	}

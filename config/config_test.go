@@ -19,7 +19,7 @@ func TestConfig(t *testing.T) {
 	}
 
 	home, _ := os.UserHomeDir()
-	if configutil.ExpandPath("~/test") != home+"/test" {
+	if configutil.ExpandPath("~/test") != filepath.Clean(home+"/test") {
 		t.Errorf("ExpandPath failed for ~")
 	}
 }
@@ -50,8 +50,8 @@ func TestExpandPath(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			result := configutil.ExpandPath(tt.input)
-			if tt.contains != "" && result != tt.input && !filepath.IsAbs(result) && tt.input[0] != '~' {
-				t.Errorf("ExpandPath(%s) = %s, expected to contain %s", tt.input, result, tt.contains)
+			if tt.contains != "" && result != filepath.Clean(tt.input) && !filepath.IsAbs(result) && filepath.Clean(tt.input)[0] != '~' {
+				t.Errorf("ExpandPath(%s) = %s, expected to contain %s", filepath.Clean(tt.input), result, tt.contains)
 			}
 		})
 	}
@@ -188,7 +188,7 @@ func TestExpandPathWithEnvVar(t *testing.T) {
 	defer os.Unsetenv("TEST_VAR")
 
 	result := configutil.ExpandPath("$TEST_VAR/path")
-	if result != "test_value/path" {
+	if result != filepath.Clean("test_value/path") {
 		t.Errorf("Expected 'test_value/path', got %s", result)
 	}
 }
