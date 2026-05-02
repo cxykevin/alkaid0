@@ -72,6 +72,7 @@ jobs:
     strategy:
       matrix:
         os: [ ubuntu-latest, macos-latest, windows-latest ]
+      fail-fast: false
     steps:
       - name: Checkout 代码
         uses: actions/checkout@v4
@@ -83,5 +84,14 @@ jobs:
           check-latest: true
 
       - name: 运行测试
+        env:
+          ALKAID0_DEBUG_MOCKSERVER: "true"
+          ALKAID0_CONFIG_PATH: "log/log.log"
+          ALKAID0_TEST_SANDBOX: "true"
         run: |
+          mkdir log
           go test -v ./...
+
+      - name: 输出 Log
+        run: |
+          cat log/log.log

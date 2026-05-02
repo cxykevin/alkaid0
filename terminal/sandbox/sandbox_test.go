@@ -277,7 +277,7 @@ func TestSetWorkDir(t *testing.T) {
 		t.Errorf("设置工作目录失败: %v", err)
 	}
 
-	if sb.GetWorkDir() != tmpDir {
+	if filepath.Clean(sb.GetWorkDir()) != filepath.Clean(tmpDir) {
 		t.Errorf("工作目录 = %s, 期望 %s", sb.GetWorkDir(), tmpDir)
 	}
 
@@ -800,65 +800,64 @@ func BenchmarkExecuteNoIsolation(b *testing.B) {
 	}
 }
 
-
 // TestConcurrentSandbox 测试并发沙盒执行
 func TestConcurrentSandbox(t *testing.T) {
-cfg := Config{
-Timeout:       5 * time.Second,
-IsolationMode: IsolationNone,
-}
+	cfg := Config{
+		Timeout:       5 * time.Second,
+		IsolationMode: IsolationNone,
+	}
 
-const numGoroutines = 5
-done := make(chan bool, numGoroutines)
+	const numGoroutines = 5
+	done := make(chan bool, numGoroutines)
 
-for i := 0; i < numGoroutines; i++ {
-go func(id int) {
-sb, err := New(cfg)
-if err != nil {
-t.Errorf("Goroutine %d: 创建沙盒失败: %v", id, err)
-done <- true
-return
-}
+	for i := 0; i < numGoroutines; i++ {
+		go func(id int) {
+			sb, err := New(cfg)
+			if err != nil {
+				t.Errorf("Goroutine %d: 创建沙盒失败: %v", id, err)
+				done <- true
+				return
+			}
 
-var cmdName string
-var cmdArgs []string
-if runtime.GOOS == "windows" {
-cmdName = "cmd.exe"
-cmdArgs = []string{"/c", "echo", fmt.Sprintf("hello from %d", id)}
-} else {
-cmdName = "echo"
-cmdArgs = []string{fmt.Sprintf("hello from %d", id)}
-}
+			var cmdName string
+			var cmdArgs []string
+			if runtime.GOOS == "windows" {
+				cmdName = "cmd.exe"
+				cmdArgs = []string{"/c", "echo", fmt.Sprintf("hello from %d", id)}
+			} else {
+				cmdName = "echo"
+				cmdArgs = []string{fmt.Sprintf("hello from %d", id)}
+			}
 
-cmd, err := sb.Execute(cmdName, cmdArgs...)
-if err != nil {
-t.Errorf("Goroutine %d: 创建命令失败: %v", id, err)
-done <- true
-return
-}
+			cmd, err := sb.Execute(cmdName, cmdArgs...)
+			if err != nil {
+				t.Errorf("Goroutine %d: 创建命令失败: %v", id, err)
+				done <- true
+				return
+			}
 
-var stdout bytes.Buffer
-cmd.SetStdout(&stdout)
+			var stdout bytes.Buffer
+			cmd.SetStdout(&stdout)
 
-if err := cmd.Run(); err != nil {
-t.Errorf("Goroutine %d: 执行命令失败: %v", id, err)
-} else {
-output := strings.TrimSpace(stdout.String())
-expected := fmt.Sprintf("hello from %d", id)
-if output != expected {
-t.Errorf("Goroutine %d: 输出 = %q, 期望 %q", id, output, expected)
-}
-}
+			if err := cmd.Run(); err != nil {
+				t.Errorf("Goroutine %d: 执行命令失败: %v", id, err)
+			} else {
+				output := strings.TrimSpace(stdout.String())
+				expected := fmt.Sprintf("hello from %d", id)
+				if output != expected {
+					t.Errorf("Goroutine %d: 输出 = %q, 期望 %q", id, output, expected)
+				}
+			}
 
-done <- true
-}(i)
-}
+			done <- true
+		}(i)
+	}
 
-for i := 0; i < numGoroutines; i++ {
-select {
-case <-done:
-case <-time.After(10 * time.Second):
-t.Fatal("Timeout waiting for concurrent sandbox executions")
-}
-}
+	for i := 0; i < numGoroutines; i++ {
+		select {
+		case <-done:
+		case <-time.After(10 * time.Second):
+			t.Fatal("Timeout waiting for concurrent sandbox executions")
+		}
+	}
 }

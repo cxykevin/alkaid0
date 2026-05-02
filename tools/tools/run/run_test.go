@@ -2,6 +2,7 @@ package run
 
 import (
 	"fmt"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -268,12 +269,23 @@ func TestRunTaskInvalidTimeout(t *testing.T) {
 }
 
 func TestGetShell(t *testing.T) {
+	emptyShell := ""
+	switch runtime.GOOS {
+	case "linux":
+		emptyShell = "bash"
+	case "darwin":
+		emptyShell = "zsh"
+	case "windows":
+		emptyShell = "powershell.exe"
+	default:
+		emptyShell = "bash"
+	}
 	tests := []struct {
 		name     string
 		shell    string
 		expected string
 	}{
-		{"empty shell linux", "", "bash"},
+		{"empty shell", "", emptyShell},
 		{"specified shell", "zsh", "zsh"},
 		{"powershell", "powershell.exe", "powershell.exe"},
 	}
