@@ -93,4 +93,4 @@ jobs:
 
       - name: 输出 Log
         run: |
-          cat alklog.log
+          cat alklog.log || true
