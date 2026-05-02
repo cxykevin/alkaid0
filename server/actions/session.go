@@ -467,6 +467,22 @@ func loadSession(cwd string, id *uint32, knowID bool) (*structs.Chats, error) {
 				}
 			}
 
+			if resp.SummaryFlag {
+				err = broadcastSessionUpdate(sessID, SessionUpdate{
+					SessionID: sessID,
+					Update: SessionUpdateUpdate{
+						SessionUpdate: "alk.cxykevin.top/summary",
+						Content: u.H{
+							"type": "text",
+							"text": resp.SummaryText,
+						},
+					},
+				}, 0)
+				if err != nil {
+					logger.Warn("failed to broadcast session update: %v", err)
+				}
+			}
+
 			toolStatus := "pending"
 			if sess.ToolState == 1 {
 				toolStatus = "completed"

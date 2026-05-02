@@ -18,6 +18,7 @@ Alkaid0 是一个模块化的 AI Coding 工具 与 Agent 框架，专为构建�
 
 ```json
 {
+    "$schema": "https://raw.githubusercontent.com/cxykevin/alkaid0/refs/heads/main/docs/schemas/config.json",
     "Version": 1,
     "Model": {
         "ProviderURL": "https://openrouter.com/api/v1（这里暂时没有用）",
@@ -30,6 +31,7 @@ Alkaid0 是一个模块化的 AI Coding 工具 与 Agent 框架，专为构建�
                 "ProviderURL": "https://模型供应商/v1",
                 "ProviderKey": "sk-模型密钥",
                 "EnableThinking": true, 
+                "CompressSize": 128000,
                 "ProviderSpecificConfig": {
                     "EnableDeepseekThinking": false,
                     "EnableReasoningEffort": true,

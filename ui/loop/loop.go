@@ -45,6 +45,7 @@ type AIResponse struct {
 	StopReason      StopReason
 	ToolCallContent map[string]any
 	Usage           *reqStructs.Usage
+	SummaryFlag     bool
 }
 
 // msgAction 停止原因
@@ -106,6 +107,8 @@ func (p *Object) Start(ctx context.Context) {
 		<-p.recvSyncQueue
 	}
 
+	var needCompress bool
+
 	var runResponseLoop func()
 	runResponseLoop = func() {
 		// 启动 loop
@@ -119,6 +122,28 @@ func (p *Object) Start(ctx context.Context) {
 			p.isResponding = true
 			p.cancelFunc = responseCancel
 			p.lock.Unlock()
+
+			if needCompress {
+				logger.Info("start auto summary in session=%d", session.ID)
+				call(AIResponse{
+					SummaryText: "",
+					SummaryFlag: true,
+				})
+				summaryText, err := funcs.SummarySession(p.ctx, session)
+				if err != nil {
+					call(AIResponse{
+						Error:      fmt.Errorf("loop error when auto summary %v", err),
+						StopReason: StopReasonError,
+					})
+				}
+
+				call(AIResponse{
+					SummaryText: summaryText,
+					SummaryFlag: true,
+				})
+
+				needCompress = false
+			}
 
 			finish, err := funcs.SendRequest(responseCtx, session, func(delta string, thinkingDelta string, id uint64, usage reqStructs.Usage) error {
 				select {
@@ -146,6 +171,24 @@ func (p *Object) Start(ctx context.Context) {
 					Content:         delta,
 					Usage:           &usage,
 				})
+
+				if usage.TotalTokens != 0 {
+					// get modelID
+					modelID := session.LastModelID
+					if session.CurrentAgentID != "" {
+						modelIDRet := uint32(session.CurrentAgentConfig.AgentModel)
+						if modelIDRet != 0 {
+							modelID = modelIDRet
+						}
+					}
+					modelCfg, ok := config.GlobalConfig.Model.Models[int32(modelID)]
+					if ok {
+						if usage.TotalTokens >= modelCfg.CompressSize {
+							needCompress = true
+						}
+					}
+
+				}
 				return nil
 			})
 
@@ -182,6 +225,28 @@ func (p *Object) Start(ctx context.Context) {
 							return
 						}
 
+						if needCompress {
+							logger.Info("start auto summary in session=%d", session.ID)
+							call(AIResponse{
+								SummaryText: "",
+								SummaryFlag: true,
+							})
+							summaryText, err := funcs.SummarySession(p.ctx, session)
+							if err != nil {
+								call(AIResponse{
+									Error:      fmt.Errorf("loop error when auto summary %v", err),
+									StopReason: StopReasonError,
+								})
+							}
+
+							call(AIResponse{
+								SummaryText: summaryText,
+								SummaryFlag: true,
+							})
+
+							needCompress = false
+						}
+
 						call(AIResponse{
 							StopReason: StopReasonModel,
 						})
@@ -192,6 +257,28 @@ func (p *Object) Start(ctx context.Context) {
 							StopReason:  StopReasonPendingTool,
 						})
 						break
+					}
+
+					if needCompress {
+						logger.Info("start auto summary in session=%d", session.ID)
+						call(AIResponse{
+							SummaryText: "",
+							SummaryFlag: true,
+						})
+						summaryText, err := funcs.SummarySession(p.ctx, session)
+						if err != nil {
+							call(AIResponse{
+								Error:      fmt.Errorf("loop error when auto summary %v", err),
+								StopReason: StopReasonError,
+							})
+						}
+
+						call(AIResponse{
+							SummaryText: summaryText,
+							SummaryFlag: true,
+						})
+
+						needCompress = false
 					}
 					call(AIResponse{
 						StopReason: StopReasonModel,
@@ -258,6 +345,27 @@ func (p *Object) Start(ctx context.Context) {
 
 	// 获取用户输入
 	for {
+		if needCompress {
+			logger.Info("start auto summary in session=%d", session.ID)
+			call(AIResponse{
+				SummaryText: "",
+				SummaryFlag: true,
+			})
+			summaryText, err := funcs.SummarySession(p.ctx, session)
+			if err != nil {
+				call(AIResponse{
+					Error:      fmt.Errorf("loop error when auto summary %v", err),
+					StopReason: StopReasonError,
+				})
+			}
+
+			call(AIResponse{
+				SummaryText: summaryText,
+				SummaryFlag: true,
+			})
+
+			needCompress = false
+		}
 		select {
 		case <-p.ctx.Done():
 			call(AIResponse{
@@ -281,6 +389,10 @@ func (p *Object) Start(ctx context.Context) {
 		switch callObj.Command {
 		case msgActionSummary:
 			logger.Info("start summary in session=%d", session.ID)
+			call(AIResponse{
+				SummaryText: "",
+				SummaryFlag: true,
+			})
 			summaryText, err := funcs.SummarySession(p.ctx, session)
 			if err != nil {
 				call(AIResponse{
@@ -291,7 +403,11 @@ func (p *Object) Start(ctx context.Context) {
 
 			call(AIResponse{
 				SummaryText: summaryText,
-				StopReason:  StopReasonUser,
+				SummaryFlag: true,
+			})
+
+			call(AIResponse{
+				StopReason: StopReasonUser,
 			})
 		case msgActionApprove:
 			session.ToolState = 1
