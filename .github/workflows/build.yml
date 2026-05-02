@@ -86,12 +86,11 @@ jobs:
       - name: 运行测试
         env:
           ALKAID0_DEBUG_MOCKSERVER: "true"
-          ALKAID0_CONFIG_PATH: "log/log.log"
+          ALKAID0_CONFIG_PATH: "alklog.log"
           ALKAID0_TEST_SANDBOX: "true"
         run: |
-          mkdir log
           go test -v ./...
 
       - name: 输出 Log
         run: |
-          cat log/log.log
+          cat alklog.log
