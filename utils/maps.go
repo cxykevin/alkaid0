@@ -3,31 +3,6 @@ package u
 
 import "encoding/json"
 
-// H map[string]any（同 gin.H 风格）
-type H map[string]any
-
-// Unwrap 解包
-func Unwrap[T any](v T, err error) T {
-	if err != nil {
-		panic(err)
-	}
-	return v
-}
-
-// Assert 断言
-func Assert(v error) {
-	if v != nil {
-		panic("assertion failed: " + v.Error())
-	}
-}
-
-// AssertB 断言(bool)
-func AssertB(v bool) {
-	if !v {
-		panic("assertion failed!")
-	}
-}
-
 // Default 默认值
 func Default[T any, K comparable](v map[K]T, key K, defaults T) T {
 	val, ok := v[key]
@@ -35,14 +10,6 @@ func Default[T any, K comparable](v map[K]T, key K, defaults T) T {
 		return defaults
 	}
 	return val
-}
-
-// ValDefault 默认值
-func ValDefault[T any](v *T, defaults T) T {
-	if v == nil {
-		return defaults
-	}
-	return *v
 }
 
 // GetH 从 H 里取 type
@@ -79,12 +46,4 @@ func ReApply[T any](v T) (H, error) {
 	var res H
 	err = json.Unmarshal(bts, &res)
 	return res, err
-}
-
-// Ternary 三元运算
-func Ternary[T any](v bool, a, b T) T {
-	if v {
-		return a
-	}
-	return b
 }

@@ -1144,6 +1144,37 @@ type SessionListRequest struct {
 	Cursor string `json:"cursor,omitempty"`
 }
 
+// SubAgentListRequest 列出 subagent 的请求
+type SubAgentListRequest struct {
+	SessionID string `json:"sessionId"`
+}
+
+// SubAgentListResponse 列出 subagent 的响应
+type SubAgentListResponse struct {
+	Subagents []AgentsInfo    `json:"agents"`
+	Tags      []AgentTagsInfo `json:"tags"`
+}
+
+// AgentsInfo subagent 信息
+type AgentsInfo struct {
+	Name string `json:"name"`
+	Tag  string `json:"tag"`
+	Path string `json:"path"`
+}
+
+// AgentTagsInfo subagent tag 信息
+type AgentTagsInfo struct {
+	Name        string `json:"name"`
+	ID          string `json:"id"`
+	ModelID     int32  `json:"modelId"`
+	Color       string `json:"color"`
+	AutoApprove string `json:"autoApproveExpr"`
+	AutoReject  string `json:"autoRejectExpr"`
+	Description string `json:"description"`
+	Prompt      string `json:"prompt"`
+	ShortPrompt string `json:"shortPrompt"`
+}
+
 // SessionInfo 会话信息
 type SessionInfo struct {
 	SessionID string `json:"sessionId"`
@@ -1195,5 +1226,68 @@ func SessionList(req SessionListRequest, call func(string, any, *string) error, 
 
 	return SessionListResponse{
 		Sessions: sess,
+	}, nil
+}
+
+// SubAgentList 列出工作目录中所有 subagent
+func SubAgentList(req SubAgentListRequest, call func(string, any, *string) error, connID uint64) (SubAgentListResponse, error) {
+	if req.SessionID == "" {
+		return SubAgentListResponse{}, fmt.Errorf("sessionId is empty")
+	}
+
+	// 解析会话ID
+	_, _, err := sessionID2Cwd(req.SessionID)
+	if err != nil {
+		return SubAgentListResponse{}, fmt.Errorf("invalid sessionId: %v", err)
+	}
+
+	// 获取会话对象
+	sessLock.Lock()
+	sessObj, ok := sessions[req.SessionID]
+	if !ok {
+		sessLock.Unlock()
+		return SubAgentListResponse{}, fmt.Errorf("session not found")
+	}
+	sessLock.Unlock()
+
+	sess := sessObj.session
+
+	db := sess.DB
+
+	if db == nil {
+		return SubAgentListResponse{}, fmt.Errorf("session not found")
+	}
+
+	agents, err := funcs.GetAgents(sess)
+	if err != nil {
+		return SubAgentListResponse{}, fmt.Errorf("failed to get agents: %v", err)
+	}
+	tags := funcs.GetAgentTags()
+
+	return SubAgentListResponse{
+		Subagents: u.MapFilter(agents, func(v structs.SubAgents) (AgentsInfo, bool) {
+			return AgentsInfo{
+				Name: v.ID,
+				Tag:  v.AgentID,
+				Path: v.BindPath,
+			}, !v.Deleted
+		}),
+		Tags: u.Map(tags, func(v funcs.AgentTagsList) AgentTagsInfo {
+			return AgentTagsInfo{
+				Name:    v.Agent.AgentName,
+				ID:      v.ID,
+				ModelID: v.Agent.AgentModel,
+				Color: fmt.Sprintf("#%02X%02X%02X",
+					v.Agent.Color.Red,
+					v.Agent.Color.Green,
+					v.Agent.Color.Blue,
+				),
+				AutoApprove: v.Agent.AutoApprove,
+				AutoReject:  v.Agent.AutoReject,
+				Description: v.Agent.AgentDescription,
+				Prompt:      v.Agent.AgentPrompt,
+				ShortPrompt: v.Agent.AgentShortDescription,
+			}
+		}),
 	}, nil
 }

@@ -22,6 +22,7 @@ func InitFuncs(srv *jsonrpc.Server) {
 	jsonrpc.Set(srv, "unstable_setSessionModel", SessionSetModel)
 	jsonrpc.Set(srv, "session/prompt", SessionPrompt)
 	jsonrpc.Set(srv, "session/cancel", SessionCancel)
+	jsonrpc.Set(srv, "alk.cxykevin.top/list_subagent", SubAgentList)
 	jsonrpc.Set(srv, "_close", Close)
 }
 

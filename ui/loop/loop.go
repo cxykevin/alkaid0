@@ -444,6 +444,9 @@ func (p *Object) Start(ctx context.Context) {
 			})
 			session.ToolState = 0
 
+			session.LatestToolCallingContext = *new(map[string]any)
+			session.LatestToolCallingType = *new(map[string]string)
+
 			// 显示 AI 响应
 			runResponseLoop()
 		default:
@@ -466,6 +469,9 @@ func (p *Object) Start(ctx context.Context) {
 					})
 				}
 			}
+
+			session.LatestToolCallingContext = *new(map[string]any)
+			session.LatestToolCallingType = *new(map[string]string)
 
 			// 显示 AI 响应
 			runResponseLoop()
