@@ -27,7 +27,6 @@ const (
 	MessagesRoleAgent
 	MessagesRoleTool
 	MessagesRoleCommunicate
-	// 注： Tool Calling 在记录时被归到 Agent 响应，但是用户展示时使用 Tool 中内容
 )
 
 // MessagesRefer 消息引用
