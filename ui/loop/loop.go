@@ -79,6 +79,7 @@ type Object struct {
 	ctx           context.Context
 }
 
+// queueSize 队列缓冲区大小
 const queueSize = 100
 
 // New 创建一个新的循环对象
@@ -93,7 +94,13 @@ func New(session *structs.Chats) *Object {
 
 }
 
-// Start 启动 Demo Loop
+// Start 启动 Demo Loop。主事件循环处理 AI 请求/响应的完整生命周期：
+//
+//	Idle → (用户输入) → Requesting → Reciving → WaitApprove
+//	                                           ↓ (auto-reject)
+//	                                           Idle ← (reject/approve)
+//
+// needCompress 标志在 token 累积超过模型配置的压缩阈值后触发自动摘要
 func (p *Object) Start(ctx context.Context) {
 	logger.Info("start loop in session %d", p.session.ID)
 	var cancel context.CancelFunc
@@ -110,20 +117,22 @@ func (p *Object) Start(ctx context.Context) {
 
 	var needCompress bool
 
+	// runResponseLoop 启动响应循环：发送请求 → 接收流式响应 → 处理工具调用结果 → 判断是否需要继续
 	var runResponseLoop func()
 	runResponseLoop = func() {
-		// 启动 loop
 		loopCount := 0
 		for {
 			thinkingFlag := false
 			responseStarted := false
 
+			// 为每次请求创建独立的可取消 context
 			responseCtx, responseCancel := context.WithCancel(p.ctx)
 			p.lock.Lock()
 			p.isResponding = true
 			p.cancelFunc = responseCancel
 			p.lock.Unlock()
 
+			// 令牌数达到压缩阈值时，在下一轮请求前执行自动摘要
 			if needCompress {
 				logger.Info("start auto summary in session=%d", session.ID)
 				call(AIResponse{
@@ -216,8 +225,15 @@ func (p *Object) Start(ctx context.Context) {
 				break
 			}
 
+			// finish=true 表示 LLM 已完成当前轮响应
 			if finish {
+				// 若 LLM 发出了工具调用，状态会变为 WaitApprove
+				// 等待用户或自动规则决策后才能继续
 				if session.State == state.StateWaitApprove {
+					// autoHandle 处理逻辑：
+					//   优先级：拒绝规则 > 手动审批 > 自动审批规则
+					//   autoHandled=true 表示规则做出了决策
+					//   approved=true 表示规则允许执行
 					autoHandled, approved, pendingTools, msgID, pErr := funcs.AutoHandlePendingToolCalls(session)
 					if pErr != nil {
 						call(AIResponse{
@@ -326,7 +342,7 @@ func (p *Object) Start(ctx context.Context) {
 		}
 	}
 
-	// 启动时如有待审批，尝试自动处理并提示用户
+	// 处理启动时的待审批状态：从数据库恢复的会话可能有未完成的工具调用
 	if session.State == state.StateWaitApprove {
 		logger.Info("waiting approve in session=%d", session.ID)
 		session.ToolState = 1
@@ -479,7 +495,8 @@ func (p *Object) Start(ctx context.Context) {
 	}
 }
 
-// Stop 停止当前消息的生成
+// Stop 通过取消当前请求的 context 来停止正在进行的 LLM 响应生成。
+// cancelFunc 由 runResponseLoop 在每次请求前设置，仅在响应中有效。
 func (p *Object) Stop() {
 	p.lock.Lock()
 	cancel := p.cancelFunc
@@ -489,14 +506,16 @@ func (p *Object) Stop() {
 	}
 }
 
-// Cancel 终止 Loop，遵从上层 context
+// Cancel 终止整个 Loop 生命周期（而非仅当前请求）。
+// 调用后 Start() 主循环退出，所有等待中的消息被丢弃。
 func (p *Object) Cancel() {
 	if p.ctxCancel != nil {
 		p.ctxCancel()
 	}
 }
 
-// Chat 发送消息
+// Chat 将用户消息发送到循环的处理队列。队列满时返回错误而非阻塞。
+// refers 参数用于消息引用（前端指定上下文片段）。
 func (p *Object) Chat(msg string, refers []any) error {
 	obj := msgObj{
 		Msg:    msg,
@@ -510,7 +529,8 @@ func (p *Object) Chat(msg string, refers []any) error {
 	}
 }
 
-// ChangeModel 切换模型
+// ChangeModel 切换当前会话使用的 AI 模型。
+// 先验证模型 ID 有效性，再更新会话记录中的模型选择。
 func (p *Object) ChangeModel(modelID int) error {
 	_, err := funcs.GetModelInfo(int32(modelID))
 	if err != nil {
@@ -523,7 +543,8 @@ func (p *Object) ChangeModel(modelID int) error {
 	return nil
 }
 
-// Summary 获取摘要
+// Summary 请求对当前对话进行摘要压缩，发送 msgActionSummary 指令到处理队列。
+// 用于在 token 数接近模型限制时清理上下文。
 func (p *Object) Summary() error {
 	obj := msgObj{
 		Command: msgActionSummary,
@@ -536,7 +557,8 @@ func (p *Object) Summary() error {
 	}
 }
 
-// Approve 审批
+// Approve 审批待处理的工具调用，发送 msgActionApprove 指令到处理队列。
+// 用户确认后执行工具调用，然后将结果继续发给 LLM。
 func (p *Object) Approve() error {
 	obj := msgObj{
 		Command: msgActionApprove,
@@ -549,14 +571,15 @@ func (p *Object) Approve() error {
 	}
 }
 
-// SetCallback 设置回调
+// SetCallback 注册 AI 响应回调函数。在独立 goroutine 中循环读取 recvQueue，
+// 将 AIResponse 对象传递给 UI 层进行处理。通过 recvSyncQueue 实现背压同步。
 func (p *Object) SetCallback(callFunc func(AIResponse)) {
 	go func() {
 		for {
 			select {
 			case call := <-p.recvQueue:
 				callFunc(call)
-				p.recvSyncQueue <- struct{}{}
+				p.recvSyncQueue <- struct{}{} // 通知发送方已完成处理
 			default:
 				if p.ctx != nil {
 					select {

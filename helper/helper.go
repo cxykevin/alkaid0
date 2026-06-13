@@ -30,7 +30,12 @@ const (
 
 var defaultConfigPath = "~/.config/alkaid0/config.json"
 
-// StartHelper 读取配置并连接 websocket，stdin 内容转发到 websocket，websocket 输出写入 stdout
+// StartHelper 读取配置并连接 websocket，实现 stdin与websocket 的双向转发。
+// 使用两个独立 goroutine 处理双向通信，分别追踪完成状态：
+//   - stdinDone: stdin 读取完毕(EOF)或错误时触发，随后发送正常关闭信号
+//   - wsDone: WebSocket 关闭或错误时触发
+//
+// 两个通道都关闭才能安全退出 select 循环，防止单方面关闭导致的数据丢失
 func StartHelper(args []string) {
 	cfg, err := buildHelperConfig(args)
 	// fmt.Fprintf(os.Stderr, "config: %#v\n", cfg)
@@ -56,22 +61,27 @@ func StartHelper(args []string) {
 	}
 	defer conn.Close()
 
+	// 信号处理：优雅关闭连接
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
 	defer signal.Stop(sigCh)
 
+	// 两个通道分别跟踪 stdin 转发和 ws 接收的完成状态
 	stdinDone := make(chan error, 1)
 	wsDone := make(chan error, 1)
 
+	// goroutine 1: 将 stdin 内容逐行转发到 WebSocket
 	go func() {
 		stdinDone <- copyStdinToWS(conn)
 	}()
+	// goroutine 2: 将 WebSocket 收到的消息写入 stdout
 	go func() {
 		wsDone <- copyWSToStdout(conn)
 	}()
 
 	var firstErr error
 
+	// 三路 select：stdin 完成 / WebSocket 关闭 / 系统信号
 	for stdinDone != nil || wsDone != nil {
 		select {
 		case err := <-stdinDone:
@@ -81,6 +91,7 @@ func StartHelper(args []string) {
 				conn.Close()
 				break
 			}
+			// stdin 正常结束，发送 WebSocket 关闭帧
 			_ = conn.WriteMessage(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""))
 		case err := <-wsDone:
 			wsDone = nil
@@ -103,7 +114,13 @@ func StartHelper(args []string) {
 	}
 }
 
+// buildHelperConfig 根据 args 构建 RPC 配置，配置来源优先级（低→高）：
+//  1. 代码硬编码默认值 (Host=127.0.0.1, Port=7433)
+//  2. 配置文件 ($ALKAID0_CONFIG_PATH 或 ~/.config/alkaid0/config.json)
+//  3. 环境变量 (ALKAID0_HELPER_HOST/PORT/PATH/KEY)
+//  4. 命令行 flag（最高优先级，flags.Visit() 确保只覆盖显式指定的 flag）
 func buildHelperConfig(args []string) (structs.RPCConfig, error) {
+	// 第 0 层：代码硬编码默认值
 	cfg := structs.RPCConfig{
 		Host: "127.0.0.1",
 		Port: 7433,
@@ -111,6 +128,8 @@ func buildHelperConfig(args []string) (structs.RPCConfig, error) {
 		Key:  "<empty>",
 	}
 
+	// 第 1 步：解析 -config flag（用于读取配置文件）
+	// 先用默认值初始化 flags，这样在未提供 -config 时也能正确 fallback
 	configPath := fromEnv(envConfigPath, defaultConfigPath)
 	if configPath == "" {
 		configPath = defaultConfigPath
@@ -133,6 +152,8 @@ func buildHelperConfig(args []string) (structs.RPCConfig, error) {
 		return cfg, err
 	}
 
+	// 第 2 步：从配置文件加载（若存在且可解析）
+	// 先取 -config flag 的值，如果环境变量 ALKAID0_CONFIG_PATH 存在则覆盖
 	configPath = *configPathFlag
 	if envPath := os.Getenv(envConfigPath); envPath != "" {
 		configPath = envPath
@@ -144,6 +165,7 @@ func buildHelperConfig(args []string) (structs.RPCConfig, error) {
 	}
 	mergeRPCConfig(&cfg, loaded)
 
+	// 第 3 步：环境变量覆盖（优先级高于配置文件）
 	if envHost := os.Getenv(envHost); envHost != "" {
 		cfg.Host = envHost
 	}
@@ -161,7 +183,8 @@ func buildHelperConfig(args []string) (structs.RPCConfig, error) {
 		cfg.Key = envKey
 	}
 
-	// Apply flags if they were provided
+	// 第 4 步：命令行 flag 最高优先级覆盖
+	// 使用 flags.Visit() 而非 flags.Lookup()，确保仅覆盖用户显式指定的 flag
 	flags.Visit(func(f *flag.Flag) {
 		switch f.Name {
 		case "host":
@@ -175,6 +198,7 @@ func buildHelperConfig(args []string) (structs.RPCConfig, error) {
 		}
 	})
 
+	// 校验必要参数
 	if cfg.Port == 0 {
 		return cfg, fmt.Errorf("port must be set")
 	}
@@ -188,6 +212,7 @@ func buildHelperConfig(args []string) (structs.RPCConfig, error) {
 	return cfg, nil
 }
 
+// loadConfigFile 从指定路径加载配置文件并提取 RPC 配置
 func loadConfigFile(path string) (structs.RPCConfig, error) {
 	if path == "" {
 		return structs.RPCConfig{}, nil
@@ -219,6 +244,7 @@ func loadConfigFile(path string) (structs.RPCConfig, error) {
 	return structs.RPCConfig{}, fmt.Errorf("invalid config file format")
 }
 
+// mergeRPCConfig 将 src 中的非空字段合并到 dst 中
 func mergeRPCConfig(dst *structs.RPCConfig, src structs.RPCConfig) {
 	if src.Host != "" {
 		dst.Host = src.Host
@@ -234,12 +260,16 @@ func mergeRPCConfig(dst *structs.RPCConfig, src structs.RPCConfig) {
 	}
 }
 
+// fromEnv 读取环境变量，未设置时返回默认值
+
 func fromEnv(name, fallback string) string {
 	if v := os.Getenv(name); v != "" {
 		return v
 	}
 	return fallback
 }
+
+// expandPath 展开路径中的 ~/ 为家目录
 
 func expandPath(path string) (string, error) {
 	if strings.HasPrefix(path, "~+") {
@@ -255,6 +285,7 @@ func expandPath(path string) (string, error) {
 	return path, nil
 }
 
+// buildWebSocketURL 根据 RPC 配置构建 WebSocket URL，支持在查询参数中携带认证密钥
 func buildWebSocketURL(cfg structs.RPCConfig) (string, error) {
 	if cfg.Host == "" {
 		return "", errors.New("host is empty")
@@ -283,6 +314,8 @@ func buildWebSocketURL(cfg structs.RPCConfig) (string, error) {
 	return urlObj.String(), nil
 }
 
+// copyStdinToWS 将标准输入内容逐块转发到 WebSocket 连接。
+// 使用 64KB 缓冲区读取 stdin，跳过纯换行输入，连接断开或 EOF 时返回。
 func copyStdinToWS(conn *websocket.Conn) error {
 	reader := bufio.NewReader(os.Stdin)
 	buf := make([]byte, 65536)
@@ -305,6 +338,8 @@ func copyStdinToWS(conn *websocket.Conn) error {
 	}
 }
 
+// copyWSToStdout 将 WebSocket 接收到的消息逐条写入标准输出（每条后附加换行）。
+// 连接关闭或出错时返回。
 func copyWSToStdout(conn *websocket.Conn) error {
 	for {
 		_, msg, err := conn.ReadMessage()

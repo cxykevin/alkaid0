@@ -1,5 +1,6 @@
 //go:build linux
 
+// Package pty 实现 Linux 平台的伪终端 (PTY) 创建与窗口大小设置
 package pty
 
 import (
@@ -10,6 +11,7 @@ import (
 	"golang.org/x/sys/unix"
 )
 
+// openPTY 在 Linux 上打开一个伪终端，返回 master 和 slave 端文件描述符
 func openPTY() (*os.File, *os.File, error) {
 	masterFd, err := unix.Open("/dev/ptmx", unix.O_RDWR|unix.O_CLOEXEC, 0)
 	if err != nil {

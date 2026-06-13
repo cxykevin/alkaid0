@@ -2,6 +2,7 @@ package index
 
 import "github.com/cxykevin/alkaid0/log"
 
+// logger 包级日志对象
 var logger *log.LogsObj
 
 func init() {

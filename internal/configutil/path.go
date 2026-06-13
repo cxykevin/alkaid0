@@ -1,3 +1,4 @@
+// Package configutil 提供配置路径相关的工具函数，如路径展开
 package configutil
 
 import (

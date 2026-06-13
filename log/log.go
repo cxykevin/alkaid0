@@ -110,7 +110,11 @@ func Load() {
 
 }
 
-// logWorker 异步日志处理worker
+// logWorker 异步日志处理 worker goroutine。
+// 后台循环读取 logChannel，将日志逐条同步写入文件。
+// 使用缓冲通道（容量 1000）解耦日志调用方和 I/O 写入方，
+// 防止主程序在日志写入时阻塞。
+// 通道关闭时 goroutine 自动退出。
 func logWorker() {
 	for msg := range logChannel {
 		str := fmt.Sprintf("[%s][%s] %s", msg.level, msg.moduleName, msg.message)
@@ -141,9 +145,18 @@ type LogsObj struct {
 	moduleName string
 }
 
+// log 核心日志写入方法。
+// 设计要点：
+//  1. 先脱敏（SanitizeSensitiveInfo）再写入，确保密钥等敏感信息不被记录
+//  2. 将多行内容转义为单行（\n→\\n 等），保持日志文件格式整洁
+//  3. 关闭阶段（isShutdown）降级为同步写入，避免通道关闭后 panic
+//  4. 正常运行时使用有缓冲通道异步写入，select-default 在通道满时丢弃日志
+//     防止高频日志拖慢主程序
 func (l *LogsObj) log(level string, msg string, v ...any) {
 	str := fmt.Sprintf(msg, v...)
+	// 自动脱敏 API 密钥等敏感信息，避免日志泄露
 	str = SanitizeSensitiveInfo(str)
+	// 转义特殊字符保持日志单行格式，便于后续 grep/awk 处理
 	str = strings.ReplaceAll(strings.ReplaceAll(strings.ReplaceAll(strings.ReplaceAll(
 		str,
 		"\\", "\\\\"),
@@ -151,12 +164,15 @@ func (l *LogsObj) log(level string, msg string, v ...any) {
 		"\r", "\\r"),
 		"\t", "\\t")
 
+	// isShutdown 标志下改用同步写入。
+	// 原因：关闭期间 logWorker 可能已退出，通道接收会 panic。
+	// 此时应优先保证关键日志被写入，即使阻塞应用程序。
 	if atomic.LoadUint32(&isShutdown) == 1 {
 		l.logSync(level, "%s", str)
 		return
 	}
 
-	// 异步写入日志
+	// 异步写入日志：将日志消息发送到缓冲通道，由 logWorker 负责实际 I/O
 	logFlushMutex.Lock()
 	logWaitGroup.Add(1)
 	logFlushMutex.Unlock()
@@ -168,12 +184,17 @@ func (l *LogsObj) log(level string, msg string, v ...any) {
 		message:    str,
 	}:
 	default:
+		// 通道已满时丢弃日志并计数，防止日志阻塞主程序
+		// 同时同步回写一条 WARN 日志作为预警
 		logWaitGroup.Done()
 		atomic.AddUint64(&droppedLogCount, 1)
 		l.logSync("WARN", "log channel full, drop log (total dropped: %d)", atomic.LoadUint64(&droppedLogCount))
 	}
 }
 
+// logSync 同步日志写入方法，绕开异步通道直接写入日志文件。
+// 在关闭阶段（isShutdown）或通道满载时作为 fallback 使用。
+// 同步写入虽会阻塞，但能保证日志不丢失。
 func (l *LogsObj) logSync(level string, msg string, v ...any) {
 	str := fmt.Sprintf(msg, v...)
 	str = SanitizeSensitiveInfo(str)

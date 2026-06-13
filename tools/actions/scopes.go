@@ -8,6 +8,8 @@ import (
 	"gorm.io/gorm"
 )
 
+// logger 包级日志对象
+// logger 包级日志对象
 var logger *log.LogsObj
 
 func init() {
@@ -51,7 +53,8 @@ func SetScopeEnabled(db *gorm.DB, chatID uint32, name string, enabled bool) erro
 	return result.Error
 }
 
-// getAllScopes 返回数据库中所有命名空间的启用状态
+// getAllScopes 从数据库查询指定会话的所有命名空间及其启用状态。
+// 返回的 map 用于初始化 session.EnableScopes，控制各工具的可用范围。
 func getAllScopes(session *structs.Chats, db *gorm.DB) (map[string]bool, error) {
 	result := make(map[string]bool)
 	if db == nil {

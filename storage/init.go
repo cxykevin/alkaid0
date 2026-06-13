@@ -15,7 +15,10 @@ import (
 
 var lessMemModeDBID int32
 
-// InitDB 初始化数据库，返回 error 便于调用方处理
+// InitDB 初始化 SQLite 数据库并自动迁移所有表结构。
+// 支持内存数据库模式（dbPath 以 :memory: 结尾）。
+// 当 ALKAID0_TEST_LESS_MEMORY_MODE 环境变量设置时，
+// 内存模式降级为临时文件模式以节省 RAM（用于资源受限的测试环境）。
 func InitDB(dbPath string) (*gorm.DB, error) {
 	if logger == nil {
 		logger = log.New("storage")
@@ -25,9 +28,10 @@ func InitDB(dbPath string) (*gorm.DB, error) {
 	}
 	logger.Info("initializing database at: %s", dbPath)
 
-	// 支持内存数据库
+	// 支持内存数据库，当以 :memory: 结尾时将使用 SQLite 内存模式
 	if strings.HasSuffix(dbPath, ":memory:") {
 		if os.Getenv("ALKAID0_TEST_LESS_MEMORY_MODE") != "" {
+			// 降级为临时文件模式，每个连接使用独立的临时数据库文件
 			dbPath = strings.ReplaceAll(dbPath, ":memory:", fmt.Sprintf("__lessmem_%d.db", atomic.AddInt32(&lessMemModeDBID, 1)))
 		} else {
 			dir := filepath.Dir(dbPath)

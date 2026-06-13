@@ -6,7 +6,16 @@ import (
 	"strings"
 )
 
-// Parser VT/XTerm转义序列解析器
+// Parser VT/XTerm 转义序列解析器，将终端输出字节流转换为 Buffer 操作。
+// 状态机使用 4 个状态处理不同种类的转义序列：
+//
+//	stateNormal  - 普通文本内容，直接写入 Buffer
+//	stateEscape  - 收到 ESC (0x1B)，等待后续命令字节
+//	stateCSI     - CSI 序列 (ESC [ params... command)，最常用的控制序列
+//	stateOSC     - OSC 序列 (ESC ] ... ST/BEL)，操作系统命令，暂时忽略
+//
+// CSI 命令包括光标移动 (A/B/C/D/H/f)、清屏 (J)、清行 (K)、
+// 颜色属性 (m) 以及滚动区域设置 (r) 等终端常用控制指令
 type Parser struct {
 	buffer       *Buffer
 	state        parserState
@@ -17,10 +26,10 @@ type Parser struct {
 type parserState int
 
 const (
-	stateNormal parserState = iota
-	stateEscape
-	stateCSI
-	stateOSC
+	stateNormal parserState = iota // 普通文本模式
+	stateEscape                    // 已收到 ESC，等待命令
+	stateCSI                       // CSI 序列：ESC [ params... cmd
+	stateOSC                       // OSC 序列：ESC ] ... ST/BEL
 )
 
 // NewParser 创建一个新的解析器
@@ -54,24 +63,24 @@ func (p *Parser) processByte(b byte) {
 	}
 }
 
-// processNormal 处理普通字符
+// processNormal 处理普通文本字符和控制字符
 func (p *Parser) processNormal(b byte) {
 	switch b {
-	case 0x1B: // ESC
+	case 0x1B: // ESC - 转义序列起始，切换到 stateEscape 等待命令
 		p.state = stateEscape
 		p.params = p.params[:0]
 		p.intermediate = p.intermediate[:0]
-	case '\n':
+	case '\n': // 换行（LF）
 		p.buffer.lineFeed()
-	case '\r':
+	case '\r': // 回车（CR）
 		p.buffer.carriageReturn()
-	case '\b':
+	case '\b': // 退格（BS）
 		p.buffer.backspace()
-	case '\t':
+	case '\t': // 制表符（TAB）
 		p.buffer.tab()
-	case 0x07: // BEL
-		// 忽略响铃
+	case 0x07: // BEL - 响铃，忽略
 	default:
+		// 可打印字符（范围 0x20-0x7E）直接写入缓冲区
 		if b >= 0x20 && b < 0x7F {
 			p.buffer.WriteRune(rune(b))
 		}
@@ -109,61 +118,74 @@ func (p *Parser) processEscape(b byte) {
 	}
 }
 
-// processCSI 处理CSI序列 (Control Sequence Introducer)
+// processCSI 解析 CSI 序列参数（ESC [ params... intermediate command）。
+// CSI 序列格式：ESC [ [参数] [中间字节] 最终字节
+//   - 数字: 累积参数值（支持多位数）
+//   - ';': 参数分隔符，新增一个参数槽
+//   - 0x20-0x3F: 中间字节（如空格、感叹号等，扩展命令用）
+//   - 其他: 最终命令字节，触发 executeCSI 执行对应操作
 func (p *Parser) processCSI(b byte) {
 	if b >= '0' && b <= '9' {
-		// 数字参数
+		// 累积数字参数（如 ESC [ 10;20H → params=[10, 20]）
 		if len(p.params) == 0 {
 			p.params = append(p.params, 0)
 		}
 		lastIdx := len(p.params) - 1
 		p.params[lastIdx] = p.params[lastIdx]*10 + int(b-'0')
 	} else if b == ';' {
-		// 参数分隔符
+		// 参数分隔符，新建一个参数槽（默认值 0）
 		p.params = append(p.params, 0)
 	} else if b >= 0x20 && b < 0x40 {
-		// 中间字节
+		// 中间字节，用于扩展命令（如 ESC [ ? 25 h 的 '?'）
 		p.intermediate = append(p.intermediate, b)
 	} else {
-		// 最终字节
+		// 最终命令字节，执行对应的终端操作
 		p.executeCSI(b)
 		p.state = stateNormal
 	}
 }
 
-// executeCSI 执行CSI命令
+// executeCSI 执行 CSI 命令。常用命令说明：
+//
+//	A/B/C/D - 光标上/下/右/左移动 n 行/列
+//	H/f     - 设置光标位置到 (row, col)，1-based
+//	J       - 清除屏幕：0=光标到末尾, 1=开头到光标, 2=全清
+//	K       - 清除行：0=光标到行尾, 1=行首到光标, 2=全行
+//	m       - SGR (Select Graphic Rendition)，设置颜色/属性
+//	r       - 设置滚动区域 (top, bottom)
+//	s/u     - 保存/恢复光标位置
 func (p *Parser) executeCSI(cmd byte) {
-	// 确保至少有一个参数
+	// 确保至少有一个参数，默认值为 0
 	if len(p.params) == 0 {
 		p.params = append(p.params, 0)
 	}
 
 	switch cmd {
-	case 'A': // 光标上移
+	case 'A': // CUU - 光标上移 n 行，不超过边界
 		n := p.getParam(0, 1)
 		p.buffer.cursorY -= n
 		if p.buffer.cursorY < 0 {
 			p.buffer.cursorY = 0
 		}
-	case 'B': // 光标下移
+	case 'B': // CUD - 光标下移 n 行，不超过边界
 		n := p.getParam(0, 1)
 		p.buffer.cursorY += n
 		if p.buffer.cursorY >= p.buffer.rows {
 			p.buffer.cursorY = p.buffer.rows - 1
 		}
-	case 'C': // 光标右移
+	case 'C': // CUF - 光标右移 n 列，不超过边界
 		n := p.getParam(0, 1)
 		p.buffer.cursorX += n
 		if p.buffer.cursorX >= p.buffer.cols {
 			p.buffer.cursorX = p.buffer.cols - 1
 		}
-	case 'D': // 光标左移
+	case 'D': // CUB - 光标左移 n 列，不超过边界
 		n := p.getParam(0, 1)
 		p.buffer.cursorX -= n
 		if p.buffer.cursorX < 0 {
 			p.buffer.cursorX = 0
 		}
-	case 'H', 'f': // 设置光标位置
+	case 'H', 'f': // CUP - 设置光标位置 (row, col)，参数为 1-based
 		row := p.getParam(0, 1) - 1
 		col := p.getParam(1, 1) - 1
 		if row < 0 {
@@ -180,25 +202,25 @@ func (p *Parser) executeCSI(cmd byte) {
 		}
 		p.buffer.cursorY = row
 		p.buffer.cursorX = col
-	case 'J': // 清除屏幕
+	case 'J': // ED - 清除屏幕
 		mode := p.getParam(0, 0)
 		p.eraseDisplay(mode)
-	case 'K': // 清除行
+	case 'K': // EL - 清除行
 		mode := p.getParam(0, 0)
 		p.eraseLine(mode)
-	case 'm': // 设置图形属性
+	case 'm': // SGR - 设置图形属性（颜色、加粗、下划线等）
 		p.setGraphicsMode()
-	case 'r': // 设置滚动区域
+	case 'r': // DECSTBM - 设置滚动区域
 		top := p.getParam(0, 1) - 1
 		bottom := p.getParam(1, p.buffer.rows) - 1
 		p.buffer.SetScrollRegion(top, bottom)
-	case 's': // 保存光标位置
+	case 's': // SCOSC - 保存光标位置
 		p.buffer.SaveCursor()
-	case 'u': // 恢复光标位置
+	case 'u': // SCORC - 恢复光标位置
 		p.buffer.RestoreCursor()
-	case 'h': // 设置模式
-		// 暂时忽略
-	case 'l': // 重置模式
+	case 'h': // SM - 设置模式
+		// 暂时忽略，如 DECSET、DECKPAM 等
+	case 'l': // RM - 重置模式
 		// 暂时忽略
 	}
 }

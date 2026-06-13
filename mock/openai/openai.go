@@ -218,10 +218,12 @@ type Model struct {
 	OwnedBy string `json:"owned_by"`
 }
 
+// generateID 生成带前缀的唯一 ID
 func generateID(prefix string) string {
 	return fmt.Sprintf("%s-%d", prefix, time.Now().UnixNano())
 }
 
+// generateEmbedding 生成 512 维的随机嵌入向量用于测试
 func generateEmbedding() []float64 {
 	embedding := make([]float64, 512)
 	for i := range embedding {
@@ -230,9 +232,13 @@ func generateEmbedding() []float64 {
 	return embedding
 }
 
+// calculateTokens 基于空格分词估算 token 数量
+
 func calculateTokens(text string) int {
 	return len(strings.Fields(text))
 }
+
+// handleChatCompletion 处理聊天补全请求，支持流式和非流式模式
 
 func handleChatCompletion(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
@@ -290,6 +296,7 @@ func handleChatCompletion(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(resp)
 }
 
+// handleStreamingChatCompletion 处理流式聊天补全请求，以 SSE 格式返回增量响应
 func handleStreamingChatCompletion(w http.ResponseWriter, _ *http.Request, req ChatCompletionRequest) {
 	flusher, ok := w.(http.Flusher)
 	if !ok {
@@ -384,6 +391,7 @@ func handleStreamingChatCompletion(w http.ResponseWriter, _ *http.Request, req C
 	flusher.Flush()
 }
 
+// handleEmbedding 处理文本嵌入请求，返回随机生成的嵌入向量
 func handleEmbedding(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -421,6 +429,8 @@ func handleEmbedding(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(resp)
 }
+
+// handleModels 处理模型列表查询请求
 
 func handleModels(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {

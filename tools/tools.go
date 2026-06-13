@@ -32,9 +32,11 @@ func checkScopeEnabled(session *structs.Chats, scope string) bool {
 }
 
 // ExecOneToolGetPrompts 执行预调用，获取提示词表
+// 返回三部分：未启用 scope 的提示词、已启用 PreHook 的返回文本、工具参数定义
+// PreHook 按 Priority 降序执行（高优先级先执行），参数定义逐层合并
 func ExecOneToolGetPrompts(session *structs.Chats, name string) ([]string, []string, map[string]parser.ToolParameters) {
 	logger.Debug("getting prompts for tool: %s", name)
-	// 执行 PreHook
+	// 收集所有未启用的 scope 的提示词，用于告知 AI 哪些工具当前不可用
 	unusedHooks := make([]string, 0)
 	for name, prompts := range toolobj.Scopes {
 		if !checkScopeEnabled(session, name) {
@@ -51,11 +53,13 @@ func ExecOneToolGetPrompts(session *structs.Chats, name string) ([]string, []str
 	hookTmp := toolobj.ToolsList[name].Hooks
 	paras := toolobj.ToolsList[name].Parameters
 
-	// 将tmp中的钩子按Priority排序
+	// 将tmp中的钩子按Priority排序（高优先级排在前面，先执行）
 	sort.Slice(hookTmp, func(i, j int) bool {
 		return hookTmp[i].PreHook.Priority > hookTmp[j].PreHook.Priority
 	})
 
+	// 遍历所有 hook，仅执行已启用 scope 的 PreHook
+	// 执行结果文本追加到 prehooks 列表，最终合并为工具上下文的提示词
 	for _, hook := range hookTmp {
 		if _, ok := toolobj.Scopes[hook.Scope]; !ok {
 			logger.Error("hook scope \"%v\" not found", hook.Scope)
@@ -80,7 +84,10 @@ func ExecOneToolGetPrompts(session *structs.Chats, name string) ([]string, []str
 	return unusedHooks, prehooks, paras
 }
 
-// ExecToolOnHook 执行工具
+// ExecToolOnHook 执行工具的 OnHook 回调。
+// 按 Priority 降序执行所有已启用 scope 的 OnHook 函数，
+// 每个 OnHook 可以修改 session 状态、调用外部命令或更新 UI。
+// passObjs 是跨 hook 传递的对象列表，hook 可以通过返回值往里追加。
 func ExecToolOnHook(session *structs.Chats, name string, args map[string]*any, toolID string) error {
 	passObjs := make([]*any, 0)
 
@@ -120,7 +127,9 @@ func ExecToolOnHook(session *structs.Chats, name string, args map[string]*any, t
 	return nil
 }
 
-// ExecToolPostHook 执行工具
+// ExecToolPostHook 执行工具的 PostHook 回调，收集工具执行后的返回数据。
+// 与 OnHook 不同，PostHook 的返回值会作为工具调用的响应内容被持久化和返回给 LLM。
+// 各 hook 按 Priority 降序执行，首个返回非 continue 的结果即为最终返回值。
 func ExecToolPostHook(session *structs.Chats, name string, args map[string]*any, toolID string) (map[string]*any, error) {
 	passObjs := make([]*any, 0)
 
@@ -145,6 +154,7 @@ func ExecToolPostHook(session *structs.Chats, name string, args map[string]*any,
 		}
 		if hook.PostHook.Func != nil {
 			idAny := any(toolID)
+			// 将工具调用 ID 注入参数，供 PostHook 的日志或追踪逻辑使用
 			args["_id"] = &idAny
 			pass, passObj, ret, err := hook.PostHook.Func(session, args, passObjs)
 			passObjs = passObj

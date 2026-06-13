@@ -1,3 +1,4 @@
+// Package client 实现服务端客户端管理与 WebSocket 服务启动
 package client
 
 import (

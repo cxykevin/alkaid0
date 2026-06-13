@@ -14,6 +14,7 @@ type cmdObj struct {
 	Function    func(*sessionObj, string) (bool, error)
 }
 
+// commandMaps 存储所有聊天命令及其对应处理函数
 var commandMaps = map[string]*cmdObj{
 	"/approve": {
 		Description: "Approve a request",

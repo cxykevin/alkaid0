@@ -9,6 +9,7 @@ import (
 	structs "github.com/cxykevin/alkaid0/storage/structs"
 )
 
+// logger 包级日志对象
 var logger = log.New("parser")
 
 // ToolsResponse 工具返回类
@@ -87,6 +88,7 @@ func (p *Parser) findTool(toolName string) int {
 // solveTool 解析并执行工具调用。
 // 由于工具调用是以 JSON 数组形式流式传输的，此函数会被多次调用以处理新到达的数组元素。
 func (p *Parser) solveTool() {
+	// 无已解析数据时跳过（流式传输初期可能尚未接收到有效 JSON）
 	if p.jsonParser.FullCallingObject == nil {
 		return
 	}
@@ -95,7 +97,8 @@ func (p *Parser) solveTool() {
 	// 尝试获取当前已解析出的对象数组。
 	// jsonParser 在解析过程中会不断更新 FullCallingObject。
 	if pObjects, ok = (*p.jsonParser.FullCallingObject).([]*any); !ok {
-		// 尝试 ArraySlot（json 库定义的未完成数组占位符）
+		// 若 FullCallingObject 尚未解析为完整数组，尝试以 ArraySlot（json 库定义的未完成数组占位符）读取
+		// 流式解析中对象可能在后续 token 到达后才转为完整类型
 		if arraySlot, isArraySlot := (*p.jsonParser.FullCallingObject).(json.ArraySlot); isArraySlot {
 			pObjects = []*any(arraySlot)
 		} else {
@@ -108,12 +111,16 @@ func (p *Parser) solveTool() {
 		return
 	}
 	// 遍历数组，处理新出现的工具调用对象
+	// toolSolveTmp.toolNum 记录上次已处理的元素数量
+	// 跳过已处理的元素，只处理新增部分
 	for idx, pObject := range pObjects {
+		// 跳过此前已处理完成的工具调用，只处理新增元素
 		if idx < p.toolSolveTmp.toolNum {
 			continue
 		}
 		if pObject == nil {
-			if idx != len(pObjects)-1 { // 非最后一个元素为 nil 通常意味着 JSON 格式异常
+			// 非最后一个元素为 nil 通常意味着 JSON 格式异常，停止解析
+			if idx != len(pObjects)-1 {
 				logger.Warn("nil object at index %d (not last)", idx)
 				p.Stop = true
 				return
@@ -122,7 +129,8 @@ func (p *Parser) solveTool() {
 		}
 		var pTools map[string]*any
 		var toolFinishTag bool = true
-		// 尝试将对象转换为 map，如果转换失败则可能是 ObjectSlot（未完成的对象占位符）
+		// 尝试将对象转换为 map，如果转换失败则可能是 ObjectSlot（json 库定义的未完成对象占位符）
+		// 流式场景中对象字段可能尚未全部到达，此时为 ObjectSlot 而非完整 map
 		if pTools, ok = (*pObject).(map[string]*any); !ok {
 			toolFinishTag = false // 标记该工具调用对象尚未完全接收（字段可能还在增加）
 			pTools, ok = (*pObject).(json.ObjectSlot)
@@ -132,7 +140,8 @@ func (p *Parser) solveTool() {
 				return
 			}
 		}
-		// 必须包含 name, id, parameters 字段才能开始处理
+		// 从 JSON 对象中提取工具调用的三个必需字段：name（工具名）、id（调用 ID）、parameters（参数）
+		// 字段缺失仅在非末尾元素时视为致命错误，末尾元素可能因流式传输被截断
 		toolNameOrigin, ok := pTools["name"]
 		if !ok {
 			if idx != len(pObjects)-1 {
@@ -151,7 +160,7 @@ func (p *Parser) solveTool() {
 			}
 			continue
 		}
-		// 在注册的 tools 中寻找工具定义
+		// 在已注册的工具列表中查找匹配定义，若找不到则停止解析
 		toolID := p.findTool(toolName)
 		if toolID == -1 {
 			logger.Error("tool not found: %s", toolName)
@@ -198,6 +207,8 @@ func (p *Parser) solveTool() {
 			}
 		}
 		// 实时参数类型校验，确保在工具执行前捕获 AI 的格式错误
+		// 校验规则：根据工具定义的参数类型，检查实际 JSON 值的 Go 类型是否匹配
+		// 注意：对于 string 和 object 类型还需检查对应的 Slot 占位符类型（流式解析未完成状态）
 		for key, value := range toolParameters {
 			switch p.Tools[toolID].Parameters[key].Type {
 			case ToolTypeString:
@@ -240,6 +251,7 @@ func (p *Parser) solveTool() {
 			}
 		}
 		// 调用工具的回调函数（如更新 UI 或执行预检）
+		// toolFinishTag 告知回调本次调用是否为完整对象（对实时预览 UI 有意义）
 		if p.Tools[toolID].Func != nil {
 			err := p.Tools[toolID].Func(toolCallID, map[string]*any(toolParameters), toolFinishTag)
 			if err != nil {
@@ -249,6 +261,7 @@ func (p *Parser) solveTool() {
 			}
 		}
 		// 如果该工具调用对象已完全接收（toolFinishTag 为 true），则将其加入已解决列表
+		// 已解决的工具会触发后续执行流程，未完成的工具等待更多 token 到达后再次解析
 		if toolFinishTag {
 			logger.Info("tool call solved: %s (id: %s)", toolName, toolCallID)
 			p.ToolsSolved = append(p.ToolsSolved, AIToolsResponse{
@@ -268,23 +281,30 @@ func (p *Parser) solveTool() {
 
 // AddToken 流式传入 token 并解析其中的特殊标签。
 // 它会返回过滤掉特殊标签后的普通文本响应和思考内容。
+// 采用 5 状态状态机处理可能被切分的标签边界：
+//
+//	0-标签外 → 1-进入标签起始 → 2-标签内容 → 3-可能的结束标签起始 → 4-结束标签名解析
+//
+// 特殊标签：<think>（模型思考过程）和 <tools>（工具调用 JSON 数组）
 func (p *Parser) AddToken(token string, tokenThinking string) (string, string, *any, error) {
 	if p.Stop {
 		return "", "", nil, errors.New("parser stop")
 	}
 	var response strings.Builder
 	var responseThinking strings.Builder
+	// 预先追加来自上游的思考内容（可能由 API 层额外提供的 think token）
 	responseThinking.WriteString(tokenThinking)
+	// 逐字符解析，确保标签边界即使被 token 切分也能正确处理
 	for _, char := range token {
-		// solveTag 根据当前 KeyMode 处理标签内的内容
+		// solveTag 根据当前 KeyMode 将标签内内容分发到对应的缓冲区或解析器
 		solveTag := func(tokens string) error {
-			if p.KeyMode == 1 { // 处于 <think> 标签内
+			if p.KeyMode == 1 { // 处于 <think> 标签内：累积到响应思考内容
 				responseThinking.WriteString(tokens)
-			} else { // 处于 <tools> 标签内
+			} else { // 处于 <tools> 标签内：交由 jsonParser 增量解析工具调用
 				p.ToolOriginString.WriteString(tokens)
 				if p.jsonParser != nil {
 					p.jsonParser.AddToken(tokens)
-					// 每次收到新 token 后尝试解析工具调用
+					// 每次收到新 token 后尝试解析工具调用（增量处理新增的 JSON 元素）
 					p.solveTool()
 					if p.Stop {
 						return errors.New("tool error")
@@ -295,6 +315,7 @@ func (p *Parser) AddToken(token string, tokenThinking string) (string, string, *
 		}
 		switch p.Mode {
 		case 0: // 状态：标签外。寻找标签起始符 '<'。
+			// 绝大多数文本在这里直接输出到普通响应缓冲区
 			if char == '<' {
 				p.Mode = 1
 				p.TokenCache = ""
@@ -305,16 +326,18 @@ func (p *Parser) AddToken(token string, tokenThinking string) (string, string, *
 			if char == '>' {
 				switch p.TokenCache {
 				case "think":
+					// 匹配 <think> 标签，后续内容进入思考模式
 					logger.Debug("entering think mode")
 					logger.Info("Parser: entering think mode")
 					p.KeyMode = 1
 				case "tools":
+					// 匹配 <tools> 标签，创建 JSON 解析器开始解析工具调用数组
 					logger.Debug("entering tools mode")
 					logger.Info("Parser: entering tools mode")
 					p.jsonParser = json.New()
 					p.KeyMode = 2
 				default:
-					// 非预期的标签，原样退回给普通响应
+					// 非预期的标签（如 `<random>`），原样退回给普通响应
 					response.WriteString("<" + p.TokenCache + ">")
 					p.TokenCache = ""
 					p.Mode = 0
@@ -358,10 +381,11 @@ func (p *Parser) AddToken(token string, tokenThinking string) (string, string, *
 			if char == '>' {
 				if p.KeyMode == 1 && p.TokenCache == "think" {
 					logger.Debug("exiting think mode")
-					p.KeyMode = 1 // 结束思考模式
+					p.KeyMode = 1
 				} else if p.KeyMode == 2 && p.TokenCache == "tools" {
+					// 工具调用结束，让 JSON 解析器完成剩余解析并标记已调用工具
 					logger.Debug("exiting tools mode")
-					p.KeyMode = 2 // 结束工具模式
+					p.KeyMode = 2
 					err := p.jsonParser.DoneToken()
 					if err != nil {
 						logger.Error("jsonParser DoneToken error: %v", err)
@@ -369,7 +393,7 @@ func (p *Parser) AddToken(token string, tokenThinking string) (string, string, *
 					}
 					p.CalledTools = true
 				} else {
-					// 错误的结束标签名，作为内容处理
+					// 错误的结束标签名，作为普通内容处理
 					err := solveTag("</" + p.TokenCache + ">")
 					if err != nil {
 						return "", "", nil, err

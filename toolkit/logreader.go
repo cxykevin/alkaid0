@@ -54,6 +54,7 @@ var levelPriority = map[string]int{
 	"ERROR": 3,
 }
 
+// parseConfig 解析命令行参数并返回配置
 func parseConfig() Config {
 	minLevel := flag.String("level", "DEBUG", "Minimum log level to display (DEBUG, INFO, WARN, ERROR)")
 	noColor := flag.Bool("no-color", false, "Disable colored output")
@@ -75,6 +76,7 @@ func parseConfig() Config {
 	}
 }
 
+// parseLogLine 解析单行日志，匹配标准日志格式并返回 LogEntry
 func parseLogLine(line string) *LogEntry {
 	// 匹配日志格式的正则表达式
 	// 2025/12/07 14:04:35 [INFO][log] log inited
@@ -94,6 +96,7 @@ func parseLogLine(line string) *LogEntry {
 	}
 }
 
+// shouldDisplay 根据最低日志级别判断是否显示该条目
 func shouldDisplay(entry *LogEntry, minLevel string) bool {
 	entryPriority, exists := levelPriority[entry.Level]
 	if !exists {
@@ -108,6 +111,8 @@ func shouldDisplay(entry *LogEntry, minLevel string) bool {
 	return entryPriority >= minPriority
 }
 
+// colorize 根据 noColor 标志决定是否给文本添加颜色
+
 func colorize(text, color string, noColor bool) string {
 	if noColor {
 		return text
@@ -115,9 +120,13 @@ func colorize(text, color string, noColor bool) string {
 	return color + text + Reset
 }
 
+// highlightTimestamp 给时间戳添加蓝色高亮
+
 func highlightTimestamp(timestamp string, noColor bool) string {
 	return colorize(timestamp, Blue, noColor)
 }
+
+// highlightLevel 给日志级别添加对应颜色高亮
 
 func highlightLevel(level string, noColor bool) string {
 	color := levelColors[level]
@@ -125,10 +134,12 @@ func highlightLevel(level string, noColor bool) string {
 		color = White
 	}
 	return colorize("["+level+"]", color, noColor)
+	// highlightCategory 给日志分类名添加品红色高亮
 }
 
 func highlightCategory(category string, noColor bool) string {
 	return colorize("["+category+"]", Magenta, noColor)
+	// displayLogEntry 格式化并输出一条日志条目
 }
 
 func displayLogEntry(entry *LogEntry, config Config) {
@@ -148,12 +159,12 @@ func displayLogEntry(entry *LogEntry, config Config) {
 	fmt.Printf("%s %s %s %s\n", timestamp, level, category, message)
 }
 
-// readLogFile 读取整个日志文件
+// readLogFile 读取指定日志文件并输出所有匹配的日志行（从第 1 行开始）
 func readLogFile(filePath string) error {
 	return readLogFileFrom(filePath, 0)
 }
 
-// readLogFileFrom 从指定行号开始读取日志文件，返回总行数和错误
+// readLogFileFrom 从指定行号开始读取日志文件，逐行解析并输出
 func readLogFileFrom(filePath string, startLine int) error {
 	file, err := os.Open(filePath)
 	if err != nil {
@@ -197,7 +208,7 @@ func readLogFileFrom(filePath string, startLine int) error {
 	return nil
 }
 
-// clearScreen 清屏并清除滚动历史
+// clearScreen 清空终端屏幕及滚动历史（使用 ANSI 转义码）
 func clearScreen() {
 	fmt.Print("\033[2J\033[H\033[3J")
 }
@@ -263,6 +274,7 @@ func clearScreen() {
 // 	}
 // }
 
+// displayUsage 打印工具使用帮助信息
 func displayUsage() {
 	fmt.Println("用法: logreader [选项] <日志文件路径>")
 	fmt.Println("")
@@ -320,6 +332,8 @@ type FileWatcher struct {
 	config      Config
 }
 
+// newFileWatcher 创建文件监控器实例
+
 func newFileWatcher(filePath string, config Config) *FileWatcher {
 	return &FileWatcher{
 		filePath: filePath,
@@ -336,6 +350,7 @@ func (fw *FileWatcher) initState() {
 	fw.lastSize = info.Size()
 	fw.lastModTime = info.ModTime()
 	fw.lastLine = countLines(fw.filePath)
+	// watch 启动文件变化监控循环，每隔 500ms 检查一次
 }
 
 func (fw *FileWatcher) watch() {

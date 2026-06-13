@@ -19,11 +19,13 @@ import (
 	"github.com/cxykevin/alkaid0/tools/toolobj"
 )
 
+// toolName 工具注册名称
 const toolName = "agent"
 
 //go:embed agents_prompt.md
 var agentPrompt string
 
+// agentsTemplate 子代理管理功能的提示词模板
 var agentsTemplate *template.Template = prompts.Load("tools:agent:agents", agentPrompt)
 
 //go:embed prompt.md
@@ -35,8 +37,10 @@ var promptIn string
 //go:embed prompt_out.md
 var promptOut string
 
+// logger 包级日志对象
 var logger = log.New("tools:agent")
 
+// parasIn 激活/停用子代理的入参定义
 var parasIn = map[string]parser.ToolParameters{
 	"name": {
 		Type:        parser.ToolTypeString,
@@ -49,12 +53,15 @@ var parasIn = map[string]parser.ToolParameters{
 		Description: "The prompt the subagent will use.",
 	},
 }
+
+// parasOut 子代理输出参数的入参定义
 var parasOut = map[string]parser.ToolParameters{
 	"prompt": {
 		Type:        parser.ToolTypeString,
 		Required:    true,
 		Description: "The prompt the main agent will use.",
 	},
+	// parasMan 子代理管理（增删改）的入参定义
 }
 var parasMan = map[string]parser.ToolParameters{
 	"name": {
@@ -84,6 +91,7 @@ var parasMan = map[string]parser.ToolParameters{
 // }
 // func buildPromptOut(session *structs.Chats) (string, error) {
 // 	return promptOut, nil
+// updateAgentInfo 处理子代理管理操作的调用信息记录
 // }
 
 func updateAgentInfo(session *structs.Chats, mp map[string]*any, cross []*any, toolID string) (bool, []*any, error) {
@@ -131,6 +139,7 @@ func updateAgentInfo(session *structs.Chats, mp map[string]*any, cross []*any, t
 	session.ToolCallingType[toolCallID] = "agent"
 
 	return true, cross, nil
+	// updateInfo 处理激活/停用子代理的调用信息记录
 }
 
 func updateInfo(session *structs.Chats, mp map[string]*any, cross []*any, toolID string) (bool, []*any, error) {
@@ -168,6 +177,7 @@ func updateInfo(session *structs.Chats, mp map[string]*any, cross []*any, toolID
 	}}
 	session.ToolCallingContext[toolCallID] = respObj
 	session.ToolCallingType[toolCallID] = currToolName
+	// editAgent 处理子代理的创建或更新操作
 	return true, cross, nil
 }
 
@@ -317,6 +327,7 @@ func CheckPrompt(mp map[string]*any) (string, error) {
 	return prompt, nil
 }
 
+// useAgent 激活一个子代理实例，将其绑定到当前会话
 func useAgent(session *structs.Chats, mp map[string]*any, cross []*any) (bool, []*any, map[string]*any, error) {
 	name, err := CheckName(mp)
 	if err != nil {
@@ -360,6 +371,7 @@ func useAgent(session *structs.Chats, mp map[string]*any, cross []*any) (bool, [
 	}, nil
 }
 
+// unuseAgent 停用当前会话的子代理实例
 func unuseAgent(session *structs.Chats, mp map[string]*any, cross []*any) (bool, []*any, map[string]*any, error) {
 	logger.Info("deactivate agent \"%s\" in ID=%d", session.CurrentAgentID, session.ID)
 
@@ -392,6 +404,7 @@ func unuseAgent(session *structs.Chats, mp map[string]*any, cross []*any) (bool,
 	}, nil
 }
 
+// agentTemplate 子代理全局提示词模板的数据结构
 type agentTemplate struct {
 	Agents []struct {
 		Name string
@@ -404,6 +417,7 @@ type agentTemplate struct {
 	}
 }
 
+// buildGlobalPrompt 构建包含所有子代理信息的全局提示词
 func buildGlobalPrompt(session *structs.Chats) (string, error) {
 	tmpl := agentTemplate{}
 	listAgent, err := agents.ListAgent(session)
@@ -434,14 +448,17 @@ func buildGlobalPrompt(session *structs.Chats) (string, error) {
 	return prompts.Render(agentsTemplate, tmpl), nil
 }
 
+// enableActivate 判断当前会话是否允许激活子代理（无活跃子代理时）
 func enableActivate(session *structs.Chats) bool {
 	return session.CurrentAgentID == ""
 }
 
+// enableDeactivate 判断当前会话是否允许停用子代理（有活跃子代理时）
 func enableDeactivate(session *structs.Chats) bool {
 	return session.CurrentAgentID != ""
 }
 
+// load 注册 agent 工具及其钩子函数到工具系统
 func load() string {
 	actions.AddTool(&toolobj.Tools{
 		Scope:           "", // Global Tools

@@ -2,6 +2,7 @@ package actions
 
 import "github.com/cxykevin/alkaid0/config"
 
+// updateCfgsToConns 将当前配置广播推送到所有已连接的会话
 func updateCfgsToConns() {
 	sessionConnLock.Lock()
 	defer sessionConnLock.Unlock()
@@ -23,10 +24,12 @@ func updateCfgsToConns() {
 	}
 }
 
+// init 注册配置重载钩子，配置变更时自动更新所有会话
 func init() {
 	config.AddReloadHook(updateCfgsToConns)
 }
 
+// reloadFunc 配置重载回调，触发配置广播推送
 func reloadFunc(_ any, _ func(string, any, *string) error, _ uint64) (any, error) {
 	go updateCfgsToConns()
 	return nil, nil

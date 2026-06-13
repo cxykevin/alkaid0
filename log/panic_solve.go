@@ -6,9 +6,10 @@ import (
 	"runtime"
 )
 
-const panicExitCode = 127 // panic退出码
+// panicExitCode panic 恢复失败后的进程退出码
+const panicExitCode = 127
 
-// SolvePanic 解决panic
+// SolvePanic 捕获并记录 panic 堆栈信息后退出进程
 func SolvePanic() {
 	// recover
 	if err := recover(); err != nil {

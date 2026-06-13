@@ -5,7 +5,7 @@ import (
 	"strconv"
 )
 
-// 初始化容器的占位符值
+// initContainerSlot 根据容器类型初始化对应的占位符值
 func (p *Parser) initContainerSlot(contMode jsonMode) any {
 	switch contMode {
 	case jsonModeInObjectWaitingKey:
@@ -17,6 +17,7 @@ func (p *Parser) initContainerSlot(contMode jsonMode) any {
 	}
 }
 
+// pushContainer 将容器值推入解析栈，并关联到父容器
 func (p *Parser) pushContainer(val any, contMode jsonMode) (*any, error) {
 	ptr := new(any)
 	*ptr = val
@@ -86,7 +87,7 @@ func (p *Parser) pushContainer(val any, contMode jsonMode) (*any, error) {
 	}
 }
 
-// helper: push a primitive value (string, number, bool, nil) into current container
+// pushValue 将原始值（string/number/bool/nil）插入到当前容器中
 func (p *Parser) pushValue(val any) error {
 	var vptr *any
 	if val != nil {

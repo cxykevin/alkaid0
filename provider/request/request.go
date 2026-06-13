@@ -26,7 +26,7 @@ import (
 	"github.com/expr-lang/expr/vm"
 )
 
-// UserAddMsg 用户发送消息
+// UserAddMsg 处理用户发送的消息，更新数据库并处理子代理和审批状态
 func UserAddMsg(session *storageStructs.Chats, msg string, refers *storageStructs.MessagesReferList) error {
 	logger.Info("UserAddMsg: chatID=%d, msgLen=%d", session.ID, len(msg))
 	db := session.DB
@@ -72,7 +72,7 @@ func UserAddMsg(session *storageStructs.Chats, msg string, refers *storageStruct
 	return nil
 }
 
-// SubAgentReject 子代理拒绝
+// SubAgentReject 处理子代理被拒绝时的状态回退
 func SubAgentReject(session *storageStructs.Chats) error {
 	logger.Info("SubAgentReject: chatID=%d", session.ID)
 	db := session.DB
@@ -113,6 +113,7 @@ func stringDefault(str *string) string {
 
 // mergeAutoRuleExpr 将用户定义的规则与系统内置规则合并。
 // 使用逻辑或 (||) 连接，意味着只要任一规则触发（审批或拒绝），该决策即生效。
+// 空字符串的规则被忽略，避免无效的表达式组合。
 func mergeAutoRuleExpr(userExpr string, builtinExpr string) string {
 	userExpr = strings.TrimSpace(userExpr)
 	builtinExpr = strings.TrimSpace(builtinExpr)
@@ -194,8 +195,16 @@ func (t ToolCall) AsMap() map[string]any {
 	}
 }
 
-// compileExpr 编译表达式字符串为可执行程序，并注入自定义函数（如 regex, contains）。
-// 这允许安全规则利用强大的字符串处理能力来识别危险参数。
+// compileExpr 编译表达式字符串为可执行程序，并注入规则引擎使用的自定义函数。
+// 注入函数说明：
+//
+//	regex(pattern, text)  - 检测参数中是否匹配自定义正则
+//	contains(s, sub)     - 关键字匹配，用于检查参数内容（如文件路径关键字）
+//	hasParam(call, key)  - 检查工具调用是否存在指定参数名
+//	param(call, key)     - 获取工具调用的指定参数值，支持链式调用
+//
+// ToolCalls 是全集（所有待审批工具），ToolCall 是当前待评估的工具，
+// Agent 包含当前 Agent 的上下文配置。这些作为表达式求值环境变量注入。
 func compileExpr(program string) (*vm.Program, error) {
 	return expr.Compile(program, expr.Env(map[string]any{
 		"ToolCalls": []map[string]any{},
@@ -285,16 +294,21 @@ func compileExpr(program string) (*vm.Program, error) {
 }
 
 // CanAutoApprove 根据配置的表达式规则判断一组工具调用是否可以自动执行。
-// 逻辑顺序：先检查拒绝规则（任一调用触发拒绝则整体不自动执行），再检查审批规则（所有调用必须触发审批）。
-// 这种设计确保了安全性优先：只要有一个调用被认为可疑，就必须人工介入。
+// 三层决策逻辑：
+//  1. 拒绝检查：任一工具命中拒绝规则则整体驳回（安全优先）
+//  2. 审批检查：无规则默认不自动执行（防默许危险操作）
+//  3. 全量检查：所有工具都必须触发审批规则
+//
+// 配置优先级：Agent 级别 > 全局默认 > 系统内置规则（IgnoreDefaultRules=false 时启用）
 func CanAutoApprove(session *storageStructs.Chats, toolCalls []ToolCall, msg *storageStructs.Messages) (bool, string, error) {
 	if session == nil || msg == nil || len(toolCalls) == 0 {
 		return false, "", nil
 	}
 
+	// 先读取 Agent 级别的配置，作为最高优先级
 	autoApprove := strings.TrimSpace(session.CurrentAgentConfig.AutoApprove)
 	autoReject := strings.TrimSpace(session.CurrentAgentConfig.AutoReject)
-	// 优先级：Agent 级别配置 > 全局默认配置
+	// 配置优先级：Agent 级别配置 > 全局默认配置
 	if autoApprove == "" {
 		autoApprove = strings.TrimSpace(config.GlobalConfig.Agent.DefaultAutoApprove)
 	}
@@ -302,6 +316,7 @@ func CanAutoApprove(session *storageStructs.Chats, toolCalls []ToolCall, msg *st
 		autoReject = strings.TrimSpace(config.GlobalConfig.Agent.DefaultAutoReject)
 	}
 
+	// 系统内置的默认规则（如自动批准读文件、拒绝写系统路径等）
 	builtinAutoApprove := ""
 	builtinAutoReject := ""
 	if !config.GlobalConfig.Agent.IgnoreDefaultRules {
@@ -309,6 +324,7 @@ func CanAutoApprove(session *storageStructs.Chats, toolCalls []ToolCall, msg *st
 		builtinAutoReject = strings.TrimSpace(builtinAutoRejectExpr)
 	}
 
+	// 用户规则与内置规则使用逻辑或合并，任一规则触发即生效
 	autoApprove = mergeAutoRuleExpr(autoApprove, builtinAutoApprove)
 	autoReject = mergeAutoRuleExpr(autoReject, builtinAutoReject)
 
@@ -318,6 +334,7 @@ func CanAutoApprove(session *storageStructs.Chats, toolCalls []ToolCall, msg *st
 	var approveProgram *vm.Program
 	var rejectProgram *vm.Program
 	var err error
+	// 预先编译拒绝和审批表达式，编译失败则停止决策
 	if autoReject != "" {
 		rejectProgram, err = compileExpr(autoReject)
 		if err != nil {
@@ -333,12 +350,14 @@ func CanAutoApprove(session *storageStructs.Chats, toolCalls []ToolCall, msg *st
 		}
 	}
 
+	// 将所有工具调用转为 map 形式供表达式引擎求值
 	callsMap := make([]map[string]any, len(toolCalls))
 	for i, c := range toolCalls {
 		callsMap[i] = c.AsMap()
 	}
 
-	// 1. 拒绝检查：只要有一个工具调用命中了拒绝规则，则整体不自动执行
+	// 第 1 层：拒绝检查（安全优先）。
+	// 任一工具调用命中拒绝规则即整体驳回，确保危险操作被拦截。
 	if rejectProgram != nil {
 		for _, call := range toolCalls {
 			result, runErr := expr.Run(rejectProgram, map[string]any{
@@ -357,12 +376,14 @@ func CanAutoApprove(session *storageStructs.Chats, toolCalls []ToolCall, msg *st
 		}
 	}
 
-	// 2. 审批检查：如果没有配置审批规则，默认不自动执行
+	// 第 2 层：审批规则缺失检查。
+	// 未配置审批规则时默认不自动执行，防止无规则状态下的误放行。
 	if approveProgram == nil {
 		return false, "", nil
 	}
 
-	// 3. 审批检查：所有工具调用都必须命中审批规则，才允许自动执行
+	// 第 3 层：全量审批检查。
+	// 所有工具调用都必须命中审批规则，任一不命中则整体驳回。
 	for _, call := range toolCalls {
 		result, runErr := expr.Run(approveProgram, map[string]any{
 			"ToolCalls": callsMap,
@@ -383,7 +404,9 @@ func CanAutoApprove(session *storageStructs.Chats, toolCalls []ToolCall, msg *st
 	return true, "", nil
 }
 
-// ParseToolsFromJSON 解析工具调用
+// ParseToolsFromJSON 解析工具调用 JSON 字符串为 ToolCall 结构体切片。
+// 支持完整 map 和 ObjectSlot（流式解析未完成状态）两种对象形式，
+// 以及完整数组和 ArraySlot 两种容器形式。空 payload 返回空切片而非错误。
 func ParseToolsFromJSON(payload string) ([]ToolCall, error) {
 	if payload == "" {
 		return nil, nil
@@ -474,7 +497,7 @@ func RejectToolCallsNoDeactivate(session *storageStructs.Chats, reason string, r
 	return session.DB.Save(session).Error
 }
 
-// ApplyToolOnHooks 应用工具调用
+// ApplyToolOnHooks 应用工具调用，遍历所有已解析的工具调用并执行对应的 OnHook 回调
 func ApplyToolOnHooks(session *storageStructs.Chats, toolCallingJSON string) error {
 	if toolCallingJSON == "" {
 		return nil
@@ -492,7 +515,9 @@ func ApplyToolOnHooks(session *storageStructs.Chats, toolCallingJSON string) err
 	return nil
 }
 
-// ExecuteToolCalls 执行工具调用
+// ExecuteToolCalls 执行工具调用并持久化结果。
+// 流程：设置状态为 ToolCalling → 逐工具执行 OnHook → 通过 Solver 解析并保存工具响应 → 恢复 Idle 状态。
+// 任一环节失败都会回滚到 Idle 并返回错误。
 func ExecuteToolCalls(session *storageStructs.Chats, toolCallingJSON string) (bool, error) {
 	if toolCallingJSON == "" {
 		return true, nil
@@ -529,12 +554,16 @@ func ExecuteToolCalls(session *storageStructs.Chats, toolCallingJSON string) (bo
 	return ok, err
 }
 
-// SendRequest 发送请求
+// SendRequest 发送 LLM 请求并处理流式响应。
+// 流程：设置状态 → 构建请求体 → 发送请求 → 流式解析 → 持久化 → 处理工具调用。
+// token 使用阈值刷写策略（每 256 字符批量写库）平衡实时性与 I/O 性能。
+// 返回的 bool 值表示是否还有后续工具调用需要处理。
 func SendRequest(ctx context.Context, session *storageStructs.Chats, callback func(string, string, uint64, structs.Usage, *string) error) (bool, error) {
 	session.State = state.StateWaiting
 	session.TemporyDataOfRequest = make(map[string]any)
 	db := session.DB
 
+	// 确定使用的模型 ID：优先使用子代理配置的模型，否则使用会话最后选择的模型
 	modelID := session.LastModelID
 	if session.CurrentAgentID != "" {
 		modelIDRet := uint32(session.CurrentAgentConfig.AgentModel)
@@ -542,12 +571,6 @@ func SendRequest(ctx context.Context, session *storageStructs.Chats, callback fu
 			modelID = modelIDRet
 		}
 	}
-	// 取模型ID
-	// var chat structs.Chats
-	// err := db.First(&chat, chatID).Error
-	// if err != nil {
-	// 	return true, err
-	// }
 	modelCfg, ok := config.GlobalConfig.Model.Models[int32(modelID)]
 	logger.Info("SendRequest: using model %s (ID: %d)", modelCfg.ModelName, modelID)
 	if !ok {
@@ -564,7 +587,8 @@ func SendRequest(ctx context.Context, session *storageStructs.Chats, callback fu
 
 	solver := response.NewSolver(db, session)
 	agent := session.CurrentAgentID
-	// 写库
+	// 在数据库中创建一条空的 Messages 记录作为本次请求的占位符
+	// 后续流式响应内容会逐步更新该记录的各个字段
 	reqObj := storageStructs.Messages{
 		ChatID:        session.ID,
 		AgentID:       &agent,
@@ -575,11 +599,11 @@ func SendRequest(ctx context.Context, session *storageStructs.Chats, callback fu
 		ModelName:     modelCfg.ModelName,
 	}
 	tx := db.Create(&reqObj)
-	// 取主键
 	if tx.Error != nil {
 		return true, tx.Error
 	}
 
+	// session.CurrentMessageID 用于后续工具调用关联到本次消息
 	session.CurrentMessageID = reqObj.ID
 
 	var gDelta strings.Builder
@@ -589,9 +613,10 @@ func SendRequest(ctx context.Context, session *storageStructs.Chats, callback fu
 	var lastFlushLen int
 	var lastFlushThinkingLen int
 	msgID := reqObj.ID
-	// tokenFlushThreshold 定义了向数据库刷新消息内容的阈值。
-	// 在流式响应中，如果每收到一个 token 就写入数据库，会对磁盘 I/O 造成巨大压力。
-	// 通过累积一定数量的 token（此处为 256）再统一更新，可以显著提升性能，同时保证用户在刷新页面时能看到大部分内容。
+	// tokenFlushThreshold 定义了向数据库刷新消息内容的阈值（256 字符）。
+	// 流式响应中每收到一个 token 就写数据库会造成严重 I/O 瓶颈。
+	// 累积到阈值再统一更新可大幅提升吞吐量（约 100x），
+	// 同时保证进程在异常终止时能够保留尽可能多的内容
 	const tokenFlushThreshold = 256
 
 	// Usage 信息
@@ -600,6 +625,8 @@ func SendRequest(ctx context.Context, session *storageStructs.Chats, callback fu
 	var totalUsage uint32
 	var cachedUsage uint32
 
+	// solveFunc 是 SimpleOpenAIRequest 的回调函数，每次收到流式响应体时调用。
+	// 内部处理：增量解析 token → 累积内容 → 达到阈值时写库 → 实时推送到 UI
 	solveFunc := func(body reqStruct.ChatCompletionResponse) error {
 		if session.State == state.StateRequesting {
 			session.State = state.StateReciving
@@ -617,6 +644,7 @@ func SendRequest(ctx context.Context, session *storageStructs.Chats, callback fu
 			return err
 		}
 
+		// 记录本次请求的 token 用量（取最大值，因为流式响应中可能多次上报不同维度）
 		if body.Usage != nil {
 			promptUsage = max(promptUsage, body.Usage.PromptTokens)
 			completionUsage = max(completionUsage, body.Usage.CompletionTokens)
@@ -625,7 +653,7 @@ func SendRequest(ctx context.Context, session *storageStructs.Chats, callback fu
 			cachedUsage = max(cachedUsage, body.Usage.DeepseekCachedToken)
 		}
 
-		// 达到阈值时执行数据库更新
+		// 达到阈值时执行数据库更新（批量刷写，减少 I/O 次数）
 		shouldFlush := pendingDelta.Len()+pendingThinkingDelta.Len() >= tokenFlushThreshold
 		if shouldFlush {
 			gstring := gDelta.String()
@@ -642,10 +670,11 @@ func SendRequest(ctx context.Context, session *storageStructs.Chats, callback fu
 			}
 			pendingDelta.Reset()
 			pendingThinkingDelta.Reset()
+			// 记录最后一次刷写时的内容长度，用于后续判断是否需要额外更新
 			lastFlushLen = len(gstring)
 			lastFlushThinkingLen = len(gtstring)
 		}
-		// 回调函数通常用于实时推送到 UI 界面
+		// 回调函数将增量内容实时推送到 UI 界面（通过 Callback）
 		if err := callback(delta, thinkingDelta, msgID, structs.Usage{
 			PromptTokens:     promptUsage,
 			CompletionTokens: completionUsage,
@@ -677,6 +706,7 @@ func SendRequest(ctx context.Context, session *storageStructs.Chats, callback fu
 
 	session.State = state.StateRequesting
 
+	// 向 LLM 发送请求，solveFunc 会在每个流式 chunk 到达时被调用
 	err = SimpleOpenAIRequest(ctx, modelCfg.ProviderURL, modelCfg.ProviderKey, modelCfg.ModelID, *obj, solveFunc)
 	if err != nil {
 		return true, err
@@ -688,12 +718,14 @@ func SendRequest(ctx context.Context, session *storageStructs.Chats, callback fu
 	gDelta.WriteString(delta)
 	tools := solver.GetTools()
 	gThinkingDelta.WriteString(thinkingDelta)
+	// 处理响应：无内容且无工具调用时删除占位消息记录
 	if gDelta.String() == "" && gThinkingDelta.String() == "" && len(tools) == 0 {
-		// 删除
+		// 空响应时删除占位消息，不保留无意义的记录
 		err = db.Delete(&storageStructs.Messages{}, msgID).Error
 	} else {
 		finalDelta := gDelta.String()
 		finalThinkingDelta := gThinkingDelta.String()
+		// 仅当最后一次刷写后有新内容时才执行数据库更新，避免冗余 I/O
 		if len(finalDelta) != lastFlushLen || len(finalThinkingDelta) != lastFlushThinkingLen {
 			err = db.Model(&storageStructs.Messages{}).Where("id = ?", msgID).Updates(storageStructs.Messages{
 				Delta:            finalDelta,
@@ -705,6 +737,7 @@ func SendRequest(ctx context.Context, session *storageStructs.Chats, callback fu
 			}).Error
 		}
 		if err == nil {
+			// 保存工具调用的原始 JSON 字符串，用于后续审批和执行
 			err = db.Model(&storageStructs.Messages{}).Where("id = ?", msgID).Update(
 				"tool_calling_json_string", string(solver.GetToolsOrigin()),
 			).Error
@@ -713,6 +746,7 @@ func SendRequest(ctx context.Context, session *storageStructs.Chats, callback fu
 	if err != nil {
 		return true, err
 	}
+	// 有工具调用时转入审批等待状态，暂停回复处理直到用户或自动规则做出决定
 	if len(tools) > 0 {
 		session.State = state.StateWaitApprove
 		if saveErr := db.Save(session).Error; saveErr != nil {

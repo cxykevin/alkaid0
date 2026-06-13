@@ -134,14 +134,17 @@ type Command struct {
 	temp    any
 }
 
-// Execute 在沙盒中执行命令
+// Execute 在沙盒中执行命令。根据隔离模式选择不同的执行策略：
+//
+//	IsolationNone: 无隔离，直接在当前进程空间运行（适用于受信命令）
+//	IsolationOS:   OS 级隔离，创建隔离环境并启用路径白名单检查（适用于非受信命令）
 func (s *Sandbox) Execute(name string, args ...string) (*Command, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
 	logger.Info("Execute command: %s %v (isolation: %s)", name, args, s.isolationMode.String())
 
-	// 创建上下文
+	// 创建上下文，若配置了超时则使用 WithTimeout
 	var ctx context.Context
 	var cancel context.CancelFunc
 	if s.timeout > 0 {
@@ -152,8 +155,8 @@ func (s *Sandbox) Execute(name string, args ...string) (*Command, error) {
 
 	switch s.isolationMode {
 	case IsolationNone:
+		// 无隔离模式：无需沙箱限制，直接在当前进程空间运行
 		cmd := createIsolateNoneCmd(ctx, name, args, s.env, s.workDir)
-		// 无隔离，直接运行
 		return &Command{
 			sandbox: s,
 			cmd:     cmd,

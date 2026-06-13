@@ -16,7 +16,7 @@ func init() {
 	aLogger = alog.New("gorm")
 }
 
-// Level 定义 gorm 日志级别别名，用于内部比较
+// Level gorm 日志级别别名，用于内部日志级别比较与设置
 type Level gormLogger.LogLevel
 
 // Logger 为 GORM 自定义 logger 实现
@@ -26,7 +26,7 @@ type Logger struct {
 	stdLogger *stdlog.Logger
 }
 
-// New 创建日志器
+// New 创建 GORM 自定义日志器，默认慢查询阈值为 300ms
 func New() gormLogger.Interface {
 	return &Logger{
 		slow: time.Millisecond * 300,
