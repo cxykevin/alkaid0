@@ -9,3 +9,9 @@ const BuildTime uint64 = 0
 
 // BuildNote 构建备注
 const BuildNote = ""
+
+// Version 版本号
+const Version = "0.0.0"
+
+// VersionID 版本ID
+const VersionID = 0

@@ -25,13 +25,18 @@ const BuildTime uint64 = {buildTime}
 
 // BuildNote 构建备注
 const BuildNote = "{note}"
+
+// Version 版本号
+const Version = "{version_tag}"
+
+// VersionID 版本ID
+const VersionID = {version_id}
 `
 
 func main() {
 	const tgt = "build.go" // 生成的文件名
 
 	commitID := ""
-	// 执行 git rev-parse HEAD 获取提交ID
 	cmd := exec.Command("git", "rev-parse", "HEAD")
 	out, err := cmd.Output()
 	if err != nil {
@@ -45,7 +50,37 @@ func main() {
 
 	note := os.Getenv("ALKAID0_BUILD_NOTE")
 
-	rendered := strings.ReplaceAll(strings.ReplaceAll(strings.ReplaceAll(template, "{commitID}", commitID), "{buildTime}", fmt.Sprintf("%d", buildTime)), "{note}", note)
+	// 获取最新的 tag（即使当前提交不在 tag 上）
+	cmd = exec.Command("git", "describe", "--tags", "--abbrev=0")
+	versionTag := ""
+	if tagOut, err := cmd.Output(); err != nil {
+		versionTag = "v0.0.0" // 没有 tag 时的默认值
+	} else {
+		versionTag = strings.TrimSpace(string(tagOut))
+	}
+
+	// 计算该 tag 是第几个 tag（按版本排序升序，1-based）
+	versionID := 0
+	cmd = exec.Command("git", "tag", "--sort=v:refname")
+	if tagListOut, err := cmd.Output(); err == nil {
+		tagList := strings.Split(strings.TrimSpace(string(tagListOut)), "\n")
+		for i, t := range tagList {
+			if t == versionTag {
+				versionID = i + 1 // 1-based
+				break
+			}
+		}
+	}
+	versionTag = strings.TrimPrefix(versionTag, "v")
+	fmt.Println("versionTag:", versionTag)
+	fmt.Println("versionID:", versionID)
+
+	rendered := template
+	rendered = strings.ReplaceAll(rendered, "{commitID}", commitID)
+	rendered = strings.ReplaceAll(rendered, "{buildTime}", fmt.Sprintf("%d", buildTime))
+	rendered = strings.ReplaceAll(rendered, "{note}", note)
+	rendered = strings.ReplaceAll(rendered, "{version_tag}", versionTag)
+	rendered = strings.ReplaceAll(rendered, "{version_id}", fmt.Sprintf("%d", versionID))
 
 	// gofmt 一下
 	src, err := format.Source([]byte(rendered))
