@@ -1,5 +1,7 @@
 # Alkaid0
 
+![alkaid-logo](https://raw.githubusercontent.com/cxykevin/alkaid0/refs/heads/main/logo/wide160x40d.svg)
+
 Alkaid0 是一个模块化的 AI Coding 工具 与 Agent 框架，专为构建具备多 Agent 能力、工具调用系统和流式响应处理功能的智能编码助手而设计。该框架基于 Go 语言构建。
 
 设计理念：**低消耗** **用户友好** **可扩展** **强兼容性**
