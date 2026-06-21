@@ -98,15 +98,6 @@ jobs:
             go build -trimpath -ldflags="-s -w" \
             -o alkaid0-darwin-arm64 .
 
-      - name: UPX 极限压缩
-        run: |
-          # macOS 上 upx 可能未预装，先安装（若需）
-          if ! command -v upx &> /dev/null; then
-            brew install upx
-          fi
-          upx --best --lzma alkaid0-darwin-amd64
-          upx --best --lzma alkaid0-darwin-arm64
-
       - name: 上传 Darwin 产物
         uses: actions/upload-artifact@v7
         with:
