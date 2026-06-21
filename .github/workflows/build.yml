@@ -6,7 +6,7 @@ on:
   pull_request:
     branches: [ "main" ]
   release:
-    types: [published]          # 改为 published：当 Release 被发布时触发
+    types: [published]
   workflow_dispatch:
 
 jobs:
@@ -63,11 +63,57 @@ jobs:
       - name: 上传构建产物
         uses: actions/upload-artifact@v7
         with:
-          name: alkaid0-binaries
+          name: alkaid0-linux-windows-binaries
           path: |
             alkaid0-linux-amd64
             alkaid0-windows-amd64.exe
             alkaid0-linux-arm64
+
+  build-darwin:
+    runs-on: macos-latest
+    steps:
+      - name: Checkout 代码
+        uses: actions/checkout@v6
+
+      - name: 安装 Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: "1.26.2"
+          check-latest: true
+
+      - name: 执行代码生成
+        run: |
+          go generate ./...
+          go generate product/gen.go
+
+      - name: 构建 Darwin amd64
+        run: |
+          CGO_ENABLED=1 GOOS=darwin GOARCH=amd64 \
+            go build -trimpath -ldflags="-s -w" \
+            -o alkaid0-darwin-amd64 .
+
+      - name: 构建 Darwin arm64
+        run: |
+          CGO_ENABLED=1 GOOS=darwin GOARCH=arm64 \
+            go build -trimpath -ldflags="-s -w" \
+            -o alkaid0-darwin-arm64 .
+
+      - name: UPX 极限压缩
+        run: |
+          # macOS 上 upx 可能未预装，先安装（若需）
+          if ! command -v upx &> /dev/null; then
+            brew install upx
+          fi
+          upx --best --lzma alkaid0-darwin-amd64
+          upx --best --lzma alkaid0-darwin-arm64
+
+      - name: 上传 Darwin 产物
+        uses: actions/upload-artifact@v7
+        with:
+          name: alkaid0-darwin-binaries
+          path: |
+            alkaid0-darwin-amd64
+            alkaid0-darwin-arm64
 
   test:
     runs-on: ${{ matrix.os }}
@@ -96,15 +142,21 @@ jobs:
 
   publish:
     runs-on: ubuntu-latest
-    needs: [build, test]                # 等待 build 和 test 都成功
-    if: github.event_name == 'release' && github.event.action == 'published'   # 改为 published
+    needs: [build, build-darwin, test]   # 等待两个构建 Job 和测试完成
+    if: github.event_name == 'release' && github.event.action == 'published'
     permissions:
-      contents: write                   # 需要写入 release 的权限
+      contents: write
     steps:
-      - name: 下载构建产物
+      - name: 下载 Linux/Windows 产物
         uses: actions/download-artifact@v8
         with:
-          name: alkaid0-binaries
+          name: alkaid0-linux-windows-binaries
+          path: ./binaries
+
+      - name: 下载 Darwin 产物
+        uses: actions/download-artifact@v8
+        with:
+          name: alkaid0-darwin-binaries
           path: ./binaries
 
       - name: 上传到 Release
@@ -114,5 +166,7 @@ jobs:
             ./binaries/alkaid0-linux-amd64
             ./binaries/alkaid0-windows-amd64.exe
             ./binaries/alkaid0-linux-arm64
+            ./binaries/alkaid0-darwin-amd64
+            ./binaries/alkaid0-darwin-arm64
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
