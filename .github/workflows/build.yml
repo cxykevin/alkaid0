@@ -139,7 +139,7 @@ jobs:
 
       # 使用官方 Action 安装 WinApp CLI
       - name: Setup winapp CLI
-        uses: microsoft/setup-WinAppCli@v1
+        uses: microsoft/setup-WinAppCli@v0.1
 
       # 使用 MSYS2 安装 MinGW-w64 GCC
       - name: Setup MSYS2
