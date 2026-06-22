@@ -152,6 +152,7 @@ jobs:
       - name: 安装图像处理工具
         run: |
           winget install --id feraxhp.cim --accept-package-agreements --accept-source-agreements
+          echo "C:\Program Files\cim\bin" >> $GITHUB_PATH
 
       - name: 下载 Windows 二进制产物
         uses: actions/download-artifact@v8
