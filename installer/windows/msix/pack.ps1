@@ -22,6 +22,9 @@ cim png "..\..\..\logo\icon16x16d.svg" "Assets\MedTile.png" -w 150 -h 150
 cim png "..\..\..\logo\icon16x16d.svg" "Assets\MedTile.scale-200.png" -w 300 -h 300
 cim png "..\..\..\logo\icon16x16d.svg" "Assets\StoreLogo.png" -w 50 -h 50
 
+Write-Output "==> Copy Binary"
+Copy-Item ".\alkaid0.exe" ".\dist\Bin\alkaid0.exe"
+
 Write-Output "==> Get Cert"
 $CertFile = ".cert.tmp"
 Write-Output "  --> Reading Base64 certificate from '$CertFile'..."
