@@ -130,9 +130,10 @@ jobs:
           ALKAID0_TEST_LESS_MEMORY_MODE: "true"
         run: |
           go test -v ./...
-  build_msix:
+  build-msix:
     runs-on: windows-latest
     needs: [ build ]
+    if: github.event_name == 'release' && github.event.action == 'published'
     steps:
       - name: Checkout 代码
         uses: actions/checkout@v6
@@ -183,7 +184,7 @@ jobs:
 
   publish:
     runs-on: ubuntu-latest
-    needs: [ build, build-darwin, test, build_msix ]
+    needs: [ build, build-darwin, test, build-msix ]
     if: github.event_name == 'release' && github.event.action == 'published'
     permissions:
       contents: write
