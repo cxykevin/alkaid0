@@ -15,12 +15,12 @@ $version = $tag -replace '^v', ''
 Write-Output "  --> Git Tag Version: ${version}"
 
 Write-Output "==> Generate Icons"
-cim png "..\..\..\logo\icon16x16d.svg" "Assets\AppList.png" -w 44 -h 44
-cim png "..\..\..\logo\icon16x16d.svg" "Assets\AppList.scale-200.png" -w 88 -h 88
-cim png "..\..\..\logo\icon16x16d.svg" "Assets\AppList.targetsize-24_altform-unplated.png" -w 24 -h 24
-cim png "..\..\..\logo\icon16x16d.svg" "Assets\MedTile.png" -w 150 -h 150
-cim png "..\..\..\logo\icon16x16d.svg" "Assets\MedTile.scale-200.png" -w 300 -h 300
-cim png "..\..\..\logo\icon16x16d.svg" "Assets\StoreLogo.png" -w 50 -h 50
+"C:\Program Files\cim\bin\cim.exe" png "..\..\..\logo\icon16x16d.svg" "Assets\AppList.png" -w 44 -h 44
+"C:\Program Files\cim\bin\cim.exe" png "..\..\..\logo\icon16x16d.svg" "Assets\AppList.scale-200.png" -w 88 -h 88
+"C:\Program Files\cim\bin\cim.exe" png "..\..\..\logo\icon16x16d.svg" "Assets\AppList.targetsize-24_altform-unplated.png" -w 24 -h 24
+"C:\Program Files\cim\bin\cim.exe" png "..\..\..\logo\icon16x16d.svg" "Assets\MedTile.png" -w 150 -h 150
+"C:\Program Files\cim\bin\cim.exe" png "..\..\..\logo\icon16x16d.svg" "Assets\MedTile.scale-200.png" -w 300 -h 300
+"C:\Program Files\cim\bin\cim.exe" png "..\..\..\logo\icon16x16d.svg" "Assets\StoreLogo.png" -w 50 -h 50
 
 Write-Output "==> Copy Binary"
 Copy-Item ".\alkaid0.exe" ".\dist\Bin\alkaid0.exe"
