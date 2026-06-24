@@ -133,7 +133,6 @@ jobs:
   build-msix:
     runs-on: windows-latest
     needs: [ build ]
-    if: github.event_name == 'release' && github.event.action == 'published'
     steps:
       - name: Checkout 代码
         uses: actions/checkout@v6
