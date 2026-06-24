@@ -8,8 +8,8 @@ New-Item "Assets" -ItemType Directory
 Write-Output "==> Get Git Info"
 $tag = git describe --tags --abbrev=0 2>$null
 if (-not $tag) {
-    Write-Error "  --> No tags found in this repository."
-    exit 1
+    Write-Output "  --> No tags found in this repository."
+    $tag = "v0.0.0"
 } 
 $version = $tag -replace '^v', ''
 Write-Output "  --> Git Tag Version: ${version}"
