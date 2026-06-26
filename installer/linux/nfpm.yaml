@@ -3,6 +3,10 @@ contents:
   - src: ./alkaid0
     dst: /usr/bin/alkaid0
 
-  # 统一中转文件夹（注意保留目录结构）
+  # 统一中转文件夹
   - src: ./service/
     dst: /usr/share/alkaid0/services/
+
+scripts:
+  postinstall: ./post.sh
+  preremove: ./clean.sh
