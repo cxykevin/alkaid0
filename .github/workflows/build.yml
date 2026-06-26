@@ -198,8 +198,8 @@ jobs:
       - name: 准备 nFPM 目录
         run: |
           cd installer/linux
-          cp ../../../temp_bin/alkaid0-linux-amd64 ./alkaid0-linux-amd64
-          cp ../../../temp_bin/alkaid0-linux-arm64 ./alkaid0-linux-arm64
+          cp ../../temp_bin/alkaid0-linux-amd64 ./alkaid0-linux-amd64
+          cp ../../temp_bin/alkaid0-linux-arm64 ./alkaid0-linux-arm64
           mkdir output
           
       - name: nFPM 打包
