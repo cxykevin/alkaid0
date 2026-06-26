@@ -195,6 +195,9 @@ jobs:
           name: alkaid0-linux-windows-binaries   # 包含 alkaid0-windows-amd64.exe
           path: ./temp_bin
 
+      - name: 安装 nFPM
+        uses: burningalchemist/action-gh-nfpm@v1
+
       - name: 准备 nFPM 目录
         run: |
           cd installer/linux
@@ -211,14 +214,14 @@ jobs:
           VERSION=${VERSION#v}
           export VERSION
           
-          BINARY_ARCH=amd64 GOARCH=amd64 --target ./output/alkaid0-linux-amd64.apk --packager apk
-          BINARY_ARCH=amd64 GOARCH=amd64 --target ./output/alkaid0-linux-amd64.deb --packager deb
-          BINARY_ARCH=amd64 GOARCH=amd64 --target ./output/alkaid0-linux-amd64.pkg.tar.zst --packager archlinux
-          BINARY_ARCH=amd64 GOARCH=amd64 --target ./output/alkaid0-linux-amd64.rpm --packager rpm
-          BINARY_ARCH=arm64 GOARCH=arm64 --target ./output/alkaid0-linux-arm64.apk --packager apk
-          BINARY_ARCH=arm64 GOARCH=arm64 --target ./output/alkaid0-linux-arm64.deb --packager deb
-          BINARY_ARCH=arm64 GOARCH=arm64 --target ./output/alkaid0-linux-arm64.pkg.tar.zst --packager archlinux
-          BINARY_ARCH=arm64 GOARCH=arm64 --target ./output/alkaid0-linux-arm64.rpm --packager rpm
+          BINARY_ARCH=amd64 GOARCH=amd64 nfpm pkg --target ./output/alkaid0-linux-amd64.apk --packager apk
+          BINARY_ARCH=amd64 GOARCH=amd64 nfpm pkg --target ./output/alkaid0-linux-amd64.deb --packager deb
+          BINARY_ARCH=amd64 GOARCH=amd64 nfpm pkg --target ./output/alkaid0-linux-amd64.pkg.tar.zst --packager archlinux
+          BINARY_ARCH=amd64 GOARCH=amd64 nfpm pkg --target ./output/alkaid0-linux-amd64.rpm --packager rpm
+          BINARY_ARCH=arm64 GOARCH=arm64 nfpm pkg --target ./output/alkaid0-linux-arm64.apk --packager apk
+          BINARY_ARCH=arm64 GOARCH=arm64 nfpm pkg --target ./output/alkaid0-linux-arm64.deb --packager deb
+          BINARY_ARCH=arm64 GOARCH=arm64 nfpm pkg --target ./output/alkaid0-linux-arm64.pkg.tar.zst --packager archlinux
+          BINARY_ARCH=arm64 GOARCH=arm64 nfpm pkg --target ./output/alkaid0-linux-arm64.rpm --packager rpm
 
       - name: 上传产物
         uses: actions/upload-artifact@v7
