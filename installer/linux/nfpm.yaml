@@ -1,0 +1,8 @@
+contents:
+  # 程序主文件
+  - src: ./alkaid0
+    dst: /usr/bin/alkaid0
+
+  # 统一中转文件夹（注意保留目录结构）
+  - src: ./service/
+    dst: /usr/share/alkaid0/services/
