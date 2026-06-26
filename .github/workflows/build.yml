@@ -130,6 +130,7 @@ jobs:
           ALKAID0_TEST_LESS_MEMORY_MODE: "true"
         run: |
           go test -v ./...
+
   build-msix:
     runs-on: windows-latest
     needs: [ build ]
@@ -181,9 +182,53 @@ jobs:
           name: alkaid0-msix
           path: installer/windows/msix/alkaid0-windows-amd64.msix
 
+  build-linux-pkgs:
+    runs-on: ubuntu-latest
+    needs: [ build ]
+    steps:
+      - name: Checkout 代码
+        uses: actions/checkout@v6
+
+      - name: 下载 Linux 二进制产物
+        uses: actions/download-artifact@v8
+        with:
+          name: alkaid0-linux-windows-binaries   # 包含 alkaid0-windows-amd64.exe
+          path: ./temp_bin
+
+      - name: 准备 nFPM 目录
+        run: |
+          cd installer/linux
+          cp ../../../temp_bin/alkaid0-linux-amd64 ./alkaid0-linux-amd64
+          cp ../../../temp_bin/alkaid0-linux-arm64 ./alkaid0-linux-arm64
+          mkdir output
+          
+      - name: nFPM 打包
+        run: |
+          VERSION=$(git describe --tags --abbrev=0 2>/dev/null)
+          if [ -z "$VERSION" ]; then
+              VERSION="0.0.0"
+          fi
+          VERSION=${VERSION#v}
+          export VERSION
+          
+          BINARY_ARCH=amd64 GOARCH=amd64 --target ./output/alkaid0-linux-amd64.apk --packager apk
+          BINARY_ARCH=amd64 GOARCH=amd64 --target ./output/alkaid0-linux-amd64.deb --packager deb
+          BINARY_ARCH=amd64 GOARCH=amd64 --target ./output/alkaid0-linux-amd64.pkg.zst --packager archlinux
+          BINARY_ARCH=amd64 GOARCH=amd64 --target ./output/alkaid0-linux-amd64.rpm --packager rpm
+          BINARY_ARCH=arm64 GOARCH=arm64 --target ./output/alkaid0-linux-arm64.apk --packager apk
+          BINARY_ARCH=arm64 GOARCH=arm64 --target ./output/alkaid0-linux-arm64.deb --packager deb
+          BINARY_ARCH=arm64 GOARCH=arm64 --target ./output/alkaid0-linux-arm64.pkg.zst --packager archlinux
+          BINARY_ARCH=arm64 GOARCH=arm64 --target ./output/alkaid0-linux-arm64.rpm --packager rpm
+
+      - name: 上传产物
+        uses: actions/upload-artifact@v7
+        with:
+          name: alkaid0-linux-pkgs
+          path: output/*
+
   publish:
     runs-on: ubuntu-latest
-    needs: [ build, build-darwin, test, build-msix ]
+    needs: [ build, build-darwin, test, build-msix, build-linux-pkgs ]
     if: github.event_name == 'release' && github.event.action == 'published'
     permissions:
       contents: write
