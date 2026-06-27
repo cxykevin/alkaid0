@@ -167,8 +167,24 @@ jobs:
           copy ..\..\..\temp_bin\alkaid0-windows-amd64.exe .\alkaid0.exe
 
       - name: 写入证书密钥
+        shell: pwsh
+        env:
+          CERT_KEY: ${{ secrets.CERT_KEY }}
         run: |
-          echo "${{ secrets.CERT_KEY }}" > installer/windows/msix/.cert.tmp
+          if ([string]::IsNullOrEmpty($env:CERT_KEY)) {
+            Write-Host "⚠️ CERT_KEY secret 未设置，正在生成新证书..."
+            # 生成自签名证书（不读取 manifest，直接指定主题）
+            winapp cert generate --subject "CN=YourPublisher" --output ./devcert.pfx
+            # 读取 PFX 并转为 Base64
+            $bytes = [System.IO.File]::ReadAllBytes("./devcert.pfx")
+            $base64 = [System.Convert]::ToBase64String($bytes)
+            $base64 | Out-File -FilePath "installer/windows/msix/.cert.tmp" -Encoding utf8
+            Remove-Item ./devcert.pfx
+            Write-Host "✅ 新证书已生成并保存为 Base64 格式 (installer/windows/msix/.cert.tmp)"
+          } else {
+            $env:CERT_KEY | Out-File -FilePath "installer/windows/msix/.cert.tmp" -Encoding utf8
+            Write-Host "✅ 使用来自 CERT_KEY secret 的现有证书"
+          }
 
       - name: 执行打包脚本
         shell: pwsh
