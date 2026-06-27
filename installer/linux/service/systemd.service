@@ -1,0 +1,16 @@
+[Unit]
+Description=Alkaid0 Coding Agent
+After=network.target
+Wants=network.target
+
+[Service]
+ExecStart=/usr/bin/alkaid0
+Type=simple
+User=root
+Restart=on-failure
+RestartSec=5s
+Environment="ALKAID0_LOG_PATH=/var/log/alkaid0/log.log"
+Environment="ALKAID0_CONFIG_PATH=/etc/alkaid0/config.json"
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,47 @@
+name: alkaid0
+
+arch: ${GOARCH}
+version: ${VERSION}
+
+# 元数据
+maintainer: "cxykevin <cxykevin@yeah.net>"
+platform: "linux"
+section: "admin"
+license: "GPL-3.0"
+description: "Alkaid0 Coding Agent"
+homepage: "https://github.com/cxykevin/alkaid0"
+
+contents:
+  # 程序主文件
+  - src: ./alkaid0-linux-${BINARY_ARCH}
+    dst: /usr/bin/alkaid0
+    file_info:
+      owner: root
+      group: root
+      mode: 0755
+
+  # 统一中转文件夹
+  - src: ./service/
+    dst: /usr/share/alkaid0/services/
+    file_info:
+      owner: root
+      group: root
+      mode: 0755
+
+scripts:
+  postinstall: ./post.sh
+  preremove: ./clean.sh
+
+overrides:
+  deb:
+    depends:
+      - libc6          # Debian/Ubuntu 的 libc 包
+  rpm:
+    depends:
+      - glibc          # RHEL/Fedora 的 libc 包
+  archlinux:
+    depends:
+      - glibc          # Arch Linux 的 libc 包
+  apk:
+    depends:
+      - musl           # Alpine 的 musl libc 包
