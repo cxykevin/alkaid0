@@ -229,7 +229,7 @@ jobs:
                   sed -e "s/\${VERSION}/$VERSION/g" \
                       -e "s/\${GOARCH}/$arch/g" \
                       -e "s/\${BINARY_ARCH}/$arch/g" \
-                      nfpm.template.yml > nfpm.yml
+                      nfpm.template.yaml > nfpm.yaml
                   
                   # 执行打包命令
                   BINARY_ARCH="$arch" GOARCH="$arch" \
