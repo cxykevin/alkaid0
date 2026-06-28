@@ -9,6 +9,7 @@ import (
 
 	"github.com/cxykevin/alkaid0/config"
 	cfgStructs "github.com/cxykevin/alkaid0/config/structs"
+	"github.com/cxykevin/alkaid0/mock/openai"
 	u "github.com/cxykevin/alkaid0/utils"
 )
 
@@ -68,9 +69,9 @@ func TestPromptIntegration_SingleClient(t *testing.T) {
 		t.Skip("ALKAID0_DEBUG_MOCKSERVER not set, skipping test")
 		return
 	}
-	// // 启动 mock server（依赖环境变量 ALKAID0_DEBUG_MOCKSERVER=true）
-	// os.Setenv("ALKAID0_DEBUG_MOCKSERVER", "true")
-	// openai.Start()
+
+	// 启动 mock server（serverOnce.Do 保证只启动一次）
+	openai.StartServerTask()
 
 	setupConfigForTest()
 
@@ -90,8 +91,8 @@ func TestPromptIntegration_SingleClient(t *testing.T) {
 	}
 	defer os.RemoveAll(tmpDir)
 
-	// call 收集通道
-	calls := make(chan ReceivedCall, 20)
+	// call 收集通道（buffer 需足够容纳所有流式 broadcast）
+	calls := make(chan ReceivedCall, 100)
 
 	// 注册第一个客户端并创建 session
 	callFunc := func(name string, data any, _ *string) error {
@@ -114,7 +115,7 @@ func TestPromptIntegration_SingleClient(t *testing.T) {
 
 	fmt.Println("[TEST] calling SessionLoad to attach second client")
 	// attach 第二个客户端（用来接收广播）
-	calls2 := make(chan ReceivedCall, 20)
+	calls2 := make(chan ReceivedCall, 100)
 	callFunc2 := func(name string, data any, _ *string) error {
 		calls2 <- ReceivedCall{Name: name, Data: data}
 		return nil
@@ -163,6 +164,9 @@ func TestPromptIntegration_MultiClient(t *testing.T) {
 		return
 	}
 
+	// 启动 mock server（serverOnce.Do 保证只启动一次）
+	openai.StartServerTask()
+
 	setupConfigForTest()
 
 	// 重置全局状态
@@ -180,10 +184,10 @@ func TestPromptIntegration_MultiClient(t *testing.T) {
 	}
 	defer os.RemoveAll(tmpDir)
 
-	// 三个客户端
+	// 三个客户端（buffer 需足够容纳所有流式 broadcast）
 	chs := make([]chan ReceivedCall, 3)
 	for i := range chs {
-		chs[i] = make(chan ReceivedCall, 50)
+		chs[i] = make(chan ReceivedCall, 100)
 	}
 
 	callFor := func(i int) func(string, any, *string) error {
