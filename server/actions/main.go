@@ -16,6 +16,7 @@ func InitFuncs(srv *jsonrpc.Server) {
 	jsonrpc.Set(srv, "session/new", SessionNew)
 	jsonrpc.Set(srv, "session/load", SessionLoad)
 	jsonrpc.Set(srv, "session/list", SessionList)
+	jsonrpc.Set(srv, "session/delete", SessionDelete)
 	jsonrpc.Set(srv, "session/set_config_option", SessionSetConfigOption)
 	jsonrpc.Set(srv, "session/set_model", SessionSetModel)
 	jsonrpc.Set(srv, "session/setModel", SessionSetModel)

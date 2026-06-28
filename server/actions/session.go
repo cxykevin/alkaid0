@@ -1138,6 +1138,11 @@ func SessionSetModel(req SessionSetModelRequest, call func(string, any, *string)
 	}, nil
 }
 
+// SessionDeleteRequest 删除会话的请求
+type SessionDeleteRequest struct {
+	SessionID string `json:"sessionId"`
+}
+
 // SessionListRequest 列出会话的请求
 type SessionListRequest struct {
 	Cwd    string `json:"cwd"`
@@ -1227,6 +1232,43 @@ func SessionList(req SessionListRequest, call func(string, any, *string) error, 
 	return SessionListResponse{
 		Sessions: sess,
 	}, nil
+}
+
+// SessionDelete 删除会话（ACP session/delete）
+// 根据 ACP 规范：
+//   - 删除的会话不再出现在 session/list 结果中
+//   - 删除已删除或不存在的会话应静默成功
+//   - 返回空对象 {}
+func SessionDelete(req SessionDeleteRequest, call func(string, any, *string) error, connID uint64) (u.H, error) {
+	if req.SessionID == "" {
+		return u.H{}, fmt.Errorf("sessionId is empty")
+	}
+
+	cwd, id, err := sessionID2Cwd(req.SessionID)
+	if err != nil {
+		// 无效的会话ID，按规范静默成功
+		return u.H{}, nil
+	}
+
+	// 如果会话当前活跃，先关闭它
+	sessLock.Lock()
+	if obj, ok := sessions[req.SessionID]; ok && obj.session.ID == id {
+		sessLock.Unlock()
+		closeSession(req.SessionID)
+	} else {
+		sessLock.Unlock()
+	}
+
+	db, err := loadDB(cwd)
+	if err != nil {
+		return u.H{}, nil
+	}
+	defer closeDB(cwd)
+
+	// 删除聊天记录（无论是否存在，按规范静默成功）
+	_ = funcs.DeleteChat(db, &structs.Chats{ID: id})
+
+	return u.H{}, nil
 }
 
 // SubAgentList 列出工作目录中所有 subagent

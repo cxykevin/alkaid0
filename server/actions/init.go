@@ -37,8 +37,11 @@ var AgentCapabilities = u.H{
 		"audio":           false,
 		"embeddedContext": false,
 	},
-	"mcp":  false,
-	"list": u.H{},
+	"mcp":              false,
+	"list":             u.H{},
+	"sessionCapabilities": u.H{
+		"delete": u.H{},
+	},
 }
 
 // AgentInfo 服务端信息常量
