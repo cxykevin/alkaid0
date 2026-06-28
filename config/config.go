@@ -1,6 +1,8 @@
 package config
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -32,9 +34,25 @@ func Path() string {
 	return configPath
 }
 
+// generateKey 生成一个以 "alk-" 开头、长度 > 12 的随机密钥
+func generateKey() string {
+	b := make([]byte, 20)
+	_, _ = rand.Read(b)
+	return "alk-" + hex.EncodeToString(b)
+}
+
+// ensureKey 检查 Server.Key 是否为空，若为空则自动生成并保存配置
+func ensureKey() {
+	if GlobalConfig.Server.Key == "" {
+		GlobalConfig.Server.Key = generateKey()
+		Save()
+	}
+}
+
 // Load 加载配置文件。
 // 先初始化默认配置（含产品版本号和默认模型），然后尝试从文件系统读取 JSON 配置。
 // 文件不存在或解析失败时会备份原文件（加上 .bak 后缀）并用默认配置兜底。
+// 加载完成后若 Server.Key 为空则自动生成随机密钥并保存。
 func Load() {
 	// 使用默认配置初始化（作为任何解析失败的 fallback）
 	model := structs.ModelsConfig{}
@@ -67,6 +85,8 @@ func Load() {
 			_ = os.Rename(expandedPath, backupPath)
 		}
 		Save()
+		// 新创建的配置文件需要自动生成密钥
+		ensureKey()
 		return
 	}
 
@@ -77,6 +97,9 @@ func Load() {
 		_ = os.Rename(expandedPath, backupPath)
 		return
 	}
+
+	// 加载完成后检查密钥，为空则自动生成
+	ensureKey()
 }
 
 // Save 将当前配置序列化为 JSON 并写入配置文件。

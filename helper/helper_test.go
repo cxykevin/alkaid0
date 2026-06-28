@@ -340,3 +340,89 @@ func TestMergeRPCConfig(t *testing.T) {
 		})
 	}
 }
+
+func TestSystemConfigPath(t *testing.T) {
+	path := systemConfigPathFn()
+	if path == "" {
+		t.Error("systemConfigPathFn() returned empty")
+	}
+	// Must be an absolute path with config.json suffix
+	if path[len(path)-11:] != "config.json" {
+		t.Errorf("systemConfigPathFn() = %q, expected config.json path", path)
+	}
+	if path[0] != '/' && (len(path) < 3 || path[1] != ':') {
+		t.Errorf("systemConfigPathFn() = %q, expected absolute path", path)
+	}
+}
+
+func TestLoadConfigChain(t *testing.T) {
+	sysDir := t.TempDir()
+	sysConfig := filepath.Join(sysDir, "config.json")
+
+	// Override systemConfigPathFn for this test
+	origSysPath := systemConfigPathFn
+	systemConfigPathFn = func() string {
+		return sysConfig
+	}
+	t.Cleanup(func() { systemConfigPathFn = origSysPath })
+
+	userFile := filepath.Join(t.TempDir(), "user.json")
+
+	t.Run("no config files", func(t *testing.T) {
+		// Override systemConfigPathFn to return nonexistent path for this subtest
+		orig := systemConfigPathFn
+		systemConfigPathFn = func() string { return "/nonexistent-alkaid0-test/config.json" }
+		defer func() { systemConfigPathFn = orig }()
+
+		cfg := structs.RPCConfig{Host: "default", Port: 7433, Path: "/acp", Key: "defaultkey"}
+		loadConfigChain(&cfg, "/nonexistent/config.json", false)
+		if cfg.Host != "default" {
+			t.Errorf("Host = %q, want %q", cfg.Host, "default")
+		}
+	})
+
+	t.Run("chain loads system then user", func(t *testing.T) {
+		// Write system config
+		writeTempJSON(t, sysConfig, `{"server":{"host":"syshost","port":1234,"path":"/sys","key":"syskey"}}`)
+
+		// Write user config (overrides host and key)
+		writeTempJSON(t, userFile, `{"server":{"host":"userhost","key":"userkey"}}`)
+
+		cfg := structs.RPCConfig{Host: "default", Port: 7433, Path: "/acp", Key: ""}
+		loadConfigChain(&cfg, userFile, false)
+
+		if cfg.Host != "userhost" {
+			t.Errorf("Host = %q, want %q", cfg.Host, "userhost")
+		}
+		if cfg.Port != 1234 {
+			t.Errorf("Port = %d, want %d", cfg.Port, 1234)
+		}
+		if cfg.Path != "/sys" {
+			t.Errorf("Path = %q, want %q", cfg.Path, "/sys")
+		}
+		if cfg.Key != "userkey" {
+			t.Errorf("Key = %q, want %q", cfg.Key, "userkey")
+		}
+	})
+
+	t.Run("explicit config skips system config", func(t *testing.T) {
+		writeTempJSON(t, userFile, `{"server":{"host":"explicit","port":9999,"path":"/exp","key":"expkey"}}`)
+
+		cfg := structs.RPCConfig{Host: "default", Port: 7433, Path: "/acp", Key: ""}
+		loadConfigChain(&cfg, userFile, true)
+
+		if cfg.Host != "explicit" {
+			t.Errorf("Host = %q, want %q", cfg.Host, "explicit")
+		}
+		if cfg.Port != 9999 {
+			t.Errorf("Port = %d, want %d", cfg.Port, 9999)
+		}
+	})
+}
+
+func writeTempJSON(t *testing.T, path, content string) {
+	t.Helper()
+	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+}

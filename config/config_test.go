@@ -192,3 +192,80 @@ func TestExpandPathWithEnvVar(t *testing.T) {
 		t.Errorf("Expected 'test_value/path', got %s", result)
 	}
 }
+
+func TestGenerateKey(t *testing.T) {
+	key := generateKey()
+
+	// Check prefix
+	if len(key) < 4 || key[:4] != "alk-" {
+		t.Errorf("generateKey() = %q, want prefix 'alk-'", key)
+	}
+
+	// Check length > 12
+	if len(key) <= 12 {
+		t.Errorf("generateKey() = %q (len=%d), want length > 12", key, len(key))
+	}
+
+	// Check uniqueness
+	key2 := generateKey()
+	if key == key2 {
+		t.Error("generateKey() returned same key twice")
+	}
+}
+
+func TestLoadAutoGeneratesKeyWhenEmpty(t *testing.T) {
+	tmpDir := t.TempDir()
+	testConfigPath := filepath.Join(tmpDir, "test_key_config.json")
+
+	// Write config with empty key
+	emptyConfig := structs.Config{
+		Version: 1,
+		Server: structs.RPCConfig{
+			Key: "",
+		},
+	}
+	data, _ := json.Marshal(emptyConfig)
+	os.WriteFile(testConfigPath, data, 0644)
+
+	oldEnv := os.Getenv(envConfigName)
+	defer os.Setenv(envConfigName, oldEnv)
+	os.Setenv(envConfigName, testConfigPath)
+	configPath = ""
+
+	Load()
+
+	if GlobalConfig.Server.Key == "" {
+		t.Error("Server.Key should be auto-generated when empty")
+	}
+
+	if len(GlobalConfig.Server.Key) <= 12 {
+		t.Errorf("Server.Key = %q (len=%d), want length > 12", GlobalConfig.Server.Key, len(GlobalConfig.Server.Key))
+	}
+}
+
+func TestLoadPreservesExistingKey(t *testing.T) {
+	tmpDir := t.TempDir()
+	testConfigPath := filepath.Join(tmpDir, "test_existing_key.json")
+
+	existingKey := "alk-my-existing-secret-key-123"
+
+	cfg := structs.Config{
+		Version: 1,
+		Server: structs.RPCConfig{
+			Key: existingKey,
+		},
+	}
+	data, _ := json.Marshal(cfg)
+	os.WriteFile(testConfigPath, data, 0644)
+
+	oldEnv := os.Getenv(envConfigName)
+	defer os.Setenv(envConfigName, oldEnv)
+	os.Setenv(envConfigName, testConfigPath)
+	configPath = ""
+
+	Load()
+
+	if GlobalConfig.Server.Key != existingKey {
+		t.Errorf("Server.Key = %q, want %q", GlobalConfig.Server.Key, existingKey)
+	}
+}

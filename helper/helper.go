@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"syscall"
@@ -29,6 +30,14 @@ const (
 )
 
 var defaultConfigPath = "~/.config/alkaid0/config.json"
+
+// systemConfigPathFn 返回平台相关的系统级配置文件路径，默认为函数，测试时可替换
+var systemConfigPathFn = func() string {
+	if runtime.GOOS == "windows" {
+		return `C:\ProgramData\alkaid0\config.json`
+	}
+	return "/etc/alkaid0/config.json"
+}
 
 // StartHelper 读取配置并连接 websocket，实现 stdin与websocket 的双向转发。
 // 使用两个独立 goroutine 处理双向通信，分别追踪完成状态：
@@ -116,7 +125,7 @@ func StartHelper(args []string) {
 
 // buildHelperConfig 根据 args 构建 RPC 配置，配置来源优先级（低→高）：
 //  1. 代码硬编码默认值 (Host=127.0.0.1, Port=7433)
-//  2. 配置文件 ($ALKAID0_CONFIG_PATH 或 ~/.config/alkaid0/config.json)
+//  2. 配置文件（系统级 /etc/alkaid0/config.json → 用户级 ~/.config/alkaid0/config.json，后覆盖前）
 //  3. 环境变量 (ALKAID0_HELPER_HOST/PORT/PATH/KEY)
 //  4. 命令行 flag（最高优先级，flags.Visit() 确保只覆盖显式指定的 flag）
 func buildHelperConfig(args []string) (structs.RPCConfig, error) {
@@ -155,15 +164,20 @@ func buildHelperConfig(args []string) (structs.RPCConfig, error) {
 	// 第 2 步：从配置文件加载（若存在且可解析）
 	// 先取 -config flag 的值，如果环境变量 ALKAID0_CONFIG_PATH 存在则覆盖
 	configPath = *configPathFlag
+
+	configExplicit := false
 	if envPath := os.Getenv(envConfigPath); envPath != "" {
 		configPath = envPath
+		configExplicit = true
 	}
+	flags.Visit(func(f *flag.Flag) {
+		if f.Name == "config" {
+			configExplicit = true
+		}
+	})
 
-	loaded, err := loadConfigFile(configPath)
-	if err != nil {
-		return cfg, err
-	}
-	mergeRPCConfig(&cfg, loaded)
+	// 加载配置文件链：非显式指定时先加载系统级配置；显式指定时仅加载指定配置
+	loadConfigChain(&cfg, configPath, configExplicit)
 
 	// 第 3 步：环境变量覆盖（优先级高于配置文件）
 	if envHost := os.Getenv(envHost); envHost != "" {
@@ -210,6 +224,25 @@ func buildHelperConfig(args []string) (structs.RPCConfig, error) {
 	}
 
 	return cfg, nil
+}
+
+	// loadConfigChain 按优先级顺序加载多个配置文件，后加载的覆盖先加载的同名字段。
+// 当未显式指定配置路径时，先尝试加载系统级配置，再加载用户配置进行覆盖。
+// 当显式指定配置路径时，仅加载指定配置。
+func loadConfigChain(cfg *structs.RPCConfig, userConfigPath string, configExplicit bool) {
+	if !configExplicit {
+		// 未显式指定时，先加载系统级配置作为基座
+		if sysPath := systemConfigPathFn(); sysPath != "" {
+			if loaded, err := loadConfigFile(sysPath); err == nil {
+				mergeRPCConfig(cfg, loaded)
+			}
+		}
+	}
+
+	// 加载用户配置（或显式指定的配置），覆盖低优先级的值
+	if loaded, err := loadConfigFile(userConfigPath); err == nil {
+		mergeRPCConfig(cfg, loaded)
+	}
 }
 
 // loadConfigFile 从指定路径加载配置文件并提取 RPC 配置
