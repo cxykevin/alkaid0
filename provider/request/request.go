@@ -722,13 +722,40 @@ func SendRequest(ctx context.Context, session *storageStructs.Chats, callback fu
 	session.State = state.StateRequesting
 
 	// 向 LLM 发送请求，solveFunc 会在每个流式 chunk 到达时被调用
-	err = SimpleOpenAIRequest(ctx, modelCfg.ProviderURL, modelCfg.ProviderKey, modelCfg.ModelID, *obj, solveFunc)
-	if err != nil {
-		return true, err
+	requestErr := SimpleOpenAIRequest(ctx, modelCfg.ProviderURL, modelCfg.ProviderKey, modelCfg.ModelID, *obj, solveFunc)
+	isCancel := requestErr != nil && errors.Is(requestErr, context.Canceled)
+
+	// 取消时在 goroutine 中异步完成最后一批内容的持久化，然后立即返回
+	if isCancel {
+		go func(msgID uint64, finalDelta, finalThinkingDelta, toolCallingJSON string,
+			promptUsage, completionUsage, totalUsage, cachedUsage uint32,
+			lastFlushLen, lastFlushThinkingLen int) {
+			_, delta, thinkingDelta, _ := solver.DoneToken()
+			fd := finalDelta + delta
+			ftd := finalThinkingDelta + thinkingDelta
+			if len(fd) != lastFlushLen || len(ftd) != lastFlushThinkingLen {
+				db.Model(&storageStructs.Messages{}).Where("id = ?", msgID).Updates(storageStructs.Messages{
+					Delta:            fd,
+					ThinkingDelta:    ftd,
+					PromptTokens:     promptUsage,
+					CompletionTokens: completionUsage,
+					TotalTokens:      totalUsage,
+					CachedTokens:     cachedUsage,
+				})
+			}
+			if toolCallingJSON != "" {
+				db.Model(&storageStructs.Messages{}).Where("id = ?", msgID).Update("tool_calling_json_string", toolCallingJSON)
+			}
+		}(msgID, gDelta.String(), gThinkingDelta.String(), solver.GetToolsOrigin(),
+			promptUsage, completionUsage, totalUsage, cachedUsage,
+			lastFlushLen, lastFlushThinkingLen)
+		return true, requestErr
 	}
-	ok, delta, thinkingDelta, err := solver.DoneToken()
-	if err != nil {
-		return true, err
+
+	// 非取消路径（正常完成 或 其他错误）：同步持久化
+	ok, delta, thinkingDelta, solverErr := solver.DoneToken()
+	if solverErr != nil {
+		return true, solverErr
 	}
 	gDelta.WriteString(delta)
 	tools := solver.GetTools()
@@ -736,31 +763,38 @@ func SendRequest(ctx context.Context, session *storageStructs.Chats, callback fu
 	// 处理响应：无内容且无工具调用时删除占位消息记录
 	if gDelta.String() == "" && gThinkingDelta.String() == "" && len(tools) == 0 {
 		// 空响应时删除占位消息，不保留无意义的记录
-		err = db.Delete(&storageStructs.Messages{}, msgID).Error
+		if err := db.Delete(&storageStructs.Messages{}, msgID).Error; err != nil {
+			return true, err
+		}
 	} else {
 		finalDelta := gDelta.String()
 		finalThinkingDelta := gThinkingDelta.String()
 		// 仅当最后一次刷写后有新内容时才执行数据库更新，避免冗余 I/O
 		if len(finalDelta) != lastFlushLen || len(finalThinkingDelta) != lastFlushThinkingLen {
-			err = db.Model(&storageStructs.Messages{}).Where("id = ?", msgID).Updates(storageStructs.Messages{
+			if err := db.Model(&storageStructs.Messages{}).Where("id = ?", msgID).Updates(storageStructs.Messages{
 				Delta:            finalDelta,
 				ThinkingDelta:    finalThinkingDelta,
 				PromptTokens:     promptUsage,
 				CompletionTokens: completionUsage,
 				TotalTokens:      totalUsage,
 				CachedTokens:     cachedUsage,
-			}).Error
+			}).Error; err != nil {
+				return true, err
+			}
 		}
-		if err == nil {
-			// 保存工具调用的原始 JSON 字符串，用于后续审批和执行
-			err = db.Model(&storageStructs.Messages{}).Where("id = ?", msgID).Update(
-				"tool_calling_json_string", string(solver.GetToolsOrigin()),
-			).Error
+		// 保存工具调用的原始 JSON 字符串，用于后续审批和执行
+		if err := db.Model(&storageStructs.Messages{}).Where("id = ?", msgID).Update(
+			"tool_calling_json_string", string(solver.GetToolsOrigin()),
+		).Error; err != nil {
+			return true, err
 		}
 	}
-	if err != nil {
-		return true, err
+
+	// 请求发生其他错误时，内容已持久化完毕，只需将错误向上传递
+	if requestErr != nil {
+		return true, requestErr
 	}
+
 	// 有工具调用时转入审批等待状态，暂停回复处理直到用户或自动规则做出决定
 	if len(tools) > 0 {
 		session.State = state.StateWaitApprove
