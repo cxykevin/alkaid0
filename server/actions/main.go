@@ -24,6 +24,13 @@ func InitFuncs(srv *jsonrpc.Server) {
 	jsonrpc.Set(srv, "session/prompt", SessionPrompt)
 	jsonrpc.Set(srv, "session/cancel", SessionCancel)
 	jsonrpc.Set(srv, "alk.cxykevin.top/list_subagent", SubAgentList)
+	jsonrpc.Set(srv, "alk.cxykevin.top/fs/stat", FsStat)
+	jsonrpc.Set(srv, "alk.cxykevin.top/fs/read", FsRead)
+	jsonrpc.Set(srv, "alk.cxykevin.top/fs/write", FsWrite)
+	jsonrpc.Set(srv, "alk.cxykevin.top/fs/mkdir", FsMkdir)
+	jsonrpc.Set(srv, "alk.cxykevin.top/fs/rm", FsRm)
+	jsonrpc.Set(srv, "alk.cxykevin.top/fs/chmod", FsChmod)
+	jsonrpc.Set(srv, "alk.cxykevin.top/fs/chown", FsChown)
 	jsonrpc.Set(srv, "_close", Close)
 }
 
