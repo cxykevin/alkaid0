@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/cxykevin/alkaid0/config"
 	"github.com/cxykevin/alkaid0/log"
@@ -13,6 +14,14 @@ import (
 	"github.com/cxykevin/alkaid0/storage/structs"
 	"github.com/cxykevin/alkaid0/ui/funcs"
 	"github.com/cxykevin/alkaid0/ui/state"
+)
+
+// 重试配置
+const (
+	// maxRetries 请求失败时的最大重试次数
+	maxRetries = 3
+	// baseBackoff 指数退避的基准间隔（秒），第 n 次重试等待 baseBackoff * 2^(n-1)
+	baseBackoff = 1 * time.Second
 )
 
 var logger = log.New("loop")
@@ -158,56 +167,98 @@ func (p *Object) Start(ctx context.Context) {
 				doAutoSummary()
 			}
 
-			finish, err := funcs.SendRequest(responseCtx, session, func(delta string, thinkingDelta string, id uint64, usage reqStructs.Usage, agentID *string) error {
-				select {
-				case <-responseCtx.Done():
-					return responseCtx.Err()
-				default:
-				}
-				if thinkingDelta != "" {
-					if !thinkingFlag {
-						thinkingFlag = true
-					}
-				}
+			// sendRequestWithRetry 执行请求，失败时根据配置重试（指数退避）
+			var sendRequestWithRetry func() (bool, error)
+			sendRequestWithRetry = func() (bool, error) {
+				// 重置每轮重试的状态
+				thinkingFlag = false
+				responseStarted = false
 
-				if delta != "" {
-					if thinkingFlag {
-						thinkingFlag = false
+				finish, err := funcs.SendRequest(responseCtx, session, func(delta string, thinkingDelta string, id uint64, usage reqStructs.Usage, agentID *string) error {
+					select {
+					case <-responseCtx.Done():
+						return responseCtx.Err()
+					default:
 					}
-					if !responseStarted {
-						responseStarted = true
+					if thinkingDelta != "" {
+						if !thinkingFlag {
+							thinkingFlag = true
+						}
 					}
-				}
-				call(AIResponse{
-					MsgID:           id,
-					ThinkingContext: thinkingDelta,
-					Content:         delta,
-					Usage:           &usage,
-					AgentID:         agentID,
+
+					if delta != "" {
+						if thinkingFlag {
+							thinkingFlag = false
+						}
+						if !responseStarted {
+							responseStarted = true
+						}
+					}
+					call(AIResponse{
+						MsgID:           id,
+						ThinkingContext: thinkingDelta,
+						Content:         delta,
+						Usage:           &usage,
+						AgentID:         agentID,
+					})
+
+					if usage.TotalTokens != 0 {
+						// get modelID
+						modelID := session.LastModelID
+						if session.CurrentAgentID != "" {
+							modelIDRet := uint32(session.CurrentAgentConfig.AgentModel)
+							if modelIDRet != 0 {
+								modelID = modelIDRet
+							}
+						}
+						modelCfg, ok := config.GlobalConfig.Model.Models[int32(modelID)]
+						if ok {
+							if modelCfg.CompressSize != 0 && usage.TotalTokens >= modelCfg.CompressSize {
+								needCompress = true
+							}
+							if modelCfg.CompressSize == 0 && usage.TotalTokens >= 100000 {
+								needCompress = true
+							}
+						}
+
+					}
+					return nil
 				})
+				return finish, err
+			}
 
-				if usage.TotalTokens != 0 {
-					// get modelID
-					modelID := session.LastModelID
-					if session.CurrentAgentID != "" {
-						modelIDRet := uint32(session.CurrentAgentConfig.AgentModel)
-						if modelIDRet != 0 {
-							modelID = modelIDRet
+			finish, err := sendRequestWithRetry()
+
+			// 重试逻辑：仅在未开始流式响应且非用户取消的错误时重试
+			if err != nil && !responseStarted {
+				if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+					// 用户主动取消，不重试
+					logger.Info("request canceled by user, skip retry")
+				} else {
+					for retryCount := 1; retryCount <= maxRetries; retryCount++ {
+						backoff := baseBackoff * (1 << (retryCount - 1)) // 指数退避: 1s, 2s, 4s
+						logger.Warn("request failed (attempt %d/%d), retrying in %v: %v",
+							retryCount, maxRetries, backoff, err)
+
+						select {
+						case <-time.After(backoff):
+						case <-p.ctx.Done():
+							goto retryDone
+						case <-responseCtx.Done():
+							goto retryDone
+						}
+
+						finish, err = sendRequestWithRetry()
+						if err == nil || responseStarted {
+							break
+						}
+						if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+							break
 						}
 					}
-					modelCfg, ok := config.GlobalConfig.Model.Models[int32(modelID)]
-					if ok {
-						if modelCfg.CompressSize != 0 && usage.TotalTokens >= modelCfg.CompressSize {
-							needCompress = true
-						}
-						if modelCfg.CompressSize == 0 && usage.TotalTokens >= 100000 {
-							needCompress = true
-						}
-					}
-
 				}
-				return nil
-			})
+			}
+		retryDone:
 
 			p.lock.Lock()
 			p.isResponding = false

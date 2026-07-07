@@ -2,6 +2,7 @@ package jsonrpc
 
 import (
 	"encoding/json"
+	"fmt"
 
 	"github.com/cxykevin/alkaid0/config"
 	"github.com/cxykevin/alkaid0/log"
@@ -204,7 +205,12 @@ func (s *Server) StartWs() error {
 func Set[T any, T2 any](s *Server, method string, function func(T, func(string, any, *string) error, uint64) (T2, error)) {
 	logger.Debug("set method %s", method)
 	s.Methods[method] = func(v u.H, f func(string, any, *string) error, id uint64) (any, error) {
-		ret, err := function(u.Unwrap(u.Apply[T](v)), f, id)
+		params, err := u.Apply[T](v)
+		if err != nil {
+			logger.Debug("invalid params for %s: %v", method, err)
+			return nil, fmt.Errorf("invalid params: %v", err)
+		}
+		ret, err := function(params, f, id)
 		_, ok := any(ret).(IgnoreReply)
 		if ok {
 			return nil, nil
