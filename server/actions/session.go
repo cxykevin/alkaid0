@@ -110,6 +110,7 @@ var dbLock = &sync.Mutex{}
 
 // 连接ID到会话ID列表的映射
 var bindedSessionOnConn = map[uint64][]string{}
+var bindedSessionOnConnMu = &sync.Mutex{}
 
 // 连接ID到call函数的映射，用于发送跨conn通知
 var connCallMap = map[uint64]func(string, any, *string) error{}
@@ -656,7 +657,9 @@ func SessionNew(req SessionNewRequest, call func(string, any, *string) error, co
 	}
 
 	sessionID := cwd2SessionID(req.Cwd, id)
-	bindedSessionOnConn[connID] = append(u.Default(bindedSessionOnConn, connID, []string{}), sessionID)
+	bindedSessionOnConnMu.Lock()
+		bindedSessionOnConn[connID] = append(bindedSessionOnConn[connID], sessionID)
+		bindedSessionOnConnMu.Unlock()
 	// 注册连接的call函数用于后续广播
 	registerConnCall(connID, sessionID, call)
 
@@ -760,7 +763,9 @@ func SessionLoad(req SessionLoadRequest, call func(string, any, *string) error, 
 	if err != nil {
 		return SessionLoadResponse{}, err
 	}
-	bindedSessionOnConn[connID] = append(u.Default(bindedSessionOnConn, connID, []string{}), req.SessionID)
+	bindedSessionOnConnMu.Lock()
+		bindedSessionOnConn[connID] = append(bindedSessionOnConn[connID], req.SessionID)
+		bindedSessionOnConnMu.Unlock()
 	// 注册连接的call函数用于后续广播
 	registerConnCall(connID, req.SessionID, call)
 	msgs, err := funcs.GetHistory(sess)

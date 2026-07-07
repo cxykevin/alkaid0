@@ -54,7 +54,8 @@ func ExecOneToolGetPrompts(session *structs.Chats, name string) ([]string, []str
 	}
 
 	hookTmp := toolobj.GetToolHooks(name)
-	paras := t.Parameters
+	paras := make(map[string]parser.ToolParameters, len(t.Parameters))
+		maps.Copy(paras, t.Parameters)
 
 	// 将tmp中的钩子按Priority排序（高优先级排在前面，先执行）
 	sort.Slice(hookTmp, func(i, j int) bool {

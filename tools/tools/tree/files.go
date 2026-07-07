@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/cxykevin/alkaid0/tools/tools/tree/ios"
+	"regexp"
 )
 
 // MaxDepth 最大递归深度
@@ -52,7 +53,36 @@ var dirBlacklistsOrigin = map[string]bool{
 	"GEMINI.md": true,
 	"AGENTS.md": true,
 	"IFLOW.md":  true,
-	// macos DS_Store
+	// 敏感配置文件（防止 AI 删除/移动）
+	".env":         true,
+	".env.example": true,
+	".env.local":   true,
+	".env.production":  true,
+	".env.development": true,
+	".ssh":            true,
+	"id_rsa":          true,
+	"id_rsa.pub":      true,
+	"id_dsa":          true,
+	"id_ecdsa":        true,
+	"id_ed25519":      true,
+	"id_ed25519.pub":  true,
+	"authorized_keys": true,
+	"known_hosts":     true,
+	"config":          true,
+	".aws":            true,
+	".gcp":            true,
+	".azure":          true,
+	".kube":           true,
+	".docker":         true,
+	"credentials":     true,
+	"secret":          true,
+	"secrets":         true,
+	"token":           true,
+	"tokens":          true,
+	".npmrc":          true,
+	".netrc":          true,
+	".pgpass":         true,
+	// macOS DS_Store
 	"DS_Store":  true,
 	".DS_Store": true,
 	".Trash":    true,
@@ -693,34 +723,80 @@ func generateDiff(origin *Node, node *Node) ([]Diff, error) {
 	return obj, nil
 }
 
+// sensitiveFilePatterns 敏感文件路径模式（正则），Delete/Move 操作命中这些模式时拒绝执行
+var sensitiveFilePatterns = []*regexp.Regexp{
+	regexp.MustCompile(`(?i)\.pem$`),
+	regexp.MustCompile(`(?i)\.key$`),
+	regexp.MustCompile(`(?i)\.cert$`),
+	regexp.MustCompile(`(?i)\.crt$`),
+	regexp.MustCompile(`(?i)\.ovpn$`),
+	regexp.MustCompile(`(?i)id_rsa`),
+	regexp.MustCompile(`(?i)id_dsa`),
+	regexp.MustCompile(`(?i)id_ecdsa`),
+	regexp.MustCompile(`(?i)id_ed25519`),
+	regexp.MustCompile(`/?\.ssh/`),
+	regexp.MustCompile(`/?\.aws/`),
+	regexp.MustCompile(`/?\.gcp/`),
+	regexp.MustCompile(`/?\.azure/`),
+	regexp.MustCompile(`/?\.kube/`),
+	regexp.MustCompile(`/?\.docker/`),
+	regexp.MustCompile(`/?\.env$`),
+	regexp.MustCompile(`/?\.env\.`),
+	regexp.MustCompile(`/?credentials`),
+	regexp.MustCompile(`/?secrets?/`),
+}
+
+// isSensitivePath 检查路径是否匹配敏感文件模式
+func isSensitivePath(path string) bool {
+	for _, re := range sensitiveFilePatterns {
+		if re.MatchString(path) {
+			return true
+		}
+	}
+	return false
+}
+
 const permission = 0755
 
 func solveDiffTask(path string, diff []Diff) error {
+	// 在 Delete/Move 操作前进行敏感路径校验，防止 AI 删除关键文件
+	for _, d := range diff {
+		switch d.Type {
+		case DiffStatusDelete:
+			if isSensitivePath(d.Target) {
+				return fmt.Errorf("refusing to delete sensitive file: %s", d.Target)
+			}
+		case DiffStatusMove:
+			if isSensitivePath(d.Origin) || isSensitivePath(d.Target) {
+				return fmt.Errorf("refusing to move sensitive file: %s", d.Target)
+			}
+		}
+	}
 	for _, d := range diff {
 		switch d.Type {
 		case DiffStatusCreateDir:
-			err := os.MkdirAll(filepath.Join(d.Target, path), permission)
+			err := os.MkdirAll(filepath.Join(path, d.Target), permission)
 			if err != nil {
 				return err
 			}
 		case DiffStatusCreateFile:
 			// 写空文件
-			err := os.WriteFile(filepath.Join(d.Target, path), []byte{}, permission)
+			err := os.WriteFile(filepath.Join(path, d.Target), []byte{}, permission)
 			if err != nil {
 				return err
 			}
 		case DiffStatusCopy:
-			err := ios.Copy(filepath.Join(d.Origin, path), filepath.Join(d.Target, path))
+			err := ios.Copy(filepath.Join(path, d.Origin), filepath.Join(path, d.Target))
 			if err != nil {
 				return err
 			}
 		case DiffStatusDelete:
-			err := os.RemoveAll(filepath.Join(d.Target, path))
+			err := os.RemoveAll(filepath.Join(path, d.Target))
 			if err != nil {
 				return err
 			}
 		case DiffStatusMove:
-			err := os.Rename(filepath.Join(d.Origin, path), filepath.Join(d.Target, path))
+			err := os.Rename(filepath.Join(path, d.Origin), filepath.Join(path, d.Target))
 			if err != nil {
 				return err
 			}

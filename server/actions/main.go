@@ -3,7 +3,6 @@ package actions
 import (
 	"github.com/cxykevin/alkaid0/log"
 	"github.com/cxykevin/alkaid0/server/client/jsonrpc"
-	u "github.com/cxykevin/alkaid0/utils"
 )
 
 var logger = log.New("actions")
@@ -36,12 +35,17 @@ func InitFuncs(srv *jsonrpc.Server) {
 
 // Close 关闭连接
 func Close(req any, call func(string, any, *string) error, connID uint64) (any, error) {
-	for _, sessionID := range u.Default(bindedSessionOnConn, connID, []string{}) {
+	bindedSessionOnConnMu.Lock()
+	sessionIDs := bindedSessionOnConn[connID]
+	delete(bindedSessionOnConn, connID)
+	bindedSessionOnConnMu.Unlock()
+	for _, sessionID := range sessionIDs {
 		closeSession(sessionID)
 		// 注销该连接与会话的绑定
 		unregisterConnCall(connID, sessionID)
 	}
-	delete(bindedSessionOnConn, connID)
+	clientConnCapsMu.Lock()
 	delete(clientConnCaps, connID)
+	clientConnCapsMu.Unlock()
 	return nil, nil
 }

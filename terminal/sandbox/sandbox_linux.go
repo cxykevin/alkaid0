@@ -83,6 +83,14 @@ func (s *Sandbox) generateWritableMounts() string {
 			mount -o remount,rw %q 2>/dev/null || :`,
 			dir, dir, dir, dir,
 		))
+		// 保护可写目录中的 .alkaid0 子目录（只读），防止沙箱内进程修改聊天记录和配置
+		mounts = append(mounts, fmt.Sprintf(`
+			if [ -d %q/.alkaid0 ]; then
+				mount --bind %q/.alkaid0 %q/.alkaid0 2>/dev/null || :
+				mount -o remount,ro,bind %q/.alkaid0 2>/dev/null || :
+			fi`,
+			dir, dir, dir, dir,
+		))
 	}
 	return strings.Join(mounts, "\n")
 }

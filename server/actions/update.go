@@ -4,23 +4,35 @@ import "github.com/cxykevin/alkaid0/config"
 
 // updateCfgsToConns 将当前配置广播推送到所有已连接的会话
 func updateCfgsToConns() {
+	// 收集所有需要更新的会话ID及其模型ID
 	sessionConnLock.Lock()
-	defer sessionConnLock.Unlock()
-	for i := range sessionConnMap {
-		sess, ok := sessions[i]
-		if !ok {
-			continue
+	sessionIDs := make([]string, 0, len(sessionConnMap))
+	for sid := range sessionConnMap {
+		sessionIDs = append(sessionIDs, sid)
+	}
+	sessionConnLock.Unlock()
+
+	sessLock.Lock()
+	type sessModel struct {
+		sid     string
+		modelID uint32
+	}
+	updates := make([]sessModel, 0, len(sessionIDs))
+	for _, sid := range sessionIDs {
+		if sess, ok := sessions[sid]; ok {
+			updates = append(updates, sessModel{sid: sid, modelID: sess.session.LastModelID})
 		}
-		modelID := sess.session.LastModelID
-		sessionConnLock.Unlock()
-		broadcastSessionUpdate(i, SessionUpdate{
-			SessionID: i,
+	}
+	sessLock.Unlock()
+
+	for _, u := range updates {
+		broadcastSessionUpdate(u.sid, SessionUpdate{
+			SessionID: u.sid,
 			Update: SessionUpdateUpdate{
 				SessionUpdate: "config_option_update",
-				Content:       buildConfigOptions(uint32(modelID)),
+				Content:       buildConfigOptions(uint32(u.modelID)),
 			},
 		}, 0)
-		sessionConnLock.Lock()
 	}
 }
 

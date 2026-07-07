@@ -1,6 +1,7 @@
 package actions
 
 import (
+	"context"
 	"encoding/base64"
 	"fmt"
 	"io"
@@ -16,7 +17,10 @@ import (
 	u "github.com/cxykevin/alkaid0/utils"
 )
 
-const fsIOTimeout = 200 * time.Millisecond
+const (
+	fsIOTimeout        = 200 * time.Millisecond
+	maxFileContentSize = 1 << 20 // 1 MiB
+)
 
 // ---- Timeout helpers ----
 
@@ -27,6 +31,8 @@ type fsOpResult[T any] struct {
 
 // fsOpWithTimeout 在超时保护下执行返回值的文件系统操作
 func fsOpWithTimeout[T any](timeout time.Duration, op func() (T, error)) (T, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
 	ch := make(chan fsOpResult[T], 1)
 	go func() {
 		val, err := op()
@@ -35,7 +41,7 @@ func fsOpWithTimeout[T any](timeout time.Duration, op func() (T, error)) (T, err
 	select {
 	case res := <-ch:
 		return res.val, res.err
-	case <-time.After(timeout):
+	case <-ctx.Done():
 		var zero T
 		return zero, fmt.Errorf("filesystem operation timed out")
 	}
@@ -43,6 +49,8 @@ func fsOpWithTimeout[T any](timeout time.Duration, op func() (T, error)) (T, err
 
 // fsOpVoidWithTimeout 在超时保护下执行无返回值的文件系统操作
 func fsOpVoidWithTimeout(timeout time.Duration, op func() error) error {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
 	ch := make(chan error, 1)
 	go func() {
 		ch <- op()
@@ -50,7 +58,7 @@ func fsOpVoidWithTimeout(timeout time.Duration, op func() error) error {
 	select {
 	case err := <-ch:
 		return err
-	case <-time.After(timeout):
+	case <-ctx.Done():
 		return fmt.Errorf("filesystem operation timed out")
 	}
 }
@@ -316,6 +324,18 @@ func FsRead(req FsReadRequest, _ func(string, any, *string) error, _ uint64) (Fs
 		}
 		defer f.Close()
 
+		// 获取文件大小用于边界检查
+		info, err := f.Stat()
+		if err != nil {
+			return struct{}{}, err
+		}
+		fileSize := info.Size()
+
+		// offset 超出文件大小时静默返回空内容
+		if req.Offset >= fileSize {
+			return struct{}{}, nil
+		}
+
 		if req.Offset > 0 {
 			_, err = f.Seek(req.Offset, io.SeekStart)
 			if err != nil {
@@ -324,6 +344,11 @@ func FsRead(req FsReadRequest, _ func(string, any, *string) error, _ uint64) (Fs
 		}
 
 		if req.Length > 0 {
+			// 确保读范围不超出文件结尾，超出时静默截断
+			maxRead := fileSize - req.Offset
+			if req.Length > maxRead {
+				req.Length = maxRead
+			}
 			data = make([]byte, req.Length)
 			n, err := io.ReadFull(f, data)
 			if err != nil && err != io.ErrUnexpectedEOF && err != io.EOF {
@@ -331,6 +356,7 @@ func FsRead(req FsReadRequest, _ func(string, any, *string) error, _ uint64) (Fs
 			}
 			data = data[:n]
 		} else {
+			// 未指定 length 时从 offset 读到文件结尾
 			data, err = io.ReadAll(f)
 			if err != nil {
 				return struct{}{}, err
@@ -377,6 +403,12 @@ func FsWrite(req FsWriteRequest, _ func(string, any, *string) error, _ uint64) (
 		}
 	} else {
 		content = []byte(req.Content)
+	}
+
+	// 内容大小限制：不超过 1 MiB（binary 模式按解码后的原始二进制数据计大小）
+	if len(content) > maxFileContentSize {
+		return FsWriteResponse{}, fmt.Errorf(
+			"content exceeds maximum size of 1MB (got %d bytes)", len(content))
 	}
 
 	// 确保父目录存在

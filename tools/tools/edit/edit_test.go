@@ -143,7 +143,7 @@ func TestHandleRegexEdit(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if out != "Hello bar bar world" {
+	if out != "Hello bar FOO world" {
 		t.Fatalf("regex replace mismatch: %q", out)
 	}
 
@@ -253,7 +253,7 @@ func TestWriteFile(t *testing.T) {
 	mp = map[string]*any{"path": ptr("rx.txt"), "target": ptr("@regex:/foo/i"), "text": ptr("bar")}
 	_, _, ret, _ = writeFile(session, mp, nil)
 	data, _ = os.ReadFile(filepath.Join(tmpdir, "rx.txt"))
-	if string(data) != "Hello bar bar world" {
+	if string(data) != "Hello bar FOO world" {
 		t.Fatalf("regex write mismatch: %q", string(data))
 	}
 }

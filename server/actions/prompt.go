@@ -210,7 +210,9 @@ func SessionCancel(req SessionCancelRequest, call func(string, any, *string) err
 	// 	return nil, fmt.Errorf("no prompt in progress for this session")
 	// }
 
+	sessLock.Lock()
 	sess, ok := sessions[req.SessionID]
+	sessLock.Unlock()
 	if !ok {
 		return nil, fmt.Errorf("session not found")
 	}

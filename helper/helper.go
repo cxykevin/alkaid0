@@ -2,6 +2,7 @@ package helper
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -355,13 +356,13 @@ func copyStdinToWS(conn *websocket.Conn) error {
 	for {
 		n, err := reader.Read(buf)
 		if n > 0 {
-			if buf[0] == '\n' {
+			// å»é¤åå¯¼æ¢è¡å­ç¬¦ï¼é¿åä»¥æ¢è¡å¼å¤´çè¯»åè¢«æ´åä¸¢å¼
+			data := buf[:n]
+			data = bytes.TrimLeft(data, "\n\r")
+			if len(data) == 0 {
 				continue
 			}
-			if buf[0] == '\r' {
-				continue
-			}
-			if writeErr := conn.WriteMessage(websocket.TextMessage, buf[:n]); writeErr != nil {
+			if writeErr := conn.WriteMessage(websocket.TextMessage, data); writeErr != nil {
 				return writeErr
 			}
 		}

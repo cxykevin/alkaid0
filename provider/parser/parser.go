@@ -167,7 +167,15 @@ func (p *Parser) solveTool() {
 			}
 			continue
 		}
-		toolName, ok := (*toolNameOrigin).(string)
+		if toolNameOrigin == nil {
+				if idx != len(pObjects)-1 {
+					logger.Warn("'name' field is null at index %d", idx)
+					p.Stop = true
+					return
+				}
+				continue
+			}
+			toolName, ok := (*toolNameOrigin).(string)
 		if !ok {
 			if idx != len(pObjects)-1 {
 				logger.Warn("'name' field is not string at index %d", idx)
@@ -192,7 +200,15 @@ func (p *Parser) solveTool() {
 			}
 			continue
 		}
-		toolCallID, ok := (*toolCallIDOrigin).(string)
+		if toolCallIDOrigin == nil {
+				if idx != len(pObjects)-1 {
+					logger.Warn("'id' field is null at index %d", idx)
+					p.Stop = true
+					return
+				}
+				continue
+			}
+			toolCallID, ok := (*toolCallIDOrigin).(string)
 		if !ok {
 			if idx != len(pObjects)-1 {
 				logger.Warn("'id' field is not string at index %d", idx)
@@ -210,7 +226,15 @@ func (p *Parser) solveTool() {
 			}
 			continue
 		}
-		toolParameters, ok := (*toolParametersOrigin).(map[string]*any)
+		if toolParametersOrigin == nil {
+				if idx != len(pObjects)-1 {
+					logger.Warn("'parameters' field is null at index %d", idx)
+					p.Stop = true
+					return
+				}
+				continue
+			}
+			toolParameters, ok := (*toolParametersOrigin).(map[string]*any)
 		if !ok {
 			toolParameters, ok = (*toolParametersOrigin).(json.ObjectSlot)
 			if !ok {
@@ -226,6 +250,11 @@ func (p *Parser) solveTool() {
 		// 校验规则：根据工具定义的参数类型，检查实际 JSON 值的 Go 类型是否匹配
 		// 注意：对于 string 和 object 类型还需检查对应的 Slot 占位符类型（流式解析未完成状态）
 		for key, value := range toolParameters {
+			if value == nil {
+				logger.Warn("parameter '%s' for tool '%s' is null", key, toolName)
+				p.Stop = true
+				return
+			}
 			switch p.Tools[toolID].Parameters[key].Type {
 			case ToolTypeString:
 				_, okStr := (*value).(string)
@@ -319,7 +348,11 @@ func (p *Parser) AddToken(token string, tokenThinking string) (string, string, *
 			} else { // 处于 <tools> 标签内：交由 jsonParser 增量解析工具调用
 				p.ToolOriginString.WriteString(tokens)
 				if p.jsonParser != nil {
-					p.jsonParser.AddToken(tokens)
+					if err := p.jsonParser.AddToken(tokens); err != nil {
+						logger.Warn("json parser error: %v", err)
+						p.Stop = true
+						return err
+					}
 					// 每次收到新 token 后尝试解析工具调用（增量处理新增的 JSON 元素）
 					p.solveTool()
 					if p.Stop {

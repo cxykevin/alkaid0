@@ -113,8 +113,15 @@ func (p *Object) Start(ctx context.Context) {
 
 	session := p.session
 	call := func(resp AIResponse) {
-		p.recvQueue <- resp
-		<-p.recvSyncQueue
+		select {
+		case p.recvQueue <- resp:
+		case <-p.done:
+			return
+		}
+		select {
+		case <-p.recvSyncQueue:
+		case <-p.done:
+		}
 	}
 
 	var needCompress bool

@@ -382,6 +382,9 @@ func handleLineReplace(lines []string, target, text string) (string, error) {
 	if to > len(lines) {
 		return "", fmt.Errorf("to line %d exceeds file length %d", to, len(lines))
 	}
+	if from > to {
+		return "", fmt.Errorf("from line %d is greater than to line %d", from, to)
+	}
 
 	// 构建新内容
 	var buf bytes.Buffer
@@ -405,8 +408,8 @@ func handleLineInsert(lines []string, target, text string) (string, error) {
 		return "", fmt.Errorf("invalid line number: %s", parts)
 	}
 
-	if lineNum > len(lines) {
-		return "", fmt.Errorf("line %d exceeds file length %d", lineNum, len(lines))
+	if lineNum < 1 || lineNum > len(lines)+1 {
+		return "", fmt.Errorf("line %d is out of range (file has %d lines)", lineNum, len(lines))
 	}
 
 	// 构建新内容
@@ -476,7 +479,12 @@ func handleRegexEdit(content, target, text string) (string, error) {
 		newContent := re.ReplaceAllString(content, text)
 		return newContent, nil
 	}
-	newContent := re.ReplaceAllString(content, text)
+	// éå¨å±æ¨¡å¼åªæ¿æ¢ç¬¬ä¸ä¸ªå¹éé¡¹
+	loc := re.FindStringIndex(content)
+	if loc == nil {
+		return content, nil
+	}
+	newContent := content[:loc[0]] + text + content[loc[1]:]
 	return newContent, nil
 }
 

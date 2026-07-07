@@ -1,11 +1,11 @@
 {{/* AI response 占位符 */}}
-{{- if eq .Thinking ""}}
+{{- if ne .Thinking ""}}
 <think>
 {{.Thinking}}
 </think>
 {{- end }}
 {{.Delta}}
-{{- if eq .ToolsCall ""}}
+{{- if ne .ToolsCall ""}}
 <tools>
 {{.ToolsCall}}
 </tools>
