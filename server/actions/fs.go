@@ -85,7 +85,7 @@ func validatePath(cwd, relPath string) (string, error) {
 	rawParts := strings.Split(relPath, "/")
 	for _, part := range rawParts {
 		if part == "." || part == ".." {
-			return "", fmt.Errorf("path must not contain . or ..")
+			return "", fmt.Errorf("path must not contain \".\" or \"..\"")
 		}
 	}
 
@@ -105,41 +105,6 @@ func validatePath(cwd, relPath string) (string, error) {
 	}
 
 	return fullPath, nil
-}
-
-// ---- Permissions helper ----
-
-// getPermissions 获取文件权限字符串（八进制格式）
-func getPermissions(info fs.FileInfo) string {
-	if runtime.GOOS == "windows" {
-		if info.Mode().Perm()&0200 == 0 {
-			return "0555"
-		}
-		return "0755"
-	}
-	return fmt.Sprintf("%o", info.Mode().Perm())
-}
-
-// ---- Ownership helper (platform-specific) ----
-
-// getOwner 获取文件所有者的用户名
-func getOwner(info fs.FileInfo) string {
-	if runtime.GOOS != "windows" {
-		// Unix: info.Sys() 返回 *syscall.Stat_t，包含 Uid
-		// 在 fs_unix.go 中实现
-		return getOwnerUnix(info)
-	}
-	// Windows：返回当前用户
-	return getOwnerCurrentUser()
-}
-
-// getOwnerCurrentUser 返回当前用户名
-func getOwnerCurrentUser() string {
-	usr, err := user.Current()
-	if err != nil {
-		return ""
-	}
-	return usr.Username
 }
 
 // ---- Request/Response types ----
@@ -528,8 +493,8 @@ func FsChmod(req FsChmodRequest, _ func(string, any, *string) error, _ uint64) (
 
 	if runtime.GOOS == "windows" {
 		err = fsOpVoidWithTimeout(fsIOTimeout, func() error {
-			if modeVal&0400 == 0 {
-				// 禁止所有者读 → 设为只读
+			if modeVal&0200 == 0 {
+				// 禁止所有者写 → 设为只读
 				return os.Chmod(fullPath, 0444)
 			}
 			return os.Chmod(fullPath, 0666)

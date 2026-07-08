@@ -9,8 +9,25 @@ import (
 	"syscall"
 )
 
-// getOwnerUnix 在 Unix 系统上通过 syscall.Stat_t 获取文件所有者用户名
-func getOwnerUnix(info fs.FileInfo) string {
+// ---- Permissions helper ----
+
+// getPermissions 获取文件权限字符串（八进制格式）
+func getPermissions(info fs.FileInfo) string {
+	return fmt.Sprintf("%o", info.Mode().Perm())
+}
+
+// ---- Ownership helper ----
+
+func getOwnerCurrentUser() string {
+	usr, err := user.Current()
+	if err != nil {
+		return "(unknown)"
+	}
+	return usr.Username
+}
+
+// getOwner 获取文件所有者的用户名
+func getOwner(info fs.FileInfo) string {
 	stat, ok := info.Sys().(*syscall.Stat_t)
 	if !ok {
 		return getOwnerCurrentUser()
