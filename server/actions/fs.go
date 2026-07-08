@@ -72,18 +72,25 @@ func fsOpVoidWithTimeout(timeout time.Duration, op func() error) error {
 //   - 拒绝 .alkaid0 目录的访问
 //   - 使用 filepath.Clean 后确保仍在 cwd 内（防 path traversal）
 func validatePath(cwd, relPath string) (string, error) {
+	relPath = strings.ReplaceAll(relPath, "\\", "/")
+
 	// 空路径表示根目录
 	if relPath == "" {
 		return cwd, nil
 	}
+
+	if relPath[0] == '/' {
+		return "", fmt.Errorf("path must be relative")
+	}
+
 	if filepath.IsAbs(relPath) {
 		return "", fmt.Errorf("path must be relative")
 	}
 
 	// 在 Clean 之前检查原始路径中的 . 和 .. 分量
 	// ACP 协议使用 / 作为路径分隔符
-	rawParts := strings.Split(relPath, "/")
-	for _, part := range rawParts {
+	rawParts := strings.SplitSeq(relPath, "/")
+	for part := range rawParts {
 		if part == "." || part == ".." {
 			return "", fmt.Errorf("path must not contain \".\" or \"..\"")
 		}

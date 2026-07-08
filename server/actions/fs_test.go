@@ -254,8 +254,14 @@ func TestFsValidation_InvalidSessionID(t *testing.T) {
 		{"write", func() error { _, err := FsWrite(FsWriteRequest{SessionID: invalidID, Path: "x"}, nil, 1); return err }},
 		{"mkdir", func() error { _, err := FsMkdir(FsCommonRequest{SessionID: invalidID, Path: "x"}, nil, 1); return err }},
 		{"rm", func() error { _, err := FsRm(FsCommonRequest{SessionID: invalidID, Path: "x"}, nil, 1); return err }},
-		{"chmod", func() error { _, err := FsChmod(FsChmodRequest{SessionID: invalidID, Path: "x", Mode: "644"}, nil, 1); return err }},
-		{"chown", func() error { _, err := FsChown(FsChownRequest{SessionID: invalidID, Path: "x", Owner: "root"}, nil, 1); return err }},
+		{"chmod", func() error {
+			_, err := FsChmod(FsChmodRequest{SessionID: invalidID, Path: "x", Mode: "644"}, nil, 1)
+			return err
+		}},
+		{"chown", func() error {
+			_, err := FsChown(FsChownRequest{SessionID: invalidID, Path: "x", Owner: "root"}, nil, 1)
+			return err
+		}},
 	}
 	for _, h := range handlers {
 		t.Run(h.name, func(t *testing.T) {
