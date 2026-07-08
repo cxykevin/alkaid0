@@ -157,24 +157,20 @@ func (p *PTY) Pipe(rw io.ReadWriter) error {
 	errChan := make(chan error, 2)
 
 	// 从PTY读取并写入到rw
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		_, err := io.Copy(rw, p.fd)
 		if err != nil && err != io.EOF {
 			errChan <- err
 		}
-	}()
+	})
 
 	// 从rw读取并写入到PTY
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		_, err := io.Copy(p.fd, rw)
 		if err != nil && err != io.EOF {
 			errChan <- err
 		}
-	}()
+	})
 
 	wg.Wait()
 	close(errChan)

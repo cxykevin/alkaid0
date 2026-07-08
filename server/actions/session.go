@@ -658,8 +658,8 @@ func SessionNew(req SessionNewRequest, call func(string, any, *string) error, co
 
 	sessionID := cwd2SessionID(req.Cwd, id)
 	bindedSessionOnConnMu.Lock()
-		bindedSessionOnConn[connID] = append(bindedSessionOnConn[connID], sessionID)
-		bindedSessionOnConnMu.Unlock()
+	bindedSessionOnConn[connID] = append(bindedSessionOnConn[connID], sessionID)
+	bindedSessionOnConnMu.Unlock()
 	// 注册连接的call函数用于后续广播
 	registerConnCall(connID, sessionID, call)
 
@@ -764,8 +764,8 @@ func SessionLoad(req SessionLoadRequest, call func(string, any, *string) error, 
 		return SessionLoadResponse{}, err
 	}
 	bindedSessionOnConnMu.Lock()
-		bindedSessionOnConn[connID] = append(bindedSessionOnConn[connID], req.SessionID)
-		bindedSessionOnConnMu.Unlock()
+	bindedSessionOnConn[connID] = append(bindedSessionOnConn[connID], req.SessionID)
+	bindedSessionOnConnMu.Unlock()
 	// 注册连接的call函数用于后续广播
 	registerConnCall(connID, req.SessionID, call)
 	msgs, err := funcs.GetHistory(sess)

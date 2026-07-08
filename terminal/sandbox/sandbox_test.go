@@ -901,7 +901,7 @@ func TestConcurrentSandbox(t *testing.T) {
 		}(i)
 	}
 
-	for i := 0; i < numGoroutines; i++ {
+	for range numGoroutines {
 		select {
 		case <-done:
 		case <-time.After(10 * time.Second):

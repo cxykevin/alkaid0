@@ -187,7 +187,7 @@ func TestChatQueueFull(t *testing.T) {
 	loopObj := New(chat)
 
 	// 填满队列
-	for i := 0; i < queueSize; i++ {
+	for range queueSize {
 		loopObj.sendQueue <- msgObj{Msg: "test"}
 	}
 
@@ -409,7 +409,7 @@ func TestLoopConcurrency(t *testing.T) {
 	loopObj := New(chat)
 
 	// 并发发送多条消息
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		go func(idx int) {
 			loopObj.Chat("Message "+string(rune(idx)), nil)
 		}(i)

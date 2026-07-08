@@ -2,6 +2,8 @@ package actions
 
 import (
 	"context"
+	"slices"
+	"strings"
 	"sync"
 	"testing"
 
@@ -195,13 +197,7 @@ func TestConnCallRegistration(t *testing.T) {
 
 	sessionConnLock.Lock()
 	conns := sessionConnMap[sessionID]
-	found := false
-	for _, c := range conns {
-		if c == connID {
-			found = true
-			break
-		}
-	}
+	found := slices.Contains(conns, connID)
 	sessionConnLock.Unlock()
 
 	if !found {
@@ -335,17 +331,17 @@ func TestContentBlockExtraction(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			userMessage := ""
+			var userMessage strings.Builder
 			for _, block := range tt.prompt {
 				if blockType, ok := u.GetH[string](block, "type"); ok && blockType == "text" {
 					if text, ok := u.GetH[string](block, "text"); ok {
-						userMessage += text
+						userMessage.WriteString(text)
 					}
 				}
 			}
 
-			if userMessage != tt.wantMessage {
-				t.Errorf("content extraction = %q, want %q", userMessage, tt.wantMessage)
+			if userMessage.String() != tt.wantMessage {
+				t.Errorf("content extraction = %q, want %q", userMessage.String(), tt.wantMessage)
 			}
 		})
 	}
@@ -362,7 +358,7 @@ func TestConcurrentBroadcast(t *testing.T) {
 	updateCounts := make(map[uint64]int)
 	callFuncs := make(map[uint64]func(string, any, *string) error)
 
-	for i := 0; i < numConn; i++ {
+	for i := range numConn {
 		cid := uint64(i + 1)
 		fn := func(conn uint64) func(string, any, *string) error {
 			return func(method string, v any, _ *string) error {
@@ -380,15 +376,13 @@ func TestConcurrentBroadcast(t *testing.T) {
 
 	// 并发发送更新
 	var wg sync.WaitGroup
-	for i := 0; i < updateCount; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+	for range updateCount {
+		wg.Go(func() {
 			broadcastSessionUpdate(sessionID, SessionUpdate{
 				SessionID: sessionID,
 				Update:    SessionUpdateUpdate{SessionUpdate: "test"},
 			}, 0)
-		}()
+		})
 	}
 	wg.Wait()
 

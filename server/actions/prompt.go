@@ -49,16 +49,16 @@ func SessionPrompt(req SessionPromptRequest, call func(string, any, *string) err
 	sessLock.Unlock()
 
 	// 从 prompt 中提取文本内容
-	userMessage := ""
+	var userMessage strings.Builder
 	for _, block := range req.Prompt {
 		if blockType, ok := u.GetH[string](block, "type"); ok && blockType == "text" {
 			if text, ok := u.GetH[string](block, "text"); ok {
-				userMessage += text
+				userMessage.WriteString(text)
 			}
 		}
 	}
 
-	if userMessage == "" {
+	if userMessage.String() == "" {
 		return SessionPromptResponse{}, fmt.Errorf("no text content in prompt")
 	}
 
@@ -69,7 +69,7 @@ func SessionPrompt(req SessionPromptRequest, call func(string, any, *string) err
 			SessionUpdate: "user_message_chunk",
 			Content: u.H{
 				"type": "text",
-				"text": userMessage,
+				"text": userMessage.String(),
 			},
 		},
 	}, connID)
@@ -102,8 +102,8 @@ func SessionPrompt(req SessionPromptRequest, call func(string, any, *string) err
 	var wait = true
 	err = nil
 
-	if len(userMessage) >= 1 && userMessage[0:1] == "/" {
-		cmds := strings.SplitN(userMessage, " ", 2)
+	if len(userMessage.String()) >= 1 && userMessage.String()[0:1] == "/" {
+		cmds := strings.SplitN(userMessage.String(), " ", 2)
 		cmdArgs := ""
 		if len(cmds) == 0 {
 			broadcastSessionUpdate(req.SessionID, SessionUpdate{ // 空内容触发 Client 状态更新
@@ -141,7 +141,7 @@ func SessionPrompt(req SessionPromptRequest, call func(string, any, *string) err
 			err = fmt.Errorf("invalid command")
 		}
 	} else {
-		err = sessObj.loop.Chat(userMessage, nil)
+		err = sessObj.loop.Chat(userMessage.String(), nil)
 	}
 
 	var ret StopMsg

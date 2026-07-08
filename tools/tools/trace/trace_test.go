@@ -575,11 +575,11 @@ func TestTraceFileTooLong(t *testing.T) {
 	testFile := filepath.Join(tmpDir, "long.txt")
 
 	// 创建一个超过MaxFileLine行的文件
-	longContent := ""
-	for i := 0; i < MaxFileLine+1; i++ {
-		longContent += fmt.Sprintf("line %d\n", i)
+	var longContent strings.Builder
+	for i := range MaxFileLine + 1 {
+		longContent.WriteString(fmt.Sprintf("line %d\n", i))
 	}
-	if err := os.WriteFile(testFile, []byte(longContent), 0644); err != nil {
+	if err := os.WriteFile(testFile, []byte(longContent.String()), 0644); err != nil {
 		t.Fatalf("Failed to create test file: %v", err)
 	}
 
@@ -804,11 +804,11 @@ func TestBuildTraceFileTooLong(t *testing.T) {
 	testFile := filepath.Join(tmpDir, "long.txt")
 
 	// 创建超过MaxFileLine行的文件
-	longContent := ""
-	for i := 0; i < MaxFileLine+1; i++ {
-		longContent += fmt.Sprintf("line %d\n", i)
+	var longContent strings.Builder
+	for i := range MaxFileLine + 1 {
+		longContent.WriteString(fmt.Sprintf("line %d\n", i))
 	}
-	if err := os.WriteFile(testFile, []byte(longContent), 0644); err != nil {
+	if err := os.WriteFile(testFile, []byte(longContent.String()), 0644); err != nil {
 		t.Fatalf("Failed to create test file: %v", err)
 	}
 
@@ -910,12 +910,12 @@ func TestAddTempObjectLongContent(t *testing.T) {
 	}
 
 	// 创建超过2000行的内容
-	longContent := ""
-	for i := 0; i < 2010; i++ {
-		longContent += fmt.Sprintf("line %d\n", i)
+	var longContent strings.Builder
+	for i := range 2010 {
+		longContent.WriteString(fmt.Sprintf("line %d\n", i))
 	}
 
-	err := AddTempObject(session, "long_temp.txt", longContent, false)
+	err := AddTempObject(session, "long_temp.txt", longContent.String(), false)
 	if err != nil {
 		t.Fatalf("Unexpected error: %v", err)
 	}
@@ -943,7 +943,7 @@ func TestTraceConcurrent(t *testing.T) {
 	tmpDir := t.TempDir()
 
 	// 创建多个测试文件
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		testFile := filepath.Join(tmpDir, fmt.Sprintf("test%d.txt", i))
 		content := fmt.Sprintf("content %d", i)
 		if err := os.WriteFile(testFile, []byte(content), 0644); err != nil {
@@ -962,7 +962,7 @@ func TestTraceConcurrent(t *testing.T) {
 
 	// 并发执行Trace - 只测试不panic，不验证数据库状态
 	done := make(chan bool, 5)
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		go func(idx int) {
 			// 为每个goroutine创建独立的数据库连接
 			testDB := setupTestDB(t)
@@ -1005,7 +1005,7 @@ func TestTraceConcurrent(t *testing.T) {
 
 	// 等待所有goroutine完成
 	allPassed := true
-	for i := 0; i < 5; i++ {
+	for range 5 {
 		if !<-done {
 			allPassed = false
 		}
@@ -1019,7 +1019,7 @@ func TestTraceConcurrent(t *testing.T) {
 func TestBuildTraceConcurrent(t *testing.T) {
 	// 并发执行buildTrace - 只测试不panic
 	done := make(chan bool, 3)
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		go func(idx int) {
 			// 为每个goroutine创建独立的数据库和数据
 			testDB := setupTestDB(t)
@@ -1069,7 +1069,7 @@ func TestBuildTraceConcurrent(t *testing.T) {
 
 	// 等待所有goroutine完成
 	allPassed := true
-	for i := 0; i < 3; i++ {
+	for range 3 {
 		if !<-done {
 			allPassed = false
 		}

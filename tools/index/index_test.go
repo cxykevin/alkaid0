@@ -82,7 +82,7 @@ func TestMultipleAddAndLoad(t *testing.T) {
 	counter := 0
 
 	// 添加多个索引
-	for i := 0; i < 5; i++ {
+	for range 5 {
 		AddIndex(func() string {
 			counter++
 			return "tool"

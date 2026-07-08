@@ -187,7 +187,7 @@ func TestScrolling(t *testing.T) {
 	buf := New(5, 10)
 
 	// 填满缓冲区
-	for i := 0; i < 10; i++ {
+	for range 10 {
 		buf.Write([]byte("Line\n"))
 	}
 
@@ -227,14 +227,14 @@ func TestConcurrentAccess(t *testing.T) {
 
 	// 并发写入
 	go func() {
-		for i := 0; i < 100; i++ {
+		for range 100 {
 			buf.Write([]byte("A"))
 		}
 		done <- true
 	}()
 
 	go func() {
-		for i := 0; i < 100; i++ {
+		for range 100 {
 			buf.Write([]byte("B"))
 		}
 		done <- true
@@ -242,14 +242,14 @@ func TestConcurrentAccess(t *testing.T) {
 
 	// 并发读取
 	go func() {
-		for i := 0; i < 100; i++ {
+		for range 100 {
 			buf.GetContent()
 		}
 		done <- true
 	}()
 
 	// 等待完成
-	for i := 0; i < 3; i++ {
+	for range 3 {
 		<-done
 	}
 }

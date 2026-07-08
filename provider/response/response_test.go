@@ -171,7 +171,7 @@ func TestSolver_ToolCalling_SingleTool(t *testing.T) {
 	}
 
 	// 解析保存的toolResponses
-	var savedResponses []map[string]interface{}
+	var savedResponses []map[string]any
 	if err := json.Unmarshal([]byte(msg.Delta), &savedResponses); err != nil {
 		t.Fatalf("failed to unmarshal toolResponses: %v", err)
 	}
@@ -195,7 +195,7 @@ func TestSolver_ToolCalling_SingleTool(t *testing.T) {
 		t.Fatalf("expected return to be string, got %T", response["return"])
 	}
 
-	var returnObj map[string]interface{}
+	var returnObj map[string]any
 	if err := json.Unmarshal([]byte(returnData), &returnObj); err != nil {
 		t.Fatalf("failed to unmarshal return data: %v", err)
 	}
@@ -360,7 +360,7 @@ func TestSolver_ToolCalling_MultipleTools(t *testing.T) {
 }
 
 // Helper function to create *any from values
-func newAny(v interface{}) *any {
+func newAny(v any) *any {
 	var a any = v
 	return &a
 }

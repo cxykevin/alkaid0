@@ -1,6 +1,7 @@
 package json
 
 import (
+	"strings"
 	"testing"
 )
 
@@ -215,14 +216,14 @@ func TestJSONParser_DynamicString(t *testing.T) {
 	parser := New()
 	jsonStr := "{\"a\":\""
 	err := parser.AddToken(string(jsonStr))
-	strCmpTmp := ""
+	var strCmpTmp strings.Builder
 	// 随机字符串
 	dynamicTestStr := ""
 	for i := range 100 {
 		dynamicTestStr += string(rune(97 + i%26))
 	}
 	for _, c := range dynamicTestStr {
-		strCmpTmp += string(c)
+		strCmpTmp.WriteString(string(c))
 		err = parser.AddToken(string(c))
 		if err != nil {
 			t.Fatalf("AddToken error: %v", err)
@@ -242,12 +243,12 @@ func TestJSONParser_DynamicString(t *testing.T) {
 		}
 		// 值可以是 string 或 StringSlot（未完成的字符串占位）
 		if valStr, ok := (*valPtr).(string); ok {
-			if valStr != strCmpTmp {
-				t.Fatalf("expected '%s', got '%s' at iteration", strCmpTmp, valStr)
+			if valStr != strCmpTmp.String() {
+				t.Fatalf("expected '%s', got '%s' at iteration", strCmpTmp.String(), valStr)
 			}
 		} else if valTmp, ok := (*valPtr).(StringSlot); ok {
-			if string(valTmp) != strCmpTmp {
-				t.Fatalf("expected '%s', got '%s' at iteration (StringSlot)", strCmpTmp, string(valTmp))
+			if string(valTmp) != strCmpTmp.String() {
+				t.Fatalf("expected '%s', got '%s' at iteration (StringSlot)", strCmpTmp.String(), string(valTmp))
 			}
 		} else {
 			t.Fatalf("value for key 'a' not string or StringSlot at iteration")
@@ -667,19 +668,20 @@ func BenchmarkJSONParser_MultiToken(b *testing.B) {
 // 性能测试 - 大型数组
 func BenchmarkJSONParser_LargeArray(b *testing.B) {
 	// 构造 [1,2,3,...,1000]
-	jsonStr := "["
+	var jsonStr strings.Builder
+	jsonStr.WriteString("[")
 	for i := 1; i <= 1000; i++ {
 		if i > 1 {
-			jsonStr += ","
+			jsonStr.WriteString(",")
 		}
-		jsonStr += string(rune('0' + (i % 10)))
+		jsonStr.WriteString(string(rune('0' + (i % 10))))
 	}
-	jsonStr += "]"
+	jsonStr.WriteString("]")
 
 	b.ResetTimer()
 	for b.Loop() {
 		parser := New()
-		parser.AddToken(jsonStr)
+		parser.AddToken(jsonStr.String())
 		parser.DoneToken()
 	}
 }
@@ -687,30 +689,31 @@ func BenchmarkJSONParser_LargeArray(b *testing.B) {
 // 性能测试 - 深层嵌套
 func BenchmarkJSONParser_DeepNesting(b *testing.B) {
 	// 构造 {"a":{"b":{"c":{"d":{"e":{"f":{"g":{"h":{"i":{"j":1}}}}}}}}}}
-	jsonStr := "{"
+	var jsonStr strings.Builder
+	jsonStr.WriteString("{")
 	for i := range 10 {
-		jsonStr += "\"" + string(rune('a'+i)) + "\":{"
+		jsonStr.WriteString("\"" + string(rune('a'+i)) + "\":{")
 	}
-	jsonStr += "\"val\":1"
+	jsonStr.WriteString("\"val\":1")
 	for range 10 {
-		jsonStr += "}"
+		jsonStr.WriteString("}")
 	}
 
 	b.ResetTimer()
 	for b.Loop() {
 		parser := New()
-		parser.AddToken(jsonStr)
+		parser.AddToken(jsonStr.String())
 		parser.DoneToken()
 	}
 }
 
 // 性能测试 - 复杂字符串处理
 func BenchmarkJSONParser_LongString(b *testing.B) {
-	longStr := ""
-	for i := 0; i < 100; i++ {
-		longStr += "abcdefghijklmnopqrstuvwxyz"
+	var longStr strings.Builder
+	for range 100 {
+		longStr.WriteString("abcdefghijklmnopqrstuvwxyz")
 	}
-	jsonStr := "{\"text\":\"" + longStr + "\"}"
+	jsonStr := "{\"text\":\"" + longStr.String() + "\"}"
 
 	b.ResetTimer()
 	for b.Loop() {
@@ -780,11 +783,11 @@ func BenchmarkJSONParser_ComplexMixed(b *testing.B) {
 
 // 性能测试 - 流式解析逐字符添加（长字符串场景）
 func BenchmarkJSONParser_StreamingLongString(b *testing.B) {
-	longStr := ""
-	for i := 0; i < 50; i++ {
-		longStr += "abcdefghijklmnopqrstuvwxyz"
+	var longStr strings.Builder
+	for range 50 {
+		longStr.WriteString("abcdefghijklmnopqrstuvwxyz")
 	}
-	jsonStr := "{\"text\":\"" + longStr + "\"}"
+	jsonStr := "{\"text\":\"" + longStr.String() + "\"}"
 
 	for b.Loop() {
 		parser := New()
@@ -798,18 +801,19 @@ func BenchmarkJSONParser_StreamingLongString(b *testing.B) {
 // 性能测试 - 大型对象（多个 key-value）
 func BenchmarkJSONParser_WideObject(b *testing.B) {
 	// 构造 {"key0":"value0","key1":"value1",...,"key99":"value99"}
-	jsonStr := "{"
+	var jsonStr strings.Builder
+	jsonStr.WriteString("{")
 	for i := range 100 {
 		if i > 0 {
-			jsonStr += ","
+			jsonStr.WriteString(",")
 		}
-		jsonStr += "\"key" + string(rune('0'+(i%10))) + "\":\"value" + string(rune('0'+(i%10))) + "\""
+		jsonStr.WriteString("\"key" + string(rune('0'+(i%10))) + "\":\"value" + string(rune('0'+(i%10))) + "\"")
 	}
-	jsonStr += "}"
+	jsonStr.WriteString("}")
 
 	for b.Loop() {
 		parser := New()
-		parser.AddToken(jsonStr)
+		parser.AddToken(jsonStr.String())
 		parser.DoneToken()
 	}
 }

@@ -57,11 +57,11 @@ const maxTagLen = 6
 
 // 状态机主模式常量
 const (
-			ModeOutside        int16 = iota // 0-标签外
-	ModeEnterTag                    // 1-进入标签起始
-	ModeInTag                       // 2-标签内容
-	ModePossibleEnd                 // 3-可能的结束标签起始
-	ModeEndTagName                  // 4-结束标签名解析
+	ModeOutside     int16 = iota // 0-标签外
+	ModeEnterTag                 // 1-进入标签起始
+	ModeInTag                    // 2-标签内容
+	ModePossibleEnd              // 3-可能的结束标签起始
+	ModeEndTagName               // 4-结束标签名解析
 )
 
 // KeyMode 逻辑区域常量
@@ -168,14 +168,14 @@ func (p *Parser) solveTool() {
 			continue
 		}
 		if toolNameOrigin == nil {
-				if idx != len(pObjects)-1 {
-					logger.Warn("'name' field is null at index %d", idx)
-					p.Stop = true
-					return
-				}
-				continue
+			if idx != len(pObjects)-1 {
+				logger.Warn("'name' field is null at index %d", idx)
+				p.Stop = true
+				return
 			}
-			toolName, ok := (*toolNameOrigin).(string)
+			continue
+		}
+		toolName, ok := (*toolNameOrigin).(string)
 		if !ok {
 			if idx != len(pObjects)-1 {
 				logger.Warn("'name' field is not string at index %d", idx)
@@ -201,14 +201,14 @@ func (p *Parser) solveTool() {
 			continue
 		}
 		if toolCallIDOrigin == nil {
-				if idx != len(pObjects)-1 {
-					logger.Warn("'id' field is null at index %d", idx)
-					p.Stop = true
-					return
-				}
-				continue
+			if idx != len(pObjects)-1 {
+				logger.Warn("'id' field is null at index %d", idx)
+				p.Stop = true
+				return
 			}
-			toolCallID, ok := (*toolCallIDOrigin).(string)
+			continue
+		}
+		toolCallID, ok := (*toolCallIDOrigin).(string)
 		if !ok {
 			if idx != len(pObjects)-1 {
 				logger.Warn("'id' field is not string at index %d", idx)
@@ -227,14 +227,14 @@ func (p *Parser) solveTool() {
 			continue
 		}
 		if toolParametersOrigin == nil {
-				if idx != len(pObjects)-1 {
-					logger.Warn("'parameters' field is null at index %d", idx)
-					p.Stop = true
-					return
-				}
-				continue
+			if idx != len(pObjects)-1 {
+				logger.Warn("'parameters' field is null at index %d", idx)
+				p.Stop = true
+				return
 			}
-			toolParameters, ok := (*toolParametersOrigin).(map[string]*any)
+			continue
+		}
+		toolParameters, ok := (*toolParametersOrigin).(map[string]*any)
 		if !ok {
 			toolParameters, ok = (*toolParametersOrigin).(json.ObjectSlot)
 			if !ok {

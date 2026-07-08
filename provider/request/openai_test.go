@@ -186,7 +186,7 @@ func TestConcurrentRequests(t *testing.T) {
 	const numGoroutines = 5
 	done := make(chan bool, numGoroutines)
 
-	for i := 0; i < numGoroutines; i++ {
+	for i := range numGoroutines {
 		go func(id int) {
 			body := structs.ChatCompletionRequest{
 				Messages: []structs.Message{
@@ -213,7 +213,7 @@ func TestConcurrentRequests(t *testing.T) {
 		}(i)
 	}
 
-	for i := 0; i < numGoroutines; i++ {
+	for range numGoroutines {
 		select {
 		case <-done:
 		case <-time.After(10 * time.Second):

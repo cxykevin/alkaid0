@@ -94,7 +94,7 @@ func StartWs(handler func(string, func(string) error, uint64) (returnString stri
 		}()
 
 		loggerWs.Info("new connection: %d", connID)
-			var writeMu sync.Mutex
+		var writeMu sync.Mutex
 
 		// 处理来自 WebSocket 的消息
 		for {

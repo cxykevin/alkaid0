@@ -227,7 +227,7 @@ func buildHelperConfig(args []string) (structs.RPCConfig, error) {
 	return cfg, nil
 }
 
-	// loadConfigChain 按优先级顺序加载多个配置文件，后加载的覆盖先加载的同名字段。
+// loadConfigChain 按优先级顺序加载多个配置文件，后加载的覆盖先加载的同名字段。
 // 当未显式指定配置路径时，先尝试加载系统级配置，再加载用户配置进行覆盖。
 // 当显式指定配置路径时，仅加载指定配置。
 func loadConfigChain(cfg *structs.RPCConfig, userConfigPath string, configExplicit bool) {

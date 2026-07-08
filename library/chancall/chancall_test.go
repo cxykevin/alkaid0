@@ -116,9 +116,9 @@ func TestConcurrentCalls(t *testing.T) {
 	const callsPerGoroutine = 100
 	results := make(chan int, numGoroutines*callsPerGoroutine)
 
-	for i := 0; i < numGoroutines; i++ {
+	for i := range numGoroutines {
 		go func(id int) {
-			for j := 0; j < callsPerGoroutine; j++ {
+			for j := range callsPerGoroutine {
 				result, err := counterFunc(id*callsPerGoroutine + j)
 				if err != nil {
 					t.Errorf("Error in goroutine %d: %v", id, err)
@@ -131,12 +131,12 @@ func TestConcurrentCalls(t *testing.T) {
 
 	// 收集结果
 	expectedSum := 0
-	for i := 0; i < numGoroutines*callsPerGoroutine; i++ {
+	for i := range numGoroutines * callsPerGoroutine {
 		expectedSum += i * 2
 	}
 
 	actualSum := 0
-	for i := 0; i < numGoroutines*callsPerGoroutine; i++ {
+	for range numGoroutines * callsPerGoroutine {
 		actualSum += <-results
 	}
 

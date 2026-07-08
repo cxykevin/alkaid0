@@ -9,7 +9,8 @@ import (
 	"github.com/cxykevin/alkaid0/storage/structs"
 )
 
-func ptr(v any) *any { return &v }
+//go:fix inline
+func ptr(v any) *any { return new(v) }
 
 func TestCheckPath(t *testing.T) {
 	okMp := map[string]*any{"path": ptr("src/file.txt")}

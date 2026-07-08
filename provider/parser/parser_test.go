@@ -2,6 +2,7 @@ package parser_test
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/cxykevin/alkaid0/provider/parser"
@@ -589,23 +590,23 @@ func TestParserMultipleAddTokens(t *testing.T) {
 
 	// 验证最终结果
 	expectedTotalResponse := "第一段文本开始 开始思考部分继续文本"
-	actualTotalResponse := ""
+	var actualTotalResponse strings.Builder
 	for _, r := range responses {
-		actualTotalResponse += r
+		actualTotalResponse.WriteString(r)
 	}
 
-	if actualTotalResponse != expectedTotalResponse {
-		t.Errorf("期望总响应 '%s'，实际 '%s'", expectedTotalResponse, actualTotalResponse)
+	if actualTotalResponse.String() != expectedTotalResponse {
+		t.Errorf("期望总响应 '%s'，实际 '%s'", expectedTotalResponse, actualTotalResponse.String())
 	}
 
 	expectedTotalThinking := "思考内容 结束思考部分"
-	actualTotalThinking := ""
+	var actualTotalThinking strings.Builder
 	for _, t := range thinkings {
-		actualTotalThinking += t
+		actualTotalThinking.WriteString(t)
 	}
 
-	if actualTotalThinking != expectedTotalThinking {
-		t.Errorf("期望总思考内容 '%s'，实际 '%s'", expectedTotalThinking, actualTotalThinking)
+	if actualTotalThinking.String() != expectedTotalThinking {
+		t.Errorf("期望总思考内容 '%s'，实际 '%s'", expectedTotalThinking, actualTotalThinking.String())
 	}
 
 	// 测试 DoneToken
@@ -626,17 +627,17 @@ func TestParserExtremeLength(t *testing.T) {
 	p := parser.NewParser(nil, testTools)
 
 	// 测试超长普通文本
-	longText := ""
+	var longText strings.Builder
 	for range 10000 {
-		longText += "a"
+		longText.WriteString("a")
 	}
-	response, thinking, _, err := p.AddToken(longText, "")
+	response, thinking, _, err := p.AddToken(longText.String(), "")
 	if err != nil {
 		t.Fatalf("解析失败: %v", err)
 	}
 
-	if response != longText {
-		t.Errorf("期望响应长度 %d，实际长度 %d", len(longText), len(response))
+	if response != longText.String() {
+		t.Errorf("期望响应长度 %d，实际长度 %d", len(longText.String()), len(response))
 	}
 	if thinking != "" {
 		t.Errorf("期望思考内容为空，实际 '%s'", thinking)
@@ -644,11 +645,11 @@ func TestParserExtremeLength(t *testing.T) {
 
 	// 测试超长思考内容
 	p = parser.NewParser(nil, testTools)
-	longThinkText := ""
+	var longThinkText strings.Builder
 	for range 10000 {
-		longThinkText += "思"
+		longThinkText.WriteString("思")
 	}
-	token := "<think>" + longThinkText + "</think>"
+	token := "<think>" + longThinkText.String() + "</think>"
 	response, thinking, _, err = p.AddToken(token, "")
 	if err != nil {
 		t.Fatalf("解析失败: %v", err)
@@ -657,8 +658,8 @@ func TestParserExtremeLength(t *testing.T) {
 	if response != "" {
 		t.Errorf("期望响应为空，实际 '%s'", response)
 	}
-	if thinking != longThinkText {
-		t.Errorf("期望思考内容长度 %d，实际长度 %d", len(longThinkText), len(thinking))
+	if thinking != longThinkText.String() {
+		t.Errorf("期望思考内容长度 %d，实际长度 %d", len(longThinkText.String()), len(thinking))
 	}
 }
 

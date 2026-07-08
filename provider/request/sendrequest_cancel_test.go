@@ -67,12 +67,12 @@ func TestSendRequest_ContextCancel_ContentPersisted(t *testing.T) {
 	}
 
 	session := &storageStructs.Chats{
-		ID:              chat.ID,
-		DB:              db,
-		LastModelID:     1,
-		CurrentAgentID:  "",
-		InTestFlag:      true,
-		EnableScopes:    make(map[string]bool),
+		ID:             chat.ID,
+		DB:             db,
+		LastModelID:    1,
+		CurrentAgentID: "",
+		InTestFlag:     true,
+		EnableScopes:   make(map[string]bool),
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -205,12 +205,12 @@ func TestSendRequest_ContextCancel_ImmediateReturn(t *testing.T) {
 	}
 
 	session := &storageStructs.Chats{
-		ID:              chat.ID,
-		DB:              db,
-		LastModelID:     1,
-		CurrentAgentID:  "",
-		InTestFlag:      true,
-		EnableScopes:    make(map[string]bool),
+		ID:             chat.ID,
+		DB:             db,
+		LastModelID:    1,
+		CurrentAgentID: "",
+		InTestFlag:     true,
+		EnableScopes:   make(map[string]bool),
 	}
 
 	// 预取消 context
@@ -272,21 +272,19 @@ func TestSendRequest_ContextCancel_FlashModel(t *testing.T) {
 	}
 
 	session := &storageStructs.Chats{
-		ID:              chat.ID,
-		DB:              db,
-		LastModelID:     1,
-		CurrentAgentID:  "",
-		InTestFlag:      true,
-		EnableScopes:    make(map[string]bool),
+		ID:             chat.ID,
+		DB:             db,
+		LastModelID:    1,
+		CurrentAgentID: "",
+		InTestFlag:     true,
+		EnableScopes:   make(map[string]bool),
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 
 	var wg sync.WaitGroup
-	wg.Add(1)
 
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		_, err := SendRequest(ctx, session,
 			func(delta, thinking string, _ uint64, _ structs.Usage, _ *string) error {
 				return nil
@@ -294,7 +292,7 @@ func TestSendRequest_ContextCancel_FlashModel(t *testing.T) {
 		if err != nil && !errors.Is(err, context.Canceled) {
 			t.Errorf("Unexpected error: %v", err)
 		}
-	}()
+	})
 
 	time.Sleep(50 * time.Millisecond)
 	cancel()
