@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/cxykevin/alkaid0/config"
 	cfgStructs "github.com/cxykevin/alkaid0/config/structs"
@@ -20,6 +21,7 @@ import (
 	"github.com/cxykevin/alkaid0/storage/structs"
 	"github.com/cxykevin/alkaid0/ui/funcs"
 	"github.com/cxykevin/alkaid0/ui/loop"
+	"github.com/cxykevin/alkaid0/ui/state"
 	u "github.com/cxykevin/alkaid0/utils"
 	"gorm.io/gorm"
 )
@@ -95,6 +97,13 @@ type sessionObj struct {
 	ctx          context.Context
 	referCnt     int
 	waitStopChan chan (*chan StopMsg)
+	// releaseTimer 连接断开后延迟释放的定时器
+	// 当连接断开时启动，超时后若仍无连接则释放会话资源
+	releaseTimer *time.Timer
+	// background 后台运行模式
+	// 为 true 时，断连后若 loop 正在活跃处理则保持运行，空闲时才释放
+	// 通过 /background on 启用，重启 loop 后自动重置为 false
+	background bool
 }
 
 // dbObj 数据库对象，包含引用计数用于生命周期管理
@@ -242,6 +251,7 @@ func sessionID2Cwd(sessionID string) (string, uint32, error) {
 }
 
 // registerConnCall 注册连接的call函数和会话绑定
+// 新连接绑定到会话时，会自动取消任何待处理的延迟释放定时器
 func registerConnCall(connID uint64, sessionID string, callFunc func(string, any, *string) error) {
 	connCallLock.Lock()
 	defer connCallLock.Unlock()
@@ -254,6 +264,9 @@ func registerConnCall(connID uint64, sessionID string, callFunc func(string, any
 		return
 	}
 	sessionConnMap[sessionID] = append(sessionConnMap[sessionID], connID)
+
+	// 新连接绑定到此会话，取消任何待处理的延迟释放定时器
+	cancelSessionRelease(sessionID)
 }
 
 // unregisterConnCall 注销连接和会话的绑定
@@ -637,6 +650,143 @@ func closeSession(sessionID string) {
 			delete(agentCallList, sessionID)
 		}
 	}
+}
+
+// cancelSessionRelease 取消会话的延迟释放定时器
+// 在客户端重新连接时调用，防止会话被错误释放
+func cancelSessionRelease(sessionID string) {
+	sessLock.Lock()
+	defer sessLock.Unlock()
+	if obj, ok := sessions[sessionID]; ok && obj.releaseTimer != nil {
+		obj.releaseTimer.Stop()
+		obj.releaseTimer = nil
+	}
+}
+
+// SessionGetBackgroundRequest 获取后台模式状态的请求
+type SessionGetBackgroundRequest struct {
+	SessionID string `json:"sessionId"`
+}
+
+// SessionGetBackgroundResponse 获取后台模式状态的响应
+type SessionGetBackgroundResponse struct {
+	Background bool `json:"background"`
+}
+
+// SessionGetBackground 获取会话的后台运行模式状态
+func SessionGetBackground(req SessionGetBackgroundRequest, call func(string, any, *string) error, connID uint64) (SessionGetBackgroundResponse, error) {
+	if req.SessionID == "" {
+		return SessionGetBackgroundResponse{}, fmt.Errorf("sessionId is empty")
+	}
+	_, _, err := sessionID2Cwd(req.SessionID)
+	if err != nil {
+		return SessionGetBackgroundResponse{}, fmt.Errorf("invalid sessionId: %v", err)
+	}
+
+	sessLock.Lock()
+	obj, ok := sessions[req.SessionID]
+	sessLock.Unlock()
+	if !ok {
+		return SessionGetBackgroundResponse{}, fmt.Errorf("session not found")
+	}
+	return SessionGetBackgroundResponse{Background: obj.background}, nil
+}
+
+// SessionGetEffortRequest 获取推理强度设置的请求
+type SessionGetEffortRequest struct {
+	SessionID string `json:"sessionId"`
+}
+
+// SessionGetEffortResponse 获取推理强度设置的响应
+type SessionGetEffortResponse struct {
+	Effort string `json:"effort"`
+}
+
+// SessionGetEffort 获取会话当前的 reasoning effort 设置
+func SessionGetEffort(req SessionGetEffortRequest, call func(string, any, *string) error, connID uint64) (SessionGetEffortResponse, error) {
+	if req.SessionID == "" {
+		return SessionGetEffortResponse{}, fmt.Errorf("sessionId is empty")
+	}
+	_, _, err := sessionID2Cwd(req.SessionID)
+	if err != nil {
+		return SessionGetEffortResponse{}, fmt.Errorf("invalid sessionId: %v", err)
+	}
+
+	sessLock.Lock()
+	obj, ok := sessions[req.SessionID]
+	sessLock.Unlock()
+	if !ok {
+		return SessionGetEffortResponse{}, fmt.Errorf("session not found")
+	}
+	effort := obj.session.ReasoningEffort
+	if effort == "" {
+		effort = "unset"
+	}
+	return SessionGetEffortResponse{Effort: effort}, nil
+}
+
+// scheduleSessionRelease 启动会话的延迟释放定时器
+// 连接断开后根据配置的超时时间启动定时器，超时后若仍无连接则释放会话资源
+// 当 background 开启时，仅在 loop 空闲或等待审批时才释放，活跃处理中会重新调度
+func scheduleSessionRelease(sessionID string) {
+	sessLock.Lock()
+	obj, ok := sessions[sessionID]
+	if !ok {
+		sessLock.Unlock()
+		return
+	}
+
+	// 停止已有的定时器
+	if obj.releaseTimer != nil {
+		obj.releaseTimer.Stop()
+	}
+
+	timeout := config.GlobalConfig.Server.SessionTimeout
+	if timeout <= 0 {
+		timeout = 60 // 默认 60 秒
+	}
+
+	var releaseFunc func()
+	releaseFunc = func() {
+		// 先检查连接状态（不持 sessLock，避免死锁）
+		sessionConnLock.Lock()
+		conns := sessionConnMap[sessionID]
+		sessionConnLock.Unlock()
+		if len(conns) > 0 {
+			return // 已有新连接重连，不释放
+		}
+
+		// 获取 sessLock 后二次确认并清理
+		sessLock.Lock()
+		defer sessLock.Unlock()
+		obj2, ok2 := sessions[sessionID]
+		if !ok2 || obj2.releaseTimer == nil {
+			return // 已被其他路径处理（如 SessionDelete）
+		}
+		obj2.releaseTimer = nil
+
+		// 后台模式开启且 loop 正在活跃处理时，重新调度，不释放
+		if obj2.background && obj2.session != nil {
+			switch obj2.session.State {
+			case state.StateRequesting, state.StateReciving, state.StateToolCalling:
+				logger.Debug("session %s background mode: still processing (state=%d), reschedule release",
+					sessionID, obj2.session.State)
+				obj2.releaseTimer = time.AfterFunc(
+					time.Duration(timeout)*time.Second, releaseFunc)
+				return
+			}
+			// 其他状态（Idle、WaitApprove、Waiting、GeneratingPrompt）→ 执行释放
+		}
+
+		logger.Info("release session %s after %ds timeout", sessionID, timeout)
+		obj2.loop.Cancel()
+		closeDB(obj2.cwd)
+		delete(sessions, sessionID)
+		delete(agentCallList, sessionID)
+	}
+
+	obj.releaseTimer = time.AfterFunc(time.Duration(timeout)*time.Second, releaseFunc)
+	sessLock.Unlock()
 }
 
 // SessionNew 创建新会话
@@ -1258,6 +1408,11 @@ func SessionDelete(req SessionDeleteRequest, call func(string, any, *string) err
 	// 如果会话当前活跃，先关闭它
 	sessLock.Lock()
 	if obj, ok := sessions[req.SessionID]; ok && obj.session.ID == id {
+		// 取消任何待处理的延迟释放定时器
+		if obj.releaseTimer != nil {
+			obj.releaseTimer.Stop()
+			obj.releaseTimer = nil
+		}
 		sessLock.Unlock()
 		closeSession(req.SessionID)
 	} else {

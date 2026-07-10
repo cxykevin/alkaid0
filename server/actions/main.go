@@ -23,6 +23,8 @@ func InitFuncs(srv *jsonrpc.Server) {
 	jsonrpc.Set(srv, "session/prompt", SessionPrompt)
 	jsonrpc.Set(srv, "session/cancel", SessionCancel)
 	jsonrpc.Set(srv, "alk.cxykevin.top/list_subagent", SubAgentList)
+	jsonrpc.Set(srv, "alk.cxykevin.top/session/get_background", SessionGetBackground)
+	jsonrpc.Set(srv, "alk.cxykevin.top/session/get_effort", SessionGetEffort)
 	jsonrpc.Set(srv, "alk.cxykevin.top/fs/stat", FsStat)
 	jsonrpc.Set(srv, "alk.cxykevin.top/fs/read", FsRead)
 	jsonrpc.Set(srv, "alk.cxykevin.top/fs/write", FsWrite)
@@ -34,15 +36,17 @@ func InitFuncs(srv *jsonrpc.Server) {
 }
 
 // Close 关闭连接
+// 连接断开后不会立即释放会话，而是启动延迟释放定时器
+// 若在超时时间内有新的客户端重连，会话会继续正常运行
 func Close(req any, call func(string, any, *string) error, connID uint64) (any, error) {
 	bindedSessionOnConnMu.Lock()
 	sessionIDs := bindedSessionOnConn[connID]
 	delete(bindedSessionOnConn, connID)
 	bindedSessionOnConnMu.Unlock()
 	for _, sessionID := range sessionIDs {
-		closeSession(sessionID)
-		// 注销该连接与会话的绑定
+		// 先移除连接绑定，再启动延迟释放定时器
 		unregisterConnCall(connID, sessionID)
+		scheduleSessionRelease(sessionID)
 	}
 	clientConnCapsMu.Lock()
 	delete(clientConnCaps, connID)

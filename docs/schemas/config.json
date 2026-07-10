@@ -227,6 +227,13 @@
                     "type": "boolean",
                     "description": "是否禁用 Stdio 服务器模式",
                     "default": false
+                },
+                "SessionTimeout": {
+                    "type": "integer",
+                    "description": "连接断开后等待客户端重连的超时时间（秒）",
+                    "minimum": 1,
+                    "maximum": 86400,
+                    "default": 60
                 }
             }
         }

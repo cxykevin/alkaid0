@@ -39,11 +39,11 @@ var commandMaps = map[string]*cmdObj{
 		},
 	},
 	"/reasoning": {
-		Description: "Set the reasoning effort (low | medium | high | max | xhigh)",
+		Description: "Set the reasoning effort (low | medium | high | max | xhigh | unset)",
 		Hint:        "reasoning effort",
 		Function: func(obj *sessionObj, arg string) (bool, error) {
 			effortArg := strings.TrimSpace(strings.ToLower(arg))
-			if effortArg == "low" || effortArg == "medium" || effortArg == "high" || effortArg == "max" || effortArg == "xhigh" {
+			if effortArg == "low" || effortArg == "medium" || effortArg == "high" || effortArg == "max" || effortArg == "xhigh" || effortArg == "unset" {
 				obj.session.ReasoningEffort = effortArg
 				err := obj.session.DB.Model(&structs.Chats{}).Where("id = ?", obj.session.ID).Update("reasoning_effort", effortArg).Error
 				return false, err
@@ -57,6 +57,23 @@ var commandMaps = map[string]*cmdObj{
 		Function: func(obj *sessionObj, arg string) (bool, error) {
 			go updateCfgsToConns()
 			return false, nil
+		},
+	},
+	"/background": {
+		Description: "Set background mode on/off — keep session alive after all clients disconnect",
+		Hint:        "on|off",
+		Function: func(obj *sessionObj, arg string) (bool, error) {
+			arg = strings.TrimSpace(strings.ToLower(arg))
+			switch arg {
+			case "on":
+				obj.background = true
+				return false, nil
+			case "off":
+				obj.background = false
+				return false, nil
+			default:
+				return false, fmt.Errorf("Usage: /background on|off")
+			}
 		},
 	},
 }

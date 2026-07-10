@@ -66,10 +66,15 @@ func RequestBody(chatID uint32, modelID int32, agentCode string, toolsList *[]*p
 			}
 		}
 	}
-	if modelConfig.ProviderSpecificConfig.EnableReasoningEffort && chatLn.ReasoningEffort != "" {
+	if modelConfig.ProviderSpecificConfig.EnableReasoningEffort {
 		reasoning := chatLn.ReasoningEffort
-		response.ReasoningEffort = &reasoning
-	}
+		if reasoning == "" {
+			reasoning = "unset"
+		}
+		if reasoning != "unset" {
+				response.ReasoningEffort = &reasoning
+			}
+		}
 
 	// 生成 messages
 	responseDeltaList := list.New()
