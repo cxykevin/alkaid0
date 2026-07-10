@@ -5,6 +5,7 @@ import (
 	"context"
 	_ "embed" // embed
 	"fmt"
+	"io"
 	"os"
 	"path"
 	"runtime"
@@ -88,13 +89,6 @@ type PassInfo struct {
 	Description string
 	Parameters  map[string]any
 }
-
-// type toolCallFlagTempory struct {
-// 	TypeOutputedLen    int32
-// 	CommandOutputedLen int32
-// 	ReasonOutputedLen  int32
-// 	SandboxOutputed    bool
-// }
 
 func asInt32(p *any) (int32, bool) {
 	if p == nil {
@@ -311,6 +305,7 @@ func runTask(session *structs.Chats, mp map[string]*any, cross []*any) (bool, []
 	}
 	env := os.Environ()
 	env = append(env, "SANDBOX=alkaid0")
+	env = append(env, "TERM=xterm-256color")
 	sand, err := sandbox.New(sandbox.Config{
 		WorkDir:       path.Join(session.Root, session.CurrentActivatePath),
 		Env:           env,
@@ -335,9 +330,6 @@ func runTask(session *structs.Chats, mp map[string]*any, cross []*any) (bool, []
 	}
 
 	var buf bytes.Buffer
-	c.SetStdin(nil)
-	c.SetStdout(&buf)
-	c.SetStderr(&buf)
 
 	// 监听context的Done信号，当context被取消时强制kill进程
 	var ctx context.Context
@@ -347,22 +339,8 @@ func runTask(session *structs.Chats, mp map[string]*any, cross []*any) (bool, []
 		ctx = context.Background()
 	}
 
-	// 启动goroutine监听context取消信号
-	contextDone := make(chan struct{})
-	go func() {
-		select {
-		case <-ctx.Done():
-			logger.Info("Context cancelled, killing command: %s", command)
-			if err := c.Kill(); err != nil {
-				logger.Warn("Failed to kill command: %v", err)
-			}
-		case <-contextDone:
-			// 命令已完成，退出监听
-		}
-	}()
-
-	err = c.Run()
-	close(contextDone)
+	// 使用 PTY 运行命令（Unix），若不可用则回退到缓冲区模式（Windows）
+	err = runCmd(c, &buf, ctx, command)
 
 	errString := ""
 	if err != nil {
@@ -398,26 +376,16 @@ func runTask(session *structs.Chats, mp map[string]*any, cross []*any) (bool, []
 				}, nil
 			}
 			var buf2 bytes.Buffer
-			c2.SetStdin(nil)
-			c2.SetStdout(&buf2)
-			c2.SetStderr(&buf2)
 
-			// 监听context的Done信号，当context被取消时强制kill进程
-			contextDone2 := make(chan struct{})
-			go func() {
-				select {
-				case <-ctx.Done():
-					logger.Info("Context cancelled, killing fallback command: %s", command)
-					if err := c2.Kill(); err != nil {
-						logger.Warn("Failed to kill fallback command: %v", err)
-					}
-				case <-contextDone2:
-					// 命令已完成，退出监听
-				}
-			}()
+			// 监听context的Done信号
+			var ctx2 context.Context
+			if session.Context != nil {
+				ctx2 = *session.Context
+			} else {
+				ctx2 = context.Background()
+			}
 
-			err2 = c2.Run()
-			close(contextDone2)
+			err2 = runCmd(c2, &buf2, ctx2, command)
 
 			if err2 != nil {
 				errString += fmt.Sprintf("[System] Command Execute Error: %v\n", err2)
@@ -470,6 +438,63 @@ func runTask(session *structs.Chats, mp map[string]*any, cross []*any) (bool, []
 	}
 	return false, cross, res, nil
 
+}
+
+// runCmd 执行命令，优先使用 PTY，否则回退到缓冲区模式。
+// runCmd 内部处理 context 取消监听和输出收集。
+func runCmd(c *sandbox.Command, buf *bytes.Buffer, ctx context.Context, command string) error {
+	// 监听 context 取消信号
+	contextDone := make(chan struct{})
+	go func() {
+		select {
+		case <-ctx.Done():
+			logger.Info("Context cancelled, killing command: %s", command)
+			if err := c.Kill(); err != nil {
+				logger.Warn("Failed to kill command: %v", err)
+			}
+		case <-contextDone:
+		}
+	}()
+	defer close(contextDone)
+
+	master, slave, ptyErr := openPTYForCmd()
+	if ptyErr == nil {
+		// PTY 模式：将子进程 stdio 挂载到 PTY 从端
+		c.SetStdin(slave)
+		c.SetStdout(slave)
+		c.SetStderr(slave)
+
+		if err := c.Start(); err != nil {
+			_ = master.Close()
+			_ = slave.Close()
+			return err
+		}
+
+		// 关闭从端（子进程已有自己的副本）
+		_ = slave.Close()
+
+		// 从主端读取输出到缓冲区
+		var copyWg sync.WaitGroup
+		copyWg.Add(1)
+		go func() {
+			defer copyWg.Done()
+			_, _ = io.Copy(buf, master)
+		}()
+
+		// 等待命令完成
+		err := c.Wait()
+
+		// 关闭主端，io.Copy 收到 EOF 后退出
+		_ = master.Close()
+		copyWg.Wait()
+		return err
+	}
+
+	// 非 PTY 模式（Windows/fallback）：使用缓冲区直接收集输出
+	c.SetStdin(nil)
+	c.SetStdout(buf)
+	c.SetStderr(buf)
+	return c.Run()
 }
 
 func getShell(shell string) string {

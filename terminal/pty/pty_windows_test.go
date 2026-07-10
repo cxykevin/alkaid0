@@ -9,7 +9,7 @@ func TestNewWindows(t *testing.T) {
 
 	p, f, err := New(cfg)
 	if err != nil {
-		t.Skipf("ConPTY 不可用: %v", err)
+		t.Fatalf("创建PTY失败: %v", err)
 	}
 	defer p.Close()
 
@@ -29,7 +29,7 @@ func TestResizeAndGetSizeWindows(t *testing.T) {
 
 	p, _, err := New(cfg)
 	if err != nil {
-		t.Skipf("ConPTY 不可用: %v", err)
+		t.Fatalf("创建PTY失败: %v", err)
 	}
 	defer p.Close()
 
@@ -51,7 +51,7 @@ func TestCloseMultipleTimesWindows(t *testing.T) {
 
 	p, _, err := New(cfg)
 	if err != nil {
-		t.Skipf("ConPTY 不可用: %v", err)
+		t.Fatalf("创建PTY失败: %v", err)
 	}
 
 	if err := p.Close(); err != nil {

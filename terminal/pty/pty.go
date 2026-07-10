@@ -57,6 +57,26 @@ func New(cfg Config) (*PTY, *os.File, error) {
 	return p, master, nil
 }
 
+// Open 打开 PTY 并返回主端和从端文件描述符，不关闭从端。
+// 主端用于父进程读写，从端用于挂载到子进程的标准输入/输出/错误。
+// 调用方负责关闭 master 和 slave。
+func Open(cfg Config) (master, slave *os.File, err error) {
+	if cfg.Rows == 0 {
+		cfg.Rows = 24
+	}
+	if cfg.Cols == 0 {
+		cfg.Cols = 80
+	}
+	master, slave, err = openPTY()
+	if err != nil {
+		return nil, nil, err
+	}
+	if cfg.Rows > 0 && cfg.Cols > 0 {
+		_ = setWinsize(int(master.Fd()), int(cfg.Cols), int(cfg.Rows))
+	}
+	return master, slave, nil
+}
+
 // File 返回底层伪终端主端文件描述符
 func (p *PTY) File() *os.File {
 	p.mu.Lock()
