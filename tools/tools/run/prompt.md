@@ -21,3 +21,13 @@ Start a task to run something likes code, command, and so on.
 - `"bash"`: Linux.
 - `"zsh"`: MacOS.
 - `"powershell"`: Windows.
+
+#### Rules of `git commit`:
+
+Unless **explicitly specified** by the user, your commit format must follow the conventions used in the user’s previous commits.
+
+If the user has **no prior commit history**, or only an **Original Commit** exists, then the Conventional Commits specification shall be adopted by default.
+
+You **must** ask for the user’s confirmation **only when** an Original Commit is present; in **all other cases**, no confirmation is required.
+
+Every commit message must end with `Co-Authored-By: Alkaid0 <alkaid0@cxykevin.top>`.
