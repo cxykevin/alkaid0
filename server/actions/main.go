@@ -25,6 +25,8 @@ func InitFuncs(srv *jsonrpc.Server) {
 	jsonrpc.Set(srv, "alk.cxykevin.top/list_subagent", SubAgentList)
 	jsonrpc.Set(srv, "alk.cxykevin.top/session/get_background", SessionGetBackground)
 	jsonrpc.Set(srv, "alk.cxykevin.top/session/get_effort", SessionGetEffort)
+	jsonrpc.Set(srv, "alk.cxykevin.top/config/get", ConfigGet)
+	jsonrpc.Set(srv, "alk.cxykevin.top/config/set", ConfigSet)
 	jsonrpc.Set(srv, "alk.cxykevin.top/fs/stat", FsStat)
 	jsonrpc.Set(srv, "alk.cxykevin.top/fs/read", FsRead)
 	jsonrpc.Set(srv, "alk.cxykevin.top/fs/write", FsWrite)
