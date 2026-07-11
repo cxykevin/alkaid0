@@ -37,11 +37,11 @@ func TestSummary_InvalidModel(t *testing.T) {
 	defer u.Unwrap(db.DB()).Close()
 
 	// 设置一个无效的summary模型ID
-	*config.GlobalConfig = cfgStruct.Config{
+	config.GlobalConfigSwap(cfgStruct.Config{
 		Agent: cfgStruct.AgentsConfig{
 			SummaryModel: 999, // 不存在的模型
 		},
-	}
+	})
 
 	// 创建聊天会话
 	chat := structs.Chats{
@@ -67,7 +67,7 @@ func TestSummary_EmptyChat(t *testing.T) {
 	defer u.Unwrap(db.DB()).Close()
 
 	// 设置有效的模型配置
-	*config.GlobalConfig = cfgStruct.Config{
+	config.GlobalConfigSwap(cfgStruct.Config{
 		Agent: cfgStruct.AgentsConfig{
 			SummaryModel: 1,
 		},
@@ -81,7 +81,7 @@ func TestSummary_EmptyChat(t *testing.T) {
 				},
 			},
 		},
-	}
+	})
 
 	// 创建空聊天会话
 	chat := structs.Chats{
@@ -110,7 +110,7 @@ func TestSummary_NonExistentChat(t *testing.T) {
 	defer u.Unwrap(db.DB()).Close()
 
 	// 设置有效的模型配置
-	*config.GlobalConfig = cfgStruct.Config{
+	config.GlobalConfigSwap(cfgStruct.Config{
 		Agent: cfgStruct.AgentsConfig{
 			SummaryModel: 1,
 		},
@@ -124,7 +124,7 @@ func TestSummary_NonExistentChat(t *testing.T) {
 				},
 			},
 		},
-	}
+	})
 
 	// 尝试获取不存在的聊天会话的总结
 	summary, err := Summary(context.Background(), db, 999, "")
@@ -143,7 +143,7 @@ func TestSummarySession(t *testing.T) {
 	defer u.Unwrap(db.DB()).Close()
 
 	// 设置有效的模型配置
-	*config.GlobalConfig = cfgStruct.Config{
+	config.GlobalConfigSwap(cfgStruct.Config{
 		Agent: cfgStruct.AgentsConfig{
 			SummaryModel: 1,
 		},
@@ -157,7 +157,7 @@ func TestSummarySession(t *testing.T) {
 				},
 			},
 		},
-	}
+	})
 
 	// 创建聊天会话
 	chat := structs.Chats{
@@ -194,7 +194,7 @@ func TestSummarySession_WithAgent(t *testing.T) {
 	defer u.Unwrap(db.DB()).Close()
 
 	// 设置有效的模型配置
-	*config.GlobalConfig = cfgStruct.Config{
+	config.GlobalConfigSwap(cfgStruct.Config{
 		Agent: cfgStruct.AgentsConfig{
 			SummaryModel: 1,
 		},
@@ -208,7 +208,7 @@ func TestSummarySession_WithAgent(t *testing.T) {
 				},
 			},
 		},
-	}
+	})
 
 	// 创建聊天会话
 	chat := structs.Chats{

@@ -1,6 +1,7 @@
 package connect
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"os"
@@ -24,6 +25,17 @@ var loggerWs = log.New("connect(ws)")
 
 // readLimit 限制 WebSocket 消息的大小
 const readLimit = 16 * 1024 * 1024
+
+// wsHTTPServer 全局 HTTP 服务器引用，用于优雅关闭
+var wsHTTPServer *http.Server
+
+// ShutdownWs 优雅关闭 WebSocket HTTP 服务器
+func ShutdownWs(ctx context.Context) error {
+	if wsHTTPServer == nil {
+		return nil
+	}
+	return wsHTTPServer.Shutdown(ctx)
+}
 
 // StartWs 从 WebSocket 启动 JSON-RPC，支持多会话
 // addr: 监听地址，例如 "localhost:8080"
@@ -96,6 +108,9 @@ func StartWs(handler func(string, func(string) error, uint64) (returnString stri
 		loggerWs.Info("new connection: %d", connID)
 		var writeMu sync.Mutex
 
+		// 每个连接最多 32 个并发消息处理 goroutine
+		sem := make(chan struct{}, 32)
+
 		// 处理来自 WebSocket 的消息
 		for {
 			_, message, err := ws.ReadMessage()
@@ -106,9 +121,14 @@ func StartWs(handler func(string, func(string) error, uint64) (returnString stri
 				}
 				break
 			}
+
+			// 获取 semaphore slot（backpressure：队列满时阻塞读取）
+			sem <- struct{}{}
+
 			// 在独立 goroutine 中处理每个请求，防止长时间阻塞（如 session/prompt 等待 AI 响应）
 			// 使得 session/cancel 等请求能在此连接上被并发处理
 			go func(msg []byte) {
+				defer func() { <-sem }()
 				responseStr, shouldExit := handler(string(msg), func(t string) error {
 					writeMu.Lock()
 					err := ws.WriteMessage(websocket.TextMessage, []byte(t))
@@ -138,8 +158,14 @@ func StartWs(handler func(string, func(string) error, uint64) (returnString stri
 		loggerWs.Info("connection close: %d", connID)
 	})
 
-	// 启动 HTTP 服务器
+	// 启动 HTTP 服务器（支持优雅关闭）
+	wsHTTPServer = &http.Server{Addr: addr}
 	loggerWs.Info("webSocket service started in ws://%s%s", addr, path)
 	fmt.Fprintf(os.Stderr, "WebSocket service started in ws://%s%s\n", addr, path)
-	return http.ListenAndServe(addr, nil)
+	go func() {
+		if err := wsHTTPServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			loggerWs.Error("ws server error: %v", err)
+		}
+	}()
+	return nil
 }

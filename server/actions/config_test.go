@@ -29,7 +29,7 @@ func configSetup(t *testing.T) (restore func()) {
 	config.Save()
 
 	return func() {
-		*config.GlobalConfig = origConfig
+		config.GlobalConfigSwap(origConfig)
 	}
 }
 

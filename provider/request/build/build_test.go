@@ -19,7 +19,7 @@ var (
 // setupBuildTest 设置构建测试环境和数据库
 func setupBuildTest(t *testing.T) *gorm.DB {
 	// 设置测试配置
-	*config.GlobalConfig = cfgStruct.Config{
+	config.GlobalConfigSwap(cfgStruct.Config{
 		Model: cfgStruct.ModelsConfig{
 			DefaultModelID: 1,
 			Models: map[int32]cfgStruct.ModelConfig{
@@ -40,7 +40,7 @@ func setupBuildTest(t *testing.T) *gorm.DB {
 				},
 			},
 		},
-	}
+	})
 
 	// 使用内存数据库，避免文件 I/O 依赖
 	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})

@@ -34,7 +34,7 @@ func setupTestDB(t *testing.T) *gorm.DB {
 // setupTestConfig 设置测试配置
 func setupTestConfig() {
 	// 设置测试模型配置
-	*config.GlobalConfig = cfgStruct.Config{
+	config.GlobalConfigSwap(cfgStruct.Config{
 		Model: cfgStruct.ModelsConfig{
 			DefaultModelID: 1,
 			Models: map[int32]cfgStruct.ModelConfig{
@@ -82,7 +82,7 @@ func setupTestConfig() {
 			},
 			GlobalPrompt: "You are a helpful assistant",
 		},
-	}
+	})
 }
 
 // TestRequestBody_Basic 测试基本功能
@@ -370,7 +370,7 @@ func TestRequestBody_WithSummary(t *testing.T) {
 // TestRequestBody_InvalidModel 测试无效模型ID
 func TestRequestBody_InvalidModel(t *testing.T) {
 	// 设置一个没有默认模型的配置
-	*config.GlobalConfig = cfgStruct.Config{
+	config.GlobalConfigSwap(cfgStruct.Config{
 		Model: cfgStruct.ModelsConfig{
 			DefaultModelID: 999, // 不存在的默认模型
 			Models: map[int32]cfgStruct.ModelConfig{
@@ -395,7 +395,7 @@ func TestRequestBody_InvalidModel(t *testing.T) {
 			},
 			GlobalPrompt: "You are a helpful assistant",
 		},
-	}
+	})
 
 	db := setupTestDB(t)
 

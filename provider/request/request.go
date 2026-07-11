@@ -726,10 +726,16 @@ func SendRequest(ctx context.Context, session *storageStructs.Chats, callback fu
 	isCancel := requestErr != nil && errors.Is(requestErr, context.Canceled)
 
 	// 取消时在 goroutine 中异步完成最后一批内容的持久化，然后立即返回
+	// goroutine 中加 recover() + context.Done() 保护，防止 DB 已关闭时 panic
 	if isCancel {
 		go func(msgID uint64, finalDelta, finalThinkingDelta, toolCallingJSON string,
 			promptUsage, completionUsage, totalUsage, cachedUsage uint32,
 			lastFlushLen, lastFlushThinkingLen int) {
+			defer func() {
+				if r := recover(); r != nil {
+					logger.Error("cancel persist goroutine recovered: %v", r)
+				}
+			}()
 			_, delta, thinkingDelta, _ := solver.DoneToken()
 			fd := finalDelta + delta
 			ftd := finalThinkingDelta + thinkingDelta

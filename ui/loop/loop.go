@@ -114,6 +114,13 @@ func New(session *structs.Chats) *Object {
 // needCompress 标志在 token 累积超过模型配置的压缩阈值后触发自动摘要
 func (p *Object) Start(ctx context.Context) {
 	logger.Info("start loop in session %d", p.session.ID)
+
+	// 确保无论 Start() 如何退出都关闭 done 通道，
+	// 避免 SetCallback 的 goroutine 泄漏。
+	defer p.closeOnce.Do(func() {
+		close(p.done)
+	})
+
 	var cancel context.CancelFunc
 	p.ctx, cancel = context.WithCancel(ctx)
 	p.ctxCancel = cancel

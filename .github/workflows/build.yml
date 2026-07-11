@@ -122,6 +122,18 @@ jobs:
           go-version: "1.26.2"
           check-latest: true
 
+      - name: 静态分析
+        run: |
+          go vet ./...
+
+      - name: 数据竞争检测
+        env:
+          ALKAID0_DEBUG_MOCKSERVER: "true"
+          ALKAID0_CONFIG_PATH: "alklog.log"
+          ALKAID0_TEST_LESS_MEMORY_MODE: "true"
+        run: |
+          go test -race -count=1 ./config/... ./library/... ./log/... ./mock/... ./provider/parser/... ./provider/request/structs/... ./storage/... ./terminal/buffer/... ./tools/... ./ui/...
+
       - name: 运行测试
         env:
           ALKAID0_DEBUG_MOCKSERVER: "true"

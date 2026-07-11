@@ -92,10 +92,17 @@ func Load() {
 	Logger = log.New(file, "", log.LstdFlags)
 
 	// 初始化异步日志channel
-	logChannel = make(chan logMessage, 200) // 缓冲200条日志，静默时可大幅减少内存占用
+	// logChannel 的写和读分别由 logFlushMutex 保护：
+	//   - 此处写时获取锁
+	//   - log() 在发送前获取锁
+	// 建立 happens-before 消除 race detector 的误报。
+	ch := make(chan logMessage, 200) // 缓冲200条日志，静默时可大幅减少内存占用
+	logFlushMutex.Lock()
+	logChannel = ch
+	logFlushMutex.Unlock()
 
-	// 启动日志处理goroutine
-	go logWorker()
+	// 启动日志处理goroutine，传入本地变量避免 worker 直接读 package 变量（跑 -race 需要）
+	go logWorker(ch)
 
 	loggerInited = true
 	loadMu.Unlock() // 先释放锁，避免 log.go:New→Load 的环形调用导致死锁
@@ -112,8 +119,8 @@ func Load() {
 // 使用缓冲通道（容量 1000）解耦日志调用方和 I/O 写入方，
 // 防止主程序在日志写入时阻塞。
 // 通道关闭时 goroutine 自动退出。
-func logWorker() {
-	for msg := range logChannel {
+func logWorker(ch chan logMessage) {
+	for msg := range ch {
 		str := fmt.Sprintf("[%s][%s] %s", msg.level, msg.moduleName, msg.message)
 		Logger.Println(str)
 		logWaitGroup.Done()
@@ -169,16 +176,15 @@ func sanitizeAndEscape(msg string, v ...any) string {
 func (l *LogsObj) log(level string, msg string, v ...any) {
 	str := sanitizeAndEscape(msg, v...)
 
-	// isShutdown 标志下改用同步写入。
-	// 原因：关闭期间 logWorker 可能已退出，通道接收会 panic。
-	// 此时应优先保证关键日志被写入，即使阻塞应用程序。
+	// 在 logFlushMutex 保护下检查 isShutdown。
+	// 防止 Shutdown 在 isShutdown 检查和 logWaitGroup.Add(1) 之间关闭通道导致 panic。
+	// 详见 Shutdown() 中对 flushLogs 的调用顺序说明。
+	logFlushMutex.Lock()
 	if atomic.LoadUint32(&isShutdown) == 1 {
+		logFlushMutex.Unlock()
 		l.logSync(level, "%s", str)
 		return
 	}
-
-	// 异步写入日志：将日志消息发送到缓冲通道，由 logWorker 负责实际 I/O
-	logFlushMutex.Lock()
 	logWaitGroup.Add(1)
 	logFlushMutex.Unlock()
 

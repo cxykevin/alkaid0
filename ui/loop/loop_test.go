@@ -3,6 +3,7 @@ package loop
 import (
 	"context"
 	"os"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -278,9 +279,9 @@ func TestSetCallback(t *testing.T) {
 
 	loopObj := New(chat)
 
-	callbackCalled := false
+	callbackCalled := atomic.Bool{}
 	loopObj.SetCallback(func(resp AIResponse) {
-		callbackCalled = true
+		callbackCalled.Store(true)
 	})
 
 	// 发送响应并验证回调被调用
@@ -293,7 +294,7 @@ func TestSetCallback(t *testing.T) {
 
 	time.Sleep(200 * time.Millisecond)
 
-	if !callbackCalled {
+	if !callbackCalled.Load() {
 		t.Fatal("Expected callback to be called")
 	}
 }

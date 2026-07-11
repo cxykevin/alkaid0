@@ -18,6 +18,9 @@ func StartStdio(handler func(string, func(string) error, uint64) (returnString s
 	reader := bufio.NewReader(os.Stdin)
 	loggerStdio.Info("connect start(ConnID 1)")
 
+	// 最多 8 个并发消息处理 goroutine
+	sem := make(chan struct{}, 8)
+
 	var writeMu sync.Mutex
 
 	for {
@@ -37,7 +40,11 @@ func StartStdio(handler func(string, func(string) error, uint64) (returnString s
 			continue
 		}
 
+		// 获取 semaphore slot（backpressure：队列满时阻塞读取）
+		sem <- struct{}{}
+
 		go func() {
+			defer func() { <-sem }()
 			// 调用 handler 处理请求
 			responseStr, shouldExit := handler(line, func(t string) error {
 				writeMu.Lock()

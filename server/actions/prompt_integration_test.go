@@ -17,7 +17,7 @@ import (
 func setupConfigForTest() {
 	apiKey := "test-key"
 	if config.GlobalConfig == nil {
-		config.GlobalConfig = &cfgStructs.Config{}
+		config.GlobalConfigSwap(cfgStructs.Config{})
 	}
 	config.GlobalConfig.Version = 1
 	config.GlobalConfig.Model = cfgStructs.ModelsConfig{

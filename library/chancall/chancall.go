@@ -1,7 +1,10 @@
 // Package chancall 提供一个基于通道的异步调用机制，用于避免循环引用
 package chancall
 
-import "fmt"
+import (
+	"fmt"
+	"log"
+)
 
 // Ret 调用结果
 type Ret struct {
@@ -16,7 +19,7 @@ type EventChan struct {
 	Out      chan Ret
 }
 
-const bufferSize = 64
+const bufferSize = 4096
 
 var actChan = make(chan EventChan, bufferSize)
 
@@ -44,17 +47,24 @@ func Register(consumer string, fn func(any) (any, error)) CallFunc {
 
 func start() {
 	for ev := range actChan {
-		consumer, ok := consumers[ev.Consumer]
-		if !ok {
-			ev.Out <- Ret{Ret: nil, Err: fmt.Errorf("consumer %s not found", ev.Consumer)}
-			continue
-		}
-		ret, err := consumer(ev.In)
-		ev.Out <- Ret{
-			Ret: ret,
-			Err: err,
-		}
-		close(ev.Out)
+		func() {
+			defer func() {
+				if r := recover(); r != nil {
+					log.Printf("chancall: panic in consumer %s: %v", ev.Consumer, r)
+				}
+			}()
+			consumer, ok := consumers[ev.Consumer]
+			if !ok {
+				ev.Out <- Ret{Ret: nil, Err: fmt.Errorf("consumer %s not found", ev.Consumer)}
+				return
+			}
+			ret, err := consumer(ev.In)
+			ev.Out <- Ret{
+				Ret: ret,
+				Err: err,
+			}
+			close(ev.Out)
+		}()
 	}
 }
 

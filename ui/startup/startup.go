@@ -1,10 +1,13 @@
 package startup
 
 import (
+	"context"
 	"fmt"
 	"os"
+	"os/signal"
 	"runtime"
 	"runtime/debug"
+	"syscall"
 	"time"
 
 	_ "embed" // embed logo
@@ -15,6 +18,7 @@ import (
 	"github.com/cxykevin/alkaid0/mock/openai"
 	"github.com/cxykevin/alkaid0/product"
 	"github.com/cxykevin/alkaid0/server"
+	"github.com/cxykevin/alkaid0/server/client/jsonrpc/connect"
 	"github.com/cxykevin/alkaid0/tools/index"
 )
 
@@ -111,8 +115,22 @@ func Startup() {
 	ensureGlobalGitIgnore()
 	index.Load()
 
-	// ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM)
-	// defer stop()
+	// 设置信号处理：SIGTERM/SIGINT/SIGQUIT 触发优雅关闭
+	// 30 秒超时后强制退出
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT, syscall.SIGQUIT)
+	defer stop()
+
+	go func() {
+		<-ctx.Done()
+		logger.Info("received shutdown signal, initiating graceful shutdown...")
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		if err := connect.ShutdownWs(shutdownCtx); err != nil {
+			logger.Warn("ws server shutdown: %v", err)
+		}
+		log.Shutdown()
+		os.Exit(0)
+	}()
 
 	// 读取环境变量 ALKAID0_WORKDIR
 	if workdir := os.Getenv("ALKAID0_WORKDIR"); workdir != "" {

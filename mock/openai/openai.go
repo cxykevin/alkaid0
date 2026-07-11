@@ -77,6 +77,7 @@ package openai
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 	"math/rand"
 	"net/http"
 	"os"
@@ -241,6 +242,11 @@ func calculateTokens(text string) int {
 // handleChatCompletion 处理聊天补全请求，支持流式和非流式模式
 
 func handleChatCompletion(w http.ResponseWriter, r *http.Request) {
+	defer func() {
+		if rec := recover(); rec != nil {
+			log.Printf("[mock] panic in handleChatCompletion: %v", rec)
+		}
+	}()
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -298,6 +304,11 @@ func handleChatCompletion(w http.ResponseWriter, r *http.Request) {
 
 // handleStreamingChatCompletion 处理流式聊天补全请求，以 SSE 格式返回增量响应
 func handleStreamingChatCompletion(w http.ResponseWriter, _ *http.Request, req ChatCompletionRequest) {
+	defer func() {
+		if rec := recover(); rec != nil {
+			log.Printf("[mock] panic in streaming handler: %v", rec)
+		}
+	}()
 	flusher, ok := w.(http.Flusher)
 	if !ok {
 		http.Error(w, "Streaming unsupported", http.StatusInternalServerError)
@@ -393,6 +404,11 @@ func handleStreamingChatCompletion(w http.ResponseWriter, _ *http.Request, req C
 
 // handleEmbedding 处理文本嵌入请求，返回随机生成的嵌入向量
 func handleEmbedding(w http.ResponseWriter, r *http.Request) {
+	defer func() {
+		if rec := recover(); rec != nil {
+			log.Printf("[mock] panic in embedding handler: %v", rec)
+		}
+	}()
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return

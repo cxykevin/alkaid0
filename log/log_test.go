@@ -205,6 +205,9 @@ func TestSanitizeSensitiveInfo_EdgeCases(t *testing.T) {
 
 // TestNew_WithoutInit 测试在未初始化时调用 New
 func TestNew_WithoutInit(t *testing.T) {
+	// 先关闭已有日志系统，确保旧 logWorker 退出后再重新初始化
+	Shutdown()
+
 	// 重置初始化标志
 	loggerInited = false
 

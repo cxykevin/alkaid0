@@ -22,6 +22,7 @@ type AsyncPipeReader struct {
 	ctx         context.Context    // 外部传入的 context
 	cancel      context.CancelFunc // 内部取消函数（组合外部 + 内部）
 	internalCtx context.Context    // 内部 context，用于 Close
+	internalCancel context.CancelFunc
 
 	wg     sync.WaitGroup
 	closed int32 // 原子操作标记关闭状态
@@ -44,17 +45,11 @@ func NewAsyncPipeReader(ctx context.Context, file *os.File, bufferSize int) *Asy
 	internalCtx, internalCancel := context.WithCancel(context.Background())
 
 	// 组合外部 context 和内部 context
-	// 任一取消都会触发
+	// 使用 AfterFunc 注册回调，任一取消都会触发 combinedCancel
+	// 替代 goroutine + select 模式，避免 context 永不取消时的 goroutine 泄漏
 	combinedCtx, combinedCancel := context.WithCancel(ctx)
-
-	go func() {
-		select {
-		case <-ctx.Done():
-			combinedCancel()
-		case <-internalCtx.Done():
-			combinedCancel()
-		}
-	}()
+	context.AfterFunc(ctx, combinedCancel)
+	context.AfterFunc(internalCtx, combinedCancel)
 
 	r := &AsyncPipeReader{
 		file:        file,
@@ -64,6 +59,7 @@ func NewAsyncPipeReader(ctx context.Context, file *os.File, bufferSize int) *Asy
 		ctx:         combinedCtx,
 		cancel:      combinedCancel,
 		internalCtx: internalCtx,
+		internalCancel: internalCancel,
 	}
 
 	r.wg.Add(1)
@@ -250,7 +246,7 @@ func (r *AsyncPipeReader) Close() error {
 	}
 
 	// 触发内部 context 取消
-	r.internalCtx.Done()
+	r.internalCancel()
 	r.cancel()
 
 	// 关闭文件（这会中断正在进行的 Read）
@@ -317,14 +313,9 @@ func (r *AsyncPipeReader) mergeContext(ctx context.Context) (context.Context, co
 
 	merged, cancel := context.WithCancel(ctx)
 
-	go func() {
-		select {
-		case <-ctx.Done():
-			cancel()
-		case <-r.ctx.Done():
-			cancel()
-		}
-	}()
+	// 使用 AfterFunc 替代 goroutine，避免 context 永不取消时的 goroutine 泄漏
+	context.AfterFunc(ctx, cancel)
+	context.AfterFunc(r.ctx, cancel)
 
 	return merged, cancel
 }
