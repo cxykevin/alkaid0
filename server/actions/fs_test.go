@@ -131,6 +131,70 @@ func TestValidatePath_InsideCwd(t *testing.T) {
 	}
 }
 
+func TestValidatePath_NoCwd_AbsolutePath(t *testing.T) {
+	// 无会话模式下，绝对路径应正常工作
+	tmpDir := t.TempDir()
+	full, err := validatePath("", tmpDir)
+	if err != nil {
+		t.Fatalf("unexpected error for absolute path without cwd: %v", err)
+	}
+	if full != tmpDir {
+		t.Errorf("expected %q, got %q", tmpDir, full)
+	}
+}
+
+func TestValidatePath_NoCwd_RelativeRejected(t *testing.T) {
+	// 无会话模式下，相对路径应被拒绝
+	_, err := validatePath("", "relative/path")
+	if err == nil || !strings.Contains(err.Error(), "absolute path") {
+		t.Errorf("expected rejection of relative path without cwd, got %v", err)
+	}
+}
+
+func TestValidatePath_NoCwd_EmptyPath(t *testing.T) {
+	// 无会话模式下，空路径应被拒绝
+	_, err := validatePath("", "")
+	if err == nil || !strings.Contains(err.Error(), "path must not be empty") {
+		t.Errorf("expected rejection of empty path without cwd, got %v", err)
+	}
+}
+
+func TestValidatePath_BlockedPaths(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("blocked path test is platform-specific (Linux)")
+	}
+	// /etc 及其子路径应被屏蔽
+	blockedTests := []string{
+		"/etc",
+		"/etc/passwd",
+		"/etc/ssh/sshd_config",
+		"/etc/",
+	}
+	for _, p := range blockedTests {
+		t.Run(p, func(t *testing.T) {
+			_, err := validatePath("", p)
+			if err == nil || !strings.Contains(err.Error(), "not allowed") {
+				t.Errorf("expected blocked path error for %q, got %v", p, err)
+			}
+		})
+	}
+	// 类似路径不应被屏蔽
+	allowedTests := []string{
+		"/etc2",
+		"/etcabc",
+		"/var",
+		"/tmp",
+	}
+	for _, p := range allowedTests {
+		t.Run(p, func(t *testing.T) {
+			_, err := validatePath("", p)
+			if err != nil {
+				t.Errorf("expected allowed path %q, got error: %v", p, err)
+			}
+		})
+	}
+}
+
 // ---- getPermissions 测试 ----
 
 func TestGetPermissions_Format(t *testing.T) {
@@ -220,13 +284,13 @@ func TestFsOpVoidWithTimeout_Timeout(t *testing.T) {
 // ---- Handler 参数验证测试 ----
 
 func TestFsValidation_EmptySessionID(t *testing.T) {
-	// 所有 handler 在 sessionId 为空时都应该返回错误
+	// 所有写操作 handler 在 sessionId 为空时都应该返回错误
+	// FsRead 是唯一允许 sessionId 为空的方法（仅读操作，绝对路径）
 	handlers := []struct {
 		name string
 		call func() error
 	}{
 		{"stat", func() error { _, err := FsStat(FsCommonRequest{SessionID: ""}, nil, 1); return err }},
-		{"read", func() error { _, err := FsRead(FsReadRequest{SessionID: ""}, nil, 1); return err }},
 		{"write", func() error { _, err := FsWrite(FsWriteRequest{SessionID: ""}, nil, 1); return err }},
 		{"mkdir", func() error { _, err := FsMkdir(FsCommonRequest{SessionID: ""}, nil, 1); return err }},
 		{"rm", func() error { _, err := FsRm(FsCommonRequest{SessionID: ""}, nil, 1); return err }},
@@ -550,6 +614,126 @@ func TestFsRead_NestedPath(t *testing.T) {
 	}
 	if str != "nested" {
 		t.Errorf("expected 'nested', got %q", str)
+	}
+}
+
+// ---- FsRead 无会话模式测试 ----
+
+func TestFsRead_NoSession_AbsolutePath(t *testing.T) {
+	// 不设置 sessionId，使用绝对路径读取文件
+	tmpDir := t.TempDir()
+	content := "no-session read test"
+	testFile := filepath.Join(tmpDir, "test.txt")
+	os.WriteFile(testFile, []byte(content), 0644)
+
+	resp, err := FsRead(FsReadRequest{Path: testFile}, nil, 1)
+	if err != nil {
+		t.Fatalf("FsRead without sessionId failed: %v", err)
+	}
+	str, ok := resp.Content.(string)
+	if !ok {
+		t.Fatalf("expected string content, got %T", resp.Content)
+	}
+	if str != content {
+		t.Errorf("expected %q, got %q", content, str)
+	}
+}
+
+func TestFsRead_NoSession_AbsolutePath_Binary(t *testing.T) {
+	tmpDir := t.TempDir()
+	binaryData := []byte{0x00, 0x01, 0x02, 0xFF}
+	testFile := filepath.Join(tmpDir, "binary.bin")
+	os.WriteFile(testFile, binaryData, 0644)
+
+	resp, err := FsRead(FsReadRequest{Path: testFile, Binary: true}, nil, 1)
+	if err != nil {
+		t.Fatalf("FsRead without sessionId (binary) failed: %v", err)
+	}
+	str, ok := resp.Content.(string)
+	if !ok {
+		t.Fatalf("expected string content, got %T", resp.Content)
+	}
+	if str == "" {
+		t.Errorf("expected non-empty base64 content")
+	}
+}
+
+func TestFsRead_NoSession_AbsolutePath_WithOffset(t *testing.T) {
+	tmpDir := t.TempDir()
+	content := "hello world"
+	testFile := filepath.Join(tmpDir, "test.txt")
+	os.WriteFile(testFile, []byte(content), 0644)
+
+	resp, err := FsRead(FsReadRequest{Path: testFile, Offset: 6}, nil, 1)
+	if err != nil {
+		t.Fatalf("FsRead without sessionId (offset) failed: %v", err)
+	}
+	str, ok := resp.Content.(string)
+	if !ok {
+		t.Fatalf("expected string content, got %T", resp.Content)
+	}
+	if str != "world" {
+		t.Errorf("expected 'world', got %q", str)
+	}
+}
+
+func TestFsRead_NoSession_RelativePath(t *testing.T) {
+	// 不设置 sessionId 时，相对路径应被拒绝
+	_, err := FsRead(FsReadRequest{Path: "relative.txt"}, nil, 1)
+	if err == nil || !strings.Contains(err.Error(), "absolute path") {
+		t.Errorf("expected error for relative path without sessionId, got %v", err)
+	}
+}
+
+func TestFsRead_NoSession_BlockedPath(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("blocked path test is platform-specific (Linux)")
+	}
+	// 不允许读取 /etc 下的文件
+	_, err := FsRead(FsReadRequest{Path: "/etc/passwd"}, nil, 1)
+	if err == nil || !strings.Contains(err.Error(), "not allowed") {
+		t.Errorf("expected blocked path error, got %v", err)
+	}
+}
+
+func TestFsRead_NoSession_EmptyPath(t *testing.T) {
+	// 不设置 sessionId 且 path 为空应报错
+	_, err := FsRead(FsReadRequest{Path: ""}, nil, 1)
+	if err == nil {
+		t.Errorf("expected error for empty path without sessionId")
+	}
+}
+
+func TestFsRead_NoSession_Directory(t *testing.T) {
+	// 不设置 sessionId，使用绝对路径列出目录
+	tmpDir := t.TempDir()
+	os.WriteFile(filepath.Join(tmpDir, "a.txt"), []byte("aaa"), 0644)
+	os.WriteFile(filepath.Join(tmpDir, "b.txt"), []byte("bbb"), 0644)
+
+	resp, err := FsRead(FsReadRequest{Path: tmpDir}, nil, 1)
+	if err != nil {
+		t.Fatalf("FsRead directory without sessionId failed: %v", err)
+	}
+	entries, ok := resp.Content.([]FsDirEntry)
+	if !ok {
+		t.Fatalf("expected []FsDirEntry, got %T", resp.Content)
+	}
+	found := map[string]bool{}
+	for _, e := range entries {
+		found[e.Name] = true
+	}
+	if !found["a.txt"] || !found["b.txt"] {
+		t.Errorf("expected a.txt and b.txt in directory listing, got %+v", entries)
+	}
+}
+
+func TestFsRead_WithSession_AbsolutePath(t *testing.T) {
+	// 有 sessionId 时绝对路径应被拒绝（即使是读操作）
+	tmpDir := t.TempDir()
+	sessionID := cwd2SessionID(tmpDir, 1)
+	_, err := FsRead(FsReadRequest{SessionID: sessionID, Path: "/tmp"}, nil, 1)
+	if err == nil || !strings.Contains(err.Error(), "path must be relative") {
+		t.Errorf("expected rejection of absolute path with sessionId, got %v", err)
 	}
 }
 

@@ -65,20 +65,54 @@ func fsOpVoidWithTimeout(timeout time.Duration, op func() error) error {
 
 // ---- Path validation ----
 
-// validatePath 验证并解析项目内的相对路径
-//   - 空路径表示项目根目录，返回 cwd 本身
-//   - 拒绝绝对路径
-//   - 拒绝包含 . 或 .. 分量的路径
-//   - 拒绝 .alkaid0 目录的访问
-//   - 使用 filepath.Clean 后确保仍在 cwd 内（防 path traversal）
+// isBlockedPath 检查绝对路径是否被屏蔽访问
+func isBlockedPath(path string) bool {
+	cleaned := filepath.Clean(path)
+
+	if runtime.GOOS == "windows" {
+		// Windows 上大小写不敏感
+		blockedUpper := strings.ToUpper(filepath.Clean(`C:\ProgramData`))
+		cleanedUpper := strings.ToUpper(cleaned)
+		if cleanedUpper == blockedUpper || strings.HasPrefix(cleanedUpper, blockedUpper+`\`) {
+			return true
+		}
+		return false
+	}
+
+	// Unix/Linux: 屏蔽 /etc
+	if cleaned == "/etc" || strings.HasPrefix(cleaned, "/etc/") {
+		return true
+	}
+	return false
+}
+
+// validatePath 验证并解析路径
+//   - cwd 非空时（有会话）：仅接受相对路径，验证防止路径穿越
+//   - cwd 为空时（无会话）：仅接受绝对路径，检查屏蔽路径
 func validatePath(cwd, relPath string) (string, error) {
 	relPath = strings.ReplaceAll(relPath, "\\", "/")
 
-	// 空路径表示根目录
+	// 空路径
 	if relPath == "" {
+		if cwd == "" {
+			return "", fmt.Errorf("path must not be empty")
+		}
 		return cwd, nil
 	}
 
+	if cwd == "" {
+		// 无会话模式：仅接受绝对路径
+		if !filepath.IsAbs(relPath) {
+			return "", fmt.Errorf("absolute path is required when sessionId is not set")
+		}
+		fullPath := filepath.Clean(relPath)
+		if isBlockedPath(fullPath) {
+			return "", fmt.Errorf("access to %s is not allowed", fullPath)
+		}
+		return fullPath, nil
+	}
+
+	// 有会话模式：仅接受相对路径
 	if relPath[0] == '/' {
 		return "", fmt.Errorf("path must be relative")
 	}
@@ -230,15 +264,18 @@ func FsStat(req FsCommonRequest, _ func(string, any, *string) error, _ uint64) (
 	}, nil
 }
 
-// FsRead 读取文件或列出目录
+// FsRead 读取文件或列出目录。
+// sessionId 可选：
+//   - 设置 sessionId：仅接受相对路径，在会话工作目录内访问
+//   - 不设置 sessionId：仅接受绝对路径，不能访问 /etc 或 C:\ProgramData
 func FsRead(req FsReadRequest, _ func(string, any, *string) error, _ uint64) (FsReadResponse, error) {
-	if req.SessionID == "" {
-		return FsReadResponse{}, fmt.Errorf("sessionId is required")
-	}
-
-	cwd, _, err := sessionID2Cwd(req.SessionID)
-	if err != nil {
-		return FsReadResponse{}, fmt.Errorf("invalid sessionId: %v", err)
+	var cwd string
+	if req.SessionID != "" {
+		var err error
+		cwd, _, err = sessionID2Cwd(req.SessionID)
+		if err != nil {
+			return FsReadResponse{}, fmt.Errorf("invalid sessionId: %v", err)
+		}
 	}
 
 	fullPath, err := validatePath(cwd, req.Path)
