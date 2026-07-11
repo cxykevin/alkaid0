@@ -20,7 +20,10 @@ func TestPrompts(t *testing.T) {
 func TestRender(t *testing.T) {
 	tmpl := template.Must(template.New("test").Parse("hello {{.Name}}"))
 	data := struct{ Name string }{Name: "world"}
-	got := Render(tmpl, data)
+	got, err := Render(tmpl, data)
+	if err != nil {
+		t.Fatalf("Render() error = %v", err)
+	}
 	if got != "hello world" {
 		t.Errorf("Render() = %q; want %q", got, "hello world")
 	}

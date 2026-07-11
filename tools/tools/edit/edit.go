@@ -496,7 +496,7 @@ func load() string {
 		Parameters:      paras,
 		ID:              toolName,
 	})
-	actions.HookTool(toolName, &toolobj.Hook{
+	if err := actions.HookTool(toolName, &toolobj.Hook{
 		Scope: "",
 		PreHook: toolobj.PreHookFunction{
 			Priority: 100,
@@ -510,7 +510,9 @@ func load() string {
 			Priority: 100,
 			Func:     writeFile,
 		},
-	})
+	}); err != nil {
+		panic(err)
+	}
 	return toolName
 }
 

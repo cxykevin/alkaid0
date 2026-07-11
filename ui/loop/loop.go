@@ -125,7 +125,7 @@ func (p *Object) Start(ctx context.Context) {
 	p.ctx, cancel = context.WithCancel(ctx)
 	p.ctxCancel = cancel
 	defer cancel()
-	p.session.Context = &p.ctx
+	p.session.SetContext(p.ctx)
 
 	session := p.session
 	call := func(resp AIResponse) {

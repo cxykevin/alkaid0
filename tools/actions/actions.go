@@ -18,10 +18,11 @@ func AddTool(tool *toolobj.Tools) {
 }
 
 // HookTool 为工具添加钩子
-func HookTool(name string, hook *toolobj.Hook) {
+func HookTool(name string, hook *toolobj.Hook) error {
 	if ok := toolobj.AppendToolHook(name, *hook); !ok {
-		panic(fmt.Sprintf("tool %q not registered before HookTool", name))
+		return fmt.Errorf("tool %q not registered before HookTool", name)
 	}
+	return nil
 }
 
 // EnableScope 启用命名空间

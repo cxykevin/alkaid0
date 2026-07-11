@@ -639,8 +639,6 @@ func TestSetCallbackExitOnCancel(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 
 	// 向 recvQueue 发送数据，此时 goroutine 已退出不应调用回调
-	afterCancelCalled := atomic.Bool{}
-	_ = afterCancelCalled // 保留用于未来验证
 	select {
 	case loopObj.recvQueue <- AIResponse{Content: "after cancel", StopReason: StopReasonNone}:
 	case <-time.After(100 * time.Millisecond):

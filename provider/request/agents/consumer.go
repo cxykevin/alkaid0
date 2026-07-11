@@ -22,7 +22,7 @@ func act(obj any) (any, error) {
 	case actions.Deactivate:
 		return nil, DeactivateAgent(objs.Session, objs.Prompt)
 	}
-	panic(fmt.Errorf("act not found"))
+	return nil, fmt.Errorf("act not found")
 }
 
 func init() {

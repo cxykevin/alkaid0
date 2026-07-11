@@ -95,25 +95,37 @@ func RequestBody(chatID uint32, modelID int32, agentCode string, toolsList *[]*p
 				Content: "",
 			}
 			if v.Summary != "" {
-				msg.Content = prompts.Render(prompts.SummaryWrapTemplate, struct {
+				rendered, err := prompts.Render(prompts.SummaryWrapTemplate, struct {
 					Summary string
 				}{Summary: v.Summary})
+				if err != nil {
+					return nil, err
+				}
+				msg.Content = rendered
 				exitFlag = true
 			} else {
 				if v.Type == structs.MessagesRoleUser {
-					msg.Content = prompts.Render(prompts.UserWrapTemplate, struct {
+					rendered, err := prompts.Render(prompts.UserWrapTemplate, struct {
 						Prompt string
 						Refers structs.MessagesReferList
 					}{
 						Prompt: v.Delta,
 						Refers: v.Refers,
 					})
+					if err != nil {
+						return nil, err
+					}
+					msg.Content = rendered
 				} else if v.Type == structs.MessagesRoleTool {
-					msg.Content = prompts.Render(prompts.ToolResponseWrapTemplate, struct {
+					toolRendered, err := prompts.Render(prompts.ToolResponseWrapTemplate, struct {
 						Prompt string
 					}{
 						Prompt: v.Delta,
 					})
+					if err != nil {
+						return nil, err
+					}
+					msg.Content = toolRendered
 				} else if v.Type == structs.MessagesRoleCommunicate {
 					renderAgentID := ""
 					if v.AgentID != nil {
@@ -121,17 +133,25 @@ func RequestBody(chatID uint32, modelID int32, agentCode string, toolsList *[]*p
 					}
 					if renderAgentID == agentCode {
 						if agentCode == "" {
-							msg.Content = prompts.Render(prompts.AgentWrapTemplate, struct {
+							agentRendered, err := prompts.Render(prompts.AgentWrapTemplate, struct {
 								Prompt string
 							}{
 								Prompt: v.Delta,
 							})
+							if err != nil {
+								return nil, err
+							}
+							msg.Content = agentRendered
 						} else {
-							msg.Content = prompts.Render(prompts.SubagentWrapTemplate, struct {
+							subAgentRendered, err := prompts.Render(prompts.SubagentWrapTemplate, struct {
 								Prompt string
 							}{
 								Prompt: v.Delta,
 							})
+							if err != nil {
+								return nil, err
+							}
+							msg.Content = subAgentRendered
 						}
 					}
 				} else if v.ThinkingDelta != "" {
@@ -142,7 +162,7 @@ func RequestBody(chatID uint32, modelID int32, agentCode string, toolsList *[]*p
 					} else {
 						thinkingWrap = v.ThinkingDelta
 					}
-					msg.Content = prompts.Render(prompts.DeltaWrapTemplate, struct {
+					deltaRendered, err := prompts.Render(prompts.DeltaWrapTemplate, struct {
 						Thinking  string
 						Delta     string
 						ToolsCall string
@@ -151,6 +171,10 @@ func RequestBody(chatID uint32, modelID int32, agentCode string, toolsList *[]*p
 						Delta:     v.Delta,
 						ToolsCall: v.ToolCallingJSONString,
 					})
+					if err != nil {
+						return nil, err
+					}
+					msg.Content = deltaRendered
 				} else {
 					msg.Content = v.Delta
 				}
@@ -178,11 +202,15 @@ func RequestBody(chatID uint32, modelID int32, agentCode string, toolsList *[]*p
 	var systemContent string
 
 	// 1. global提示词 (GlobalTemplate)
-	systemContent += prompts.Render(prompts.GlobalTemplate, struct {
+	globalRendered, err := prompts.Render(prompts.GlobalTemplate, struct {
 		ModelName string
 	}{
 		ModelName: modelConfig.ModelName,
-	}) + "\\n\\n"
+	})
+	if err != nil {
+		return nil, err
+	}
+	systemContent += globalRendered + "\\n\\n"
 
 	// 2. 用户设置 (GlobalPrompt)
 	if config.GlobalConfig.Agent.GlobalPrompt != "" {
@@ -202,11 +230,15 @@ func RequestBody(chatID uint32, modelID int32, agentCode string, toolsList *[]*p
 	systemContent += prompts.Tools + "\\n\\n"
 
 	// 5. 工具列表
-	systemContent += prompts.Render(prompts.ToolsWrapTemplate, struct {
+	toolsRendered, err := prompts.Render(prompts.ToolsWrapTemplate, struct {
 		Tools string
 	}{
 		Tools: string(toolsLst),
-	}) + "\\n\\n"
+	})
+	if err != nil {
+		return nil, err
+	}
+	systemContent += toolsRendered + "\\n\\n"
 
 	// 6. 额外动态系统信息
 	if addSystemPrompt != "" {

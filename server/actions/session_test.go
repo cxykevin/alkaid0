@@ -415,7 +415,9 @@ func TestSessionReleaseTimerCancel(t *testing.T) {
 	sessions = map[string]*sessionObj{}
 	agentCallList = map[string]map[string]func(){}
 	defer func() {
+		sessLock.Lock()
 		sessions = oldSessions
+		sessLock.Unlock()
 		agentCallList = oldAgentCallList
 	}()
 
@@ -435,7 +437,10 @@ func TestSessionReleaseTimerCancel(t *testing.T) {
 	cancelSessionRelease(sessionID)
 
 	// 确认会话仍在
-	if _, ok := sessions[sessionID]; !ok {
+	sessLock.Lock()
+	_, ok := sessions[sessionID]
+	sessLock.Unlock()
+	if !ok {
 		t.Error("session should still exist after cancelSessionRelease")
 	}
 
@@ -455,7 +460,9 @@ func TestSessionReleaseTimerFires(t *testing.T) {
 	agentCallList = map[string]map[string]func(){}
 	config.GlobalConfig.Server.SessionTimeout = 1 // 1 秒超时
 	defer func() {
+		sessLock.Lock()
 		sessions = oldSessions
+		sessLock.Unlock()
 		agentCallList = oldAgentCallList
 		config.GlobalConfig.Server.SessionTimeout = oldSessionTimeout
 	}()
@@ -476,7 +483,10 @@ func TestSessionReleaseTimerFires(t *testing.T) {
 	time.Sleep(1500 * time.Millisecond)
 
 	// 确认会话已被清理
-	if _, ok := sessions[sessionID]; ok {
+	sessLock.Lock()
+	_, ok := sessions[sessionID]
+	sessLock.Unlock()
+	if ok {
 		t.Error("session should have been released after timeout")
 	}
 }
@@ -488,7 +498,9 @@ func TestSessionReleaseTimerMultiSession(t *testing.T) {
 	sessions = map[string]*sessionObj{}
 	agentCallList = map[string]map[string]func(){}
 	defer func() {
+		sessLock.Lock()
 		sessions = oldSessions
+		sessLock.Unlock()
 		agentCallList = oldAgentCallList
 	}()
 
@@ -538,7 +550,9 @@ func TestRegisterConnCallCancelsReleaseTimer(t *testing.T) {
 	connCallMap = map[uint64]func(string, any, *string) error{}
 	config.GlobalConfig.Server.SessionTimeout = 3 // 3 秒超时，给足够时间让 register 取消
 	defer func() {
+		sessLock.Lock()
 		sessions = oldSessions
+		sessLock.Unlock()
 		agentCallList = oldAgentCallList
 		sessionConnMap = oldSessionConnMap
 		connCallMap = oldConnCallMap
@@ -563,7 +577,10 @@ func TestRegisterConnCallCancelsReleaseTimer(t *testing.T) {
 	// 等待足够长（确认定时器被取消，不会触发释放）
 	time.Sleep(500 * time.Millisecond)
 
-	if _, ok := sessions[sessionID]; !ok {
+	sessLock.Lock()
+	_, ok := sessions[sessionID]
+	sessLock.Unlock()
+	if !ok {
 		t.Error("session should still exist after registerConnCall cancels the release timer")
 	}
 	if obj.releaseTimer != nil {
@@ -579,7 +596,9 @@ func TestSessionDeleteCancelsTimer(t *testing.T) {
 	sessions = map[string]*sessionObj{}
 	agentCallList = map[string]map[string]func(){}
 	defer func() {
+		sessLock.Lock()
 		sessions = oldSessions
+		sessLock.Unlock()
 		agentCallList = oldAgentCallList
 	}()
 
@@ -623,7 +642,7 @@ func TestBackgroundDefaultFalse(t *testing.T) {
 func TestGetBackgroundSessionNotFound(t *testing.T) {
 	oldSessions := sessions
 	sessions = map[string]*sessionObj{}
-	defer func() { sessions = oldSessions }()
+	defer func() { sessLock.Lock(); sessions = oldSessions; sessLock.Unlock() }()
 
 	_, err := SessionGetBackground(SessionGetBackgroundRequest{
 		SessionID: "sess_99999:/nonexistent",
@@ -640,7 +659,9 @@ func TestGetBackgroundSession(t *testing.T) {
 	sessions = map[string]*sessionObj{}
 	agentCallList = map[string]map[string]func(){}
 	defer func() {
+		sessLock.Lock()
 		sessions = oldSessions
+		sessLock.Unlock()
 		agentCallList = oldAgentCallList
 	}()
 
@@ -686,7 +707,9 @@ func TestScheduleReleaseBackgroundActive(t *testing.T) {
 	agentCallList = map[string]map[string]func(){}
 	config.GlobalConfig.Server.SessionTimeout = 1 // 1 秒超时
 	defer func() {
+		sessLock.Lock()
 		sessions = oldSessions
+		sessLock.Unlock()
 		agentCallList = oldAgentCallList
 		config.GlobalConfig.Server.SessionTimeout = oldSessionTimeout
 	}()
@@ -711,7 +734,10 @@ func TestScheduleReleaseBackgroundActive(t *testing.T) {
 	time.Sleep(1500 * time.Millisecond)
 
 	// session 应仍然存在（被重新调度了）
-	if _, ok := sessions[sessionID]; !ok {
+	sessLock.Lock()
+	_, ok := sessions[sessionID]
+	sessLock.Unlock()
+	if !ok {
 		t.Error("session should still exist when background mode is on and state is active")
 	}
 	// releaseTimer 应被重新设置（非 nil）
@@ -729,7 +755,9 @@ func TestScheduleReleaseBackgroundIdle(t *testing.T) {
 	agentCallList = map[string]map[string]func(){}
 	config.GlobalConfig.Server.SessionTimeout = 1 // 1 秒超时
 	defer func() {
+		sessLock.Lock()
 		sessions = oldSessions
+		sessLock.Unlock()
 		agentCallList = oldAgentCallList
 		config.GlobalConfig.Server.SessionTimeout = oldSessionTimeout
 	}()
@@ -754,7 +782,10 @@ func TestScheduleReleaseBackgroundIdle(t *testing.T) {
 	time.Sleep(1500 * time.Millisecond)
 
 	// session 应被释放（Idle 状态下即使 background=true 也应释放）
-	if _, ok := sessions[sessionID]; ok {
+	sessLock.Lock()
+	_, ok := sessions[sessionID]
+	sessLock.Unlock()
+	if ok {
 		t.Error("session should be released when background mode is on but state is idle")
 	}
 }
@@ -768,7 +799,9 @@ func TestScheduleReleaseBackgroundWaitApprove(t *testing.T) {
 	agentCallList = map[string]map[string]func(){}
 	config.GlobalConfig.Server.SessionTimeout = 1 // 1 秒超时
 	defer func() {
+		sessLock.Lock()
 		sessions = oldSessions
+		sessLock.Unlock()
 		agentCallList = oldAgentCallList
 		config.GlobalConfig.Server.SessionTimeout = oldSessionTimeout
 	}()
@@ -793,7 +826,10 @@ func TestScheduleReleaseBackgroundWaitApprove(t *testing.T) {
 	time.Sleep(1500 * time.Millisecond)
 
 	// session 应被释放（WaitApprove 状态下即使 background=true 也应释放）
-	if _, ok := sessions[sessionID]; ok {
+	sessLock.Lock()
+	_, ok := sessions[sessionID]
+	sessLock.Unlock()
+	if ok {
 		t.Error("session should be released when background mode is on but state is WaitApprove")
 	}
 }
@@ -807,7 +843,9 @@ func TestScheduleReleaseBackgroundOff(t *testing.T) {
 	agentCallList = map[string]map[string]func(){}
 	config.GlobalConfig.Server.SessionTimeout = 1 // 1 秒超时
 	defer func() {
+		sessLock.Lock()
 		sessions = oldSessions
+		sessLock.Unlock()
 		agentCallList = oldAgentCallList
 		config.GlobalConfig.Server.SessionTimeout = oldSessionTimeout
 	}()
@@ -832,7 +870,10 @@ func TestScheduleReleaseBackgroundOff(t *testing.T) {
 	time.Sleep(1500 * time.Millisecond)
 
 	// session 应被释放（background=false 时即使活跃也应释放）
-	if _, ok := sessions[sessionID]; ok {
+	sessLock.Lock()
+	_, ok := sessions[sessionID]
+	sessLock.Unlock()
+	if ok {
 		t.Error("session should be released when background mode is off, even if state is active")
 	}
 }

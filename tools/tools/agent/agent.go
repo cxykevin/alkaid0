@@ -445,7 +445,11 @@ func buildGlobalPrompt(session *structs.Chats) (string, error) {
 		tmpl.Tags[idx].Description = agent.AgentDescription
 		idx++
 	}
-	return prompts.Render(agentsTemplate, tmpl), nil
+	rendered, err := prompts.Render(agentsTemplate, tmpl)
+	if err != nil {
+		return "", err
+	}
+	return rendered, nil
 }
 
 // enableActivate 判断当前会话是否允许激活子代理（无活跃子代理时）
@@ -484,7 +488,7 @@ func load() string {
 		ID:              "deactivate_agent",
 		Enable:          enableDeactivate,
 	})
-	actions.HookTool("", &toolobj.Hook{
+	if err := actions.HookTool("", &toolobj.Hook{
 		Scope: "",
 		PreHook: toolobj.PreHookFunction{
 			Priority: 100,
@@ -498,8 +502,10 @@ func load() string {
 			Priority: 100,
 			Func:     nil,
 		},
-	})
-	actions.HookTool("agent", &toolobj.Hook{
+	}); err != nil {
+		panic(err)
+	}
+	if err := actions.HookTool("agent", &toolobj.Hook{
 		Scope: "",
 		PreHook: toolobj.PreHookFunction{
 			Priority: 100,
@@ -513,8 +519,10 @@ func load() string {
 			Priority: 100,
 			Func:     editAgent,
 		},
-	})
-	actions.HookTool("activate_agent", &toolobj.Hook{
+	}); err != nil {
+		panic(err)
+	}
+	if err := actions.HookTool("activate_agent", &toolobj.Hook{
 		Scope: "",
 		PreHook: toolobj.PreHookFunction{
 			Priority: 100,
@@ -528,8 +536,10 @@ func load() string {
 			Priority: 100,
 			Func:     useAgent,
 		},
-	})
-	actions.HookTool("deactivate_agent", &toolobj.Hook{
+	}); err != nil {
+		panic(err)
+	}
+	if err := actions.HookTool("deactivate_agent", &toolobj.Hook{
 		Scope: "",
 		PreHook: toolobj.PreHookFunction{
 			Priority: 100,
@@ -543,7 +553,9 @@ func load() string {
 			Priority: 100,
 			Func:     unuseAgent,
 		},
-	})
+	}); err != nil {
+		panic(err)
+	}
 	return toolName
 }
 

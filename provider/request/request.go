@@ -44,7 +44,10 @@ func UserAddMsg(session *storageStructs.Chats, msg string, refers *storageStruct
 	}
 
 	if session.State == state.StateWaitApprove {
-		reason := prompts.Render(prompts.UserRejectTemplate, msg)
+		reason, err := prompts.Render(prompts.UserRejectTemplate, msg)
+		if err != nil {
+			return err
+		}
 		if err := db.Create(&storageStructs.Messages{
 			ChatID: chatID,
 			Delta:  reason,
@@ -499,7 +502,10 @@ func RejectToolCallsNoDeactivate(session *storageStructs.Chats, reason string, r
 	if refers != nil {
 		refer = *refers
 	}
-	finalReason := prompts.Render(prompts.UserRejectTemplate, reason)
+	finalReason, err := prompts.Render(prompts.UserRejectTemplate, reason)
+	if err != nil {
+		return err
+	}
 	if err := session.DB.Create(&storageStructs.Messages{
 		ChatID: session.ID,
 		Delta:  finalReason,

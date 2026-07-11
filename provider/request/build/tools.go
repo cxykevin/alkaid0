@@ -30,7 +30,7 @@ func map2Slice[sliceType any, originMapKeyType comparable, originMapValType any]
 
 // Tools 构建工具(scopes, tool traces, tools)
 func Tools(session *structs.Chats) (string, string, *[]*parser.ToolsDefine) {
-	scopesString := prompts.Render(prompts.ToolScopesTemplate, struct {
+	toolScopesRendered, err := prompts.Render(prompts.ToolScopesTemplate, struct {
 		Scopes []scopeInfo
 	}{
 		Scopes: map2Slice(toolobj.Scopes, func(k string, v string) *scopeInfo {
@@ -45,16 +45,24 @@ func Tools(session *structs.Chats) (string, string, *[]*parser.ToolsDefine) {
 			}
 		}),
 	})
+	if err != nil {
+		panic(err)
+	}
+	scopesString := toolScopesRendered
 
 	globalToolsTracesUnused, globalToolsTracesActive, _ := tools.ExecOneToolGetPrompts(session, "")
 
-	globalToolTraceStr := prompts.Render(prompts.ToolPrehookTemplate, struct {
+	globalToolTraceRendered, err := prompts.Render(prompts.ToolPrehookTemplate, struct {
 		Unused []string
 		Active []string
 	}{
 		Unused: globalToolsTracesUnused,
 		Active: globalToolsTracesActive,
 	})
+	if err != nil {
+		panic(err)
+	}
+	globalToolTraceStr := globalToolTraceRendered
 
 	toolsDef := make([]*parser.ToolsDefine, 0)
 	toolobj.ToolsMu.RLock()
@@ -73,15 +81,19 @@ func Tools(session *structs.Chats) (string, string, *[]*parser.ToolsDefine) {
 			continue
 		}
 		unusedPrompt, activePrompt, paras := tools.ExecOneToolGetPrompts(session, k)
+		toolDescription, err := prompts.Render(prompts.ToolPrehookTemplate, struct {
+			Unused []string
+			Active []string
+		}{
+			Unused: unusedPrompt,
+			Active: activePrompt,
+		})
+		if err != nil {
+			panic(err)
+		}
 		toolDefObj := &parser.ToolsDefine{
-			Name: k,
-			Description: prompts.Render(prompts.ToolPrehookTemplate, struct {
-				Unused []string
-				Active []string
-			}{
-				Unused: unusedPrompt,
-				Active: activePrompt,
-			}),
+			Name:        k,
+			Description: toolDescription,
 		}
 		toolDefObj.Parameters = paras
 		toolsDef = append(toolsDef, toolDefObj)

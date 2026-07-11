@@ -332,12 +332,7 @@ func runTask(session *structs.Chats, mp map[string]*any, cross []*any) (bool, []
 	var buf bytes.Buffer
 
 	// 监听context的Done信号，当context被取消时强制kill进程
-	var ctx context.Context
-	if session.Context != nil {
-		ctx = *session.Context
-	} else {
-		ctx = context.Background()
-	}
+	ctx := session.GetContext()
 
 	// 使用 PTY 运行命令（Unix），若不可用则回退到缓冲区模式（Windows）
 	err = runCmd(c, &buf, ctx, command)
@@ -378,12 +373,7 @@ func runTask(session *structs.Chats, mp map[string]*any, cross []*any) (bool, []
 			var buf2 bytes.Buffer
 
 			// 监听context的Done信号
-			var ctx2 context.Context
-			if session.Context != nil {
-				ctx2 = *session.Context
-			} else {
-				ctx2 = context.Background()
-			}
+			ctx2 := session.GetContext()
 
 			err2 = runCmd(c2, &buf2, ctx2, command)
 
@@ -515,7 +505,7 @@ func getShell(shell string) string {
 
 func genOSInfo(session *structs.Chats) (string, error) {
 	sysVer := sysVerOnce()
-	return prompts.Render(templateSys, struct {
+	rendered, err := prompts.Render(templateSys, struct {
 		Workdir string
 		SysOS   string
 		Shell   string
@@ -525,7 +515,11 @@ func genOSInfo(session *structs.Chats) (string, error) {
 		SysOS:   runtime.GOOS + "(" + sysVer + ")",
 		Shell:   getShell(config.GlobalConfig.Agent.UseShell),
 		Arch:    runtime.GOARCH,
-	}), nil
+	})
+	if err != nil {
+		return "", err
+	}
+	return rendered, nil
 }
 
 func load() string {
@@ -536,7 +530,7 @@ func load() string {
 		Parameters:      paras,
 		ID:              toolName,
 	})
-	actions.HookTool(toolName, &toolobj.Hook{
+	if err := actions.HookTool(toolName, &toolobj.Hook{
 		Scope: "",
 		PreHook: toolobj.PreHookFunction{
 			Priority: 100,
@@ -550,8 +544,10 @@ func load() string {
 			Priority: 50,
 			Func:     runTask,
 		},
-	})
-	actions.HookTool("", &toolobj.Hook{
+	}); err != nil {
+		panic(err)
+	}
+	if err := actions.HookTool("", &toolobj.Hook{
 		Scope: "",
 		PreHook: toolobj.PreHookFunction{
 			Priority: 100,
@@ -565,7 +561,9 @@ func load() string {
 			Priority: 100,
 			Func:     nil,
 		},
-	})
+	}); err != nil {
+		panic(err)
+	}
 	return toolName
 }
 

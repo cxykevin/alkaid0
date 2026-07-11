@@ -5,11 +5,11 @@ import (
 	"text/template"
 )
 
-// Render 渲染模板（error 直接 panic）
-func Render(tmpl *template.Template, data any) string {
+// Render 渲染模板
+func Render(tmpl *template.Template, data any) (string, error) {
 	var buf bytes.Buffer
 	if err := tmpl.Execute(&buf, data); err != nil {
-		panic(err)
+		return "", err
 	}
-	return buf.String()
+	return buf.String(), nil
 }

@@ -73,7 +73,11 @@ func buildGlobalPrompt(session *structs.Chats) (string, error) {
 		fmt.Fprintf(&builder, "%*d|%s\n", allLenStrLen, lineno+1, line)
 	}
 
-	return prompts.Render(treeTempate, builder.String()), nil
+	rendered, err := prompts.Render(treeTempate, builder.String())
+	if err != nil {
+		return "", err
+	}
+	return rendered, nil
 }
 
 func buildPrompt(session *structs.Chats) (string, error) {
@@ -171,7 +175,7 @@ func writeTree(session *structs.Chats, mp map[string]*any, cross []*any) (bool, 
 }
 
 func load() string {
-	actions.HookTool("", &toolobj.Hook{
+	if err := actions.HookTool("", &toolobj.Hook{
 		Scope: "",
 		PreHook: toolobj.PreHookFunction{
 			Priority: 100,
@@ -185,8 +189,10 @@ func load() string {
 			Priority: 100,
 			Func:     nil,
 		},
-	})
-	actions.HookTool("edit", &toolobj.Hook{
+	}); err != nil {
+		panic(err)
+	}
+	if err := actions.HookTool("edit", &toolobj.Hook{
 		Scope: "",
 		PreHook: toolobj.PreHookFunction{
 			Priority: 90,
@@ -200,7 +206,9 @@ func load() string {
 			Priority: 110,
 			Func:     writeTree,
 		},
-	})
+	}); err != nil {
+		panic(err)
+	}
 	return toolName
 }
 

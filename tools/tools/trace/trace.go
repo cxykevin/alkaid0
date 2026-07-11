@@ -445,7 +445,10 @@ func buildTrace(session *structs.Chats) (string, error) {
 			Text:   builder.String(),
 		})
 	}
-	traceList := prompts.Render(traceTempate, obj)
+	traceList, err := prompts.Render(traceTempate, obj)
+	if err != nil {
+		return "", err
+	}
 	return traceList, nil
 }
 
@@ -457,7 +460,7 @@ func load() string {
 		Parameters:      paras,
 		ID:              toolName,
 	})
-	actions.HookTool(toolName, &toolobj.Hook{
+	if err := actions.HookTool(toolName, &toolobj.Hook{
 		Scope: "",
 		PreHook: toolobj.PreHookFunction{
 			Priority: 100,
@@ -471,8 +474,10 @@ func load() string {
 			Priority: 100,
 			Func:     Trace,
 		},
-	})
-	actions.HookTool("", &toolobj.Hook{
+	}); err != nil {
+		panic(err)
+	}
+	if err := actions.HookTool("", &toolobj.Hook{
 		Scope: "",
 		PreHook: toolobj.PreHookFunction{
 			Priority: 100,
@@ -486,7 +491,9 @@ func load() string {
 			Priority: 100,
 			Func:     nil,
 		},
-	})
+	}); err != nil {
+		panic(err)
+	}
 	return toolName
 }
 

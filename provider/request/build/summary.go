@@ -78,25 +78,37 @@ func SummaryWithKeepNumber(chatID uint32, agentID string, db *gorm.DB, keepNum i
 				Content: "",
 			}
 			if v.Summary != "" {
-				msg.Content = prompts.Render(prompts.SummaryWrapTemplate, struct {
+				rendered, err := prompts.Render(prompts.SummaryWrapTemplate, struct {
 					Summary string
 				}{Summary: v.Summary})
+				if err != nil {
+					return 0, nil, err
+				}
+				msg.Content = rendered
 				exitFlag = true
 			} else {
 				if v.Type == structs.MessagesRoleUser {
-					msg.Content = prompts.Render(prompts.UserWrapTemplate, struct {
+					rendered, err := prompts.Render(prompts.UserWrapTemplate, struct {
 						Prompt string
 						Refers structs.MessagesReferList
 					}{
 						Prompt: v.Delta,
 						Refers: v.Refers,
 					})
+					if err != nil {
+						return 0, nil, err
+					}
+					msg.Content = rendered
 				} else if v.Type == structs.MessagesRoleTool {
-					msg.Content = prompts.Render(prompts.ToolResponseWrapTemplate, struct {
+					toolRendered, err := prompts.Render(prompts.ToolResponseWrapTemplate, struct {
 						Prompt string
 					}{
 						Prompt: v.Delta,
 					})
+					if err != nil {
+						return 0, nil, err
+					}
+					msg.Content = toolRendered
 				} else if v.Type == structs.MessagesRoleCommunicate {
 					renderAgentID := ""
 					if v.AgentID != nil {
@@ -104,17 +116,25 @@ func SummaryWithKeepNumber(chatID uint32, agentID string, db *gorm.DB, keepNum i
 					}
 					if renderAgentID == agentID {
 						if agentID == "" {
-							msg.Content = prompts.Render(prompts.AgentWrapTemplate, struct {
+							agentRendered, err := prompts.Render(prompts.AgentWrapTemplate, struct {
 								Prompt string
 							}{
 								Prompt: v.Delta,
 							})
+							if err != nil {
+								return 0, nil, err
+							}
+							msg.Content = agentRendered
 						} else {
-							msg.Content = prompts.Render(prompts.SubagentWrapTemplate, struct {
+							subAgentRendered, err := prompts.Render(prompts.SubagentWrapTemplate, struct {
 								Prompt string
 							}{
 								Prompt: v.Delta,
 							})
+							if err != nil {
+								return 0, nil, err
+							}
+							msg.Content = subAgentRendered
 						}
 					}
 				} else if v.ThinkingDelta != "" {
@@ -125,7 +145,7 @@ func SummaryWithKeepNumber(chatID uint32, agentID string, db *gorm.DB, keepNum i
 						msg.Content = v.Delta
 					} else {
 						thinkingWrap = v.ThinkingDelta
-						msg.Content = prompts.Render(prompts.DeltaWrapTemplate, struct {
+						deltaRendered, err := prompts.Render(prompts.DeltaWrapTemplate, struct {
 							Thinking  string
 							Delta     string
 							ToolsCall string
@@ -134,6 +154,10 @@ func SummaryWithKeepNumber(chatID uint32, agentID string, db *gorm.DB, keepNum i
 							Delta:     v.Delta,
 							ToolsCall: v.ToolCallingJSONString,
 						})
+						if err != nil {
+							return 0, nil, err
+						}
+						msg.Content = deltaRendered
 					}
 				} else {
 					msg.Content = v.Delta
@@ -153,14 +177,17 @@ func SummaryWithKeepNumber(chatID uint32, agentID string, db *gorm.DB, keepNum i
 	messages := make([]reqStruct.Message, 0, responseDeltaList.Len()+2)
 
 	// 1. 放入系统提示词
-	systemContent := prompts.Render(prompts.GlobalTemplate, struct {
+	globalRendered, err := prompts.Render(prompts.GlobalTemplate, struct {
 		ModelName string
 	}{
 		ModelName: modelConfig.ModelName,
 	})
+	if err != nil {
+		return 0, nil, err
+	}
 	messages = append(messages, reqStruct.Message{
 		Role:    "system",
-		Content: systemContent,
+		Content: globalRendered,
 	})
 
 	// 2. 放入对话内容
