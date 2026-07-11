@@ -188,7 +188,7 @@ func TestSessionListValidation(t *testing.T) {
 		},
 		{
 			name:        "未初始化的工作目录",
-			cwd:         "/tmp",
+			cwd:         t.TempDir(),
 			wantErr:     true,
 			errContains: "not inited",
 		},
