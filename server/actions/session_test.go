@@ -2,6 +2,7 @@ package actions
 
 import (
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -221,7 +222,7 @@ func TestSessionLoadValidation(t *testing.T) {
 			cwd:         "/tmp",
 			sessionID:   "invalid",
 			wantErr:     true,
-			errContains: "short",
+			errContains: "invalid session id",
 		},
 		{
 			name:        "cwd不匹配",
@@ -838,5 +839,5 @@ func TestScheduleReleaseBackgroundOff(t *testing.T) {
 
 // 辅助函数
 func contains(s, substr string) bool {
-	return len(s) > 0 && len(substr) > 0 && (s == substr || len(s) >= len(substr))
+	return len(s) > 0 && len(substr) > 0 && strings.Contains(s, substr)
 }

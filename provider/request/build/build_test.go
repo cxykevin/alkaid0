@@ -1,20 +1,23 @@
 package build
 
 import (
-	"os"
+	"sync"
 	"testing"
 
 	"github.com/cxykevin/alkaid0/config"
 	cfgStruct "github.com/cxykevin/alkaid0/config/structs"
-	"github.com/cxykevin/alkaid0/storage"
 	"github.com/cxykevin/alkaid0/storage/structs"
 	"github.com/cxykevin/alkaid0/tools/index"
-	u "github.com/cxykevin/alkaid0/utils"
+	"github.com/glebarez/sqlite"
 	"gorm.io/gorm"
 )
 
+var (
+	loadToolsOnce sync.Once
+)
+
 // setupBuildTest 设置构建测试环境和数据库
-func setupBuildTest(_ *testing.T) *gorm.DB {
+func setupBuildTest(t *testing.T) *gorm.DB {
 	// 设置测试配置
 	*config.GlobalConfig = cfgStruct.Config{
 		Model: cfgStruct.ModelsConfig{
@@ -39,15 +42,28 @@ func setupBuildTest(_ *testing.T) *gorm.DB {
 		},
 	}
 
-	os.Setenv("ALKAID_DEBUG_PROJECTPATH", "../../debug_config/dot_alkaid")
+	// 使用内存数据库，避免文件 I/O 依赖
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	if err != nil {
+		t.Fatalf("Failed to open test database: %v", err)
+	}
 
-	// 清理数据库文件并重新初始化
-	dbPath := "../../debug_config/dot_alkaid/db.sqlite"
-	os.Remove(dbPath)
+	// 迁移所有需要的表
+	if err := db.AutoMigrate(
+		&structs.Chats{},
+		&structs.Messages{},
+		&structs.SubAgents{},
+		&structs.Scopes{},
+		&structs.Configs{},
+		&structs.Traces{},
+	); err != nil {
+		t.Fatalf("Failed to migrate database: %v", err)
+	}
 
-	db := u.Unwrap(storage.InitStorage("", ""))
-
-	index.Load()
+	// 加载工具注册（只执行一次）
+	loadToolsOnce.Do(func() {
+		index.Load()
+	})
 
 	return db
 }

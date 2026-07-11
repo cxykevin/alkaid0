@@ -1,24 +1,15 @@
 package build
 
 import (
-	"os"
 	"testing"
 
 	"github.com/cxykevin/alkaid0/provider/parser"
-	"github.com/cxykevin/alkaid0/storage"
 	"github.com/cxykevin/alkaid0/storage/structs"
 	"github.com/cxykevin/alkaid0/tools/toolobj"
 )
 
-func initTestEnv() {
-	os.Setenv("ALKAID_DEBUG_PROJECTPATH", "../../debug_config/dot_alkaid")
-	os.Remove("../../debug_config/dot_alkaid/db.sqlite")
-	storage.InitStorage("", "")
-}
-
 // TestMap2Slice 测试 map 转 slice 的泛型函数
 func TestMap2Slice(t *testing.T) {
-	initTestEnv()
 	tests := []struct {
 		name      string
 		input     map[string]int
@@ -114,7 +105,6 @@ func TestMap2Slice(t *testing.T) {
 
 // TestTools 测试 Tools 函数
 func TestTools(t *testing.T) {
-	initTestEnv()
 	// 保存原始值
 	originalScopes := toolobj.Scopes
 	originalToolsList := toolobj.ToolsList
@@ -604,7 +594,6 @@ func TestTools(t *testing.T) {
 
 // BenchmarkMap2Slice map 转 slice 的性能测试
 func BenchmarkMap2Slice(b *testing.B) {
-	initTestEnv()
 	// 创建一个包含 1000 个元素的 map
 	largeMap := make(map[string]int)
 	for i := range 1000 {
@@ -625,7 +614,6 @@ func BenchmarkMap2Slice(b *testing.B) {
 
 // BenchmarkTools Tools 函数的性能测试
 func BenchmarkTools(b *testing.B) {
-	initTestEnv()
 	// 保存原始值
 	originalScopes := toolobj.Scopes
 	originalToolsList := toolobj.ToolsList

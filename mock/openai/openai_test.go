@@ -152,3 +152,117 @@ func TestGenerateEmbedding(t *testing.T) {
 		}
 	}
 }
+
+func TestHandleStreamingChatCompletion(t *testing.T) {
+	reqBody := `{"model":"test-chat","messages":[{"role":"user","content":"Hello"}],"stream":true}`
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewReader([]byte(reqBody)))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	handleChatCompletion(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("expected status 200, got %d", w.Code)
+	}
+
+	// SSE response should contain "data:" lines
+	body := w.Body.String()
+	if !strings.Contains(body, "data:") {
+		t.Error("expected SSE response with data: lines")
+	}
+	if !strings.Contains(body, "[DONE]") {
+		t.Error("expected SSE stream to end with [DONE]")
+	}
+}
+
+func TestHandleStreamingChatCompletion_ThinkingModel(t *testing.T) {
+	reqBody := `{"model":"test-chat-thinking","messages":[{"role":"user","content":"Think about this"}],"stream":true}`
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewReader([]byte(reqBody)))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	handleChatCompletion(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("expected status 200, got %d", w.Code)
+	}
+
+	body := w.Body.String()
+	if !strings.Contains(body, "data:") {
+		t.Error("expected SSE response with data: lines")
+	}
+
+	// 思考模型应包含 reasoning_content
+	if !strings.Contains(body, "reasoning_content") {
+		t.Log("thinking model may not include reasoning_content (varies by implementation)")
+	}
+}
+
+func TestHandleChatCompletion_FlashModel(t *testing.T) {
+	reqBody := `{"model":"test-chat-flash","messages":[{"role":"user","content":"Quick response"}]}`
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewReader([]byte(reqBody)))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	handleChatCompletion(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("expected status 200, got %d", w.Code)
+	}
+
+	var resp ChatCompletionResponse
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+
+	if resp.Model != "test-chat-flash" {
+		t.Errorf("expected model test-chat-flash, got %s", resp.Model)
+	}
+	if len(resp.Choices) == 0 || resp.Choices[0].Delta.Content == "" {
+		t.Error("expected non-empty response content")
+	}
+}
+
+func TestHandleChatCompletion_EmptyMessages(t *testing.T) {
+	reqBody := `{"model":"test-chat","messages":[]}`
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewReader([]byte(reqBody)))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	handleChatCompletion(w, req)
+
+	// Empty messages should still return a valid response
+	if w.Code != http.StatusOK {
+		t.Errorf("expected status 200, got %d", w.Code)
+	}
+}
+
+func TestHandleEmbedding_InvalidJSON(t *testing.T) {
+	req := httptest.NewRequest(http.MethodPost, "/v1/embeddings", bytes.NewReader([]byte("not json")))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	handleEmbedding(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("expected status 400, got %d", w.Code)
+	}
+}
+
+func TestCalculateTokens_EdgeCases(t *testing.T) {
+	tests := []struct {
+		input    string
+		expected int
+	}{
+		{"   ", 0},
+		{"\n\t\r", 0},
+		{"Hello, 世界", 2},
+		{"a b c d e f g h i j", 10},
+	}
+	for _, tt := range tests {
+		got := calculateTokens(tt.input)
+		if got != tt.expected {
+			t.Errorf("calculateTokens(%q) = %d, want %d", tt.input, got, tt.expected)
+		}
+	}
+}

@@ -11,7 +11,47 @@ import (
 type H map[string]any
 
 // 测试工具定义
-var testTools = []*parser.ToolsDefine{}
+var testTools = []*parser.ToolsDefine{
+	{
+		Name:        "calculator",
+		Description: "A calculator tool",
+		Parameters: map[string]parser.ToolParameters{
+			"expression": {
+				Type:        parser.ToolTypeString,
+				Required:    true,
+				Description: "要计算的表达式",
+			},
+			"precision": {
+				Type:        parser.ToolTypeNumber,
+				Required:    false,
+				Description: "计算精度",
+			},
+			"count": {
+				Type:        parser.ToolTypeNumber,
+				Required:    false,
+				Description: "整型参数",
+			},
+			"enabled": {
+				Type:        parser.ToolTypeBoolean,
+				Required:    false,
+				Description: "布尔参数",
+			},
+			"items": {
+				Type:        parser.ToolTypeArray,
+				Required:    false,
+				Description: "数组参数",
+			},
+			"config": {
+				Type:        parser.ToolTypeObject,
+				Required:    false,
+				Description: "对象参数",
+			},
+		},
+		Func: func(id string, params map[string]*any, finished bool) error {
+			return nil
+		},
+	},
+}
 
 // TestNewParser 测试解析器创建
 func TestNewParser(t *testing.T) {
@@ -75,27 +115,30 @@ func TestAddTokenThinkTag(t *testing.T) {
 	}
 }
 
-// // TestAddTokenToolsTag 测试 tools 标签解析
-// func TestAddTokenToolsTag(t *testing.T) {
-// 	p := parser.NewParser(nil, testTools)
+// TestAddTokenToolsTag 测试 tools 标签解析
+func TestAddTokenToolsTag(t *testing.T) {
+	p := parser.NewParser(nil, testTools)
 
-// 	// 测试 tools 标签
-// 	token := "<tools>\n{\n  \"name\": \"calculator\",\n  \"parameters\": {\n    \"expression\": \"2+2\"\n  }\n}\n</tools>"
-// 	response, thinking, tools, err := p.AddToken(token,"")
-// 	if err != nil {
-// 		t.Fatalf("解析失败: %v", err)
-// 	}
+	// 测试 tools 标签
+	token := "<tools>\n[\n  {\n    \"name\": \"calculator\",\n    \"id\": \"call_1\",\n    \"parameters\": {\n      \"expression\": \"2+2\"\n    }\n  }\n]\n</tools>"
+	response, thinking, _, err := p.AddToken(token, "")
+	if err != nil {
+		t.Fatalf("解析失败: %v", err)
+	}
 
-// 	if response != "" {
-// 		t.Errorf("期望响应为空，实际 '%s'", response)
-// 	}
-// 	if thinking != "" {
-// 		t.Errorf("期望思考内容为空，实际 '%s'", thinking)
-// 	}
-// 	if tools == nil {
-// 		t.Errorf("期望工具不为 nil，实际为 nil")
-// 	}
-// }
+	if response != "" {
+		t.Errorf("期望响应为空，实际 '%s'", response)
+	}
+	if thinking != "" {
+		t.Errorf("期望思考内容为空，实际 '%s'", thinking)
+	}
+
+	// DoneToken 结束解析
+	_, _, _, err = p.DoneToken()
+	if err != nil {
+		t.Fatalf("DoneToken failed: %v", err)
+	}
+}
 
 // TestAddTokenMixedContent 测试混合内容解析
 func TestAddTokenMixedContent(t *testing.T) {
@@ -300,47 +343,31 @@ func TestParserThinkNotFull(t *testing.T) {
 	}
 }
 
-// // TestParserToolsTag 测试工具标签解析
-// func TestParserToolsTag(t *testing.T) {
-// 	p := parser.NewParser(nil, testTools)
+// TestParserToolsTag 测试工具标签解析
+func TestParserToolsTag(t *testing.T) {
+	p := parser.NewParser(nil, testTools)
 
-// 	// 测试 tools 标签
-// 	toolsContent := `{
-// 		"name": "calculator",
-// 		"parameters": {
-// 			"expression": "2+2"
-// 		}
-// 	}`
-// 	token := "<tools>\n" + toolsContent + "\n</tools>"
-// 	response, thinking, tools, err := p.AddToken(token,"")
-// 	if err != nil {
-// 		t.Fatalf("解析失败: %v", err)
-// 	}
+	// 测试 tools 标签（使用与 TestAddTokenToolsTag 相同的格式）
+	token := "<tools>\n[\n  {\n    \"name\": \"calculator\",\n    \"id\": \"call_1\",\n    \"parameters\": {\n      \"expression\": \"2+2\"\n    }\n  }\n]\n</tools>"
+	response, thinking, _, err := p.AddToken(token, "")
+	if err != nil {
+		t.Fatalf("解析失败: %v", err)
+	}
 
-// 	if response != "" {
-// 		t.Errorf("期望响应为空，实际 '%s'", response)
-// 	}
-// 	if thinking != "" {
-// 		t.Errorf("期望思考内容为空，实际 '%s'", thinking)
-// 	}
-// 	if tools == nil {
-// 		t.Errorf("期望工具不为 nil，实际为 nil")
-// 	}
+	if response != "" {
+		t.Errorf("期望响应为空，实际 '%s'", response)
+	}
+	if thinking != "" {
+		t.Errorf("期望思考内容为空，实际 '%s'", thinking)
+	}
 
-// 	// 测试 tools 标签内包含普通文本
-// 	tokenWithText := "<tools>普通文本内容</tools>"
-// 	response, thinking, tools, err = p.AddToken(tokenWithText)
-// 	if err != nil {
-// 		t.Fatalf("解析失败: %v", err)
-// 	}
+	// DoneToken 结束解析
+	_, _, _, err = p.DoneToken()
+	if err != nil {
+		t.Fatalf("DoneToken failed: %v", err)
+	}
+}
 
-// 	if response != "" {
-// 		t.Errorf("期望响应为空，实际 '%s'", response)
-// 	}
-// 	if thinking != "" {
-// 		t.Errorf("期望思考内容为空，实际 '%s'", thinking)
-// 	}
-// }
 
 // TestParserUnmatchedTags 测试不匹配标签
 func TestParserUnmatchedTags(t *testing.T) {
