@@ -38,7 +38,7 @@ var commandMaps = map[string]*cmdObj{
 			return true, nil
 		},
 	},
-	"/reasoning": {
+	"/effort": {
 		Description: "Set the reasoning effort (low | medium | high | max | xhigh | unset)",
 		Hint:        "reasoning effort",
 		Function: func(obj *sessionObj, arg string) (bool, error) {
