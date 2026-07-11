@@ -12,6 +12,7 @@ import (
 // PTY 表示一个伪终端主端（仅文件描述符）
 type PTY struct {
 	fd     *os.File
+	slave  *os.File // 保持 slave 端打开，防止 macOS 写入主端时返回 EIO
 	mu     sync.Mutex
 	closed bool
 	rows   uint16
@@ -39,12 +40,10 @@ func New(cfg Config) (*PTY, *os.File, error) {
 	if err != nil {
 		return nil, nil, err
 	}
-	if slave != nil {
-		_ = slave.Close()
-	}
 
 	p := &PTY{
 		fd:     master,
+		slave:  slave, // 保持 slave 打开，避免写入 master 时 EIO
 		closed: false,
 		rows:   cfg.Rows,
 		cols:   cfg.Cols,
@@ -121,6 +120,11 @@ func (p *PTY) Close() error {
 		return nil
 	}
 	p.closed = true
+
+	if p.slave != nil {
+		_ = p.slave.Close()
+		p.slave = nil
+	}
 
 	if p.fd != nil {
 		return p.fd.Close()
