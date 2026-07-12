@@ -113,8 +113,9 @@ func stringDefault(str *string) string {
 // }
 
 // mergeAutoRuleExpr 将用户定义的规则与系统内置规则合并。
-// 使用逻辑或 (||) 连接，意味着只要任一规则触发（审批或拒绝），该决策即生效。
-// 空字符串的规则被忽略，避免无效的表达式组合。
+// 使用 truthy() 包装两侧表达式确保类型安全——用户可能写入 "true"（字符串）
+// 或其他非布尔类型的表达式，直接与内置规则用 || 连接会导致 expr-lang 类型错误。
+// truthy() 函数会在 expr 环境中注册，委托给 Go 的 exprTruthy。
 func mergeAutoRuleExpr(userExpr string, builtinExpr string) string {
 	userExpr = strings.TrimSpace(userExpr)
 	builtinExpr = strings.TrimSpace(builtinExpr)
@@ -124,7 +125,7 @@ func mergeAutoRuleExpr(userExpr string, builtinExpr string) string {
 	if builtinExpr == "" {
 		return userExpr
 	}
-	return "(" + userExpr + ") || (" + builtinExpr + ")"
+	return "truthy(" + userExpr + ") || truthy(" + builtinExpr + ")"
 }
 
 func hasParam(call ToolCall, key string) bool {
@@ -216,6 +217,7 @@ func (t ToolCall) AsMap() map[string]any {
 // compileExpr 编译表达式字符串为可执行程序，并注入规则引擎使用的自定义函数。
 // 注入函数说明：
 //
+//	truthy(value)       - 将任意值转为布尔值（委托给 Go 的 exprTruthy）
 //	regex(pattern, text)  - 检测参数中是否匹配自定义正则
 //	contains(s, sub)     - 关键字匹配，用于检查参数内容（如文件路径关键字）
 //	hasParam(call, key)  - 检查工具调用是否存在指定参数名
@@ -228,6 +230,11 @@ func compileExpr(program string) (*vm.Program, error) {
 		"ToolCalls": []map[string]any{},
 		"ToolCall":  map[string]any{},
 		"Agent":     cfgStructs.AgentConfig{},
+	}), expr.Function("truthy", func(params ...any) (any, error) {
+		if len(params) == 0 {
+			return false, nil
+		}
+		return exprTruthy(params[0]), nil
 	}), expr.Function("regex", func(params ...any) (any, error) {
 		if len(params) != 2 {
 			return false, nil
@@ -326,9 +333,11 @@ func CanAutoApprove(session *storageStructs.Chats, toolCalls []ToolCall, msg *st
 	// 先读取 Agent 级别的配置，作为最高优先级
 	autoApprove := strings.TrimSpace(session.CurrentAgentConfig.AutoApprove)
 	autoReject := strings.TrimSpace(session.CurrentAgentConfig.AutoReject)
+	logger.Debug("CanAutoApprove: agent level AutoApprove=%q, AutoReject=%q", autoApprove, autoReject)
 	// 配置优先级：Agent 级别配置 > 全局默认配置
 	if autoApprove == "" {
 		autoApprove = strings.TrimSpace(config.GlobalConfig.Agent.DefaultAutoApprove)
+		logger.Debug("CanAutoApprove: fallback DefaultAutoApprove=%q", autoApprove)
 	}
 	if autoReject == "" {
 		autoReject = strings.TrimSpace(config.GlobalConfig.Agent.DefaultAutoReject)
@@ -498,6 +507,7 @@ func RejectToolCallsNoDeactivate(session *storageStructs.Chats, reason string, r
 	if session.DB == nil {
 		return errors.New("db not initialized")
 	}
+	logger.Info("RejectToolCallsNoDeactivate: chatID=%d, reason=%q", session.ID, reason)
 	refer := storageStructs.MessagesReferList{}
 	if refers != nil {
 		refer = *refers
