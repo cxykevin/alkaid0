@@ -240,6 +240,15 @@ func Trace(session *structs.Chats, mp map[string]*any, push []*any) (bool, []*an
 				}, nil
 			}
 			// 读取文件内容
+			if session.GetContext().Err() != nil {
+				boolx := false
+				success := any(boolx)
+				errMsg := any("trace cancelled: " + session.GetContext().Err().Error())
+				return false, push, map[string]*any{
+					"success": &success,
+					"error":   &errMsg,
+				}, nil
+			}
 			content, err := os.ReadFile(path2)
 			if err != nil {
 				boolx := false

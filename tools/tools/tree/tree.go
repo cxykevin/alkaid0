@@ -154,6 +154,17 @@ func writeTree(session *structs.Chats, mp map[string]*any, cross []*any) (bool, 
 		}, nil
 	}
 
+	// 执行文件操作前检查取消信号（大量文件操作可能阻塞）
+	if session.GetContext().Err() != nil {
+		boolx := false
+		success := any(boolx)
+		errMsg := any("tree cancelled: " + session.GetContext().Err().Error())
+		return false, cross, map[string]*any{
+			"success": &success,
+			"error":   &errMsg,
+		}, nil
+	}
+
 	_, err = SolveCall(filepath.Join(session.Root, session.CurrentActivatePath), rets.TreeObj, str)
 	// fmt.Printf("\nTree diff: %v\n", diff)
 	if err != nil {

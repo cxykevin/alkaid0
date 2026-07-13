@@ -2,14 +2,20 @@ package connect
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"os"
+	"runtime"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/cxykevin/alkaid0/config"
+	"github.com/cxykevin/alkaid0/library/chancall"
 	"github.com/cxykevin/alkaid0/log"
+	"github.com/cxykevin/alkaid0/product"
+	u "github.com/cxykevin/alkaid0/utils"
 	"github.com/gorilla/websocket"
 )
 
@@ -37,6 +43,32 @@ func ShutdownWs(ctx context.Context) error {
 	return wsHTTPServer.Shutdown(ctx)
 }
 
+var (
+	activeConns   = make(map[uint64]*websocket.Conn)
+	activeConnsMu sync.Mutex
+)
+
+// GetSessionCount 返回当前活跃 Session,DB 数
+func GetSessionCount() (int, int) {
+	ev := chancall.EventChan{
+		Consumer: "actions/states",
+		In:       nil,
+		Out:      make(chan chancall.Ret, 1),
+	}
+	ev.In = nil
+	chancall.ActChan <- ev
+	ret := <-ev.Out
+	if ret.Err != nil {
+		return -1, -1
+	}
+	v := ret.Ret
+	ret2, ok := v.(u.H)
+	if !ok {
+		return -1, -1
+	}
+	return u.AnyDefault(u.Default(ret2, "sessions", -1), -1), u.AnyDefault(u.Default(ret2, "dbs", -1), -1)
+}
+
 // StartWs 从 WebSocket 启动 JSON-RPC，支持多会话
 // addr: 监听地址，例如 "localhost:8080"
 // path: WebSocket 路径，例如 "/jsonrpc"
@@ -52,6 +84,51 @@ func StartWs(handler func(string, func(string) error, uint64) (returnString stri
 	// 存储所有活跃连接
 	connsMutex := sync.Mutex{}
 	conns := make(map[uint64]*websocket.Conn)
+
+	// 根路径返回简单 JSON
+	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/" {
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("X-Server", product.UserAgent)
+		json.NewEncoder(w).Encode(map[string]string{
+			"server":  "alkaid0",
+			"version": product.Version,
+		})
+	})
+
+	// 根路径返回简单 JSON
+	http.HandleFunc("/info", func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/info" {
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("X-Server", product.UserAgent)
+		var state runtime.MemStats
+		runtime.ReadMemStats(&state)
+		ss, db := GetSessionCount()
+		json.NewEncoder(w).Encode(u.H{
+			"version": product.Version,
+			"system": u.H{
+				"pid":        os.Getpid(),
+				"goroutines": runtime.NumGoroutine(),
+				"mem": u.H{
+					"alloc": state.Alloc,
+					"sys":   state.Sys,
+				},
+				"gc": u.H{
+					"num":   state.NumGC,
+					"pause": float32(time.Duration(state.PauseTotalNs) / time.Second),
+					"cpu":   state.GCCPUFraction,
+				},
+			},
+			"network": u.H{
+				"sessions": ss,
+				"dbs":      db,
+			},
+		})
+	})
 
 	// 处理 WebSocket 连接
 	http.HandleFunc(config.GlobalConfig.Server.Path, func(w http.ResponseWriter, r *http.Request) {

@@ -21,7 +21,8 @@ type EventChan struct {
 
 const bufferSize = 4096
 
-var actChan = make(chan EventChan, bufferSize)
+// ActChan 事件通道
+var ActChan = make(chan EventChan, bufferSize)
 
 var consumers = make(map[string]func(any) (any, error))
 
@@ -38,7 +39,7 @@ func Register(consumer string, fn func(any) (any, error)) CallFunc {
 			Out:      make(chan Ret, 1),
 		}
 		ev.In = obj
-		actChan <- ev
+		ActChan <- ev
 		ret := <-ev.Out
 		return ret.Ret, ret.Err
 	})
@@ -46,7 +47,7 @@ func Register(consumer string, fn func(any) (any, error)) CallFunc {
 }
 
 func start() {
-	for ev := range actChan {
+	for ev := range ActChan {
 		func() {
 			defer func() {
 				if r := recover(); r != nil {

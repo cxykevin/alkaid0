@@ -76,17 +76,18 @@ type msgObj struct {
 
 // Object 循环对象
 type Object struct {
-	sendQueue     chan msgObj
-	recvQueue     chan AIResponse
-	recvSyncQueue chan struct{}
-	lock          sync.Mutex
-	isResponding  bool
-	cancelFunc    context.CancelFunc
-	ctxCancel     context.CancelFunc
-	session       *structs.Chats
-	ctx           context.Context
-	done          chan struct{}
-	closeOnce     sync.Once
+	sendQueue      chan msgObj
+	recvQueue      chan AIResponse
+	recvSyncQueue  chan struct{}
+	lock           sync.Mutex
+	isResponding   bool
+	cancelFunc     context.CancelFunc // 取消当前 LLM 请求
+	toolCancelFunc context.CancelFunc // 取消正在执行中的工具（ExecuteToolCalls）
+	ctxCancel      context.CancelFunc // 取消整个循环生命周期
+	session        *structs.Chats
+	ctx            context.Context
+	done           chan struct{}
+	closeOnce      sync.Once
 }
 
 // queueSize 队列缓冲区大小
@@ -295,7 +296,9 @@ func (p *Object) Start(ctx context.Context) {
 					//   优先级：拒绝规则 > 手动审批 > 自动审批规则
 					//   autoHandled=true 表示规则做出了决策
 					//   approved=true 表示规则允许执行
-					autoHandled, approved, pendingTools, msgID, pErr := funcs.AutoHandlePendingToolCalls(session)
+					restoreToolCtx := p.runWithToolCancel(session)
+				autoHandled, approved, pendingTools, msgID, pErr := funcs.AutoHandlePendingToolCalls(session)
+				restoreToolCtx()
 					if pErr != nil {
 						call(AIResponse{
 							Error:      fmt.Errorf("loop error in pending tool calls: %v", pErr),
@@ -372,7 +375,9 @@ func (p *Object) Start(ctx context.Context) {
 	if session.State == state.StateWaitApprove {
 		logger.Info("waiting approve in session=%d", session.ID)
 		session.ToolState = 1
+		restoreToolCtx := p.runWithToolCancel(session)
 		autoHandled, approved, pendingTools, msgID, err := funcs.AutoHandlePendingToolCalls(session)
+		restoreToolCtx()
 		if err != nil {
 			session.ToolState = 0
 			call(AIResponse{
@@ -453,7 +458,9 @@ func (p *Object) Start(ctx context.Context) {
 		case msgActionApprove:
 			session.ToolState = 1
 			logger.Info("approve tools in session=%d", session.ID)
+			restoreToolCtx := p.runWithToolCancel(session)
 			msgID, err := funcs.ApproveToolCalls(session)
+			restoreToolCtx()
 			if err != nil {
 				call(AIResponse{
 					Error:      fmt.Errorf("loop error when approve %v", err),
@@ -503,14 +510,26 @@ func (p *Object) Start(ctx context.Context) {
 	}
 }
 
-// Stop 通过取消当前请求的 context 来停止正在进行的 LLM 响应生成。
-// cancelFunc 由 runResponseLoop 在每次请求前设置，仅在响应中有效。
+// Stop 停止当前正在进行的操作。
+//   - LLM 请求阶段：取消 responseCtx，终止流式响应。
+//   - 工具执行阶段：
+//     1. 取消 toolCancelFunc，通过 session.GetContext() 通知 runCmd 等 kill 进程。
+//     2. 调用 session.KillTool()，调用工具注册的直接停止回调（如 kill 进程）。
+//   - 空闲阶段：无操作（nothing to stop）。
 func (p *Object) Stop() {
 	p.lock.Lock()
 	cancel := p.cancelFunc
+	toolCancel := p.toolCancelFunc
 	p.lock.Unlock()
 	if cancel != nil {
 		cancel()
+	}
+	if toolCancel != nil {
+		toolCancel()
+	}
+	// 调用工具注册的直接停止函数（所有工具通用的中断入口）
+	if p.session != nil {
+		p.session.KillTool()
 	}
 }
 
@@ -522,6 +541,25 @@ func (p *Object) Cancel() {
 	})
 	if p.ctxCancel != nil {
 		p.ctxCancel()
+	}
+}
+
+// runWithToolCancel 在工具执行期间设置可取消的上下文，使 Stop() 能够中断正在执行的工具。
+// 返回 restore 函数，调用后恢复原始 session 上下文并清理 toolCancelFunc。
+// 使用方式：defer p.runWithToolCancel(session)()
+func (p *Object) runWithToolCancel(session *structs.Chats) func() {
+	toolCtx, toolCancel := context.WithCancel(p.ctx)
+	p.lock.Lock()
+	p.toolCancelFunc = toolCancel
+	p.lock.Unlock()
+	oldCtx := session.GetContext()
+	session.SetContext(toolCtx)
+	return func() {
+		p.lock.Lock()
+		p.toolCancelFunc = nil
+		p.lock.Unlock()
+		toolCancel()
+		session.SetContext(oldCtx)
 	}
 }
 

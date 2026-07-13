@@ -329,6 +329,10 @@ func runTask(session *structs.Chats, mp map[string]*any, cross []*any) (bool, []
 		return false, cross, nil, err
 	}
 
+	// 注册停止回调，使 loop.Stop() 能直接 kill 此进程
+	session.SetToolKillFn(func() { c.Kill() })
+	defer session.SetToolKillFn(nil)
+
 	var buf bytes.Buffer
 
 	// 监听context的Done信号，当context被取消时强制kill进程
@@ -371,6 +375,9 @@ func runTask(session *structs.Chats, mp map[string]*any, cross []*any) (bool, []
 				}, nil
 			}
 			var buf2 bytes.Buffer
+
+			// 覆盖为 c2 的停止回调（fallback 使用新进程）
+			session.SetToolKillFn(func() { c2.Kill() })
 
 			// 监听context的Done信号
 			ctx2 := session.GetContext()

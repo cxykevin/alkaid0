@@ -277,6 +277,16 @@ func writeFile(session *structs.Chats, mp map[string]*any, cross []*any) (bool, 
 		scanner := bufio.NewScanner(file)
 		for scanner.Scan() {
 			lines = append(lines, scanner.Text())
+			if session.GetContext().Err() != nil {
+				_ = file.Close()
+				boolx := false
+				success := any(boolx)
+				errMsg := any("edit cancelled: " + session.GetContext().Err().Error())
+				return false, cross, map[string]*any{
+					"success": &success,
+					"error":   &errMsg,
+				}, nil
+			}
 		}
 		if err := scanner.Err(); err != nil {
 			boolx := false
@@ -303,6 +313,16 @@ func writeFile(session *structs.Chats, mp map[string]*any, cross []*any) (bool, 
 		}, nil
 	}
 
+	// 写入文件前检查取消信号（网络文件系统下可能阻塞）
+	if session.GetContext().Err() != nil {
+		boolx := false
+		success := any(boolx)
+		errMsg := any("edit cancelled: " + session.GetContext().Err().Error())
+		return false, cross, map[string]*any{
+			"success": &success,
+			"error":   &errMsg,
+		}, nil
+	}
 	// 写入文件
 	err = os.WriteFile(path, []byte(newContent), 0644)
 	if err != nil {

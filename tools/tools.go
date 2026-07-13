@@ -116,6 +116,11 @@ func ExecToolOnHook(session *structs.Chats, name string, args map[string]*any, t
 			continue
 		}
 		if hook.OnHook.Func != nil {
+			// 检查取消信号：session 上下文被取消时跳过后续 hook
+			if session.GetContext().Err() != nil {
+				logger.Warn("tool on hook cancelled for %s: %v", name, session.GetContext().Err())
+				return session.GetContext().Err()
+			}
 			pass, passObj, err := hook.OnHook.Func(session, args, passObjs, toolID)
 			passObjs = passObj
 			if err != nil {
@@ -159,6 +164,11 @@ func ExecToolPostHook(session *structs.Chats, name string, args map[string]*any,
 			continue
 		}
 		if hook.PostHook.Func != nil {
+			// 检查取消信号：session 上下文被取消时跳过后续 hook
+			if session.GetContext().Err() != nil {
+				logger.Warn("tool post hook cancelled for %s: %v", name, session.GetContext().Err())
+				return map[string]*any{}, session.GetContext().Err()
+			}
 			idAny := any(toolID)
 			// 将工具调用 ID 注入参数，供 PostHook 的日志或追踪逻辑使用
 			args["_id"] = &idAny

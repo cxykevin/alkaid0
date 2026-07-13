@@ -8,3 +8,12 @@ func ValDefault[T any](v *T, defaults T) T {
 	}
 	return *v
 }
+
+// AnyDefault 默认值
+func AnyDefault[T any](v any, defaults T) T {
+	v2, ok := v.(T)
+	if !ok {
+		return defaults
+	}
+	return v2
+}
