@@ -241,6 +241,38 @@ func TestExecuteCommandWithIsolation(t *testing.T) {
 	logf("隔离执行输出: %q", output)
 }
 
+func TestCommandShortTimeout(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("跳过：Windows 不支持快速超时测试")
+	}
+
+	cfg := Config{
+		Timeout:       100 * time.Millisecond,
+		IsolationMode: IsolationNone,
+	}
+
+	sb, err := New(cfg)
+	if err != nil {
+		t.Fatalf("创建沙盒失败: %v", err)
+	}
+
+	start := time.Now()
+	cmd, err := sb.Execute("sleep", "10")
+	if err != nil {
+		t.Fatalf("创建命令失败: %v", err)
+	}
+
+	err = cmd.Run()
+	if err == nil {
+		t.Fatal("期望超时错误，但命令成功完成")
+	}
+	elapsed := time.Since(start)
+	if elapsed > 5*time.Second {
+		t.Fatalf("命令在 %v 后才返回，疑似 hang", elapsed)
+	}
+	t.Logf("超时测试通过: error=%v, elapsed=%v", err, elapsed)
+}
+
 func TestCommandTimeout(t *testing.T) {
 	if os.Getenv("ALKAID0_TEST_SANDBOX") == "" {
 		t.Skip("跳过隔离测试（设置 ALKAID0_TEST_SANDBOX=true 启用）")
@@ -495,16 +527,9 @@ func TestDirectoryPermissions(t *testing.T) {
 	}
 	defer os.RemoveAll(tempDir)
 
-	// 在当前工作目录下创建只读测试目录（不在系统临时目录中）
-	workDir, err := os.Getwd()
-	if err != nil {
-		t.Fatalf("获取工作目录失败: %v", err)
-	}
-	readOnlyDir := filepath.Join(workDir, "sandbox-test-readonly-temp")
-	if err := os.MkdirAll(readOnlyDir, 0755); err != nil {
-		t.Fatalf("创建只读测试目录失败: %v", err)
-	}
-	defer os.RemoveAll(readOnlyDir)
+	// 使用系统目录作为只读测试路径（不在默认可写白名单内：tmpdir+workdir）
+	// IsPathWritable 不检查路径是否存在，只检查是否在白名单内
+	readOnlyDir := "/etc/sandbox-test-readonly-temp"
 
 	tests := []struct {
 		name          string
@@ -589,16 +614,8 @@ func TestDirectoryPermissionsWithMultipleDirs(t *testing.T) {
 	}
 	defer os.RemoveAll(tempDir2)
 
-	// 在当前工作目录下创建只读测试目录（不在系统临时目录中）
-	workDir, err := os.Getwd()
-	if err != nil {
-		t.Fatalf("获取工作目录失败: %v", err)
-	}
-	readOnlyDir := filepath.Join(workDir, "sandbox-test-readonly-temp2")
-	if err := os.MkdirAll(readOnlyDir, 0755); err != nil {
-		t.Fatalf("创建只读测试目录失败: %v", err)
-	}
-	defer os.RemoveAll(readOnlyDir)
+	// 使用系统目录作为只读测试路径（不在默认可写白名单内）
+	readOnlyDir := "/etc/sandbox-test-readonly-temp2"
 
 	cfg := Config{
 		WritableDirs:  []string{tempDir1, tempDir2},

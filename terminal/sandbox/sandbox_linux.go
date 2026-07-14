@@ -6,8 +6,10 @@ import (
 	"context"
 	_ "embed" // embed
 	"fmt"
+	"os"
 	"os/exec"
 	"strings"
+	"syscall"
 )
 
 //go:embed scripts/linux/mount.sh
@@ -42,7 +44,14 @@ func (s *Sandbox) createLinuxIsolatedCommand(ctx context.Context, name string, a
 	}
 
 	// 先chroot，再内部挂载
+	// 注意：进程以 UID 0 (root) 运行，但 --map-root-user 将 UID 0
+	// 映射为宿主机的真实用户，因此文件操作归属正确
+	realUser := os.Getenv("USER")
+	if realUser == "" {
+		realUser = "user"
+	}
 	script := fmt.Sprintf(mountScript,
+		shellQuote(realUser),
 		writableMounts,
 		chrootWorkDir,
 		shellQuote(name),
@@ -50,8 +59,8 @@ func (s *Sandbox) createLinuxIsolatedCommand(ctx context.Context, name string, a
 
 	// 直接通过 unshare 执行，无需临时文件
 	cmd := exec.CommandContext(ctx, "unshare",
-		"--user",          // 创建用户命名空间
-		"--map-root-user", // 当前用户映射为root (允许chroot)
+		"--user",          // 创建用户命名空间（允许非 root 创建其他命名空间）
+		"--map-root-user", // 需要 root 身份才能完成 mount/chroot 等操作
 		"--mount",         // 创建挂载命名空间（关键：隔离所有mount操作）
 		"--pid",           // 创建PID命名空间
 		"--fork",          // fork子进程作为PID 1
@@ -59,6 +68,18 @@ func (s *Sandbox) createLinuxIsolatedCommand(ctx context.Context, name string, a
 		"--uts",           // UTS命名空间（可选，隔离hostname）
 		"sh", "-c", script,
 	)
+	// 设置进程组，确保超时时可以杀死整个进程树
+	// unshare --pid --fork 的子进程会成为孤儿进程，通过进程组 kill 可防止残留
+	cmd.SysProcAttr = &syscall.SysProcAttr{
+		Setpgid: true,
+	}
+	cmd.Cancel = func() error {
+		if cmd.Process != nil {
+			// 负 PID 表示向进程组发送信号
+			return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+		}
+		return nil
+	}
 
 	// 传递原始参数
 	cmd.Args = append(cmd.Args, "--")

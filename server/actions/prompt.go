@@ -219,6 +219,18 @@ func SessionCancel(req SessionCancelRequest, call func(string, any, *string) err
 
 	sess.loop.Stop()
 
+	// 停止后直接发送停止信号，停止整个会话交互。
+	// 若不发送，则工具 kill 的错误结果会传递给 AI，导致 AI 继续重试而非停止。
+	for {
+		select {
+		case i := <-sess.waitStopChan:
+			*i <- StopMsg{StopReason: "user_interrupted"}
+		default:
+			goto cancelDone
+		}
+	}
+cancelDone:
+
 	// // 触发取消
 	// if promptCtx.cancel != nil {
 	// 	promptCtx.cancel()

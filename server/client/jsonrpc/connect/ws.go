@@ -43,10 +43,10 @@ func ShutdownWs(ctx context.Context) error {
 	return wsHTTPServer.Shutdown(ctx)
 }
 
-var (
-	activeConns   = make(map[uint64]*websocket.Conn)
-	activeConnsMu sync.Mutex
-)
+// var (
+// 	activeConns   = make(map[uint64]*websocket.Conn)
+// 	activeConnsMu sync.Mutex
+// )
 
 // GetSessionCount 返回当前活跃 Session,DB 数
 func GetSessionCount() (int, int) {

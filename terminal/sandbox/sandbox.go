@@ -81,8 +81,10 @@ func New(cfg Config) (*Sandbox, error) {
 	}
 
 	// 规范化路径
-	writableDirs := make([]string, 0, len(cfg.WritableDirs)+1)
+	// 默认可写目录：临时目录 + 工作目录（覆盖 .git、临时文件等常见操作）
+	writableDirs := make([]string, 0, len(cfg.WritableDirs)+2)
 	writableDirs = append(writableDirs, filepath.Clean(tmpDir))
+	writableDirs = append(writableDirs, filepath.Clean(workDir))
 	for _, dir := range cfg.WritableDirs {
 		cleanDir := filepath.Clean(dir)
 		writableDirs = append(writableDirs, cleanDir)

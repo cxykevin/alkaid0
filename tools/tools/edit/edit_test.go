@@ -13,7 +13,7 @@ import (
 func ptr(v any) *any { return new(v) }
 
 func TestCheckPath(t *testing.T) {
-	okMp := map[string]*any{"path": ptr("src/file.txt")}
+	okMp := map[string]*any{"path": new(any("src/file.txt"))}
 	p, err := CheckPath(okMp)
 	if err != nil {
 		t.Fatalf("expected no error, got %v", err)
@@ -22,7 +22,7 @@ func TestCheckPath(t *testing.T) {
 		t.Fatalf("unexpected path: %s", p)
 	}
 
-	badMp := map[string]*any{"path": ptr("../secret")}
+	badMp := map[string]*any{"path": new(any("../secret"))}
 	_, err = CheckPath(badMp)
 	if err == nil {
 		t.Fatalf("expected error for .. in path")
@@ -31,8 +31,8 @@ func TestCheckPath(t *testing.T) {
 
 func TestCheckTargetText(t *testing.T) {
 	mp := map[string]*any{
-		"target": ptr("@all"),
-		"text":   ptr("hello world"),
+		"target": new(any("@all")),
+		"text":   new(any("hello world")),
 	}
 	target, text, err := CheckTargetText(mp)
 	if err != nil {
@@ -43,7 +43,7 @@ func TestCheckTargetText(t *testing.T) {
 	}
 
 	// missing text
-	mp2 := map[string]*any{"target": ptr("x")}
+	mp2 := map[string]*any{"target": new(any("x"))}
 	_, _, err = CheckTargetText(mp2)
 	if err == nil {
 		t.Fatalf("expected error for missing text")
@@ -171,7 +171,7 @@ func TestWriteFile(t *testing.T) {
 	session := &structs.Chats{CurrentActivatePath: tmpdir}
 
 	// create new file by append
-	mp := map[string]*any{"path": ptr("a.txt"), "target": ptr(""), "text": ptr("hello")}
+	mp := map[string]*any{"path": new(any("a.txt")), "target": new(any("")), "text": new(any("hello"))}
 	_, _, ret, err := writeFile(session, mp, nil)
 	if err != nil {
 		t.Fatalf("writeFile returned error: %v", err)
@@ -195,7 +195,7 @@ func TestWriteFile(t *testing.T) {
 	}
 
 	// append to existing
-	mp = map[string]*any{"path": ptr("a.txt"), "target": ptr(""), "text": ptr("world")}
+	mp = map[string]*any{"path": new(any("a.txt")), "target": new(any("")), "text": new(any("world"))}
 	_, _, ret, _ = writeFile(session, mp, nil)
 	data, _ = os.ReadFile(filepath.Join(tmpdir, "a.txt"))
 	if string(data) != "hello\nworld\n" {
@@ -203,9 +203,9 @@ func TestWriteFile(t *testing.T) {
 	}
 
 	// replace substring
-	mp = map[string]*any{"path": ptr("b.txt"), "target": ptr("@all"), "text": ptr("foo bar")}
+	mp = map[string]*any{"path": new(any("b.txt")), "target": new(any("@all")), "text": new(any("foo bar"))}
 	_, _, ret, _ = writeFile(session, mp, nil)
-	mp = map[string]*any{"path": ptr("b.txt"), "target": ptr("foo"), "text": ptr("baz")}
+	mp = map[string]*any{"path": new(any("b.txt")), "target": new(any("foo")), "text": new(any("baz"))}
 	_, _, ret, _ = writeFile(session, mp, nil)
 	data, _ = os.ReadFile(filepath.Join(tmpdir, "b.txt"))
 	s := string(data)
@@ -214,7 +214,7 @@ func TestWriteFile(t *testing.T) {
 	}
 
 	// replace substring on non-existent file -> expect error in ret
-	mp = map[string]*any{"path": ptr("noexist.txt"), "target": ptr("x"), "text": ptr("y")}
+	mp = map[string]*any{"path": new(any("noexist.txt")), "target": new(any("x")), "text": new(any("y"))}
 	_, _, ret, _ = writeFile(session, mp, nil)
 	if ret == nil || ret["success"] == nil {
 		t.Fatalf("unexpected return map for noexist")
@@ -233,7 +233,7 @@ func TestWriteFile(t *testing.T) {
 	// @ln replace
 	// create file with lines
 	os.WriteFile(filepath.Join(tmpdir, "lines.txt"), []byte("one\ntwo\nthree\n"), 0644)
-	mp = map[string]*any{"path": ptr("lines.txt"), "target": ptr("@ln:2"), "text": ptr("NEW")}
+	mp = map[string]*any{"path": new(any("lines.txt")), "target": new(any("@ln:2")), "text": new(any("NEW"))}
 	_, _, ret, _ = writeFile(session, mp, nil)
 	data, _ = os.ReadFile(filepath.Join(tmpdir, "lines.txt"))
 	if string(data) != "one\nNEW\nthree\n" {
@@ -242,7 +242,7 @@ func TestWriteFile(t *testing.T) {
 
 	// @insert
 	os.WriteFile(filepath.Join(tmpdir, "ins.txt"), []byte("a\nb\nc\n"), 0644)
-	mp = map[string]*any{"path": ptr("ins.txt"), "target": ptr("@insert:2"), "text": ptr("X")}
+	mp = map[string]*any{"path": new(any("ins.txt")), "target": new(any("@insert:2")), "text": new(any("X"))}
 	_, _, ret, _ = writeFile(session, mp, nil)
 	data, _ = os.ReadFile(filepath.Join(tmpdir, "ins.txt"))
 	if string(data) != "a\nX\nb\nc\n" {
@@ -251,7 +251,7 @@ func TestWriteFile(t *testing.T) {
 
 	// @regex
 	os.WriteFile(filepath.Join(tmpdir, "rx.txt"), []byte("Hello foo FOO world"), 0644)
-	mp = map[string]*any{"path": ptr("rx.txt"), "target": ptr("@regex:/foo/i"), "text": ptr("bar")}
+	mp = map[string]*any{"path": new(any("rx.txt")), "target": new(any("@regex:/foo/i")), "text": new(any("bar"))}
 	_, _, ret, _ = writeFile(session, mp, nil)
 	data, _ = os.ReadFile(filepath.Join(tmpdir, "rx.txt"))
 	if string(data) != "Hello bar FOO world" {

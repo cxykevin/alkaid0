@@ -5,6 +5,10 @@ trap 'umount -R "$T" 2>/dev/null || true; rm -rf "$T" 2>/dev/null || true' EXIT
 mount --rbind / "$T" || exit 1
 mount -o remount,ro,bind "$T" || exit 1
 
+# 将真实用户名传给 chroot 内的脚本
+REAL_USER="%s"
+export REAL_USER
+
 # 阶段2: chroot后内部完成所有挂载（关键：在此ns中，外部看不到）
 # 保存命令的退出码
 EXIT_CODE=0
@@ -20,10 +24,23 @@ chroot "$T" sh -uc '
 		mknod -m 666 /dev/random c 1 8 2>/dev/null || :
 		mknod -m 666 /dev/urandom c 1 9 2>/dev/null || :
 	}
-	
+
 	# 可写目录重新挂载（覆盖ro层）
 	%s
-	
+
+	# 伪造 /etc/passwd 和 /etc/group，使 whoami/id 输出真实用户名
+	# 实际 UID 仍是 0（--map-root-user 映射），文件操作归属正确
+	# 注意：getpwuid(0) 返回第一个匹配 UID 0 的条目，真实用户必须放第一行
+	_alk_pwf=$(mktemp /tmp/.alk-sandbox-etc-password-XXXXXX 2>/dev/null)
+	_alk_grf=$(mktemp /tmp/.alk-sandbox-etc-group-XXXXXX 2>/dev/null)
+	{
+		echo "${REAL_USER}:x:0:0:${REAL_USER}:/home/${REAL_USER}:/bin/sh"
+		echo "root:x:0:0:root:/root:/bin/sh"
+	} > "$_alk_pwf" 2>/dev/null || :
+	mount --bind "$_alk_pwf" /etc/passwd 2>/dev/null || :
+	echo "${REAL_USER}:x:0:" > "$_alk_grf" 2>/dev/null || :
+	mount --bind "$_alk_grf" /etc/group 2>/dev/null || :
+
 	# 切换到工作目录并执行
 	cd %q || exit 1
 	exec %s "$@"

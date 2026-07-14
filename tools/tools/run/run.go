@@ -278,19 +278,19 @@ func runTask(session *structs.Chats, mp map[string]*any, cross []*any) (bool, []
 	timeoutObj, ok := mp["timeout"]
 	var timeout int32
 	if !ok || timeoutObj == nil {
-		timeout = 60
+		timeout = 0 // 未指定则不设超时，由 session cancel 控制
 	} else {
 		if v, ok := asInt32(timeoutObj); ok {
 			timeout = v
 		} else {
-			timeout = 60
+			timeout = 0
 		}
-	}
-	if timeout <= 0 {
-		timeout = 60
 	}
 	if timeout >= 300 {
 		return errResult("[System] Parameter Error: timeout must less than 300", cross)
+	}
+	if timeout < 0 {
+		timeout = 0
 	}
 
 	logger.Info("run shell \"%s\"(reason: %s)(%ds) sandbox:%v in ID=%d,agentID=%s", command, reason, timeout, sandboxFlag, session.ID, session.CurrentAgentID)
@@ -306,10 +306,21 @@ func runTask(session *structs.Chats, mp map[string]*any, cross []*any) (bool, []
 	env := os.Environ()
 	env = append(env, "SANDBOX=alkaid0")
 	env = append(env, "TERM=xterm-256color")
+	// 禁止交互式分页器/编辑器，防止命令在 PTY 中因等待输入而永久挂起
+	env = append(env, "PAGER=cat")
+	env = append(env, "SYSTEMD_PAGER=cat")
+	env = append(env, "GIT_PAGER=cat")
+	env = append(env, "DEBIAN_FRONTEND=noninteractive")
+
+	// 只有显式指定了超时时才设置 sandbox timeout，否则为 0（无超时）
+	var sandTimeout time.Duration
+	if timeout > 0 {
+		sandTimeout = time.Duration(timeout)*time.Second + 1*time.Second
+	}
 	sand, err := sandbox.New(sandbox.Config{
 		WorkDir:       path.Join(session.Root, session.CurrentActivatePath),
 		Env:           env,
-		Timeout:       time.Duration(timeout)*time.Second + 1*time.Second,
+		Timeout:       sandTimeout,
 		IsolationMode: isolateMode,
 	})
 	if err != nil {
@@ -348,7 +359,7 @@ func runTask(session *structs.Chats, mp map[string]*any, cross []*any) (bool, []
 			sand2, err2 := sandbox.New(sandbox.Config{
 				WorkDir:       path.Join(session.Root, session.CurrentActivatePath),
 				Env:           env,
-				Timeout:       time.Duration(timeout)*time.Second + 1*time.Second,
+				Timeout:       sandTimeout,
 				IsolationMode: sandbox.IsolationNone,
 			})
 			if err2 != nil {
@@ -440,22 +451,24 @@ func runTask(session *structs.Chats, mp map[string]*any, cross []*any) (bool, []
 // runCmd 执行命令，优先使用 PTY，否则回退到缓冲区模式。
 // runCmd 内部处理 context 取消监听和输出收集。
 func runCmd(c *sandbox.Command, buf *bytes.Buffer, ctx context.Context, command string) error {
-	// 监听 context 取消信号
-	contextDone := make(chan struct{})
-	go func() {
-		select {
-		case <-ctx.Done():
-			logger.Info("Context cancelled, killing command: %s", command)
-			if err := c.Kill(); err != nil {
-				logger.Warn("Failed to kill command: %v", err)
-			}
-		case <-contextDone:
-		}
-	}()
-	defer close(contextDone)
-
 	master, slave, ptyErr := openPTYForCmd()
 	if ptyErr == nil {
+		// 先打开 PTY，再启动 context 监听，确保监听 goroutine 能访问 master
+		contextDone := make(chan struct{})
+		go func() {
+			select {
+			case <-ctx.Done():
+				logger.Info("Context cancelled, killing command: %s", command)
+				if err := c.Kill(); err != nil {
+					logger.Warn("Failed to kill command: %v", err)
+				}
+				// 关闭 master 解除 io.Copy 阻塞（孤儿进程可能仍持有 slave fd）
+				_ = master.Close()
+			case <-contextDone:
+			}
+		}()
+		defer close(contextDone)
+
 		// PTY 模式：将子进程 stdio 挂载到 PTY 从端
 		c.SetStdin(slave)
 		c.SetStdout(slave)
@@ -472,11 +485,9 @@ func runCmd(c *sandbox.Command, buf *bytes.Buffer, ctx context.Context, command 
 
 		// 从主端读取输出到缓冲区
 		var copyWg sync.WaitGroup
-		copyWg.Add(1)
-		go func() {
-			defer copyWg.Done()
+		copyWg.Go(func() {
 			_, _ = io.Copy(buf, master)
-		}()
+		})
 
 		// 等待命令完成
 		err := c.Wait()
@@ -488,6 +499,16 @@ func runCmd(c *sandbox.Command, buf *bytes.Buffer, ctx context.Context, command 
 	}
 
 	// 非 PTY 模式（Windows/fallback）：使用缓冲区直接收集输出
+	contextDone := make(chan struct{})
+	go func() {
+		select {
+		case <-ctx.Done():
+			logger.Info("Context cancelled, killing command: %s", command)
+			_ = c.Kill()
+		case <-contextDone:
+		}
+	}()
+	defer close(contextDone)
 	c.SetStdin(nil)
 	c.SetStdout(buf)
 	c.SetStderr(buf)

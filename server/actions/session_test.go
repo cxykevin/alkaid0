@@ -629,9 +629,9 @@ func TestSessionDeleteCancelsTimer(t *testing.T) {
 // TestBackgroundDefaultFalse 新建 session 的 background 应为 false
 func TestBackgroundDefaultFalse(t *testing.T) {
 	obj := &sessionObj{
-		cwd:  "/tmp",
-		id:   88880,
-		loop: loop.New(nil),
+		// cwd:  "/tmp",
+		// id:   88880,
+		// loop: loop.New(nil),
 	}
 	if obj.background {
 		t.Error("new sessionObj should have background=false by default")

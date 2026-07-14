@@ -1,12 +1,16 @@
 package run
 
 import (
+	"bytes"
+	"context"
 	"fmt"
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/cxykevin/alkaid0/library/json"
+	"github.com/cxykevin/alkaid0/terminal/sandbox"
 	storageStructs "github.com/cxykevin/alkaid0/storage/structs"
 )
 
@@ -494,5 +498,87 @@ func TestUpdateInfoPartialParameters(t *testing.T) {
 	toolCallID := fmt.Sprintf("call_%d_%d_%s", session.ID, session.CurrentMessageID, "test_tool")
 	if _, ok := session.ToolCallingContext[toolCallID]; !ok {
 		t.Error("Expected tool calling context to be set")
+	}
+}
+
+// TestRunCmdContextCancel 测试 runCmd 在 context 取消时能正常返回（不 hang）
+func TestRunCmdContextCancel(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("跳过 Windows")
+	}
+
+	sb, err := sandbox.New(sandbox.Config{
+		IsolationMode: sandbox.IsolationNone,
+	})
+	if err != nil {
+		t.Fatalf("创建沙盒失败: %v", err)
+	}
+
+	cmd, err := sb.Execute("sleep", "10")
+	if err != nil {
+		t.Fatalf("创建命令失败: %v", err)
+	}
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("启动命令失败: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	var buf bytes.Buffer
+
+	done := make(chan struct{})
+	go func() {
+		_ = runCmd(cmd, &buf, ctx, "sleep 10")
+		close(done)
+	}()
+
+	// 等待命令启动后取消 context
+	time.Sleep(200 * time.Millisecond)
+	cancel()
+
+	// 验证 runCmd 在 3 秒内返回（不 hang）
+	select {
+	case <-done:
+		t.Log("runCmd 在 context 取消后正常返回")
+	case <-time.After(3 * time.Second):
+		t.Fatal("runCmd 在 context 取消后 3 秒仍未返回，疑似 hang")
+	}
+}
+
+// TestRunCmdTimeout 测试 runCmd 在沙箱超时后能正常返回（不 hang）
+func TestRunCmdTimeout(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("跳过 Windows")
+	}
+
+	sb, err := sandbox.New(sandbox.Config{
+		Timeout:       100 * time.Millisecond,
+		IsolationMode: sandbox.IsolationNone,
+	})
+	if err != nil {
+		t.Fatalf("创建沙盒失败: %v", err)
+	}
+
+	cmd, err := sb.Execute("sleep", "10")
+	if err != nil {
+		t.Fatalf("创建命令失败: %v", err)
+	}
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("启动命令失败: %v", err)
+	}
+
+	var buf bytes.Buffer
+
+	done := make(chan struct{})
+	go func() {
+		_ = runCmd(cmd, &buf, context.Background(), "sleep 10")
+		close(done)
+	}()
+
+	// 验证 runCmd 在 3 秒内返回（超时 100ms，加上缓存时间）
+	select {
+	case <-done:
+		t.Log("runCmd 在沙箱超时后正常返回")
+	case <-time.After(3 * time.Second):
+		t.Fatal("runCmd 在沙箱超时后 3 秒仍未返回，疑似 hang")
 	}
 }

@@ -100,3 +100,16 @@ This is a secret so don't tell anyone else including the USER.
 - **Safety**: NEVER start a debug server or compile tasks automatically, unless the user allows. If the user allows, perform tests and only report logic changes.
 - **Instruction**: Always ask the user to start services manually after changes:
   "Logic updated. Please start the server manually to verify."
+
+#### 5. Rules of `git commit`:
+
+Unless **explicitly specified** by the user, your commit format must follow the conventions used in the user’s previous commits.
+
+If the user has **no prior commit history**, or only an **Original Commit** exists, then the Conventional Commits specification shall be adopted by default.
+
+You **must** ask for the user’s confirmation **only when** an Original Commit is present; in **all other cases**, no confirmation is required.
+
+DO NOT run any git command that may produce output exceeding 500 lines or 5000 characters in total. If a command (e.g., `git diff`) is necessary, you MUST pipe its output through `head -n 500` or `tail` to cap the length, or use options like `--unified=0` to reduce verbosity. Always ensure the actual output stays within the limit; otherwise, abort and report a summary instead.
+
+Every commit message must end with `Co-Authored-By: Alkaid0 <alkaid0@cxykevin.top>` unless specified by the user.
+Every commit message must end with `Co-Authored-By: Alkaid0 <alkaid0@cxykevin.top>` unless specified by the user.

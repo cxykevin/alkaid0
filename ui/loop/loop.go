@@ -88,6 +88,7 @@ type Object struct {
 	ctx            context.Context
 	done           chan struct{}
 	closeOnce      sync.Once
+	stopped        bool // Stop() 已调用标记，防止 cancel 后 AI 继续重试
 }
 
 // queueSize 队列缓冲区大小
@@ -160,6 +161,14 @@ func (p *Object) Start(ctx context.Context) {
 	runResponseLoop = func() {
 		loopCount := 0
 		for {
+			// Stop() 已调用，跳过此轮 AI 交互
+			if p.stopped {
+				call(AIResponse{
+					StopReason: StopReasonUser,
+				})
+				break
+			}
+
 			thinkingFlag := false
 			responseStarted := false
 
@@ -481,6 +490,8 @@ func (p *Object) Start(ctx context.Context) {
 			// 显示 AI 响应
 			runResponseLoop()
 		default:
+			// 新用户输入，重置 stopped 标志
+			p.stopped = false
 			input = strings.TrimSpace(input)
 			logger.Info("run in session=%d with input \"%s\"", session.ID, input)
 
@@ -510,13 +521,15 @@ func (p *Object) Start(ctx context.Context) {
 	}
 }
 
-// Stop 停止当前正在进行的操作。
+// Stop 停止当前正在进行的操作，并标记 stopped 防止 AI 继续重试。
 //   - LLM 请求阶段：取消 responseCtx，终止流式响应。
 //   - 工具执行阶段：
 //     1. 取消 toolCancelFunc，通过 session.GetContext() 通知 runCmd 等 kill 进程。
 //     2. 调用 session.KillTool()，调用工具注册的直接停止回调（如 kill 进程）。
 //   - 空闲阶段：无操作（nothing to stop）。
+// 注意：Stop 仅停止当前操作，不终止 Loop 主循环。Loop 存活以接收后续 prompt。
 func (p *Object) Stop() {
+	p.stopped = true
 	p.lock.Lock()
 	cancel := p.cancelFunc
 	toolCancel := p.toolCancelFunc

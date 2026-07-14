@@ -218,11 +218,11 @@ func TestJSONParser_DynamicString(t *testing.T) {
 	err := parser.AddToken(string(jsonStr))
 	var strCmpTmp strings.Builder
 	// 随机字符串
-	dynamicTestStr := ""
+	var dynamicTestStr strings.Builder
 	for i := range 100 {
-		dynamicTestStr += string(rune(97 + i%26))
+		dynamicTestStr.WriteString(string(rune(97 + i%26)))
 	}
-	for _, c := range dynamicTestStr {
+	for _, c := range dynamicTestStr.String() {
 		strCmpTmp.WriteString(string(c))
 		err = parser.AddToken(string(c))
 		if err != nil {
