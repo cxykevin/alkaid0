@@ -84,8 +84,15 @@ func writeGitInitMarker(path string) error {
 }
 
 func getGitGlobalExcludePath() (string, bool, error) {
-	if value, ok := readGitConfigValue("--global", "core.excludesfile"); ok {
-		return value, true, nil
+	// 先尝试系统级配置 (--system)，再尝试用户级配置 (--global)
+	// 哪个报错了就静默写日志继续
+	for _, scope := range []string{"--system", "--global"} {
+		if value, ok := readGitConfigValue(scope, "core.excludesfile"); ok {
+			logger.Info("git config %s core.excludesfile: %s", scope, value)
+			return value, true, nil
+		} else {
+			logger.Debug("git config %s core.excludesfile not found", scope)
+		}
 	}
 
 	defaultPath := defaultGitExcludePath()
