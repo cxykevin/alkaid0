@@ -19,23 +19,23 @@ import (
 )
 
 // GetChats 获取所有聊天
-func GetChats(db *gorm.DB) ([]structs.Chats, error) {
-	chats := []structs.Chats{}
+func GetChats(db *gorm.DB) ([]*structs.Chats, error) {
+	chats := []*structs.Chats{}
 	err := db.Find(&chats).Error
 	if err != nil {
 		return chats, err
 	}
 
-	slices.SortFunc(chats, func(a, b structs.Chats) int {
+	slices.SortFunc(chats, func(a, b *structs.Chats) int {
 		return int(a.ID) - int(b.ID)
 	})
 	return chats, nil
 }
 
 // QueryChat 获取聊天
-func QueryChat(db *gorm.DB, id uint32) (structs.Chats, error) {
-	chats := structs.Chats{}
-	err := db.Where("id = ?", id).First(&chats).Error
+func QueryChat(db *gorm.DB, id uint32) (*structs.Chats, error) {
+	chats := &structs.Chats{}
+	err := db.Where("id = ?", id).First(chats).Error
 	return chats, err
 }
 
@@ -56,18 +56,17 @@ func CreateChat(db *gorm.DB) (uint32, error) {
 
 // InitChat 加载聊天
 func InitChat(db *gorm.DB, chat *structs.Chats) (*structs.Chats, error) {
-	session := *chat
-	session.DB = db
-	session.ToolCallingContext = make(map[string]any)
-	session.ToolCallingType = make(map[string]string)
-	session.TemporyDataOfSession = make(map[string]any)
-	actions.Load(&session)
-	storage.GlobalConfig.LastChatID = session.ID
-	err := agents.Load(&session)
+	chat.DB = db
+	chat.ToolCallingContext = make(map[string]any)
+	chat.ToolCallingType = make(map[string]string)
+	chat.TemporyDataOfSession = make(map[string]any)
+	actions.Load(chat)
+	storage.GlobalConfig.LastChatID = chat.ID
+	err := agents.Load(chat)
 	if err != nil {
 		return nil, err
 	}
-	return &session, nil
+	return chat, nil
 }
 
 // GetModelName 获取模型名称

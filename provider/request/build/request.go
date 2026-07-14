@@ -26,7 +26,7 @@ var msgRole = map[structs.MessagesRole]string{
 }
 
 // RequestBody 构建请求
-func RequestBody(chatID uint32, modelID int32, agentCode string, toolsList *[]*parser.ToolsDefine, db *gorm.DB, addSystemPrompt string, addUserPrompt string, agentCfg cfgStruct.AgentConfig, chatLn storageStructs.Chats) (*reqStruct.ChatCompletionRequest, error) {
+func RequestBody(chatID uint32, modelID int32, agentCode string, toolsList *[]*parser.ToolsDefine, db *gorm.DB, addSystemPrompt string, addUserPrompt string, agentCfg cfgStruct.AgentConfig, chatLn *storageStructs.Chats) (*reqStruct.ChatCompletionRequest, error) {
 	toolsLst, err := json.Marshal(*toolsList)
 	if err != nil {
 		return nil, err

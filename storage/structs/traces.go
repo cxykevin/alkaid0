@@ -6,5 +6,5 @@ type Traces struct {
 	ChatID  uint32 `gorm:"primaryKey"`
 	AgentID string `gorm:"primaryKey"`
 	TraceID uint64
-	Chats   Chats `gorm:"foreignKey:ChatID"`
+	Chats   *Chats `gorm:"foreignKey:ChatID"`
 }

@@ -21,8 +21,8 @@ func Build(db *gorm.DB, session *storageStructs.Chats) (*reqStruct.ChatCompletio
 	if !session.InTestFlag {
 		scopes, traces, tools = Tools(session)
 	}
-	chatLine := storageStructs.Chats{}
-	err := db.Where("id = ?", session.ID).First(&chatLine).Error
+	chatLine := &storageStructs.Chats{}
+	err := db.Where("id = ?", session.ID).First(chatLine).Error
 	if err != nil {
 		logger.Error("db error %v", err)
 	}

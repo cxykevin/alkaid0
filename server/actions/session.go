@@ -435,7 +435,7 @@ func loadSession(cwd string, id *uint32, knowID bool) (*structs.Chats, error) {
 		}
 
 		chTemp.Root = cwd
-		sess, err := funcs.InitChat(db, &chTemp)
+		sess, err := funcs.InitChat(db, chTemp)
 		if err != nil {
 			closeDB(obj.cwd)
 			return nil, err

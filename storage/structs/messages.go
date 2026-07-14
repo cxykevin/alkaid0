@@ -86,7 +86,7 @@ type Messages struct {
 	Delta         string `gorm:"type:text"`
 	Summary       string `gorm:"type:text"`
 	ThinkingDelta string `gorm:"type:text"`
-	Chats         Chats  `gorm:"foreignKey:ChatID;constraints:OnDelete:RESTRICT;OnUpdate:CASCADE"`
+	Chats         *Chats `gorm:"foreignKey:ChatID;constraints:OnDelete:RESTRICT;OnUpdate:CASCADE"`
 	// SubAgents             SubAgents         `gorm:"foreignKey:AgentID;constraints:OnDelete:RESTRICT;OnUpdate:CASCADE"`
 	Refers                MessagesReferList `gorm:"type:bytes;serialize:gob"`
 	ToolCallingJSONString string            `gorm:"type:text"`
