@@ -225,7 +225,7 @@ func TestSetWorkDir(t *testing.T) {
 		t.Fatalf("New() failed: %v", err)
 	}
 
-	testDir := os.TempDir()
+	testDir := filepath.Clean(os.TempDir())
 
 	if err := sb.SetWorkDir(testDir); err != nil {
 		t.Errorf("SetWorkDir(%s) failed: %v", testDir, err)
@@ -235,8 +235,8 @@ func TestSetWorkDir(t *testing.T) {
 		t.Errorf("workDir should be %s, got %s", testDir, sb.GetWorkDir())
 	}
 
-	if err := sb.SetWorkDir(os.DevNull); err == nil {
-		t.Error("SetWorkDir on non-directory should fail")
+	if err := sb.SetWorkDir("/alkaid0-unit-test-nonexistent-path"); err == nil {
+		t.Error("SetWorkDir on non-existent path should fail")
 	}
 }
 
