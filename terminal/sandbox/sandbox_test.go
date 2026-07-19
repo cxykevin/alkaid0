@@ -225,16 +225,18 @@ func TestSetWorkDir(t *testing.T) {
 		t.Fatalf("New() failed: %v", err)
 	}
 
-	if err := sb.SetWorkDir("/tmp"); err != nil {
-		t.Errorf("SetWorkDir(/tmp) failed: %v", err)
+	testDir := os.TempDir()
+
+	if err := sb.SetWorkDir(testDir); err != nil {
+		t.Errorf("SetWorkDir(%s) failed: %v", testDir, err)
 	}
 
-	if sb.GetWorkDir() != "/tmp" {
-		t.Errorf("workDir should be /tmp, got %s", sb.GetWorkDir())
+	if sb.GetWorkDir() != testDir {
+		t.Errorf("workDir should be %s, got %s", testDir, sb.GetWorkDir())
 	}
 
-	if err := sb.SetWorkDir("/nonexistent"); err == nil {
-		t.Error("SetWorkDir(/nonexistent) should fail")
+	if err := sb.SetWorkDir(os.DevNull); err == nil {
+		t.Error("SetWorkDir on non-directory should fail")
 	}
 }
 
