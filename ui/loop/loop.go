@@ -331,6 +331,7 @@ func (p *Object) Start(ctx context.Context) {
 						call(AIResponse{
 							StopReason: StopReasonModel,
 						})
+						break
 					} else if len(pendingTools) > 0 {
 						if session.CurrentAgentID != "" {
 							funcs.SubAgentReject(session)

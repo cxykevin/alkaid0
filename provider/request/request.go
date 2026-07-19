@@ -398,7 +398,7 @@ func CanAutoApprove(session *storageStructs.Chats, toolCalls []ToolCall, msg *st
 			}
 			if exprTruthy(result) {
 				logger.Info("autoReject matched for tool: %s", call.Name)
-				return false, "", nil
+				return false, "auto-rejected by reject rule for tool: "+call.Name, nil
 			}
 		}
 	}

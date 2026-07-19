@@ -125,6 +125,12 @@ func AutoHandlePendingToolCalls(session *structs.Chats) (bool, bool, []ToolCall,
 		_, err = request.ExecuteToolCalls(session, msg.ToolCallingJSONString)
 		return true, true, nil, msgID, err
 	}
+	// reason 非空表示 reject 规则匹配，无论是主会话还是 sub-agent 都应自动拒绝
+	if reason != "" {
+		err = request.RejectToolCallsNoDeactivate(session, reason, nil)
+		return true, false, nil, msgID, err
+	}
+	// 无明确 reject 规则匹配时，sub-agent 也自动拒绝（安全限制），主会话等待用户审批
 	if session.CurrentAgentID != "" || session.NowAgent != "" {
 		err = request.RejectToolCallsNoDeactivate(session, reason, nil)
 		return true, false, nil, msgID, err
