@@ -59,8 +59,9 @@ type SessionNewResponse struct {
 
 // SessionLoadRequest 加载会话的请求
 type SessionLoadRequest struct {
-	Cwd       string `json:"cwd"`
-	SessionID string `json:"sessionId"`
+	Cwd         string `json:"cwd"`
+	SessionID   string `json:"sessionId"`
+	SkipHistory bool   `json:"alk.cxkevin.top/skip_history"`
 }
 
 // AvailableModel 可用的模型
@@ -921,33 +922,18 @@ func SessionLoad(req SessionLoadRequest, call func(string, any, *string) error, 
 	msgs, err := funcs.GetHistory(sess)
 	previousToolJSON := ""
 	prevMsgID := uint64(0)
-	logger.Info("replay session: %s", req.SessionID)
-	for _, val := range msgs {
-		switch val.Type {
-		case structs.MessagesRoleUser:
-			err := call("session/update", SessionUpdate{
-				SessionID: req.SessionID,
-				Update: SessionUpdateUpdate{
-					SessionUpdate: "user_message_chunk",
-					Content: u.H{
-						"type": "text",
-						"text": val.Delta,
-					},
-					AgentStatus: new(u.ValDefault(val.AgentID, "")),
-				},
-			}, nil)
-			if err != nil {
-				return SessionLoadResponse{}, err
-			}
-		case structs.MessagesRoleAgent:
-			if val.ThinkingDelta != "" {
+	if !req.SkipHistory {
+		logger.Info("replay session: %s", req.SessionID)
+		for _, val := range msgs {
+			switch val.Type {
+			case structs.MessagesRoleUser:
 				err := call("session/update", SessionUpdate{
 					SessionID: req.SessionID,
 					Update: SessionUpdateUpdate{
-						SessionUpdate: "agent_thought_chunk",
+						SessionUpdate: "user_message_chunk",
 						Content: u.H{
 							"type": "text",
-							"text": val.ThinkingDelta,
+							"text": val.Delta,
 						},
 						AgentStatus: new(u.ValDefault(val.AgentID, "")),
 					},
@@ -955,118 +941,134 @@ func SessionLoad(req SessionLoadRequest, call func(string, any, *string) error, 
 				if err != nil {
 					return SessionLoadResponse{}, err
 				}
-			}
-			err := call("session/update", SessionUpdate{
-				SessionID: req.SessionID,
-				Update: SessionUpdateUpdate{
-					SessionUpdate: "agent_message_chunk",
-					Content: u.H{
-						"type": "text",
-						"text": val.Delta,
-					},
-					AgentStatus: new(u.ValDefault(val.AgentID, "")),
-				},
-			}, nil)
-			previousToolJSON = val.ToolCallingJSONString
-			prevMsgID = val.ID
-			if err != nil {
-				return SessionLoadResponse{}, err
-			}
-			if val.TotalTokens != 0 || val.CachedTokens != 0 || val.PromptTokens != 0 || val.CompletionTokens != 0 {
-				err = broadcastSessionUpdate(req.SessionID, SessionUpdate{
-					SessionID: req.SessionID,
-					Update: SessionUpdateUpdate{
-						SessionUpdate: "alk.cxykevin.top/usage",
-						Content: &reqStructs.Usage{
-							TotalTokens:      val.TotalTokens,
-							CachedTokens:     val.CachedTokens,
-							PromptTokens:     val.PromptTokens,
-							CompletionTokens: val.CompletionTokens,
-						},
-					},
-				}, 0)
-			}
-		case structs.MessagesRoleTool:
-			if previousToolJSON != "" {
-				jsonObj := []u.H{}
-				err := json.Unmarshal([]byte(strings.TrimSpace(previousToolJSON)), &jsonObj)
-				if err != nil {
-					logger.Warn("error when replay session marshal json: %v", err)
-					continue
-				}
-				for _, obj := range jsonObj {
-					toolName, ok := u.GetH[string](obj, "name")
-					if !ok {
-						logger.Warn("error when replay session without tool name: %v", err)
-						continue
-					}
-					toolID, ok := u.GetH[string](obj, "id")
-					if !ok {
-						logger.Warn("error when replay session without tool id: %v", err)
-						continue
-					}
-					err = call("session/update", SessionUpdate{
+			case structs.MessagesRoleAgent:
+				if val.ThinkingDelta != "" {
+					err := call("session/update", SessionUpdate{
 						SessionID: req.SessionID,
 						Update: SessionUpdateUpdate{
-							SessionUpdate: "tool_call",
-							ToolCallID:    fmt.Sprintf("call_%d_%d_%s", sess.ID, prevMsgID, toolID),
-							Title:         fmt.Sprintf("[Call %s]%s", toolName, toolID),
-							Kind:          u.Default(ToolNameToTypeMap, toolName, "other"),
-							Status:        "completed",
+							SessionUpdate: "agent_thought_chunk",
+							Content: u.H{
+								"type": "text",
+								"text": val.ThinkingDelta,
+							},
+							AgentStatus: new(u.ValDefault(val.AgentID, "")),
 						},
 					}, nil)
 					if err != nil {
 						return SessionLoadResponse{}, err
 					}
 				}
+				err := call("session/update", SessionUpdate{
+					SessionID: req.SessionID,
+					Update: SessionUpdateUpdate{
+						SessionUpdate: "agent_message_chunk",
+						Content: u.H{
+							"type": "text",
+							"text": val.Delta,
+						},
+						AgentStatus: new(u.ValDefault(val.AgentID, "")),
+					},
+				}, nil)
+				previousToolJSON = val.ToolCallingJSONString
+				prevMsgID = val.ID
+				if err != nil {
+					return SessionLoadResponse{}, err
+				}
+				if val.TotalTokens != 0 || val.CachedTokens != 0 || val.PromptTokens != 0 || val.CompletionTokens != 0 {
+					err = broadcastSessionUpdate(req.SessionID, SessionUpdate{
+						SessionID: req.SessionID,
+						Update: SessionUpdateUpdate{
+							SessionUpdate: "alk.cxykevin.top/usage",
+							Content: &reqStructs.Usage{
+								TotalTokens:      val.TotalTokens,
+								CachedTokens:     val.CachedTokens,
+								PromptTokens:     val.PromptTokens,
+								CompletionTokens: val.CompletionTokens,
+							},
+						},
+					}, 0)
+				}
+			case structs.MessagesRoleTool:
+				if previousToolJSON != "" {
+					jsonObj := []u.H{}
+					err := json.Unmarshal([]byte(strings.TrimSpace(previousToolJSON)), &jsonObj)
+					if err != nil {
+						logger.Warn("error when replay session marshal json: %v", err)
+						continue
+					}
+					for _, obj := range jsonObj {
+						toolName, ok := u.GetH[string](obj, "name")
+						if !ok {
+							logger.Warn("error when replay session without tool name: %v", err)
+							continue
+						}
+						toolID, ok := u.GetH[string](obj, "id")
+						if !ok {
+							logger.Warn("error when replay session without tool id: %v", err)
+							continue
+						}
+						err = call("session/update", SessionUpdate{
+							SessionID: req.SessionID,
+							Update: SessionUpdateUpdate{
+								SessionUpdate: "tool_call",
+								ToolCallID:    fmt.Sprintf("call_%d_%d_%s", sess.ID, prevMsgID, toolID),
+								Title:         fmt.Sprintf("[Call %s]%s", toolName, toolID),
+								Kind:          u.Default(ToolNameToTypeMap, toolName, "other"),
+								Status:        "completed",
+							},
+						}, nil)
+						if err != nil {
+							return SessionLoadResponse{}, err
+						}
+					}
+				}
 			}
 		}
-	}
-
-	if sess.LatestToolCallingContext != nil && sess.LatestToolCallingType != nil {
-		for id, val := range sess.LatestToolCallingContext {
-			stx := strings.SplitN(id, "_", 4)
-			s := ""
-			if len(stx) == 4 {
-				s = stx[3]
+		if sess.LatestToolCallingContext != nil && sess.LatestToolCallingType != nil {
+			for id, val := range sess.LatestToolCallingContext {
+				stx := strings.SplitN(id, "_", 4)
+				s := ""
+				if len(stx) == 4 {
+					s = stx[3]
+				}
+				err = broadcastSessionUpdate(req.SessionID, SessionUpdate{
+					SessionID: req.SessionID,
+					Update: SessionUpdateUpdate{
+						SessionUpdate: "tool_call",
+						ToolCallID:    id,
+						Kind:          ToolNameToTypeMap[sess.LatestToolCallingType[id]],
+						Status:        "pending",
+						Title:         fmt.Sprintf("[Call %s]%s", sess.LatestToolCallingType[id], s),
+						Content:       val,
+					},
+				}, 0)
+				if err != nil {
+					logger.Warn("failed to broadcast session update: %v", err)
+				}
 			}
-			err = broadcastSessionUpdate(req.SessionID, SessionUpdate{
-				SessionID: req.SessionID,
-				Update: SessionUpdateUpdate{
-					SessionUpdate: "tool_call",
-					ToolCallID:    id,
-					Kind:          ToolNameToTypeMap[sess.LatestToolCallingType[id]],
-					Status:        "pending",
-					Title:         fmt.Sprintf("[Call %s]%s", sess.LatestToolCallingType[id], s),
-					Content:       val,
-				},
-			}, 0)
-			if err != nil {
-				logger.Warn("failed to broadcast session update: %v", err)
-			}
+			// var waitApproveSessionString strings.Builder
+			// waitApproveSessionString.WriteString("---\n### ***[System]*** Waiting Approve Tools:\n```text")
+			// for id := range sess.LatestToolCallingContext {
+			// 	stx := strings.SplitN(id, "_", 4)
+			// 	s := ""
+			// 	if len(stx) == 4 {
+			// 		s = stx[3]
+			// 	}
+			// 	fmt.Fprintf(&waitApproveSessionString, "\n%s", fmt.Sprintf("[Call %s]%s", sess.LatestToolCallingType[id], s))
+			// }
+			// waitApproveSessionString.WriteString("\n```\n> Using `/approve` command to approve or type anything else to reject.\n")
+			// err = broadcastSessionUpdate(req.SessionID, SessionUpdate{
+			// 	SessionID: req.SessionID,
+			// 	Update: SessionUpdateUpdate{
+			// 		SessionUpdate: "agent_message_chunk",
+			// 		Content: u.H{
+			// 			"type": "text",
+			// 			"text": waitApproveSessionString.String(),
+			// 		},
+			// 		CompabiltyIgnore: "true",
+			// 	},
+			// }, 0)
 		}
-		// var waitApproveSessionString strings.Builder
-		// waitApproveSessionString.WriteString("---\n### ***[System]*** Waiting Approve Tools:\n```text")
-		// for id := range sess.LatestToolCallingContext {
-		// 	stx := strings.SplitN(id, "_", 4)
-		// 	s := ""
-		// 	if len(stx) == 4 {
-		// 		s = stx[3]
-		// 	}
-		// 	fmt.Fprintf(&waitApproveSessionString, "\n%s", fmt.Sprintf("[Call %s]%s", sess.LatestToolCallingType[id], s))
-		// }
-		// waitApproveSessionString.WriteString("\n```\n> Using `/approve` command to approve or type anything else to reject.\n")
-		// err = broadcastSessionUpdate(req.SessionID, SessionUpdate{
-		// 	SessionID: req.SessionID,
-		// 	Update: SessionUpdateUpdate{
-		// 		SessionUpdate: "agent_message_chunk",
-		// 		Content: u.H{
-		// 			"type": "text",
-		// 			"text": waitApproveSessionString.String(),
-		// 		},
-		// 		CompabiltyIgnore: "true",
-		// 	},
-		// }, 0)
 	}
 	modelID := sess.LastModelID
 
@@ -1207,6 +1209,50 @@ func SessionSetConfigOption(req SessionSetConfigOptionRequest, call func(string,
 
 	return SessionSetConfigOptionResponse{
 		ConfigOptions: configOptions,
+	}, nil
+}
+
+// SessionListModelsRequest 列出会话可用模型的请求
+type SessionListModelsRequest struct {
+	SessionID string `json:"sessionId"`
+}
+
+// SessionListModelsResponse 列出会话可用模型的响应
+type SessionListModelsResponse struct {
+	CurrentModelID  string           `json:"currentModelId"`
+	AvailableModels []AvailableModel `json:"availableModels"`
+}
+
+// SessionListModels 列出会话可用的所有模型列表
+// 返回所有配置的模型以及当前会话选中的模型 ID
+func SessionListModels(req SessionListModelsRequest, call func(string, any, *string) error, connID uint64) (SessionListModelsResponse, error) {
+	if req.SessionID == "" {
+		return SessionListModelsResponse{}, fmt.Errorf("sessionId is empty")
+	}
+
+	// 解析会话ID（用于验证格式）
+	_, _, err := sessionID2Cwd(req.SessionID)
+	if err != nil {
+		return SessionListModelsResponse{}, fmt.Errorf("invalid sessionId: %v", err)
+	}
+
+	// 获取会话对象以获取当前模型
+	sessLock.Lock()
+	sessObj, ok := sessions[req.SessionID]
+	sessLock.Unlock()
+	if !ok {
+		return SessionListModelsResponse{}, fmt.Errorf("session not found")
+	}
+
+	sess := sessObj.session
+	modelID := sess.LastModelID
+	currentModelID := fmt.Sprintf("%d/%s", modelID, u.Default(config.GlobalConfig.Model.Models, int32(modelID), cfgStructs.ModelConfig{
+		ModelID: fmt.Sprintf("UnknownModel(%d)", modelID),
+	}).ModelID)
+
+	return SessionListModelsResponse{
+		CurrentModelID:  currentModelID,
+		AvailableModels: buildModelList(),
 	}, nil
 }
 

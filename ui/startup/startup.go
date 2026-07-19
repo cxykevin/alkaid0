@@ -117,20 +117,25 @@ func Startup() {
 
 	// 设置信号处理：SIGTERM/SIGINT/SIGQUIT 触发优雅关闭
 	// 30 秒超时后强制退出
-	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT, syscall.SIGQUIT)
-	defer stop()
+	// 当 config.IgnoreSignals 为 true 时跳过信号处理注册，忽略所有信号
+	if !config.GlobalConfig.IgnoreSignals {
+		ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT, syscall.SIGQUIT)
+		defer stop()
 
-	go func() {
-		<-ctx.Done()
-		logger.Info("received shutdown signal, initiating graceful shutdown...")
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer cancel()
-		if err := connect.ShutdownWs(shutdownCtx); err != nil {
-			logger.Warn("ws server shutdown: %v", err)
-		}
-		log.Shutdown()
-		os.Exit(0)
-	}()
+		go func() {
+			<-ctx.Done()
+			logger.Info("received shutdown signal, initiating graceful shutdown...")
+			shutdownCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			if err := connect.ShutdownWs(shutdownCtx); err != nil {
+				logger.Warn("ws server shutdown: %v", err)
+			}
+			log.Shutdown()
+			os.Exit(0)
+		}()
+	} else {
+		logger.Info("signal handling disabled by config (ignoreSignals=true)")
+	}
 
 	// 读取环境变量 ALKAID0_WORKDIR
 	if workdir := os.Getenv("ALKAID0_WORKDIR"); workdir != "" {

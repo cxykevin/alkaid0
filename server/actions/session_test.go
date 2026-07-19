@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/cxykevin/alkaid0/config"
+	cfgStructs "github.com/cxykevin/alkaid0/config/structs"
 	"github.com/cxykevin/alkaid0/storage/structs"
 	"github.com/cxykevin/alkaid0/ui/loop"
 	"github.com/cxykevin/alkaid0/ui/state"
@@ -875,6 +876,136 @@ func TestScheduleReleaseBackgroundOff(t *testing.T) {
 	sessLock.Unlock()
 	if ok {
 		t.Error("session should be released when background mode is off, even if state is active")
+	}
+}
+
+// --- SessionListModels 测试 ---
+
+// TestSessionListModelsValidation 测试 SessionListModels 的参数验证
+func TestSessionListModelsValidation(t *testing.T) {
+	tests := []struct {
+		name        string
+		sessionID   string
+		wantErr     bool
+		errContains string
+	}{
+		{
+			name:        "空的 sessionId",
+			sessionID:   "",
+			wantErr:     true,
+			errContains: "empty",
+		},
+		{
+			name:        "无效的 sessionId 格式",
+			sessionID:   "invalid",
+			wantErr:     true,
+			errContains: "invalid",
+		},
+		{
+			name:        "不存在的会话",
+			sessionID:   "sess_99999:/nonexistent",
+			wantErr:     true,
+			errContains: "not found",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := SessionListModels(SessionListModelsRequest{
+				SessionID: tt.sessionID,
+			}, nil, 1)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("SessionListModels() error = %v, wantErr %v", err, tt.wantErr)
+				return
+			}
+			if tt.wantErr && err != nil && !contains(err.Error(), tt.errContains) {
+				t.Errorf("SessionListModels() error message = %v, want contains %v", err.Error(), tt.errContains)
+			}
+		})
+	}
+}
+
+// TestSessionListModelsSuccess 创建 session 后查询模型列表
+func TestSessionListModelsSuccess(t *testing.T) {
+	oldSessions := sessions
+	oldAgentCallList := agentCallList
+	oldModels := config.GlobalConfig.Model.Models
+	oldDefaultModelID := config.GlobalConfig.Model.DefaultModelID
+	sessions = map[string]*sessionObj{}
+	agentCallList = map[string]map[string]func(){}
+	// 设置测试用模型
+	config.GlobalConfig.Model.Models = map[int32]cfgStructs.ModelConfig{
+		0: {ModelName: "Test Model A", ModelID: "test-model-a"},
+		1: {ModelName: "Test Model B", ModelID: "test-model-b"},
+	}
+	config.GlobalConfig.Model.DefaultModelID = 1
+	defer func() {
+		sessLock.Lock()
+		sessions = oldSessions
+		sessLock.Unlock()
+		agentCallList = oldAgentCallList
+		config.GlobalConfig.Model.Models = oldModels
+		config.GlobalConfig.Model.DefaultModelID = oldDefaultModelID
+	}()
+
+	obj := &sessionObj{
+		cwd:  "/tmp/test_list_models",
+		id:   77771,
+		loop: loop.New(nil),
+		session: &structs.Chats{
+			LastModelID: uint32(config.GlobalConfig.Model.DefaultModelID),
+		},
+	}
+	sessionID := cwd2SessionID(obj.cwd, obj.id)
+	sessions[sessionID] = obj
+	agentCallList[sessionID] = make(map[string]func())
+
+	resp, err := SessionListModels(SessionListModelsRequest{
+		SessionID: sessionID,
+	}, nil, 1)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if resp.CurrentModelID == "" {
+		t.Error("currentModelId should not be empty")
+	}
+	if len(resp.AvailableModels) == 0 {
+		t.Fatal("availableModels should not be empty")
+	}
+
+	// 验证模型列表格式和内容
+	if len(resp.AvailableModels) != 2 {
+		t.Errorf("expected 2 models, got %d", len(resp.AvailableModels))
+	}
+
+	// 验证按 RealID 排序（0 在前，1 在后）
+	if resp.AvailableModels[0].RealID != 0 {
+		t.Errorf("first model RealID should be 0, got %d", resp.AvailableModels[0].RealID)
+	}
+	if resp.AvailableModels[1].RealID != 1 {
+		t.Errorf("second model RealID should be 1, got %d", resp.AvailableModels[1].RealID)
+	}
+
+	// 验证模型 ID 格式为 "index/modelID"
+	expectedModel0ID := "0/test-model-a"
+	expectedModel1ID := "1/test-model-b"
+	if resp.AvailableModels[0].ModelID != expectedModel0ID {
+		t.Errorf("model[0].ModelID = %q, want %q", resp.AvailableModels[0].ModelID, expectedModel0ID)
+	}
+	if resp.AvailableModels[1].ModelID != expectedModel1ID {
+		t.Errorf("model[1].ModelID = %q, want %q", resp.AvailableModels[1].ModelID, expectedModel1ID)
+	}
+	if resp.AvailableModels[0].Name != "Test Model A" {
+		t.Errorf("model[0].Name = %q, want %q", resp.AvailableModels[0].Name, "Test Model A")
+	}
+	if resp.AvailableModels[1].Name != "Test Model B" {
+		t.Errorf("model[1].Name = %q, want %q", resp.AvailableModels[1].Name, "Test Model B")
+	}
+
+	// 验证 currentModelId 在 availableModels 中（DefaultModelID=1）
+	if resp.CurrentModelID != expectedModel1ID {
+		t.Errorf("currentModelId = %q, want %q", resp.CurrentModelID, expectedModel1ID)
 	}
 }
 

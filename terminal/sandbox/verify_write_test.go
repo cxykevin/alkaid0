@@ -87,6 +87,7 @@ func TestVerifyWriteFile(t *testing.T) {
 
 		cfg := Config{
 			WritableDirs:  []string{tmpDir},
+			WorkDir:       tmpDir,
 			IsolationMode: IsolationOS,
 			Timeout:       5 * time.Second,
 		}

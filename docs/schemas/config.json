@@ -236,6 +236,11 @@
                     "default": 60
                 }
             }
+        },
+        "ignoreSignals": {
+            "type": "boolean",
+            "description": "为 true 时忽略 SIGTERM/SIGINT/SIGQUIT 信号，进程不会因这些信号退出",
+            "default": false
         }
     }
 }

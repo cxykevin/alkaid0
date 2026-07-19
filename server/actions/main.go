@@ -10,31 +10,45 @@ var logger = log.New("actions")
 // InitFuncs 初始化函数
 func InitFuncs(srv *jsonrpc.Server) {
 	logger.Info("init functions")
-	jsonrpc.Set(srv, "initialize", Initialize)
-	jsonrpc.Set(srv, "alk.cxykevin.top/reload_config", reloadFunc)
-	jsonrpc.Set(srv, "session/new", SessionNew)
-	jsonrpc.Set(srv, "session/load", SessionLoad)
-	jsonrpc.Set(srv, "session/list", SessionList)
-	jsonrpc.Set(srv, "session/delete", SessionDelete)
-	jsonrpc.Set(srv, "session/set_config_option", SessionSetConfigOption)
-	jsonrpc.Set(srv, "session/set_model", SessionSetModel)
-	jsonrpc.Set(srv, "session/setModel", SessionSetModel)
-	jsonrpc.Set(srv, "unstable_setSessionModel", SessionSetModel)
-	jsonrpc.Set(srv, "session/prompt", SessionPrompt)
-	jsonrpc.Set(srv, "session/cancel", SessionCancel)
-	jsonrpc.Set(srv, "alk.cxykevin.top/list_subagent", SubAgentList)
-	jsonrpc.Set(srv, "alk.cxykevin.top/session/get_background", SessionGetBackground)
-	jsonrpc.Set(srv, "alk.cxykevin.top/session/get_effort", SessionGetEffort)
-	jsonrpc.Set(srv, "alk.cxykevin.top/config/get", ConfigGet)
-	jsonrpc.Set(srv, "alk.cxykevin.top/config/set", ConfigSet)
-	jsonrpc.Set(srv, "alk.cxykevin.top/fs/stat", FsStat)
-	jsonrpc.Set(srv, "alk.cxykevin.top/fs/read", FsRead)
-	jsonrpc.Set(srv, "alk.cxykevin.top/fs/write", FsWrite)
-	jsonrpc.Set(srv, "alk.cxykevin.top/fs/mkdir", FsMkdir)
-	jsonrpc.Set(srv, "alk.cxykevin.top/fs/rm", FsRm)
-	jsonrpc.Set(srv, "alk.cxykevin.top/fs/chmod", FsChmod)
-	jsonrpc.Set(srv, "alk.cxykevin.top/fs/chown", FsChown)
-	jsonrpc.Set(srv, "_close", Close)
+
+	{ // 系统
+		jsonrpc.Set(srv, "initialize", Initialize)
+		jsonrpc.Set(srv, "_close", Close)
+
+		jsonrpc.Set(srv, "alk.cxykevin.top/config/get", ConfigGet)
+		jsonrpc.Set(srv, "alk.cxykevin.top/config/set", ConfigSet)
+		jsonrpc.Set(srv, "alk.cxykevin.top/config/reload", reloadFunc)
+		jsonrpc.Set(srv, "alk.cxykevin.top/reload_config", reloadFunc)
+	}
+
+	{ // 会话
+		jsonrpc.Set(srv, "session/new", SessionNew)
+		jsonrpc.Set(srv, "session/load", SessionLoad)
+		jsonrpc.Set(srv, "session/list", SessionList)
+		jsonrpc.Set(srv, "session/delete", SessionDelete)
+		jsonrpc.Set(srv, "session/set_config_option", SessionSetConfigOption)
+		jsonrpc.Set(srv, "session/set_model", SessionSetModel)
+		jsonrpc.Set(srv, "session/setModel", SessionSetModel)
+		jsonrpc.Set(srv, "unstable_setSessionModel", SessionSetModel)
+		jsonrpc.Set(srv, "session/prompt", SessionPrompt)
+		jsonrpc.Set(srv, "session/cancel", SessionCancel)
+
+		jsonrpc.Set(srv, "alk.cxykevin.top/session/get_background", SessionGetBackground)
+		jsonrpc.Set(srv, "alk.cxykevin.top/session/get_effort", SessionGetEffort)
+		jsonrpc.Set(srv, "alk.cxykevin.top/session/list_models", SessionListModels)
+
+		jsonrpc.Set(srv, "alk.cxykevin.top/list_subagent", SubAgentList)
+	}
+
+	{ // 文件系统
+		jsonrpc.Set(srv, "alk.cxykevin.top/fs/stat", FsStat)
+		jsonrpc.Set(srv, "alk.cxykevin.top/fs/read", FsRead)
+		jsonrpc.Set(srv, "alk.cxykevin.top/fs/write", FsWrite)
+		jsonrpc.Set(srv, "alk.cxykevin.top/fs/mkdir", FsMkdir)
+		jsonrpc.Set(srv, "alk.cxykevin.top/fs/rm", FsRm)
+		jsonrpc.Set(srv, "alk.cxykevin.top/fs/chmod", FsChmod)
+		jsonrpc.Set(srv, "alk.cxykevin.top/fs/chown", FsChown)
+	}
 }
 
 // Close 关闭连接
