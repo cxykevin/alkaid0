@@ -19,9 +19,9 @@ type AsyncPipeReader struct {
 	doneChan chan struct{}
 
 	// 支持外部 context 和内部 context
-	ctx         context.Context    // 外部传入的 context
-	cancel      context.CancelFunc // 内部取消函数（组合外部 + 内部）
-	internalCtx context.Context    // 内部 context，用于 Close
+	ctx            context.Context    // 外部传入的 context
+	cancel         context.CancelFunc // 内部取消函数（组合外部 + 内部）
+	internalCtx    context.Context    // 内部 context，用于 Close
 	internalCancel context.CancelFunc
 
 	wg     sync.WaitGroup
@@ -52,13 +52,13 @@ func NewAsyncPipeReader(ctx context.Context, file *os.File, bufferSize int) *Asy
 	context.AfterFunc(internalCtx, combinedCancel)
 
 	r := &AsyncPipeReader{
-		file:        file,
-		dataChan:    make(chan []byte, bufferSize),
-		errChan:     make(chan error, 1),
-		doneChan:    make(chan struct{}),
-		ctx:         combinedCtx,
-		cancel:      combinedCancel,
-		internalCtx: internalCtx,
+		file:           file,
+		dataChan:       make(chan []byte, bufferSize),
+		errChan:        make(chan error, 1),
+		doneChan:       make(chan struct{}),
+		ctx:            combinedCtx,
+		cancel:         combinedCancel,
+		internalCtx:    internalCtx,
 		internalCancel: internalCancel,
 	}
 

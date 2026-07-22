@@ -306,8 +306,8 @@ func (p *Object) Start(ctx context.Context) {
 					//   autoHandled=true 表示规则做出了决策
 					//   approved=true 表示规则允许执行
 					restoreToolCtx := p.runWithToolCancel(session)
-				autoHandled, approved, pendingTools, msgID, pErr := funcs.AutoHandlePendingToolCalls(session)
-				restoreToolCtx()
+					autoHandled, approved, pendingTools, msgID, pErr := funcs.AutoHandlePendingToolCalls(session)
+					restoreToolCtx()
 					if pErr != nil {
 						call(AIResponse{
 							Error:      fmt.Errorf("loop error in pending tool calls: %v", pErr),
@@ -528,6 +528,7 @@ func (p *Object) Start(ctx context.Context) {
 //     1. 取消 toolCancelFunc，通过 session.GetContext() 通知 runCmd 等 kill 进程。
 //     2. 调用 session.KillTool()，调用工具注册的直接停止回调（如 kill 进程）。
 //   - 空闲阶段：无操作（nothing to stop）。
+//
 // 注意：Stop 仅停止当前操作，不终止 Loop 主循环。Loop 存活以接收后续 prompt。
 func (p *Object) Stop() {
 	p.stopped = true

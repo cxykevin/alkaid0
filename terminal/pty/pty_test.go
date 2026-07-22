@@ -234,4 +234,3 @@ func TestCopyToWithoutSlave(t *testing.T) {
 		t.Fatal("CopyTo超时未退出")
 	}
 }
-

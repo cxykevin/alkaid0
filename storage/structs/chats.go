@@ -55,7 +55,7 @@ type Chats struct {
 	LatestToolCallingContext map[string]any      `gorm:"-" json:"-"`
 	LatestToolCallingType    map[string]string   `gorm:"-" json:"-"`
 	// toolKillMu 保护 ToolKillFn 的并发访问
-	toolKillMu sync.Mutex    `gorm:"-" json:"-"`
+	toolKillMu sync.Mutex `gorm:"-" json:"-"`
 	// ToolKillFn 由当前正在执行的工具注册，loop.Stop() 调用它来中断工具
 	ToolKillFn func() `gorm:"-" json:"-"`
 }

@@ -14,7 +14,7 @@ import (
 )
 
 // GlobalConfig 配置文件对象。注意：Load/Save/Reload 会写锁保护，直接读字段是线程安全的
-//（写操作发生在启动时和管理 RPC 中），但严格并发安全应使用 GlobalConfig() 函数。
+// （写操作发生在启动时和管理 RPC 中），但严格并发安全应使用 GlobalConfig() 函数。
 var GlobalConfig = &structs.Config{}
 
 const defaultConfigPath = "~/.config/alkaid0/config.json"

@@ -15,14 +15,15 @@ type AgentConfig struct {
 
 // AgentsConfig 代理配置结构
 type AgentsConfig struct {
-	Agents              map[string]AgentConfig
-	IgnoreBuiltinAgents bool   `default:"false"`
-	GlobalPrompt        string `default:""`
-	SummaryModel        int32
-	MaxCallCount        int32  `default:"50"`
-	DefaultAutoApprove  string `default:"" json:"AutoApprove"` // 全局默认自动批准表达式
-	DefaultAutoReject   string `default:"" json:"AutoReject"`  // 全局默认自动拒绝表达式
-	IgnoreDefaultRules  bool   `default:"false"`
-	UseShell            string `default:""`
-	DisableSandbox      bool   `default:"false"`
+	Agents                  map[string]AgentConfig
+	IgnoreBuiltinAgents     bool   `default:"false"`
+	GlobalPrompt            string `default:""`
+	SummaryModel            int32
+	MaxCallCount            int32  `default:"50"`
+	DefaultAutoApprove      string `default:"" json:"AutoApprove"` // 全局默认自动批准表达式
+	DefaultAutoReject       string `default:"" json:"AutoReject"`  // 全局默认自动拒绝表达式
+	IgnoreDefaultRules      bool   `default:"false"`
+	DisablePromptPreprocess bool   `default:"false"` // 禁用提示词预处理（prompt分类器）
+	UseShell                string `default:""`
+	DisableSandbox          bool   `default:"false"`
 }

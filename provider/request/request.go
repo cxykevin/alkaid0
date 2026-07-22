@@ -15,6 +15,7 @@ import (
 	"github.com/cxykevin/alkaid0/prompts"
 	"github.com/cxykevin/alkaid0/provider/request/agents/actions"
 	"github.com/cxykevin/alkaid0/provider/request/build"
+	"github.com/cxykevin/alkaid0/provider/request/classifier"
 	"github.com/cxykevin/alkaid0/provider/request/structs"
 	"github.com/cxykevin/alkaid0/provider/response"
 	storageStructs "github.com/cxykevin/alkaid0/storage/structs"
@@ -60,16 +61,44 @@ func UserAddMsg(session *storageStructs.Chats, msg string, refers *storageStruct
 		return db.Save(session).Error
 	}
 
+	// 分类并转换消息（prompt/code/log 三段分类）
+	var transformedMsg string
+	var segInfos []classifier.SegmentInfo
+	if !config.GlobalConfig.Agent.DisablePromptPreprocess {
+		var err error
+		transformedMsg, segInfos, err = classifier.ClassifyAndTransform(session, msg)
+		if err != nil {
+			logger.Warn("classifier transform failed (falling back to original): %v", err)
+			transformedMsg = msg
+		}
+	} else {
+		transformedMsg = msg
+	}
+
 	// 插入
-	err := db.Create(&storageStructs.Messages{
+	msgRecord := storageStructs.Messages{
 		ChatID: chatID,
-		Delta:  msg,
+		Delta:  transformedMsg,
 		Refers: refer,
 		Type:   storageStructs.MessagesRoleUser,
-	}).Error
-	if err != nil {
+	}
+	if err := db.Create(&msgRecord).Error; err != nil {
 		return err
 	}
+
+	// 存储分类标签
+	for _, si := range segInfos {
+		if err := db.Create(&storageStructs.ClassifySegment{
+			ChatID:    chatID,
+			MessageID: msgRecord.ID,
+			Label:     si.Label,
+			Text:      si.Text,
+			TempPath:  si.TempPath,
+		}).Error; err != nil {
+			logger.Warn("failed to store classify segment: %v", err)
+		}
+	}
+
 	return nil
 }
 
@@ -398,7 +427,7 @@ func CanAutoApprove(session *storageStructs.Chats, toolCalls []ToolCall, msg *st
 			}
 			if exprTruthy(result) {
 				logger.Info("autoReject matched for tool: %s", call.Name)
-				return false, "auto-rejected by reject rule for tool: "+call.Name, nil
+				return false, "auto-rejected by reject rule for tool: " + call.Name, nil
 			}
 		}
 	}

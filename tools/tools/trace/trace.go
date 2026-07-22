@@ -566,3 +566,18 @@ func AddTempObject(session *structs.Chats, path string, content string, ro bool)
 
 	return err
 }
+
+// StoreTempObject 仅存储到 ReferFiles，不创建 Traces 记录。
+// 用于 prompt 分类器，避免 code/log 段被自动 trace。
+func StoreTempObject(session *structs.Chats, path string, content string, ro bool) error {
+	err := session.DB.Create(structs.ReferFiles{
+		ChatID:   session.ID,
+		Path:     path,
+		Content:  content,
+		ReadOnly: ro,
+	}).Error
+	if err != nil {
+		logger.Warn("store temp object failed: %v", err)
+	}
+	return err
+}

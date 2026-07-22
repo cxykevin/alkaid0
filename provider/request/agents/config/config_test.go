@@ -67,7 +67,7 @@ func TestGetAgentConfig_UserOverridesBuiltin(t *testing.T) {
 		Agent: cfgStruct.AgentsConfig{
 			Agents: map[string]cfgStruct.AgentConfig{
 				"coder": {
-					AgentName: "Custom Coder",
+					AgentName:  "Custom Coder",
 					AgentModel: 2,
 				},
 			},
