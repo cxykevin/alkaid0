@@ -108,8 +108,9 @@ func PendingToolCall(session *structs.Chats) ([]ToolCall, *structs.Messages, uin
 	return tools, &msg, msg.ID, nil
 }
 
-// AutoHandlePendingToolCalls 自动处理待审批工具调用
-func AutoHandlePendingToolCalls(session *structs.Chats) (bool, bool, []ToolCall, uint64, error) {
+// AutoHandleMainSessionPendingTools 处理主会话的待审批工具。
+// 返回: (autoHandled, approved, pendingTools, msgID, error)
+func AutoHandleMainSessionPendingTools(session *structs.Chats) (bool, bool, []ToolCall, uint64, error) {
 	if session.State != state.StateWaitApprove {
 		return false, false, nil, 0, nil
 	}
@@ -117,25 +118,68 @@ func AutoHandlePendingToolCalls(session *structs.Chats) (bool, bool, []ToolCall,
 	if err != nil || msg == nil || len(tools) == 0 {
 		return false, false, tools, msgID, err
 	}
-	approved, reason, err := request.CanAutoApprove(session, tools, msg)
-	if err != nil {
-		return false, false, tools, msgID, err
-	}
-	if approved {
+	result := request.EvaluateApprovalRules(session, tools)
+	switch result.Decision {
+	case request.DecisionApproved:
 		_, err = request.ExecuteToolCalls(session, msg.ToolCallingJSONString)
 		return true, true, nil, msgID, err
-	}
-	// reason 非空表示 reject 规则匹配，无论是主会话还是 sub-agent 都应自动拒绝
-	if reason != "" {
-		err = request.RejectToolCallsNoDeactivate(session, reason, nil)
+	case request.DecisionRejected:
+		err = request.RejectToolCallsNoDeactivate(session, result.Reason, nil)
 		return true, false, nil, msgID, err
+	case request.DecisionManual:
+		return false, false, tools, msgID, nil
+	default:
+		return false, false, tools, msgID, nil
 	}
-	// 无明确 reject 规则匹配时，sub-agent 也自动拒绝（安全限制），主会话等待用户审批
+}
+
+// AutoHandleSubAgentPendingTools 处理子代理会话的待审批工具。
+// 子代理从不将待审批工具暴露给用户——未命中规则的调用自动拒绝（安全限制）。
+// 返回: (autoHandled, approved, error)
+func AutoHandleSubAgentPendingTools(session *structs.Chats) (bool, bool, error) {
+	if session.State != state.StateWaitApprove {
+		return false, false, nil
+	}
+	tools, msg, msgID, err := PendingToolCall(session)
+	if err != nil || msg == nil || len(tools) == 0 {
+		return false, false, err
+	}
+	_ = msgID
+	result := request.EvaluateApprovalRules(session, tools)
+	switch result.Decision {
+	case request.DecisionApproved:
+		_, err = request.ExecuteToolCalls(session, msg.ToolCallingJSONString)
+		return true, true, err
+	case request.DecisionRejected:
+		err = request.RejectToolCallsNoDeactivate(session, result.Reason, nil)
+		if subErr := request.SubAgentReject(session); subErr != nil && err == nil {
+			err = subErr
+		}
+		return true, false, err
+	case request.DecisionManual:
+		// 子代理：无规则命中时自动拒绝
+		err = request.RejectToolCallsNoDeactivate(session, "sub-agent tool call auto-rejected: no approval rule matched", nil)
+		if subErr := request.SubAgentReject(session); subErr != nil && err == nil {
+			err = subErr
+		}
+		return true, false, err
+	default:
+		return true, false, nil
+	}
+}
+
+// AutoHandlePendingToolCalls 自动处理待审批工具调用。
+// 根据是否有活跃子代理分派到对应的处理函数。
+// Deprecated: 直接使用 AutoHandleMainSessionPendingTools 或 AutoHandleSubAgentPendingTools
+func AutoHandlePendingToolCalls(session *structs.Chats) (bool, bool, []ToolCall, uint64, error) {
+	if session.State != state.StateWaitApprove {
+		return false, false, nil, 0, nil
+	}
 	if session.CurrentAgentID != "" || session.NowAgent != "" {
-		err = request.RejectToolCallsNoDeactivate(session, reason, nil)
-		return true, false, nil, msgID, err
+		handled, approved, err := AutoHandleSubAgentPendingTools(session)
+		return handled, approved, nil, 0, err
 	}
-	return false, false, tools, msgID, nil
+	return AutoHandleMainSessionPendingTools(session)
 }
 
 // ApproveToolCalls 允许执行待审批工具调用

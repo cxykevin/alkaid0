@@ -301,60 +301,9 @@ func (p *Object) Start(ctx context.Context) {
 				// 若 LLM 发出了工具调用，状态会变为 WaitApprove
 				// 等待用户或自动规则决策后才能继续
 				if session.State == state.StateWaitApprove {
-					// autoHandle 处理逻辑：
-					//   优先级：拒绝规则 > 手动审批 > 自动审批规则
-					//   autoHandled=true 表示规则做出了决策
-					//   approved=true 表示规则允许执行
-					restoreToolCtx := p.runWithToolCancel(session)
-					autoHandled, approved, pendingTools, msgID, pErr := funcs.AutoHandlePendingToolCalls(session)
-					restoreToolCtx()
-					if pErr != nil {
-						call(AIResponse{
-							Error:      fmt.Errorf("loop error in pending tool calls: %v", pErr),
-							StopReason: StopReasonError,
-						})
-						break
-					} else if autoHandled {
-						if approved {
-							continue
-						}
-
-						if session.CurrentAgentID != "" {
-							funcs.SubAgentReject(session)
-							continue
-						}
-
-						if needCompress {
-							doAutoSummary()
-						}
-
-						call(AIResponse{
-							StopReason: StopReasonModel,
-						})
-						break
-					} else if len(pendingTools) > 0 {
-						if session.CurrentAgentID != "" {
-							funcs.SubAgentReject(session)
-							continue
-						}
-						call(AIResponse{
-							MsgID:       msgID,
-							PendingTool: &pendingTools,
-							StopReason:  StopReasonPendingTool,
-						})
-						break
-					}
-					if session.CurrentAgentID != "" {
-						funcs.SubAgentReject(session)
+					if p.handleWaitApprove(session, call, needCompress, doAutoSummary) {
 						continue
 					}
-
-					if needCompress {
-						doAutoSummary()
-					}
-					call(AIResponse{
-						StopReason: StopReasonModel,
-					})
 					break
 				}
 				if !responseStarted && !thinkingFlag {
@@ -385,34 +334,10 @@ func (p *Object) Start(ctx context.Context) {
 	if session.State == state.StateWaitApprove {
 		logger.Info("waiting approve in session=%d", session.ID)
 		session.ToolState = 1
-		restoreToolCtx := p.runWithToolCancel(session)
-		autoHandled, approved, pendingTools, msgID, err := funcs.AutoHandlePendingToolCalls(session)
-		restoreToolCtx()
-		if err != nil {
-			session.ToolState = 0
-			call(AIResponse{
-				Error:      fmt.Errorf("loop error in pending tool calls: %v", err),
-				StopReason: StopReasonError,
-			})
-		} else if autoHandled {
-			if approved {
-				call(AIResponse{
-					MsgID:           msgID,
-					ThinkingContext: "",
-					Content:         "",
-				})
-				func() {
-					runResponseLoop()
-				}()
-			}
-			session.ToolState = 0
-		} else if len(pendingTools) > 0 {
-			session.ToolState = 0
-			call(AIResponse{
-				MsgID:       msgID,
-				PendingTool: &pendingTools,
-				StopReason:  StopReasonPendingTool,
-			})
+		if p.handleWaitApprove(session, call, false, func() {}) {
+			func() {
+				runResponseLoop()
+			}()
 		}
 		session.ToolState = 0
 	}
@@ -557,6 +482,65 @@ func (p *Object) Cancel() {
 	if p.ctxCancel != nil {
 		p.ctxCancel()
 	}
+}
+
+// handleWaitApprove 统一处理 WaitApprove 状态的审批逻辑。
+// 在每个分支中通过 call() 发送 AIResponse 回调。
+// 返回 shouldContinue — 为 true 时调用方应 continue 下一轮 LLM 请求。
+// needCompress 和 doAutoSummary 用于在拒绝后自动摘要。
+func (p *Object) handleWaitApprove(session *structs.Chats, call func(AIResponse), needCompress bool, doAutoSummary func()) (shouldContinue bool) {
+	restoreToolCtx := p.runWithToolCancel(session)
+	autoHandled, approved, pendingTools, msgID, pErr := funcs.AutoHandlePendingToolCalls(session)
+	restoreToolCtx()
+
+	if pErr != nil {
+		call(AIResponse{
+			Error:      fmt.Errorf("loop error in pending tool calls: %v", pErr),
+			StopReason: StopReasonError,
+		})
+		return false
+	}
+
+	if autoHandled {
+		if approved {
+			return true
+		}
+		// auto-rejected
+		if session.CurrentAgentID != "" {
+			funcs.SubAgentReject(session)
+			return true
+		}
+		if needCompress {
+			doAutoSummary()
+		}
+		call(AIResponse{StopReason: StopReasonModel})
+		return false
+	}
+
+	// 手动审批
+	if len(pendingTools) > 0 {
+		if session.CurrentAgentID != "" {
+			funcs.SubAgentReject(session)
+			return true
+		}
+		call(AIResponse{
+			MsgID:       msgID,
+			PendingTool: &pendingTools,
+			StopReason:  StopReasonPendingTool,
+		})
+		return false
+	}
+
+	// 无 pending tools（异常路径）
+	if session.CurrentAgentID != "" {
+		funcs.SubAgentReject(session)
+		return true
+	}
+	if needCompress {
+		doAutoSummary()
+	}
+	call(AIResponse{StopReason: StopReasonModel})
+	return false
 }
 
 // runWithToolCancel 在工具执行期间设置可取消的上下文，使 Stop() 能够中断正在执行的工具。

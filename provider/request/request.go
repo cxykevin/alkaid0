@@ -26,6 +26,8 @@ import (
 )
 
 // UserAddMsg 处理用户发送的消息，更新数据库并处理子代理和审批状态
+// 当 session 处于 WaitApprove 状态时，用户消息会被同时作为拒绝原因（写入
+// Communicate 消息）和正常用户消息（写入 MessagesRoleUser）处理，确保输入不丢失。
 func UserAddMsg(session *storageStructs.Chats, msg string, refers *storageStructs.MessagesReferList) error {
 	logger.Info("UserAddMsg: chatID=%d, msgLen=%d", session.ID, len(msg))
 	db := session.DB
@@ -37,14 +39,9 @@ func UserAddMsg(session *storageStructs.Chats, msg string, refers *storageStruct
 		refer = *refers
 	}
 
-	if session.CurrentAgentID != "" {
-		err := actions.DeactivateAgent(session, "<| user stopped subagent |>")
-		if err != nil {
-			return err
-		}
-	}
-
+	// 第 1 步：处理 WaitApprove 状态 — 先写入拒绝消息，再继续处理用户输入
 	if session.State == state.StateWaitApprove {
+		logger.Info("UserAddMsg: state=WaitApprove, rejecting pending tools and processing user input")
 		reason, err := prompts.Render(prompts.UserRejectTemplate, msg)
 		if err != nil {
 			return err
@@ -58,7 +55,18 @@ func UserAddMsg(session *storageStructs.Chats, msg string, refers *storageStruct
 			return err
 		}
 		session.State = state.StateIdle
-		return db.Save(session).Error
+		if err := db.Save(session).Error; err != nil {
+			return err
+		}
+		// NOTE: 不 return — 继续执行后续逻辑，将用户输入作为正常消息插入
+	}
+
+	// 第 2 步：停用子代理（如果有）
+	if session.CurrentAgentID != "" {
+		err := actions.DeactivateAgent(session, "<| user stopped subagent |>")
+		if err != nil {
+			return err
+		}
 	}
 
 	// 分类并转换消息（prompt/code/log 三段分类）
@@ -243,6 +251,171 @@ func (t ToolCall) AsMap() map[string]any {
 	}
 }
 
+// ApprovalDecision 审批决策类型，消除旧有 (bool, string) 返回值的三重歧义。
+type ApprovalDecision uint8
+
+const (
+	// DecisionManual 表示无任何规则匹配，需用户手动审批
+	DecisionManual ApprovalDecision = iota
+	// DecisionApproved 表示所有工具调用均命中自动审批规则
+	DecisionApproved
+	// DecisionRejected 表示至少一个工具调用命中了自动拒绝规则
+	DecisionRejected
+)
+
+// ApprovalResult 是 EvaluateApprovalRules 的结构化返回值。
+// Reason 仅在 Decision == DecisionRejected 时有意义。
+type ApprovalResult struct {
+	Decision ApprovalDecision
+	Reason   string
+}
+
+// EvaluateApprovalRules 评估配置的自动审批/拒绝规则，返回明确决策。
+// 评估顺序（安全优先）：
+//  1. 编译用户+内置合并规则
+//  2. 先检查拒绝规则——任一匹配即整体拒绝
+//  3. 无审批规则时返回 DecisionManual
+//  4. 检查审批规则——所有工具必须全部命中
+//
+// 配置优先级：Agent 级别 > 全局默认 > 内置规则（受 IgnoreDefaultRules 控制）
+func EvaluateApprovalRules(session *storageStructs.Chats, toolCalls []ToolCall) ApprovalResult {
+	if session == nil || len(toolCalls) == 0 {
+		return ApprovalResult{Decision: DecisionManual}
+	}
+
+	// 先读取 Agent 级别的配置，作为最高优先级
+	autoApprove := strings.TrimSpace(session.CurrentAgentConfig.AutoApprove)
+	autoReject := strings.TrimSpace(session.CurrentAgentConfig.AutoReject)
+
+	logger.Debug("EvaluateRules: agent level AutoApprove=%q, AutoReject=%q", autoApprove, autoReject)
+
+	// 配置优先级：Agent 级别配置 > 全局默认配置
+	if autoApprove == "" {
+		autoApprove = strings.TrimSpace(config.GlobalConfig.Agent.DefaultAutoApprove)
+		logger.Debug("EvaluateRules: fallback DefaultAutoApprove=%q", autoApprove)
+	}
+	if autoReject == "" {
+		autoReject = strings.TrimSpace(config.GlobalConfig.Agent.DefaultAutoReject)
+		logger.Debug("EvaluateRules: fallback DefaultAutoReject=%q", autoReject)
+	}
+
+	// 系统内置的默认规则
+	useBuiltin := !config.GlobalConfig.Agent.IgnoreDefaultRules
+	builtinAutoApprove := ""
+	builtinAutoReject := ""
+	if useBuiltin {
+		builtinAutoApprove = strings.TrimSpace(builtinAutoApproveExpr)
+		builtinAutoReject = strings.TrimSpace(builtinAutoRejectExpr)
+	}
+
+	logger.Debug("EvaluateRules: builtin approve=%q, reject=%q (useBuiltin=%v)",
+		builtinAutoApprove, builtinAutoReject, useBuiltin)
+
+	// 用户规则与内置规则使用逻辑或合并
+	autoApprove = mergeAutoRuleExpr(autoApprove, builtinAutoApprove)
+	autoReject = mergeAutoRuleExpr(autoReject, builtinAutoReject)
+
+	logger.Debug("EvaluateRules: merged approve expr=%q", autoApprove)
+	logger.Debug("EvaluateRules: merged reject expr=%q", autoReject)
+
+	var approveProgram *vm.Program
+	var rejectProgram *vm.Program
+	var err error
+
+	if autoReject != "" {
+		rejectProgram, err = compileExpr(autoReject)
+		if err != nil {
+			logger.Error("EvaluateRules: compile reject rule error: %v", err)
+			return ApprovalResult{Decision: DecisionManual}
+		}
+	}
+	if autoApprove != "" {
+		approveProgram, err = compileExpr(autoApprove)
+		if err != nil {
+			logger.Error("EvaluateRules: compile approve rule error: %v", err)
+			return ApprovalResult{Decision: DecisionManual}
+		}
+	}
+
+	// 将所有工具调用转为 map 形式供表达式引擎求值
+	callsMap := make([]map[string]any, len(toolCalls))
+	for i, c := range toolCalls {
+		callsMap[i] = c.AsMap()
+	}
+
+	// 第 1 层：拒绝检查（安全优先）
+	if rejectProgram != nil {
+		for _, call := range toolCalls {
+			result, runErr := expr.Run(rejectProgram, map[string]any{
+				"ToolCalls": callsMap,
+				"ToolCall":  call.AsMap(),
+				"Agent":     session.CurrentAgentConfig,
+			})
+			if runErr != nil {
+				logger.Error("EvaluateRules: run reject expr error: %v", runErr)
+				return ApprovalResult{Decision: DecisionManual}
+			}
+			if exprTruthy(result) {
+				reason := "auto-rejected by reject rule for tool: " + call.Name
+				logger.Info("EvaluateRules: %s", reason)
+				return ApprovalResult{Decision: DecisionRejected, Reason: reason}
+			}
+		}
+	}
+
+	// 第 2 层：审批规则缺失检查
+	if approveProgram == nil {
+		logger.Debug("EvaluateRules: no approve rules configured → DecisionManual")
+		return ApprovalResult{Decision: DecisionManual}
+	}
+
+	// 第 3 层：全量审批检查
+	for _, call := range toolCalls {
+		result, runErr := expr.Run(approveProgram, map[string]any{
+			"ToolCalls": callsMap,
+			"ToolCall":  call.AsMap(),
+			"Agent":     session.CurrentAgentConfig,
+		})
+		if runErr != nil {
+			logger.Error("EvaluateRules: run approve expr error: %v", runErr)
+			return ApprovalResult{Decision: DecisionManual}
+		}
+		if !exprTruthy(result) {
+			logger.Info("EvaluateRules: approve NOT matched for tool: %s → DecisionManual", call.Name)
+			return ApprovalResult{Decision: DecisionManual}
+		}
+	}
+
+	logger.Info("EvaluateRules: all tool calls approved")
+	return ApprovalResult{Decision: DecisionApproved}
+}
+
+// CanAutoApprove 根据配置的表达式规则判断一组工具调用是否可以自动执行。
+// 三层决策逻辑：
+//  1. 拒绝检查：任一工具命中拒绝规则则整体驳回（安全优先）
+//  2. 审批检查：无规则默认不自动执行（防默许危险操作）
+//  3. 全量检查：所有工具都必须触发审批规则
+//
+// 配置优先级：Agent 级别 > 全局默认 > 系统内置规则（IgnoreDefaultRules=false 时启用）
+//
+// Deprecated: 使用 EvaluateApprovalRules 替代
+func CanAutoApprove(session *storageStructs.Chats, toolCalls []ToolCall, msg *storageStructs.Messages) (bool, string, error) {
+	if session == nil || msg == nil || len(toolCalls) == 0 {
+		return false, "", nil
+	}
+	result := EvaluateApprovalRules(session, toolCalls)
+	switch result.Decision {
+	case DecisionApproved:
+		return true, "", nil
+	case DecisionRejected:
+		return false, result.Reason, nil
+	case DecisionManual:
+		return false, "", nil
+	default:
+		return false, "", nil
+	}
+}
+
 // compileExpr 编译表达式字符串为可执行程序，并注入规则引擎使用的自定义函数。
 // 注入函数说明：
 //
@@ -345,119 +518,6 @@ func compileExpr(program string) (*vm.Program, error) {
 		}
 		return param(call, key), nil
 	}))
-}
-
-// CanAutoApprove 根据配置的表达式规则判断一组工具调用是否可以自动执行。
-// 三层决策逻辑：
-//  1. 拒绝检查：任一工具命中拒绝规则则整体驳回（安全优先）
-//  2. 审批检查：无规则默认不自动执行（防默许危险操作）
-//  3. 全量检查：所有工具都必须触发审批规则
-//
-// 配置优先级：Agent 级别 > 全局默认 > 系统内置规则（IgnoreDefaultRules=false 时启用）
-func CanAutoApprove(session *storageStructs.Chats, toolCalls []ToolCall, msg *storageStructs.Messages) (bool, string, error) {
-	if session == nil || msg == nil || len(toolCalls) == 0 {
-		return false, "", nil
-	}
-
-	// 先读取 Agent 级别的配置，作为最高优先级
-	autoApprove := strings.TrimSpace(session.CurrentAgentConfig.AutoApprove)
-	autoReject := strings.TrimSpace(session.CurrentAgentConfig.AutoReject)
-	logger.Debug("CanAutoApprove: agent level AutoApprove=%q, AutoReject=%q", autoApprove, autoReject)
-	// 配置优先级：Agent 级别配置 > 全局默认配置
-	if autoApprove == "" {
-		autoApprove = strings.TrimSpace(config.GlobalConfig.Agent.DefaultAutoApprove)
-		logger.Debug("CanAutoApprove: fallback DefaultAutoApprove=%q", autoApprove)
-	}
-	if autoReject == "" {
-		autoReject = strings.TrimSpace(config.GlobalConfig.Agent.DefaultAutoReject)
-	}
-
-	// 系统内置的默认规则（如自动批准读文件、拒绝写系统路径等）
-	builtinAutoApprove := ""
-	builtinAutoReject := ""
-	if !config.GlobalConfig.Agent.IgnoreDefaultRules {
-		builtinAutoApprove = strings.TrimSpace(builtinAutoApproveExpr)
-		builtinAutoReject = strings.TrimSpace(builtinAutoRejectExpr)
-	}
-
-	// 用户规则与内置规则使用逻辑或合并，任一规则触发即生效
-	autoApprove = mergeAutoRuleExpr(autoApprove, builtinAutoApprove)
-	autoReject = mergeAutoRuleExpr(autoReject, builtinAutoReject)
-
-	logger.Debug("autoApprove expr: %s", autoApprove)
-	logger.Debug("autoReject expr: %s", autoReject)
-
-	var approveProgram *vm.Program
-	var rejectProgram *vm.Program
-	var err error
-	// 预先编译拒绝和审批表达式，编译失败则停止决策
-	if autoReject != "" {
-		rejectProgram, err = compileExpr(autoReject)
-		if err != nil {
-			logger.Error("compile autoReject expr error: %v", err)
-			return false, "", err
-		}
-	}
-	if autoApprove != "" {
-		approveProgram, err = compileExpr(autoApprove)
-		if err != nil {
-			logger.Error("compile autoApprove expr error: %v", err)
-			return false, "", err
-		}
-	}
-
-	// 将所有工具调用转为 map 形式供表达式引擎求值
-	callsMap := make([]map[string]any, len(toolCalls))
-	for i, c := range toolCalls {
-		callsMap[i] = c.AsMap()
-	}
-
-	// 第 1 层：拒绝检查（安全优先）。
-	// 任一工具调用命中拒绝规则即整体驳回，确保危险操作被拦截。
-	if rejectProgram != nil {
-		for _, call := range toolCalls {
-			result, runErr := expr.Run(rejectProgram, map[string]any{
-				"ToolCalls": callsMap,
-				"ToolCall":  call.AsMap(),
-				"Agent":     session.CurrentAgentConfig,
-			})
-			if runErr != nil {
-				logger.Error("run autoReject expr error: %v", runErr)
-				return false, "", runErr
-			}
-			if exprTruthy(result) {
-				logger.Info("autoReject matched for tool: %s", call.Name)
-				return false, "auto-rejected by reject rule for tool: " + call.Name, nil
-			}
-		}
-	}
-
-	// 第 2 层：审批规则缺失检查。
-	// 未配置审批规则时默认不自动执行，防止无规则状态下的误放行。
-	if approveProgram == nil {
-		return false, "", nil
-	}
-
-	// 第 3 层：全量审批检查。
-	// 所有工具调用都必须命中审批规则，任一不命中则整体驳回。
-	for _, call := range toolCalls {
-		result, runErr := expr.Run(approveProgram, map[string]any{
-			"ToolCalls": callsMap,
-			"ToolCall":  call.AsMap(),
-			"Agent":     session.CurrentAgentConfig,
-		})
-		if runErr != nil {
-			logger.Error("run autoApprove expr error: %v", runErr)
-			return false, "", runErr
-		}
-		if !exprTruthy(result) {
-			logger.Info("autoApprove NOT matched for tool: %s", call.Name)
-			return false, "", nil
-		}
-	}
-
-	logger.Info("all tool calls auto-approved")
-	return true, "", nil
 }
 
 // ParseToolsFromJSON 解析工具调用 JSON 字符串为 ToolCall 结构体切片。

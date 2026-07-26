@@ -9,6 +9,7 @@ import (
 	"github.com/cxykevin/alkaid0/storage"
 	"github.com/cxykevin/alkaid0/storage/structs"
 	"github.com/cxykevin/alkaid0/tools/toolobj"
+	"github.com/cxykevin/alkaid0/ui/state"
 	u "github.com/cxykevin/alkaid0/utils"
 	"gorm.io/gorm"
 )
@@ -261,5 +262,67 @@ func TestGetScopes_Empty(t *testing.T) {
 	scopes := GetScopes()
 	if len(scopes) != 0 {
 		t.Errorf("Expected empty scopes, got %d", len(scopes))
+	}
+}
+
+// TestAutoHandleMainSession_Manual 测试主会话无规则匹配 → 手动审批
+func TestAutoHandleMainSession_Manual(t *testing.T) {
+	db := setupTestDB(t)
+	defer u.Unwrap(db.DB()).Close()
+
+	defer configSetup()()
+	config.GlobalConfig.Agent.IgnoreDefaultRules = true
+	config.GlobalConfig.Agent.DefaultAutoApprove = ""
+	config.GlobalConfig.Agent.DefaultAutoReject = ""
+
+	session := &structs.Chats{
+		DB:             db,
+		State:          state.StateIdle,
+		CurrentAgentID: "",
+		NowAgent:       "",
+	}
+	if err := db.Create(session).Error; err != nil {
+		t.Fatalf("Failed to create session: %v", err)
+	}
+
+	// 不在 WaitApprove → no-op
+	handled, approved, tools, msgID, err := AutoHandleMainSessionPendingTools(session)
+	if err != nil {
+		t.Fatalf("Unexpected error: %v", err)
+	}
+	if handled {
+		t.Error("Expected not handled when not in WaitApprove")
+	}
+	_ = approved
+	_ = tools
+	_ = msgID
+
+	// 设置 WaitApprove 但无 tool_calling_json_string → no-op
+	session.State = state.StateWaitApprove
+	if err := db.Save(session).Error; err != nil {
+		t.Fatalf("Failed to save session: %v", err)
+	}
+
+	handled, approved, tools, msgID, err = AutoHandleMainSessionPendingTools(session)
+	if err != nil {
+		t.Fatalf("Unexpected error: %v", err)
+	}
+	if handled {
+		t.Error("Expected not handled with no pending tools")
+	}
+}
+
+// TestPendingToolCall_NotWaitApprove 测试非 WaitApprove 状态返回空
+func TestPendingToolCall_NotWaitApprove(t *testing.T) {
+	db := setupTestDB(t)
+	defer u.Unwrap(db.DB()).Close()
+
+	session := &structs.Chats{DB: db, State: state.StateIdle}
+	tools, msg, msgID, err := PendingToolCall(session)
+	if err != nil {
+		t.Fatalf("Unexpected error: %v", err)
+	}
+	if tools != nil || msg != nil || msgID != 0 {
+		t.Error("Expected empty results for non-WaitApprove state")
 	}
 }

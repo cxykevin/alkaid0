@@ -5,11 +5,13 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/cxykevin/alkaid0/config"
 	cfgStruct "github.com/cxykevin/alkaid0/config/structs"
 	"github.com/cxykevin/alkaid0/library/chancall"
 	"github.com/cxykevin/alkaid0/provider/request/agents/actions"
 	"github.com/cxykevin/alkaid0/provider/request/structs"
 	storageStructs "github.com/cxykevin/alkaid0/storage/structs"
+	"github.com/cxykevin/alkaid0/ui/state"
 	u "github.com/cxykevin/alkaid0/utils"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
@@ -508,5 +510,328 @@ func TestSendRequest_ModelNotFound(t *testing.T) {
 
 	if err.Error() != "model not found" {
 		t.Errorf("Expected 'model not found' error, got: %v", err)
+	}
+}
+
+// TestEvaluateApprovalRules_AgentLevel 测试 agent 级别规则
+func TestEvaluateApprovalRules_AgentLevel(t *testing.T) {
+	db := setupTestDB(t)
+	defer u.Unwrap(db.DB()).Close()
+
+	session := &storageStructs.Chats{
+		ID: 1,
+		DB: db,
+		CurrentAgentConfig: cfgStruct.AgentConfig{
+			AutoApprove: "ToolCall.Name == \"approve_me\"",
+			AutoReject:  "ToolCall.Name == \"reject_me\"",
+		},
+	}
+
+	// 1. 拒绝规则触发
+	result := EvaluateApprovalRules(session, []ToolCall{{Name: "reject_me", ID: "1"}})
+	if result.Decision != DecisionRejected {
+		t.Errorf("Expected DecisionRejected, got %v", result.Decision)
+	}
+	if result.Reason == "" {
+		t.Error("Expected non-empty reason for reject")
+	}
+
+	// 2. 审批规则触发
+	result = EvaluateApprovalRules(session, []ToolCall{{Name: "approve_me", ID: "2"}})
+	if result.Decision != DecisionApproved {
+		t.Errorf("Expected DecisionApproved, got %v", result.Decision)
+	}
+
+	// 3. 混合调用 — 拒绝优先
+	result = EvaluateApprovalRules(session, []ToolCall{
+		{Name: "approve_me", ID: "3"},
+		{Name: "reject_me", ID: "4"},
+	})
+	if result.Decision != DecisionRejected {
+		t.Errorf("Expected DecisionRejected for mixed calls, got %v", result.Decision)
+	}
+
+	// 4. 无规则命中
+	result = EvaluateApprovalRules(session, []ToolCall{{Name: "unknown_tool", ID: "5"}})
+	if result.Decision != DecisionManual {
+		t.Errorf("Expected DecisionManual for unknown tool, got %v", result.Decision)
+	}
+}
+
+// TestEvaluateApprovalRules_EmptyConfig 测试零值配置（无 AutoApprove/AutoReject）
+func TestEvaluateApprovalRules_EmptyConfig(t *testing.T) {
+	db := setupTestDB(t)
+	defer u.Unwrap(db.DB()).Close()
+
+	session := &storageStructs.Chats{
+		ID:                 1,
+		DB:                 db,
+		CurrentAgentConfig: cfgStruct.AgentConfig{}, // 零值
+	}
+
+	// 无任何规则 → DecisionManual
+	result := EvaluateApprovalRules(session, []ToolCall{{Name: "edit", ID: "1"}})
+	if result.Decision != DecisionManual {
+		t.Errorf("Expected DecisionManual with empty config, got %v", result.Decision)
+	}
+}
+
+// TestEvaluateApprovalRules_GlobalDefaults 测试全局默认值生效
+func TestEvaluateApprovalRules_GlobalDefaults(t *testing.T) {
+	db := setupTestDB(t)
+	defer u.Unwrap(db.DB()).Close()
+
+	// 保存原始配置
+	oldCfg := config.GlobalConfig.Agent.DefaultAutoApprove
+	oldReject := config.GlobalConfig.Agent.DefaultAutoReject
+	oldIgnore := config.GlobalConfig.Agent.IgnoreDefaultRules
+	defer func() {
+		config.GlobalConfig.Agent.DefaultAutoApprove = oldCfg
+		config.GlobalConfig.Agent.DefaultAutoReject = oldReject
+		config.GlobalConfig.Agent.IgnoreDefaultRules = oldIgnore
+	}()
+
+	config.GlobalConfig.Agent.DefaultAutoApprove = "true"
+	config.GlobalConfig.Agent.DefaultAutoReject = ""
+	config.GlobalConfig.Agent.IgnoreDefaultRules = true
+
+	session := &storageStructs.Chats{
+		ID:                 1,
+		DB:                 db,
+		CurrentAgentConfig: cfgStruct.AgentConfig{}, // 零值，应回退到全局默认
+	}
+
+	// 全局 AutoApprove="true" → 所有工具应自动批准
+	result := EvaluateApprovalRules(session, []ToolCall{{Name: "any_tool", ID: "1"}})
+	if result.Decision != DecisionApproved {
+		t.Errorf("Expected DecisionApproved with DefaultAutoApprove=true, got %v", result.Decision)
+	}
+}
+
+// TestEvaluateApprovalRules_RejectPriority 测试拒绝优先于审批
+func TestEvaluateApprovalRules_RejectPriority(t *testing.T) {
+	db := setupTestDB(t)
+	defer u.Unwrap(db.DB()).Close()
+
+	session := &storageStructs.Chats{
+		ID: 1,
+		DB: db,
+		CurrentAgentConfig: cfgStruct.AgentConfig{
+			AutoApprove: "true", // 全部批准
+			AutoReject:  "true", // 全部拒绝（应优先）
+		},
+	}
+
+	// 拒绝规则应优先于审批规则
+	result := EvaluateApprovalRules(session, []ToolCall{{Name: "conflict_tool", ID: "1"}})
+	if result.Decision != DecisionRejected {
+		t.Errorf("Expected DecisionRejected (reject priority), got %v", result.Decision)
+	}
+}
+
+// TestEvaluateApprovalRules_BuiltinRules 测试内置规则
+func TestEvaluateApprovalRules_BuiltinRules(t *testing.T) {
+	db := setupTestDB(t)
+	defer u.Unwrap(db.DB()).Close()
+
+	// 保存并设置配置：使用内置规则
+	oldIgnore := config.GlobalConfig.Agent.IgnoreDefaultRules
+	oldApprove := config.GlobalConfig.Agent.DefaultAutoApprove
+	oldReject := config.GlobalConfig.Agent.DefaultAutoReject
+	defer func() {
+		config.GlobalConfig.Agent.IgnoreDefaultRules = oldIgnore
+		config.GlobalConfig.Agent.DefaultAutoApprove = oldApprove
+		config.GlobalConfig.Agent.DefaultAutoReject = oldReject
+	}()
+
+	config.GlobalConfig.Agent.IgnoreDefaultRules = false // 启用内置规则
+	config.GlobalConfig.Agent.DefaultAutoApprove = ""
+	config.GlobalConfig.Agent.DefaultAutoReject = ""
+
+	session := &storageStructs.Chats{
+		ID:                 1,
+		DB:                 db,
+		CurrentAgentConfig: cfgStruct.AgentConfig{},
+	}
+
+	// 内置 approve 规则应批准 scope 工具
+	result := EvaluateApprovalRules(session, []ToolCall{{Name: "scope", ID: "1"}})
+	if result.Decision != DecisionApproved {
+		t.Errorf("Expected DecisionApproved for scope (builtin rule), got %v", result.Decision)
+	}
+
+	// 内置 approve 规则应批准 agent 工具
+	result = EvaluateApprovalRules(session, []ToolCall{{Name: "agent", ID: "2"}})
+	if result.Decision != DecisionApproved {
+		t.Errorf("Expected DecisionApproved for agent (builtin rule), got %v", result.Decision)
+	}
+
+	// 内置 approve 规则应批准 trace 工具
+	result = EvaluateApprovalRules(session, []ToolCall{{Name: "trace", ID: "3"}})
+	if result.Decision != DecisionApproved {
+		t.Errorf("Expected DecisionApproved for trace (builtin rule), got %v", result.Decision)
+	}
+}
+
+// TestEvaluateApprovalRules_BuiltinReject 测试内置拒绝规则（敏感文件路径）
+func TestEvaluateApprovalRules_BuiltinReject(t *testing.T) {
+	db := setupTestDB(t)
+	defer u.Unwrap(db.DB()).Close()
+
+	oldIgnore := config.GlobalConfig.Agent.IgnoreDefaultRules
+	defer func() { config.GlobalConfig.Agent.IgnoreDefaultRules = oldIgnore }()
+	config.GlobalConfig.Agent.IgnoreDefaultRules = false
+
+	envPath := "/project/.env"
+	envVal := any(envPath)
+
+	session := &storageStructs.Chats{
+		ID: 1, DB: db,
+		CurrentAgentConfig: cfgStruct.AgentConfig{},
+	}
+
+	// 编辑 .env → 应被内置拒绝规则匹配
+	result := EvaluateApprovalRules(session, []ToolCall{{
+		Name: "edit", ID: "1",
+		Parameters: map[string]*any{"path": &envVal},
+	}})
+	if result.Decision != DecisionRejected {
+		t.Errorf("Expected DecisionRejected for edit .env, got %v", result.Decision)
+	}
+}
+
+// TestEvaluateApprovalRules_NilSession 测试空会话
+func TestEvaluateApprovalRules_NilSession(t *testing.T) {
+	result := EvaluateApprovalRules(nil, []ToolCall{{Name: "test", ID: "1"}})
+	if result.Decision != DecisionManual {
+		t.Errorf("Expected DecisionManual for nil session, got %v", result.Decision)
+	}
+
+	result = EvaluateApprovalRules(&storageStructs.Chats{}, nil)
+	if result.Decision != DecisionManual {
+		t.Errorf("Expected DecisionManual for nil tools, got %v", result.Decision)
+	}
+
+	result = EvaluateApprovalRules(&storageStructs.Chats{}, []ToolCall{})
+	if result.Decision != DecisionManual {
+		t.Errorf("Expected DecisionManual for empty tools, got %v", result.Decision)
+	}
+}
+
+// TestMergeAutoRuleExpr 测试 mergeAutoRuleExpr 的各种边界情况
+func TestMergeAutoRuleExpr(t *testing.T) {
+	tests := []struct {
+		name     string
+		user     string
+		builtin  string
+		expected string
+	}{
+		{"both empty", "", "", ""},
+		{"user only", "true", "", "true"},
+		{"builtin only", "", "x == 1", "x == 1"},
+		{"both non-empty", "a", "b", "truthy(a) || truthy(b)"},
+		{"with surrounding spaces", "  true  ", "  x  ", "truthy(true) || truthy(x)"},
+		{"user true string", "true", "x == 1", "truthy(true) || truthy(x == 1)"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := mergeAutoRuleExpr(tt.user, tt.builtin)
+			if got != tt.expected {
+				t.Errorf("mergeAutoRuleExpr(%q, %q) = %q, want %q",
+					tt.user, tt.builtin, got, tt.expected)
+			}
+		})
+	}
+}
+
+// TestUserAddMsg_WaitApprove 测试 WaitApprove 状态下用户输入是否同时作为拒绝和正常消息处理
+func TestUserAddMsg_WaitApprove(t *testing.T) {
+	db := setupTestDB(t)
+	defer u.Unwrap(db.DB()).Close()
+
+	chat := storageStructs.Chats{
+		ID:          1,
+		LastModelID: 1,
+	}
+	if err := db.Create(&chat).Error; err != nil {
+		t.Fatalf("Failed to create chat: %v", err)
+	}
+
+	// 创建处于 WaitApprove 状态的会话
+	session := &storageStructs.Chats{
+		ID:             1,
+		DB:             db,
+		CurrentAgentID: "",
+		State:          state.StateWaitApprove,
+	}
+
+	// 在 WaitApprove 状态下发送用户消息
+	userInput := "继续吧，但别改配置文件"
+	err := UserAddMsg(session, userInput, nil)
+	if err != nil {
+		t.Fatalf("UserAddMsg failed: %v", err)
+	}
+
+	// 验证生成了 2 条消息：1 条拒绝 + 1 条用户正常消息
+	var messages []storageStructs.Messages
+	db.Where("chat_id = ?", 1).Order("id ASC").Find(&messages)
+
+	if len(messages) != 2 {
+		t.Fatalf("Expected 2 messages (reject + user), got %d", len(messages))
+	}
+
+	// 第 1 条应该是拒绝通信消息
+	if messages[0].Type != storageStructs.MessagesRoleCommunicate {
+		t.Errorf("Expected first message type Communicate, got %d", messages[0].Type)
+	}
+
+	// 第 2 条应该是用户正常消息
+	if messages[1].Type != storageStructs.MessagesRoleUser {
+		t.Errorf("Expected second message type User, got %d", messages[1].Type)
+	}
+
+	// 状态应该回到 Idle
+	if session.State != state.StateIdle {
+		t.Errorf("Expected state Idle after reject, got %v", session.State)
+	}
+}
+
+// TestUserAddMsg_WaitApprove_AgentActive 测试有活跃子代理时 WaitApprove 状态的处理
+func TestUserAddMsg_WaitApprove_AgentActive(t *testing.T) {
+	db := setupTestDB(t)
+	defer u.Unwrap(db.DB()).Close()
+
+	chat := storageStructs.Chats{
+		ID:          1,
+		LastModelID: 1,
+	}
+	if err := db.Create(&chat).Error; err != nil {
+		t.Fatalf("Failed to create chat: %v", err)
+	}
+
+	// 创建处于 WaitApprove 且有子代理的会话
+	session := &storageStructs.Chats{
+		ID:             1,
+		DB:             db,
+		CurrentAgentID: "test-agent",
+		NowAgent:       "test-agent",
+		State:          state.StateWaitApprove,
+	}
+
+	err := UserAddMsg(session, "停下", nil)
+	if err != nil {
+		t.Fatalf("UserAddMsg failed: %v", err)
+	}
+
+	// 验证生成了 1 条拒绝消息（用户输入作为拒绝）
+	var messages []storageStructs.Messages
+	db.Where("chat_id = ?", 1).Order("id ASC").Find(&messages)
+	if len(messages) < 1 {
+		t.Fatalf("Expected at least 1 message, got %d", len(messages))
+	}
+
+	// 状态回到 Idle
+	if session.State != state.StateIdle {
+		t.Errorf("Expected state Idle, got %v", session.State)
 	}
 }
