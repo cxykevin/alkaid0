@@ -118,7 +118,10 @@ func AutoHandleMainSessionPendingTools(session *structs.Chats) (bool, bool, []To
 	if err != nil || msg == nil || len(tools) == 0 {
 		return false, false, tools, msgID, err
 	}
-	result := request.EvaluateApprovalRules(session, tools)
+	result, evalErr := request.EvaluateApprovalRules(session, tools)
+	if evalErr != nil {
+		return false, false, tools, msgID, evalErr
+	}
 	switch result.Decision {
 	case request.DecisionApproved:
 		_, err = request.ExecuteToolCalls(session, msg.ToolCallingJSONString)
@@ -145,23 +148,22 @@ func AutoHandleSubAgentPendingTools(session *structs.Chats) (bool, bool, error) 
 		return false, false, err
 	}
 	_ = msgID
-	result := request.EvaluateApprovalRules(session, tools)
+	result, evalErr := request.EvaluateApprovalRules(session, tools)
+	if evalErr != nil {
+		return false, false, evalErr
+	}
 	switch result.Decision {
 	case request.DecisionApproved:
 		_, err = request.ExecuteToolCalls(session, msg.ToolCallingJSONString)
 		return true, true, err
 	case request.DecisionRejected:
+		// RejectToolCallsNoDeactivate 写入拒绝消息 + 设状态为 Idle
+		// 不额外调 SubAgentReject——handleWaitApprove 在返回后统一处理
 		err = request.RejectToolCallsNoDeactivate(session, result.Reason, nil)
-		if subErr := request.SubAgentReject(session); subErr != nil && err == nil {
-			err = subErr
-		}
 		return true, false, err
 	case request.DecisionManual:
 		// 子代理：无规则命中时自动拒绝
 		err = request.RejectToolCallsNoDeactivate(session, "sub-agent tool call auto-rejected: no approval rule matched", nil)
-		if subErr := request.SubAgentReject(session); subErr != nil && err == nil {
-			err = subErr
-		}
 		return true, false, err
 	default:
 		return true, false, nil

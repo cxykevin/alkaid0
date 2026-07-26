@@ -278,9 +278,10 @@ type ApprovalResult struct {
 //  4. 检查审批规则——所有工具必须全部命中
 //
 // 配置优先级：Agent 级别 > 全局默认 > 内置规则（受 IgnoreDefaultRules 控制）
-func EvaluateApprovalRules(session *storageStructs.Chats, toolCalls []ToolCall) ApprovalResult {
+// 编译/运行时错误通过第二个返回值传播，不会被静默吞咽。
+func EvaluateApprovalRules(session *storageStructs.Chats, toolCalls []ToolCall) (ApprovalResult, error) {
 	if session == nil || len(toolCalls) == 0 {
-		return ApprovalResult{Decision: DecisionManual}
+		return ApprovalResult{Decision: DecisionManual}, nil
 	}
 
 	// 先读取 Agent 级别的配置，作为最高优先级
@@ -326,14 +327,14 @@ func EvaluateApprovalRules(session *storageStructs.Chats, toolCalls []ToolCall) 
 		rejectProgram, err = compileExpr(autoReject)
 		if err != nil {
 			logger.Error("EvaluateRules: compile reject rule error: %v", err)
-			return ApprovalResult{Decision: DecisionManual}
+			return ApprovalResult{}, err
 		}
 	}
 	if autoApprove != "" {
 		approveProgram, err = compileExpr(autoApprove)
 		if err != nil {
 			logger.Error("EvaluateRules: compile approve rule error: %v", err)
-			return ApprovalResult{Decision: DecisionManual}
+			return ApprovalResult{}, err
 		}
 	}
 
@@ -353,12 +354,12 @@ func EvaluateApprovalRules(session *storageStructs.Chats, toolCalls []ToolCall) 
 			})
 			if runErr != nil {
 				logger.Error("EvaluateRules: run reject expr error: %v", runErr)
-				return ApprovalResult{Decision: DecisionManual}
+				return ApprovalResult{}, runErr
 			}
 			if exprTruthy(result) {
 				reason := "auto-rejected by reject rule for tool: " + call.Name
 				logger.Info("EvaluateRules: %s", reason)
-				return ApprovalResult{Decision: DecisionRejected, Reason: reason}
+				return ApprovalResult{Decision: DecisionRejected, Reason: reason}, nil
 			}
 		}
 	}
@@ -366,7 +367,7 @@ func EvaluateApprovalRules(session *storageStructs.Chats, toolCalls []ToolCall) 
 	// 第 2 层：审批规则缺失检查
 	if approveProgram == nil {
 		logger.Debug("EvaluateRules: no approve rules configured → DecisionManual")
-		return ApprovalResult{Decision: DecisionManual}
+		return ApprovalResult{Decision: DecisionManual}, nil
 	}
 
 	// 第 3 层：全量审批检查
@@ -378,16 +379,16 @@ func EvaluateApprovalRules(session *storageStructs.Chats, toolCalls []ToolCall) 
 		})
 		if runErr != nil {
 			logger.Error("EvaluateRules: run approve expr error: %v", runErr)
-			return ApprovalResult{Decision: DecisionManual}
+			return ApprovalResult{}, runErr
 		}
 		if !exprTruthy(result) {
 			logger.Info("EvaluateRules: approve NOT matched for tool: %s → DecisionManual", call.Name)
-			return ApprovalResult{Decision: DecisionManual}
+			return ApprovalResult{Decision: DecisionManual}, nil
 		}
 	}
 
 	logger.Info("EvaluateRules: all tool calls approved")
-	return ApprovalResult{Decision: DecisionApproved}
+	return ApprovalResult{Decision: DecisionApproved}, nil
 }
 
 // CanAutoApprove 根据配置的表达式规则判断一组工具调用是否可以自动执行。
@@ -403,7 +404,10 @@ func CanAutoApprove(session *storageStructs.Chats, toolCalls []ToolCall, msg *st
 	if session == nil || msg == nil || len(toolCalls) == 0 {
 		return false, "", nil
 	}
-	result := EvaluateApprovalRules(session, toolCalls)
+	result, err := EvaluateApprovalRules(session, toolCalls)
+	if err != nil {
+		return false, "", err
+	}
 	switch result.Decision {
 	case DecisionApproved:
 		return true, "", nil

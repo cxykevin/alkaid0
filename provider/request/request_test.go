@@ -528,7 +528,7 @@ func TestEvaluateApprovalRules_AgentLevel(t *testing.T) {
 	}
 
 	// 1. 拒绝规则触发
-	result := EvaluateApprovalRules(session, []ToolCall{{Name: "reject_me", ID: "1"}})
+	result, _ := EvaluateApprovalRules(session, []ToolCall{{Name: "reject_me", ID: "1"}})
 	if result.Decision != DecisionRejected {
 		t.Errorf("Expected DecisionRejected, got %v", result.Decision)
 	}
@@ -537,13 +537,13 @@ func TestEvaluateApprovalRules_AgentLevel(t *testing.T) {
 	}
 
 	// 2. 审批规则触发
-	result = EvaluateApprovalRules(session, []ToolCall{{Name: "approve_me", ID: "2"}})
+	result, _ = EvaluateApprovalRules(session, []ToolCall{{Name: "approve_me", ID: "2"}})
 	if result.Decision != DecisionApproved {
 		t.Errorf("Expected DecisionApproved, got %v", result.Decision)
 	}
 
 	// 3. 混合调用 — 拒绝优先
-	result = EvaluateApprovalRules(session, []ToolCall{
+	result, _ = EvaluateApprovalRules(session, []ToolCall{
 		{Name: "approve_me", ID: "3"},
 		{Name: "reject_me", ID: "4"},
 	})
@@ -552,7 +552,7 @@ func TestEvaluateApprovalRules_AgentLevel(t *testing.T) {
 	}
 
 	// 4. 无规则命中
-	result = EvaluateApprovalRules(session, []ToolCall{{Name: "unknown_tool", ID: "5"}})
+	result, _ = EvaluateApprovalRules(session, []ToolCall{{Name: "unknown_tool", ID: "5"}})
 	if result.Decision != DecisionManual {
 		t.Errorf("Expected DecisionManual for unknown tool, got %v", result.Decision)
 	}
@@ -570,7 +570,7 @@ func TestEvaluateApprovalRules_EmptyConfig(t *testing.T) {
 	}
 
 	// 无任何规则 → DecisionManual
-	result := EvaluateApprovalRules(session, []ToolCall{{Name: "edit", ID: "1"}})
+	result, _ := EvaluateApprovalRules(session, []ToolCall{{Name: "edit", ID: "1"}})
 	if result.Decision != DecisionManual {
 		t.Errorf("Expected DecisionManual with empty config, got %v", result.Decision)
 	}
@@ -602,7 +602,7 @@ func TestEvaluateApprovalRules_GlobalDefaults(t *testing.T) {
 	}
 
 	// 全局 AutoApprove="true" → 所有工具应自动批准
-	result := EvaluateApprovalRules(session, []ToolCall{{Name: "any_tool", ID: "1"}})
+	result, _ := EvaluateApprovalRules(session, []ToolCall{{Name: "any_tool", ID: "1"}})
 	if result.Decision != DecisionApproved {
 		t.Errorf("Expected DecisionApproved with DefaultAutoApprove=true, got %v", result.Decision)
 	}
@@ -623,7 +623,7 @@ func TestEvaluateApprovalRules_RejectPriority(t *testing.T) {
 	}
 
 	// 拒绝规则应优先于审批规则
-	result := EvaluateApprovalRules(session, []ToolCall{{Name: "conflict_tool", ID: "1"}})
+	result, _ := EvaluateApprovalRules(session, []ToolCall{{Name: "conflict_tool", ID: "1"}})
 	if result.Decision != DecisionRejected {
 		t.Errorf("Expected DecisionRejected (reject priority), got %v", result.Decision)
 	}
@@ -655,19 +655,19 @@ func TestEvaluateApprovalRules_BuiltinRules(t *testing.T) {
 	}
 
 	// 内置 approve 规则应批准 scope 工具
-	result := EvaluateApprovalRules(session, []ToolCall{{Name: "scope", ID: "1"}})
+	result, _ := EvaluateApprovalRules(session, []ToolCall{{Name: "scope", ID: "1"}})
 	if result.Decision != DecisionApproved {
 		t.Errorf("Expected DecisionApproved for scope (builtin rule), got %v", result.Decision)
 	}
 
 	// 内置 approve 规则应批准 agent 工具
-	result = EvaluateApprovalRules(session, []ToolCall{{Name: "agent", ID: "2"}})
+	result, _ = EvaluateApprovalRules(session, []ToolCall{{Name: "agent", ID: "2"}})
 	if result.Decision != DecisionApproved {
 		t.Errorf("Expected DecisionApproved for agent (builtin rule), got %v", result.Decision)
 	}
 
 	// 内置 approve 规则应批准 trace 工具
-	result = EvaluateApprovalRules(session, []ToolCall{{Name: "trace", ID: "3"}})
+	result, _ = EvaluateApprovalRules(session, []ToolCall{{Name: "trace", ID: "3"}})
 	if result.Decision != DecisionApproved {
 		t.Errorf("Expected DecisionApproved for trace (builtin rule), got %v", result.Decision)
 	}
@@ -691,7 +691,7 @@ func TestEvaluateApprovalRules_BuiltinReject(t *testing.T) {
 	}
 
 	// 编辑 .env → 应被内置拒绝规则匹配
-	result := EvaluateApprovalRules(session, []ToolCall{{
+	result, _ := EvaluateApprovalRules(session, []ToolCall{{
 		Name: "edit", ID: "1",
 		Parameters: map[string]*any{"path": &envVal},
 	}})
@@ -702,17 +702,17 @@ func TestEvaluateApprovalRules_BuiltinReject(t *testing.T) {
 
 // TestEvaluateApprovalRules_NilSession 测试空会话
 func TestEvaluateApprovalRules_NilSession(t *testing.T) {
-	result := EvaluateApprovalRules(nil, []ToolCall{{Name: "test", ID: "1"}})
+	result, _ := EvaluateApprovalRules(nil, []ToolCall{{Name: "test", ID: "1"}})
 	if result.Decision != DecisionManual {
 		t.Errorf("Expected DecisionManual for nil session, got %v", result.Decision)
 	}
 
-	result = EvaluateApprovalRules(&storageStructs.Chats{}, nil)
+	result, _ = EvaluateApprovalRules(&storageStructs.Chats{}, nil)
 	if result.Decision != DecisionManual {
 		t.Errorf("Expected DecisionManual for nil tools, got %v", result.Decision)
 	}
 
-	result = EvaluateApprovalRules(&storageStructs.Chats{}, []ToolCall{})
+	result, _ = EvaluateApprovalRules(&storageStructs.Chats{}, []ToolCall{})
 	if result.Decision != DecisionManual {
 		t.Errorf("Expected DecisionManual for empty tools, got %v", result.Decision)
 	}
@@ -834,4 +834,24 @@ func TestUserAddMsg_WaitApprove_AgentActive(t *testing.T) {
 	if session.State != state.StateIdle {
 		t.Errorf("Expected state Idle, got %v", session.State)
 	}
+}
+
+// TestEvaluateApprovalRules_ErrorPropagation 测试错误不会被静默吞咽
+func TestEvaluateApprovalRules_ErrorPropagation(t *testing.T) {
+	db := setupTestDB(t)
+	defer u.Unwrap(db.DB()).Close()
+
+	session := &storageStructs.Chats{
+		ID: 1,
+		DB: db,
+		CurrentAgentConfig: cfgStruct.AgentConfig{
+			AutoReject: "invalid syntax {{{",
+		},
+	}
+
+	_, err := EvaluateApprovalRules(session, []ToolCall{{Name: "any", ID: "1"}})
+	if err == nil {
+		t.Error("Expected error for malformed reject expression, got nil")
+	}
+	t.Logf("Got expected error: %v", err)
 }
