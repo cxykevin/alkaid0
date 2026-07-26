@@ -505,6 +505,10 @@ func loadSession(cwd string, id *uint32, knowID bool) (*structs.Chats, error) {
 				toolStatus = "completed"
 				sess.LatestToolCallingContext = make(map[string]any)
 				sess.LatestToolCallingType = make(map[string]string)
+			} else if sess.ToolState == 2 {
+				toolStatus = "cancelled"
+				sess.LatestToolCallingContext = make(map[string]any)
+				sess.LatestToolCallingType = make(map[string]string)
 			}
 
 			if sess.LatestToolCallingContext == nil {

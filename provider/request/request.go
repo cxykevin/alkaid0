@@ -284,20 +284,26 @@ func EvaluateApprovalRules(session *storageStructs.Chats, toolCalls []ToolCall) 
 		return ApprovalResult{Decision: DecisionManual}, nil
 	}
 
-	// 先读取 Agent 级别的配置，作为最高优先级
-	autoApprove := strings.TrimSpace(session.CurrentAgentConfig.AutoApprove)
-	autoReject := strings.TrimSpace(session.CurrentAgentConfig.AutoReject)
+	// 先读取 Agent 级别的配置，作为最高优先级。
+	// CurrentAgentConfig 仅在子代理活跃时有效；主会话必须直接使用全局规则。
+	autoApprove := ""
+	autoReject := ""
+	if session.CurrentAgentID != "" || session.NowAgent != "" {
+		autoApprove = strings.TrimSpace(session.CurrentAgentConfig.AutoApprove)
+		autoReject = strings.TrimSpace(session.CurrentAgentConfig.AutoReject)
+		logger.Debug("EvaluateRules: active agent=%q, AutoApprove=%q, AutoReject=%q",
+			session.CurrentAgentID, autoApprove, autoReject)
+	}
 
-	logger.Debug("EvaluateRules: agent level AutoApprove=%q, AutoReject=%q", autoApprove, autoReject)
-
-	// 配置优先级：Agent 级别配置 > 全局默认配置
+	// 配置优先级：活跃 Agent 配置 > 全局默认配置。
+	// 主会话没有活跃 Agent 时始终从全局规则开始。
 	if autoApprove == "" {
 		autoApprove = strings.TrimSpace(config.GlobalConfig.Agent.DefaultAutoApprove)
-		logger.Debug("EvaluateRules: fallback DefaultAutoApprove=%q", autoApprove)
+		logger.Debug("EvaluateRules: using DefaultAutoApprove=%q", autoApprove)
 	}
 	if autoReject == "" {
 		autoReject = strings.TrimSpace(config.GlobalConfig.Agent.DefaultAutoReject)
-		logger.Debug("EvaluateRules: fallback DefaultAutoReject=%q", autoReject)
+		logger.Debug("EvaluateRules: using DefaultAutoReject=%q", autoReject)
 	}
 
 	// 系统内置的默认规则
@@ -685,6 +691,7 @@ func ExecuteToolCalls(session *storageStructs.Chats, toolCallingJSON string) (bo
 func SendRequest(ctx context.Context, session *storageStructs.Chats, callback func(string, string, uint64, structs.Usage, *string) error) (bool, error) {
 	session.State = state.StateWaiting
 	session.TemporyDataOfRequest = make(map[string]any)
+	session.ToolState = 0
 	db := session.DB
 
 	// 确定使用的模型 ID：优先使用子代理配置的模型，否则使用会话最后选择的模型

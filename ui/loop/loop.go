@@ -505,8 +505,14 @@ func (p *Object) handleWaitApprove(session *structs.Chats, call func(AIResponse)
 		if approved {
 			return true
 		}
-		// auto-rejected
+		// auto-rejected：标记工具状态为已取消，UI 不再显示 "pending"
+		session.ToolState = 2
 		if session.CurrentAgentID != "" {
+			call(AIResponse{
+				MsgID:           0,
+				ThinkingContext: "",
+				Content:         "",
+			})
 			funcs.SubAgentReject(session)
 			return true
 		}
@@ -532,6 +538,7 @@ func (p *Object) handleWaitApprove(session *structs.Chats, call func(AIResponse)
 	}
 
 	// 无 pending tools（异常路径）
+	session.ToolState = 2
 	if session.CurrentAgentID != "" {
 		funcs.SubAgentReject(session)
 		return true

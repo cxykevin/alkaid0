@@ -376,8 +376,10 @@ func TestCanAutoApprove(t *testing.T) {
 
 	// 设置基础环境
 	session := &storageStructs.Chats{
-		ID: 1,
-		DB: db,
+		ID:             1,
+		DB:             db,
+		CurrentAgentID: "test-agent",
+		NowAgent:       "test-agent",
 		CurrentAgentConfig: cfgStruct.AgentConfig{
 			AutoApprove: "ToolCall.Name == \"approve_me\"",
 			AutoReject:  "ToolCall.Name == \"reject_me\"",
@@ -519,8 +521,10 @@ func TestEvaluateApprovalRules_AgentLevel(t *testing.T) {
 	defer u.Unwrap(db.DB()).Close()
 
 	session := &storageStructs.Chats{
-		ID: 1,
-		DB: db,
+		ID:             1,
+		DB:             db,
+		CurrentAgentID: "test-agent",
+		NowAgent:       "test-agent",
 		CurrentAgentConfig: cfgStruct.AgentConfig{
 			AutoApprove: "ToolCall.Name == \"approve_me\"",
 			AutoReject:  "ToolCall.Name == \"reject_me\"",
@@ -614,8 +618,10 @@ func TestEvaluateApprovalRules_RejectPriority(t *testing.T) {
 	defer u.Unwrap(db.DB()).Close()
 
 	session := &storageStructs.Chats{
-		ID: 1,
-		DB: db,
+		ID:             1,
+		DB:             db,
+		CurrentAgentID: "test-agent",
+		NowAgent:       "test-agent",
 		CurrentAgentConfig: cfgStruct.AgentConfig{
 			AutoApprove: "true", // 全部批准
 			AutoReject:  "true", // 全部拒绝（应优先）
@@ -842,8 +848,10 @@ func TestEvaluateApprovalRules_ErrorPropagation(t *testing.T) {
 	defer u.Unwrap(db.DB()).Close()
 
 	session := &storageStructs.Chats{
-		ID: 1,
-		DB: db,
+		ID:             1,
+		DB:             db,
+		CurrentAgentID: "test-agent",
+		NowAgent:       "test-agent",
 		CurrentAgentConfig: cfgStruct.AgentConfig{
 			AutoReject: "invalid syntax {{{",
 		},
