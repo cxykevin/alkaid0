@@ -3,6 +3,7 @@ package build
 import (
 	"container/list"
 	"encoding/json"
+	"strings"
 
 	"github.com/cxykevin/alkaid0/config"
 	cfgStruct "github.com/cxykevin/alkaid0/config/structs"
@@ -240,7 +241,35 @@ func RequestBody(chatID uint32, modelID int32, agentCode string, toolsList *[]*p
 	}
 	systemContent += toolsRendered + "\\n\\n"
 
-	// 6. 额外动态系统信息
+	// 6. 自动审批规则说明 — 告知 AI 哪些工具会不经确认直接执行
+	autoApproveRules := getEffectiveAutoApprove(agentCfg)
+	autoRejectRules := getEffectiveAutoReject(agentCfg)
+	var approvalInfo string
+	if autoApproveRules != "" || autoRejectRules != "" {
+		approvalInfo += "\n[Auto Approval Rules]\n"
+		approvalInfo += "The following rules determine whether tool calls are automatically approved or rejected.\n"
+		approvalInfo += "Tools matching Auto-Approve rules will execute without waiting for user confirmation.\n"
+		approvalInfo += "Tools matching Auto-Reject rules are automatically blocked and will not execute.\n"
+		if autoApproveRules != "" {
+			approvalInfo += "Auto-Approve: " + autoApproveRules + "\n"
+		}
+		if autoRejectRules != "" {
+			approvalInfo += "Auto-Reject: " + autoRejectRules + "\n"
+		}
+		approvalInfo += "Plan your tool usage accordingly — avoid calling tools that will be rejected.\n"
+		systemContent += approvalInfo + "\n"
+	}
+
+	// 7. [path:@temp/...] marker explanation
+	if !config.GlobalConfig.Agent.DisablePromptPreprocess {
+		systemContent += "\n[Prompt Preprocessing]\n"
+		systemContent += "When user input contains large code blocks or logs, they are extracted and saved to temporary files.\n"
+		systemContent += "The user message will show [path:@temp/prompt/code-...] (for code) or [path:@temp/prompt/log-...] (for log) instead.\n"
+		systemContent += "Use `trace` tool with this path to read the full content if needed.\n"
+		systemContent += "Make sure to use the full path including @temp/prompt/ prefix.\n\n"
+	}
+
+	// 8. extra dynamic system prompts
 	if addSystemPrompt != "" {
 		systemContent += addSystemPrompt + "\\n\\n"
 	}
@@ -257,4 +286,22 @@ func RequestBody(chatID uint32, modelID int32, agentCode string, toolsList *[]*p
 		response.Messages[i] = j.Value.(reqStruct.Message)
 	}
 	return response, nil
+}
+
+// getEffectiveAutoApprove 获取用户配置的 AutoApprove 规则（不含内置规则合并）
+func getEffectiveAutoApprove(agentCfg cfgStruct.AgentConfig) string {
+	r := strings.TrimSpace(agentCfg.AutoApprove)
+	if r == "" {
+		r = strings.TrimSpace(config.GlobalConfig.Agent.DefaultAutoApprove)
+	}
+	return r
+}
+
+// getEffectiveAutoReject 获取用户配置的 AutoReject 规则（不含内置规则合并）
+func getEffectiveAutoReject(agentCfg cfgStruct.AgentConfig) string {
+	r := strings.TrimSpace(agentCfg.AutoReject)
+	if r == "" {
+		r = strings.TrimSpace(config.GlobalConfig.Agent.DefaultAutoReject)
+	}
+	return r
 }
