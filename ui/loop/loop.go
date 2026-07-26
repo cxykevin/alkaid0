@@ -505,22 +505,18 @@ func (p *Object) handleWaitApprove(session *structs.Chats, call func(AIResponse)
 		if approved {
 			return true
 		}
-		// auto-rejected：标记工具状态为已取消，UI 不再显示 "pending"
+		// auto-rejected：标记工具状态为已取消，无论主会话还是子代理都继续
 		session.ToolState = 2
+		// 先发送空回调广播 cancelled，然后继续下一轮 LLM
+		call(AIResponse{
+			MsgID:           0,
+			ThinkingContext: "",
+			Content:         "",
+		})
 		if session.CurrentAgentID != "" {
-			call(AIResponse{
-				MsgID:           0,
-				ThinkingContext: "",
-				Content:         "",
-			})
 			funcs.SubAgentReject(session)
-			return true
 		}
-		if needCompress {
-			doAutoSummary()
-		}
-		call(AIResponse{StopReason: StopReasonModel})
-		return false
+		return true
 	}
 
 	// 手动审批
