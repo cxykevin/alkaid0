@@ -43,6 +43,6 @@ func init() {
 
 // reloadFunc 配置重载回调，触发配置广播推送
 func reloadFunc(_ any, _ func(string, any, *string) error, _ uint64) (any, error) {
-	go updateCfgsToConns()
+	config.Reload()
 	return nil, nil
 }

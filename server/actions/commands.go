@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/cxykevin/alkaid0/config"
 	"github.com/cxykevin/alkaid0/storage/structs"
 )
 
@@ -52,10 +53,10 @@ var commandMaps = map[string]*cmdObj{
 		},
 	},
 	"/reload": {
-		Description: "Reload config file",
+		Description: "Reload config file from disk",
 		Hint:        "(no args)",
 		Function: func(obj *sessionObj, arg string) (bool, error) {
-			go updateCfgsToConns()
+			config.Reload()
 			return false, nil
 		},
 	},
