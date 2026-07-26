@@ -10,4 +10,5 @@ var Tables = []any{
 	&Configs{},
 	&Traces{},
 	&ReferFiles{},
+	&ClassifySegment{},
 }

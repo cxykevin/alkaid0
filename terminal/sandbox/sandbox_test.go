@@ -50,22 +50,22 @@ func TestIsPathWritable(t *testing.T) {
 		match string
 	}{
 		{
-			name:  "无隔离-任意路径",
-			cfg:   Config{IsolationMode: IsolationNone},
-			path:  "/etc/passwd",
-			want:  true,
+			name: "无隔离-任意路径",
+			cfg:  Config{IsolationMode: IsolationNone},
+			path: "/etc/passwd",
+			want: true,
 		},
 		{
-			name:  "OS隔离-临时目录",
-			cfg:   Config{IsolationMode: IsolationOS, WritableDirs: []string{tmpDir}, WorkDir: tmpDir},
-			path:  tmpDir,
-			want:  true,
+			name: "OS隔离-临时目录",
+			cfg:  Config{IsolationMode: IsolationOS, WritableDirs: []string{tmpDir}, WorkDir: tmpDir},
+			path: tmpDir,
+			want: true,
 		},
 		{
-			name:  "OS隔离-系统目录",
-			cfg:   Config{IsolationMode: IsolationOS, WritableDirs: []string{tmpDir}, WorkDir: tmpDir},
-			path:  "/etc/passwd",
-			want:  false,
+			name: "OS隔离-系统目录",
+			cfg:  Config{IsolationMode: IsolationOS, WritableDirs: []string{tmpDir}, WorkDir: tmpDir},
+			path: "/etc/passwd",
+			want: false,
 		},
 	}
 
@@ -594,7 +594,7 @@ func TestConcurrentSandbox(t *testing.T) {
 
 	// 并发执行多个命令
 	done := make(chan bool, 3)
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		go func(id int) {
 			cmd, err := sb.Execute("echo", fmt.Sprintf("hello-%d", id))
 			if err != nil {
@@ -620,7 +620,7 @@ func TestConcurrentSandbox(t *testing.T) {
 		}(i)
 	}
 
-	for i := 0; i < 3; i++ {
+	for range 3 {
 		<-done
 	}
 }

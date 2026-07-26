@@ -1,5 +1,15 @@
 package structs
 
+// ModelType 模型类型
+type ModelType string
+
+// 模型类型
+const (
+	ModelTypeLLM       ModelType = ""
+	ModelTypeEmbedding ModelType = "embedding"
+	ModelTypeRerank    ModelType = "rerank"
+)
+
 // ProviderSpecificConfig 特定模型提供方配置结构
 type ProviderSpecificConfig struct {
 	EnableDeepseekThinking bool `default:"false"`
@@ -25,14 +35,16 @@ type ModelConfig struct {
 	EnableThinking         bool                   `default:"false"`                         // 是否启用思考
 	EnableToolCalling      bool                   `default:"false"`                         // 是否启用工具调用（只影响 delta 拼接）
 	CompressSize           uint32                 `default:"128000"`                        // 压缩大小
+	Hide                   bool                   `default:"false"`                         // 在列表中隐藏
+	Type                   ModelType              `default:""`                              // 模型类型
 	ProviderSpecificConfig ProviderSpecificConfig // 特定模型提供方配置
-
 }
 
 // ModelsConfig 模型配置结构
 type ModelsConfig struct {
-	ProviderURL    string                `default:"https://openrouter.com/api/v1"` // 模型提供者URL
-	ProviderKey    string                `default:"sk-or-xxx"`                     // 模型提供者Key
-	DefaultModelID int32                 `default:"0"`
-	Models         map[int32]ModelConfig // 模型列表, value为模型配置
+	ProviderURL      string                `default:"https://openrouter.com/api/v1"` // 模型提供者URL
+	ProviderKey      string                `default:"sk-or-xxx"`                     // 模型提供者Key
+	DefaultModelID   int32                 `default:"0"`
+	EmbeddingModelID int32                 `default:"1"`
+	Models           map[int32]ModelConfig // 模型列表, value为模型配置
 }

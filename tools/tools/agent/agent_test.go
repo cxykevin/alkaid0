@@ -223,10 +223,10 @@ func TestCheckPrompt_NilMap(t *testing.T) {
 
 func TestEnableActivate(t *testing.T) {
 	tests := []struct {
-		name              string
-		currentAgentID    string
-		wantActivate      bool
-		wantDeactivate    bool
+		name           string
+		currentAgentID string
+		wantActivate   bool
+		wantDeactivate bool
 	}{
 		{name: "无活跃 Agent", currentAgentID: "", wantActivate: true, wantDeactivate: false},
 		{name: "有活跃 Agent", currentAgentID: "active", wantActivate: false, wantDeactivate: true},

@@ -72,9 +72,9 @@ func RequestBody(chatID uint32, modelID int32, agentCode string, toolsList *[]*p
 			reasoning = "unset"
 		}
 		if reasoning != "unset" {
-				response.ReasoningEffort = &reasoning
-			}
+			response.ReasoningEffort = &reasoning
 		}
+	}
 
 	// 生成 messages
 	responseDeltaList := list.New()
