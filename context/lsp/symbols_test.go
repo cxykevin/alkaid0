@@ -60,43 +60,64 @@ func TestPathToURI(t *testing.T) {
 	}
 }
 
-func TestExtractDocComment(t *testing.T) {
+func TestExtractHoverInfo(t *testing.T) {
 	tests := []struct {
-		name string
-		data string // JSON hover response
-		want string
+		name          string
+		data          string // JSON hover response
+		wantSig       string
+		wantDoc       string
 	}{
 		{
-			name: "markdown content",
-			data: `{"contents":{"kind":"markdown","value":"GetA returns the A value\n\nThis function does X"}}`,
-			want: "GetA returns the A value\n\nThis function does X",
+			name:    "markdown with code block signature",
+			data:    "{\"contents\":{\"kind\":\"markdown\",\"value\":\"```go\\nfunc GetA(a int) error\\n```\\n\\nGetA returns the A value\\n\\nThis function does X\"}}",
+			wantSig: "func GetA(a int) error",
+			wantDoc: "GetA returns the A value\n\nThis function does X",
 		},
 		{
-			name: "plain string",
-			data: `{"contents":"simple doc string"}`,
-			want: "simple doc string",
+			name:    "plain string",
+			data:    `{"contents":"func GetA(a int) error"}`,
+			wantSig: "func GetA(a int) error",
+			wantDoc: "",
 		},
 		{
-			name: "empty result",
-			data: `{}`,
-			want: "",
+			name:    "plain text with doc",
+			data:    "{\"contents\":{\"kind\":\"plaintext\",\"value\":\"func GetA(a int) error\\n\\nGetA returns the A value\"}}",
+			wantSig: "func GetA(a int) error",
+			wantDoc: "GetA returns the A value",
 		},
 		{
-			name: "nil contents",
-			data: `{"contents":null}`,
-			want: "",
+			name:    "empty result",
+			data:    `{}`,
+			wantSig: "",
+			wantDoc: "",
 		},
 		{
-			name: "code block cleanup",
-			data: `{"contents":{"kind":"markdown","value":"Some doc\n\nfunc Foo()\nHere"}}`,
-			want: "Some doc\n\nfunc Foo()\nHere",
+			name:    "nil contents",
+			data:    `{"contents":null}`,
+			wantSig: "",
+			wantDoc: "",
+		},
+		{
+			name:    "python function hover",
+			data:    "{\"contents\":{\"kind\":\"markdown\",\"value\":\"```python\\ndef get_a(a: int) -> None:\\n```\\n\\nGet A value\"}}",
+			wantSig: "def get_a(a: int) -> None:",
+			wantDoc: "Get A value",
+		},
+		{
+			name:    "typescript function hover",
+			data:    "{\"contents\":{\"kind\":\"markdown\",\"value\":\"```typescript\\nfunction getA(a: number): void\\n```\\n\\nGets A\"}}",
+			wantSig: "function getA(a: number): void",
+			wantDoc: "Gets A",
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := extractDocComment([]byte(tt.data))
-			if got != tt.want {
-				t.Errorf("extractDocComment() = %q, want %q", got, tt.want)
+			gotSig, gotDoc := extractHoverInfo([]byte(tt.data))
+			if gotSig != tt.wantSig {
+				t.Errorf("extractHoverInfo() sig = %q, want %q", gotSig, tt.wantSig)
+			}
+			if gotDoc != tt.wantDoc {
+				t.Errorf("extractHoverInfo() doc = %q, want %q", gotDoc, tt.wantDoc)
 			}
 		})
 	}
@@ -147,7 +168,7 @@ func TestFormatDocComment(t *testing.T) {
 	}
 }
 
-func TestExtractSignature(t *testing.T) {
+func TestExtractFullCode(t *testing.T) {
 	content := `package main
 
 // GetA returns A
@@ -174,8 +195,8 @@ type Config struct {
 	}{
 		{
 			name: "function",
-			rng:  Range{Start: Position{Line: 3, Character: 0}, End: Position{Line: 9, Character: 0}},
-			want: "func GetA(a int) error {",
+			rng:  Range{Start: Position{Line: 3, Character: 0}, End: Position{Line: 8, Character: 0}},
+			want: "func GetA(a int) error {\n\tif a > 0 {\n\t\treturn nil\n\t}\n\treturn nil\n}",
 		},
 		{
 			name: "type alias",
@@ -185,15 +206,15 @@ type Config struct {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := extractSignature(content, tt.rng)
+			got := extractFullCode(content, tt.rng)
 			if got != tt.want {
-				t.Errorf("extractSignature() = %q, want %q", got, tt.want)
+				t.Errorf("extractFullCode() = %q, want %q", got, tt.want)
 			}
 		})
 	}
 }
 
-func TestExtractSignatureStruct(t *testing.T) {
+func TestExtractFullCodeStruct(t *testing.T) {
 	content := `package main
 
 type Config struct {
@@ -202,10 +223,10 @@ type Config struct {
 }
 `
 	rng := Range{Start: Position{Line: 2, Character: 0}, End: Position{Line: 5, Character: 0}}
-	got := extractSignature(content, rng)
-	want := "type Config struct {"
+	got := extractFullCode(content, rng)
+	want := "type Config struct {\n\tName string\n\tValue int\n}"
 	if got != want {
-		t.Errorf("extractSignature() struct = %q, want %q", got, want)
+		t.Errorf("extractFullCode() struct = %q, want %q", got, want)
 	}
 }
 

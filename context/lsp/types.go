@@ -90,6 +90,7 @@ type SymbolResult struct {
 	KindName   string     `json:"kindName"`
 	Detail     string     `json:"detail,omitempty"`
 	DocComment string     `json:"docComment,omitempty"`
+	Signature  string     `json:"signature"`
 	Code       string     `json:"code"`
 	Line       uint32     `json:"line"`
 }

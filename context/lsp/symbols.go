@@ -99,27 +99,31 @@ func (m *Manager) buildSymbolResult(ctx context.Context, client *Client, text, u
 		Line:     sym.Range.Start.Line,
 	}
 
-	// 获取 hover 文档注释
-	docComment := m.getDocComment(ctx, client, uri, sym.SelectionRange.Start)
+	// 获取 hover 签名+文档注释（合在一起）
+	signature, docComment := m.getHoverInfo(ctx, client, uri, sym.SelectionRange.Start)
+	result.Signature = signature
+	if docComment != "" {
+		result.Signature += "\n" + docComment
+	}
 	result.DocComment = formatDocComment(docComment, languageFromURI(uri))
 
-	// 提取签名代码
-	result.Code = extractSignature(text, sym.Range)
+	// 提取完整代码
+	result.Code = extractFullCode(text, sym.Range)
 
 	return result
 }
 
-// getDocComment 通过 hover 获取符号的文档注释
-func (m *Manager) getDocComment(ctx context.Context, client *Client, uri string, position Position) string {
+// getHoverInfo 通过 hover 获取符号的签名和文档注释
+func (m *Manager) getHoverInfo(ctx context.Context, client *Client, uri string, position Position) (signature, docComment string) {
 	hoverData, err := client.SendRequest(ctx, "textDocument/hover", HoverParams{
 		TextDocument: TextDocumentIdentifier{URI: uri},
 		Position:     position,
 	})
 	if err != nil || hoverData == nil {
-		return ""
+		return "", ""
 	}
 
-	return extractDocComment(hoverData)
+	return extractHoverInfo(hoverData)
 }
 
 // ---------------------------------------------------------------------------
@@ -198,26 +202,28 @@ func parseOneSymbol(raw json.RawMessage) (*DocumentSymbol, error) {
 	return sym, nil
 }
 
-// extractDocComment 从 hover 响应中提取文档注释
-func extractDocComment(data json.RawMessage) string {
+// extractHoverInfo 从 hover 响应中提取签名和文档注释
+// LSP hover 返回格式通常为 markdown，签名在第一段代码块中
+func extractHoverInfo(data json.RawMessage) (signature, docComment string) {
 	// 解析顶层
 	var top map[string]any
 	if err := json.Unmarshal(data, &top); err != nil {
-		return ""
+		return "", ""
 	}
 
 	contents, ok := top["contents"]
 	if !ok || contents == nil {
-		return ""
+		return "", ""
 	}
 
+	var rawText string
 	switch c := contents.(type) {
 	case string:
-		return cleanDocComment(c)
+		rawText = c
 	case map[string]any:
 		if value, ok := c["value"]; ok {
 			if s, ok := value.(string); ok {
-				return cleanDocComment(s)
+				rawText = s
 			}
 		}
 	case []any:
@@ -235,24 +241,51 @@ func extractDocComment(data json.RawMessage) string {
 				}
 			}
 		}
-		return cleanDocComment(strings.Join(parts, "\n"))
+		rawText = strings.Join(parts, "\n")
 	}
 
-	return ""
+	if rawText == "" {
+		return "", ""
+	}
+
+	return splitSignatureAndDoc(rawText)
 }
 
-// cleanDocComment 清理文档注释（去掉代码块标记、多余空白等）
-func cleanDocComment(s string) string {
-	// 去掉 markdown 代码块标记（```go, ```python 等）
-	lines := strings.Split(s, "\n")
-	var cleaned []string
-	for _, line := range lines {
-		if strings.HasPrefix(line, "```") {
-			continue
+// splitSignatureAndDoc 将 hover 文本拆分为签名和文档注释
+// markdown 模式：第一个 ```...``` 代码块为签名，其余为文档
+// plaintext 模式：空行前为签名，空行后为文档
+func splitSignatureAndDoc(text string) (signature, docComment string) {
+	lines := strings.Split(text, "\n")
+
+	// 检查是否以代码块开头（markdown 模式）
+	if len(lines) > 0 && strings.HasPrefix(strings.TrimSpace(lines[0]), "```") {
+		var sigLines []string
+		i := 1
+		for ; i < len(lines); i++ {
+			if strings.HasPrefix(strings.TrimSpace(lines[i]), "```") {
+				i++ // 跳过关闭的 ```
+				break
+			}
+			sigLines = append(sigLines, lines[i])
 		}
-		cleaned = append(cleaned, line)
+		signature = strings.TrimSpace(strings.Join(sigLines, "\n"))
+		docComment = strings.TrimSpace(strings.Join(lines[i:], "\n"))
+		return
 	}
-	return strings.TrimSpace(strings.Join(cleaned, "\n"))
+
+	// plaintext 模式：第一个 block（空行前）为签名
+	var sigLines []string
+	for i, line := range lines {
+		if strings.TrimSpace(line) == "" {
+			signature = strings.TrimSpace(strings.Join(sigLines, "\n"))
+			docComment = strings.TrimSpace(strings.Join(lines[i+1:], "\n"))
+			return
+		}
+		sigLines = append(sigLines, line)
+	}
+
+	// 只有一行或没有空行分隔，全部作为签名
+	return strings.TrimSpace(text), ""
 }
 
 // formatDocComment 根据语言格式化文档注释
@@ -313,8 +346,8 @@ func formatDocComment(comment string, language string) string {
 	return strings.Join(formatted, "\n")
 }
 
-// extractSignature 从文件内容中提取符号签名部分（不含函数体）
-func extractSignature(content string, rng Range) string {
+// extractFullCode 从文件内容中提取符号的完整代码（含函数体/结构体成员等）
+func extractFullCode(content string, rng Range) string {
 	lines := strings.Split(content, "\n")
 	if int(rng.Start.Line) < 0 || int(rng.Start.Line) >= len(lines) {
 		return ""
@@ -325,34 +358,12 @@ func extractSignature(content string, rng Range) string {
 		endLine = len(lines) - 1
 	}
 
-	var sigLines []string
+	var codeLines []string
 	for i := int(rng.Start.Line); i <= endLine; i++ {
-		line := lines[i]
-		sigLines = append(sigLines, line)
-		if strings.Contains(line, "{") {
-			break
-		}
-		// 单行声明（无 { 的顶层符号）
-		if i == int(rng.Start.Line) && isSingleLineDecl(line) {
-			break
-		}
+		codeLines = append(codeLines, lines[i])
 	}
 
-	sig := strings.Join(sigLines, "\n")
-	// 去掉 { 之后的内容（保留 { 本身）
-	if idx := strings.Index(sig, "{"); idx >= 0 {
-		sig = strings.TrimRight(sig[:idx+1], " \t")
-	}
-	return strings.TrimRight(sig, " \t\n\r")
-}
-
-// isSingleLineDecl 判断是否为单行声明（如 type X string、const X = 1）
-func isSingleLineDecl(line string) bool {
-	trimmed := strings.TrimSpace(line)
-	if strings.HasPrefix(trimmed, "type ") || strings.HasPrefix(trimmed, "const ") || strings.HasPrefix(trimmed, "var ") {
-		return !strings.Contains(trimmed, "{")
-	}
-	return false
+	return strings.TrimRight(strings.Join(codeLines, "\n"), " \t\n\r")
 }
 
 // ---------------------------------------------------------------------------
