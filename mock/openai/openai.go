@@ -79,6 +79,7 @@ import (
 	"fmt"
 	"log"
 	"math/rand"
+	"net"
 	"net/http"
 	"os"
 	"strings"
@@ -473,22 +474,28 @@ var (
 
 // StartServer 启动服务器
 func StartServer() {
+	listener, err := net.Listen("tcp", Addr)
+	if err != nil {
+		fmt.Printf("Server failed to listen on %s: %v\n", Addr, err)
+		return
+	}
+
 	mux := http.NewServeMux()
 	mux.HandleFunc("/v1/chat/completions", handleChatCompletion)
 	mux.HandleFunc("/v1/embeddings", handleEmbedding)
 	mux.HandleFunc("/v1/models", handleModels)
 
 	server := &http.Server{
-		Addr:    Addr,
 		Handler: mux,
 	}
 
-	// fmt.Println("Mock OpenAI-compatible API server running on http://localhost" + server.Addr)
+	// fmt.Println("Mock OpenAI-compatible API server running on http://localhost" + Addr)
 
+	// 端口已就绪后再发信号，避免竞态
 	if waitChan != nil {
 		waitChan <- true
 	}
-	if err := server.ListenAndServe(); err != nil {
+	if err := server.Serve(listener); err != nil {
 		if strings.Contains(err.Error(), "address already in use") {
 			return
 		}
