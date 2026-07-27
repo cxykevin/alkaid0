@@ -1,0 +1,106 @@
+package lsp
+
+import (
+	"fmt"
+	"path/filepath"
+	"strings"
+
+	"github.com/cxykevin/alkaid0/config"
+)
+
+// LanguageServerConfig 语言服务器配置（命令+参数）
+type LanguageServerConfig struct {
+	Command string
+	Args    []string
+}
+
+// defaultLanguageServers 内置默认语言服务器映射表
+var defaultLanguageServers = map[string]LanguageServerConfig{
+	".go":  {Command: "gopls"},
+	".py":  {Command: "pyright-langserver", Args: []string{"--stdio"}},
+	".c":   {Command: "clangd"},
+	".h":   {Command: "clangd"},
+	".cpp": {Command: "clangd"},
+	".hpp": {Command: "clangd"},
+	".cc":  {Command: "clangd"},
+	".cxx": {Command: "clangd"},
+	".rs":  {Command: "rust-analyzer"},
+	".java": {Command: "jdtls"},
+	".kt":  {Command: "kotlin-language-server"},
+	".kts": {Command: "kotlin-language-server"},
+	".cs":  {Command: "csharp-ls"},
+	".js":  {Command: "typescript-language-server", Args: []string{"--stdio"}},
+	".jsx": {Command: "typescript-language-server", Args: []string{"--stdio"}},
+	".ts":  {Command: "typescript-language-server", Args: []string{"--stdio"}},
+	".tsx": {Command: "typescript-language-server", Args: []string{"--stdio"}},
+}
+
+// extToLanguageID 文件扩展名到 LSP 语言 ID 的映射
+var extToLanguageID = map[string]string{
+	".go":   "go",
+	".py":   "python",
+	".c":    "c",
+	".h":    "c",
+	".cpp":  "cpp",
+	".hpp":  "cpp",
+	".cc":   "cpp",
+	".cxx":  "cpp",
+	".rs":   "rust",
+	".java": "java",
+	".kt":   "kotlin",
+	".kts":  "kotlin",
+	".cs":   "csharp",
+	".js":   "javascript",
+	".jsx":  "javascript",
+	".ts":   "typescript",
+	".tsx":  "typescript",
+}
+
+// extFromPath 从文件路径获取小写扩展名
+func extFromPath(filePath string) string {
+	ext := strings.ToLower(filepath.Ext(filePath))
+	return ext
+}
+
+// resolveLanguageServer 解析文件扩展名对应的语言服务器配置
+// 优先使用用户配置，否则使用内置默认值
+func resolveLanguageServer(ext string) (LanguageServerConfig, error) {
+	// 尝试用户配置覆盖
+	cfg := config.GlobalConfigSafe()
+	if cfg.LSP.LanguageServers != nil {
+		if userCfg, ok := cfg.LSP.LanguageServers[ext]; ok {
+			return LanguageServerConfig{
+				Command: userCfg.Command,
+				Args:    userCfg.Args,
+			}, nil
+		}
+	}
+
+	// 回退到内置默认值
+	if def, ok := defaultLanguageServers[ext]; ok {
+		return def, nil
+	}
+
+	return LanguageServerConfig{}, fmt.Errorf("unsupported file extension: %s", ext)
+}
+
+// languageIDFromExt 从文件扩展名获取 LSP 语言 ID
+func languageIDFromExt(ext string) string {
+	if lang, ok := extToLanguageID[ext]; ok {
+		return lang
+	}
+	// 去掉 . 当作语言 ID
+	return strings.TrimPrefix(ext, ".")
+}
+
+// languageKey 生成用于管理器缓存的 key
+// 格式: "workdir|language"
+func languageKey(workdir, language string) string {
+	return workdir + "|" + language
+}
+
+// resolver 接口组合，便于测试替换
+type resolver interface {
+	resolveLanguageServer(ext string) (LanguageServerConfig, error)
+	languageIDFromExt(ext string) string
+}

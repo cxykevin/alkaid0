@@ -13,6 +13,7 @@ import (
 	_ "embed" // embed logo
 
 	"github.com/cxykevin/alkaid0/config"
+	"github.com/cxykevin/alkaid0/context/lsp"
 	"github.com/cxykevin/alkaid0/helper"
 	"github.com/cxykevin/alkaid0/log"
 	"github.com/cxykevin/alkaid0/mock/openai"
@@ -115,6 +116,11 @@ func Startup() {
 	ensureGlobalGitIgnore()
 	index.Load()
 
+	// LSP 客户端初始化
+	if err := lsp.Initialize(); err != nil {
+		logger.Warn("LSP init: %v (continuing without LSP)", err)
+	}
+
 	// 设置信号处理：SIGTERM/SIGINT/SIGQUIT 触发优雅关闭
 	// 30 秒超时后强制退出
 	// 当 config.IgnoreSignals 为 true 时跳过信号处理注册，忽略所有信号
@@ -129,6 +135,9 @@ func Startup() {
 			defer cancel()
 			if err := connect.ShutdownWs(shutdownCtx); err != nil {
 				logger.Warn("ws server shutdown: %v", err)
+			}
+			if err := lsp.Shutdown(); err != nil {
+				logger.Warn("LSP shutdown: %v", err)
 			}
 			log.Shutdown()
 			os.Exit(0)
