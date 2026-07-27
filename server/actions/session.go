@@ -152,6 +152,9 @@ func buildModelList() []AvailableModel {
 	models := make([]AvailableModel, len(cfg))
 	idx := 0
 	for i, model := range cfg {
+		if model.Hide {
+			continue
+		}
 		models[idx] = AvailableModel{
 			ModelID: fmt.Sprintf("%d/%s", i, model.ModelID),
 			Name:    model.ModelName,
@@ -206,6 +209,9 @@ func buildConfigOptions(currentModelID uint32) []ConfigOption {
 	options := make([]ConfigOptionValue, 0, len(cfg))
 
 	for i, model := range cfg {
+		if model.Hide {
+			continue
+		}
 		options = append(options, ConfigOptionValue{
 			Value:       fmt.Sprintf("%d/%s", i, model.ModelID),
 			Name:        model.ModelName,

@@ -18,6 +18,7 @@ type ProviderSpecificConfig struct {
 	EnableTemperature      bool `default:"false"`
 	EnableTopK             bool `default:"false"`
 	EnableUsage            bool `default:"true"`
+	Dimension              int  `default:"0"` // Embedding 模型维度, 嵌入模型必填
 }
 
 // ModelConfig 单个模型配置结构

@@ -142,9 +142,10 @@ func TestGenerateID(t *testing.T) {
 }
 
 func TestGenerateEmbedding(t *testing.T) {
-	emb := generateEmbedding()
-	if len(emb) != 512 {
-		t.Errorf("expected 512 dimensions, got %d", len(emb))
+	dim := 512
+	emb := generateEmbedding(dim)
+	if len(emb) != dim {
+		t.Errorf("expected %d dimensions, got %d", dim, len(emb))
 	}
 	for _, v := range emb {
 		if v < -1 || v > 1 {

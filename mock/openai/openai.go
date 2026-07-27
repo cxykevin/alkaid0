@@ -219,14 +219,17 @@ type Model struct {
 	OwnedBy string `json:"owned_by"`
 }
 
+// EmbeddingDim 嵌入向量的维度，默认为 512；测试可修改此值以匹配测试配置
+var EmbeddingDim = 512
+
 // generateID 生成带前缀的唯一 ID
 func generateID(prefix string) string {
 	return fmt.Sprintf("%s-%d", prefix, time.Now().UnixNano())
 }
 
-// generateEmbedding 生成 512 维的随机嵌入向量用于测试
-func generateEmbedding() []float64 {
-	embedding := make([]float64, 512)
+// generateEmbedding 生成指定维度的随机嵌入向量用于测试
+func generateEmbedding(dim int) []float64 {
+	embedding := make([]float64, dim)
 	for i := range embedding {
 		embedding[i] = rand.Float64()*2 - 1
 	}
@@ -426,7 +429,7 @@ func handleEmbedding(w http.ResponseWriter, r *http.Request) {
 	for i, text := range req.Input {
 		embeddings[i] = Embedding{
 			Object:    "embedding",
-			Embedding: generateEmbedding(),
+			Embedding: generateEmbedding(EmbeddingDim),
 			Index:     i,
 		}
 		totalTokens += calculateTokens(text)
