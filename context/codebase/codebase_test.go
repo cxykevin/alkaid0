@@ -2,6 +2,7 @@ package codebase
 
 import (
 	"context"
+	"fmt"
 	"database/sql"
 	"os"
 	"path/filepath"
@@ -665,5 +666,658 @@ func TestDBPath(t *testing.T) {
 
 	if _, err := os.Stat(expected); os.IsNotExist(err) {
 		t.Fatalf("db file not created at %s", expected)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// BM25 关键词提取 & 查询构建
+// ---------------------------------------------------------------------------
+
+func TestExtractKeywords(t *testing.T) {
+	tests := []struct {
+		input string
+		want  []string
+	}{
+		{"", nil},
+		{"a", nil},                    // 太短
+		{"the", nil},                  // 停用词
+		{"hello", []string{"hello"}},
+		{"the hello world", []string{"hello", "world"}},
+		{"function edit file", []string{"function", "edit", "file"}},
+		{"EditFile", []string{"editfile"}},
+		{"1 2 3", nil},               // 纯数字
+	}
+	for _, tt := range tests {
+		got := extractKeywords(tt.input)
+		if len(got) != len(tt.want) {
+			t.Errorf("extractKeywords(%q) = %v (len=%d), want %v (len=%d)",
+				tt.input, got, len(got), tt.want, len(tt.want))
+			continue
+		}
+		for i := range got {
+			if got[i] != tt.want[i] {
+				t.Errorf("extractKeywords(%q)[%d] = %q, want %q",
+					tt.input, i, got[i], tt.want[i])
+			}
+		}
+	}
+}
+
+func TestBuildFTSQuery(t *testing.T) {
+	tests := []struct {
+		keywords []string
+		want     string
+	}{
+		{[]string{"hello"}, `"hello"*`},
+		{[]string{"hello", "world"}, `"hello"* AND "world"*`},
+		{[]string{"foo", "bar", "baz"}, `"foo"* AND "bar"* AND "baz"*`},
+	}
+	for _, tt := range tests {
+		got := buildFTSQuery(tt.keywords)
+		if got != tt.want {
+			t.Errorf("buildFTSQuery(%v) = %q, want %q", tt.keywords, got, tt.want)
+		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// BM25 搜索 end-to-end
+// ---------------------------------------------------------------------------
+
+func TestBM25SearchEmpty(t *testing.T) {
+	dir, restore := setupCodebase(t, 4)
+	defer restore()
+
+	cdb, err := getOrCreateDB(dir)
+	if err != nil {
+		t.Fatalf("getOrCreateDB failed: %v", err)
+	}
+	cdb.mu.RLock()
+	defer cdb.mu.RUnlock()
+
+	// 空查询应返回 nil
+	results, err := cdb.BM25Search(context.Background(), "", 10)
+	if err != nil {
+		t.Fatalf("BM25Search empty query: %v", err)
+	}
+	if results != nil {
+		t.Fatalf("expected nil for empty query, got %d results", len(results))
+	}
+
+	// 仅有停用词的查询应返回 nil
+	results, err = cdb.BM25Search(context.Background(), "the is a", 10)
+	if err != nil {
+		t.Fatalf("BM25Search stop words: %v", err)
+	}
+	if results != nil {
+		t.Fatalf("expected nil for stop-words-only query, got %d results", len(results))
+	}
+}
+
+// insertTestItem 直接向数据库插入一条 codebase_items 记录（绕过 worker/API）
+func insertTestItem(t *testing.T, cdb *CodebaseDB, filePath, symbol, embedText, fullContent string, tags string) int64 {
+	t.Helper()
+
+	// 先删除同 file_path+symbol 的记录（避免冲突）
+	_, _ = cdb.db.Exec("DELETE FROM codebase_items WHERE file_path=? AND symbol=?", filePath, symbol)
+
+	h := embedHash(embedText)
+	res, err := cdb.db.Exec(
+		`INSERT INTO codebase_items (file_path, symbol, tags, full_content, embed_text, embed_hash)
+		 VALUES (?, ?, ?, ?, ?, ?)`,
+		filePath, symbol, tags, fullContent, embedText, h,
+	)
+	if err != nil {
+		t.Fatalf("insert test item %s:%s: %v", filePath, symbol, err)
+	}
+	id, _ := res.LastInsertId()
+	return id
+}
+
+func TestBM25SearchBasic(t *testing.T) {
+	dir, restore := setupCodebase(t, 4)
+	defer restore()
+
+	cdb, err := getOrCreateDB(dir)
+	if err != nil {
+		t.Fatalf("getOrCreateDB failed: %v", err)
+	}
+	cdb.mu.RLock()
+	defer cdb.mu.RUnlock()
+
+	// 插入测试数据
+	insertTestItem(t, cdb, "main.go", "ReadFile",
+		"ReadFile reads a file from the filesystem",
+		"func ReadFile() string { ... }",
+		`["go"]`)
+
+	insertTestItem(t, cdb, "main.go", "WriteFile",
+		"WriteFile writes content to a file",
+		"func WriteFile() error { ... }",
+		`["go"]`)
+
+	insertTestItem(t, cdb, "search.go", "SearchBM25",
+		"SearchBM25 performs keyword-based search using BM25 ranking",
+		"func SearchBM25() []Result { ... }",
+		`["go"]`)
+
+	// 搜索 "read file"
+	results, err := cdb.BM25Search(context.Background(), "read file", 10)
+	if err != nil {
+		t.Fatalf("BM25Search failed: %v", err)
+	}
+	if len(results) == 0 {
+		t.Fatal("expected at least 1 result for 'read file'")
+	}
+
+	// 结果应按相关性排序，ReadFile 应排在最前面
+	foundReadFile := false
+	for _, r := range results {
+		if r.Symbol == "ReadFile" {
+			foundReadFile = true
+			break
+		}
+	}
+	if !foundReadFile {
+		t.Fatalf("expected 'ReadFile' in results for 'read file', got: %+v", results)
+	}
+
+	// 搜索 "search"
+	results, err = cdb.BM25Search(context.Background(), "search", 10)
+	if err != nil {
+		t.Fatalf("BM25Search 'search' failed: %v", err)
+	}
+	if len(results) == 0 {
+		t.Fatal("expected at least 1 result for 'search'")
+	}
+	foundSearch := false
+	for _, r := range results {
+		if r.Symbol == "SearchBM25" {
+			foundSearch = true
+			break
+		}
+	}
+	if !foundSearch {
+		t.Fatalf("expected 'SearchBM25' in results for 'search', got: %+v", results)
+	}
+}
+
+func TestBM25SearchLimit(t *testing.T) {
+	dir, restore := setupCodebase(t, 4)
+	defer restore()
+
+	cdb, err := getOrCreateDB(dir)
+	if err != nil {
+		t.Fatalf("getOrCreateDB failed: %v", err)
+	}
+	cdb.mu.RLock()
+	defer cdb.mu.RUnlock()
+
+	// 插入多条记录
+	insertTestItem(t, cdb, "a.go", "FuncA", "function A does something", "func A(){}", `[]`)
+	insertTestItem(t, cdb, "b.go", "FuncB", "function B does something else", "func B(){}", `[]`)
+	insertTestItem(t, cdb, "c.go", "FuncC", "third function C does things", "func C(){}", `[]`)
+
+	// limit=1
+	results, err := cdb.BM25Search(context.Background(), "function", 1)
+	if err != nil {
+		t.Fatalf("BM25Search limit=1: %v", err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("expected 1 result with limit=1, got %d", len(results))
+	}
+}
+
+func TestBM25SearchSymbolWeight(t *testing.T) {
+	dir, restore := setupCodebase(t, 4)
+	defer restore()
+
+	cdb, err := getOrCreateDB(dir)
+	if err != nil {
+		t.Fatalf("getOrCreateDB failed: %v", err)
+	}
+	cdb.mu.RLock()
+	defer cdb.mu.RUnlock()
+
+	// EditFile 的 symbol 含 edit，HelperFunc 的内容含 edit
+	insertTestItem(t, cdb, "editor.go", "EditFile",
+		"File manipulation and editing utilities",
+		"func EditFile() { }",
+		`["go"]`)
+
+	insertTestItem(t, cdb, "helper.go", "HelperFunc",
+		"helper for editing configuration files",
+		"func HelperFunc() { }",
+		`["go"]`)
+
+	results, err := cdb.BM25Search(context.Background(), "edit", 10)
+	if err != nil {
+		t.Fatalf("BM25Search 'edit' failed: %v", err)
+	}
+
+	foundEditFile := false
+	for _, r := range results {
+		if r.Symbol == "EditFile" {
+			foundEditFile = true
+			break
+		}
+	}
+	if !foundEditFile {
+		t.Fatalf("expected 'EditFile' in results for 'edit', got: %+v", results)
+	}
+}
+
+// TestFTS5Migration 验证已有数据库能正确迁移出 FTS 表
+func TestFTS5Migration(t *testing.T) {
+	dir, restore := setupCodebase(t, 4)
+	defer restore()
+
+	cdb, err := getOrCreateDB(dir)
+	if err != nil {
+		t.Fatalf("getOrCreateDB failed: %v", err)
+	}
+	cdb.mu.RLock()
+	defer cdb.mu.RUnlock()
+
+	// 验证 FTS5 表存在
+	var ftsName string
+	err = cdb.db.QueryRow(
+		"SELECT name FROM sqlite_master WHERE type='table' AND name='codebase_fts'",
+	).Scan(&ftsName)
+	if err != nil {
+		t.Fatalf("codebase_fts table missing: %v", err)
+	}
+
+	// 验证 3 个触发器存在
+	var triggerCount int
+	cdb.db.QueryRow(
+		"SELECT COUNT(*) FROM sqlite_master WHERE type='trigger' AND tbl_name='codebase_items' AND name LIKE 'codebase_items_%'",
+	).Scan(&triggerCount)
+	if triggerCount != 3 {
+		t.Fatalf("expected 3 triggers on codebase_items, got %d", triggerCount)
+	}
+}
+
+// TestBM25AfterEmbedPipeline 验证嵌入管道输出的 BM25 搜索
+func TestBM25AfterEmbedPipeline(t *testing.T) {
+	oldDim := openai.EmbeddingDim
+	openai.EmbeddingDim = 4
+	defer func() { openai.EmbeddingDim = oldDim }()
+
+	dir, restore := setupCodebase(t, 4)
+	defer restore()
+
+	done := make(chan struct{})
+	err := AddToQueue(dir, EmbedTask{
+		EmbedText:   "BM25 indexed search function",
+		FullContent: "func Bm25Search() { return nil }",
+		FilePath:    "search.go",
+		Symbol:      "Bm25Search",
+		Tags:        []string{"go", "search"},
+		Done:        done,
+	})
+	if err != nil {
+		t.Fatalf("AddToQueue failed: %v", err)
+	}
+	<-done
+
+	// 用 BM25 搜索
+	cdb := VecDBs[dir]
+	cdb.mu.RLock()
+	results, err := cdb.BM25Search(context.Background(), "BM25 indexed search", 10)
+	cdb.mu.RUnlock()
+	if err != nil {
+		t.Fatalf("BM25Search after pipeline: %v", err)
+	}
+	if len(results) == 0 {
+		t.Fatal("expected results from BM25 after embed pipeline")
+	}
+	found := false
+	for _, r := range results {
+		if r.Symbol == "Bm25Search" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected 'Bm25Search' in results, got: %+v", results)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// VectorSearch 向量相似度搜索
+// ---------------------------------------------------------------------------
+
+func TestVectorSearchAfterEmbedPipeline(t *testing.T) {
+	oldDim := openai.EmbeddingDim
+	openai.EmbeddingDim = 4
+	defer func() { openai.EmbeddingDim = oldDim }()
+
+	dir, restore := setupCodebase(t, 4)
+	defer restore()
+
+	// 嵌入两条记录
+	done1 := make(chan struct{})
+	err := AddToQueue(dir, EmbedTask{
+		EmbedText:   "Go function to read file contents",
+		FullContent: "func ReadFile(path string) string { ... }",
+		FilePath:    "file.go",
+		Symbol:      "ReadFile",
+		Tags:        []string{"go", "io"},
+		Done:        done1,
+	})
+	if err != nil {
+		t.Fatalf("AddToQueue 1 failed: %v", err)
+	}
+	<-done1
+
+	done2 := make(chan struct{})
+	err = AddToQueue(dir, EmbedTask{
+		EmbedText:   "Go function to write data to file",
+		FullContent: "func WriteFile(path string, data []byte) error { ... }",
+		FilePath:    "file.go",
+		Symbol:      "WriteFile",
+		Tags:        []string{"go", "io"},
+		Done:        done2,
+	})
+	if err != nil {
+		t.Fatalf("AddToQueue 2 failed: %v", err)
+	}
+	<-done2
+
+	// 执行向量搜索
+	cdb := VecDBs[dir]
+	results, err := cdb.VectorSearch(context.Background(), "file reading function", 10)
+	if err != nil {
+		t.Fatalf("VectorSearch failed: %v", err)
+	}
+	if len(results) == 0 {
+		t.Fatal("expected non-empty VectorSearch results")
+	}
+	if results[0].FilePath != "file.go" {
+		t.Fatalf("expected file_path=file.go, got %s", results[0].FilePath)
+	}
+	// 验证 Distance 字段有效
+	if results[0].Distance <= 0 {
+		t.Fatalf("expected positive distance, got %f", results[0].Distance)
+	}
+}
+
+func TestVectorSearchContextCancel(t *testing.T) {
+	oldDim := openai.EmbeddingDim
+	openai.EmbeddingDim = 4
+	defer func() { openai.EmbeddingDim = oldDim }()
+
+	dir, restore := setupCodebase(t, 4)
+	defer restore()
+
+	// 先嵌入一条数据
+	done := make(chan struct{})
+	if err := AddToQueue(dir, EmbedTask{
+		EmbedText:   "test function",
+		FullContent: "func Test() {}",
+		FilePath:    "test.go",
+		Symbol:      "Test",
+		Done:        done,
+	}); err != nil {
+		t.Fatalf("AddToQueue failed: %v", err)
+	}
+	<-done
+
+	cdb := VecDBs[dir]
+
+	// 已取消的 context
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	results, err := cdb.VectorSearch(ctx, "test", 10)
+	if err == nil {
+		t.Fatal("expected error for cancelled context, got nil")
+	}
+	if results != nil {
+		t.Fatalf("expected nil results for cancelled context, got %d", len(results))
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Search 统一搜索
+// ---------------------------------------------------------------------------
+
+func TestSearchBM25Only(t *testing.T) {
+	dir, restore := setupCodebase(t, 4)
+	defer restore()
+
+	cdb, err := getOrCreateDB(dir)
+	if err != nil {
+		t.Fatalf("getOrCreateDB failed: %v", err)
+	}
+	cdb.mu.RLock()
+	defer cdb.mu.RUnlock()
+
+	insertTestItem(t, cdb, "app.go", "RunApp",
+		"RunApp starts the application",
+		"func RunApp() { ... }",
+		`["go"]`)
+
+	results, err := cdb.Search(context.Background(), SearchBM25, "start application", 10)
+	if err != nil {
+		t.Fatalf("Search BM25 failed: %v", err)
+	}
+	if len(results) == 0 {
+		t.Fatal("expected at least 1 result for BM25 search")
+	}
+	found := false
+	for _, r := range results {
+		if r.Symbol == "RunApp" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected 'RunApp' in BM25 search results")
+	}
+	// BM25 only: Distance 应为 0
+	for _, r := range results {
+		if r.Distance != 0 {
+			t.Fatalf("expected Distance=0 for BM25-only search, got %f for %s", r.Distance, r.Symbol)
+		}
+	}
+}
+
+func TestSearchVectorOnly(t *testing.T) {
+	oldDim := openai.EmbeddingDim
+	openai.EmbeddingDim = 4
+	defer func() { openai.EmbeddingDim = oldDim }()
+
+	dir, restore := setupCodebase(t, 4)
+	defer restore()
+
+	done := make(chan struct{})
+	if err := AddToQueue(dir, EmbedTask{
+		EmbedText:   "main entry point for the application",
+		FullContent: "func main() { ... }",
+		FilePath:    "main.go",
+		Symbol:      "main",
+		Tags:        []string{"go"},
+		Done:        done,
+	}); err != nil {
+		t.Fatalf("AddToQueue failed: %v", err)
+	}
+	<-done
+
+	cdb := VecDBs[dir]
+	results, err := cdb.Search(context.Background(), SearchVector, "entry point", 10)
+	if err != nil {
+		t.Fatalf("Search Vector failed: %v", err)
+	}
+	if len(results) == 0 {
+		t.Fatal("expected at least 1 result for Vector search")
+	}
+	if results[0].Symbol != "main" {
+		t.Fatalf("expected 'main' as top result, got '%s'", results[0].Symbol)
+	}
+	// Vector only: Score 应为 0
+	for _, r := range results {
+		if r.Score != 0 {
+			t.Fatalf("expected Score=0 for vector-only search, got %f for %s", r.Score, r.Symbol)
+		}
+	}
+}
+
+func TestSearchAutoDegradeToBM25(t *testing.T) {
+	// 当 embedding 不可用/无结果时，SearchAuto 应退化为 BM25
+	dir, restore := setupCodebase(t, 4)
+	defer restore()
+
+	cdb, err := getOrCreateDB(dir)
+	if err != nil {
+		t.Fatalf("getOrCreateDB failed: %v", err)
+	}
+	cdb.mu.RLock()
+	defer cdb.mu.RUnlock()
+
+	insertTestItem(t, cdb, "search.go", "FindFunc",
+		"FindFunc searches for functions by name",
+		"func FindFunc() []Func { ... }",
+		`["go"]`)
+
+	// Auto 模式：有明确关键词时应走 BM25
+	results, err := cdb.Search(context.Background(), SearchAuto, "search by name", 10)
+	if err != nil {
+		t.Fatalf("Search Auto failed: %v", err)
+	}
+	if len(results) == 0 {
+		t.Fatal("expected at least 1 result for Auto search with keywords")
+	}
+	found := false
+	for _, r := range results {
+		if r.Symbol == "FindFunc" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected 'FindFunc' in auto search results")
+	}
+}
+
+func TestSearchContextCancel(t *testing.T) {
+	dir, restore := setupCodebase(t, 4)
+	defer restore()
+
+	cdb, err := getOrCreateDB(dir)
+	if err != nil {
+		t.Fatalf("getOrCreateDB failed: %v", err)
+	}
+	cdb.mu.RLock()
+	defer cdb.mu.RUnlock()
+
+	insertTestItem(t, cdb, "x.go", "FuncX", "function X", "func X(){}", `[]`)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	results, err := cdb.Search(ctx, SearchBM25, "function", 10)
+	if err == nil {
+		t.Fatal("expected error for cancelled context")
+	}
+	if results != nil {
+		t.Fatalf("expected nil results for cancelled context, got %d", len(results))
+	}
+}
+
+func TestSearchEmptyQuery(t *testing.T) {
+	dir, restore := setupCodebase(t, 4)
+	defer restore()
+
+	cdb, err := getOrCreateDB(dir)
+	if err != nil {
+		t.Fatalf("getOrCreateDB failed: %v", err)
+	}
+	cdb.mu.RLock()
+	defer cdb.mu.RUnlock()
+
+	// BM25: 空查询应返回 nil
+	results, err := cdb.Search(context.Background(), SearchBM25, "", 10)
+	if err != nil {
+		t.Fatalf("Search BM25 with empty query: %v", err)
+	}
+	if results != nil {
+		t.Fatalf("expected nil for empty BM25 query, got %d", len(results))
+	}
+}
+
+func TestSearchDefaultLimit(t *testing.T) {
+	dir, restore := setupCodebase(t, 4)
+	defer restore()
+
+	cdb, err := getOrCreateDB(dir)
+	if err != nil {
+		t.Fatalf("getOrCreateDB failed: %v", err)
+	}
+	cdb.mu.RLock()
+	defer cdb.mu.RUnlock()
+
+	// 插入超过 10 条
+	for i := 0; i < 15; i++ {
+		sym := fmt.Sprintf("Func%d", i)
+		insertTestItem(t, cdb, "multi.go", sym,
+			fmt.Sprintf("function %d does something", i),
+			fmt.Sprintf("func Func%d(){}", i),
+			`[]`)
+	}
+
+	results, err := cdb.Search(context.Background(), SearchBM25, "function", 0) // limit=0 -> 10
+	if err != nil {
+		t.Fatalf("Search with default limit: %v", err)
+	}
+	if len(results) != 10 {
+		t.Fatalf("expected exactly 10 results with default limit (0), got %d", len(results))
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Package-level Search function
+// ---------------------------------------------------------------------------
+
+func TestPackageLevelSearch(t *testing.T) {
+	oldDim := openai.EmbeddingDim
+	openai.EmbeddingDim = 4
+	defer func() { openai.EmbeddingDim = oldDim }()
+
+	dir, restore := setupCodebase(t, 4)
+	defer restore()
+
+	// 嵌入一条数据
+	done := make(chan struct{})
+	if err := AddToQueue(dir, EmbedTask{
+		EmbedText:   "package level search test function",
+		FullContent: "func PackageLevel() {}",
+		FilePath:    "pkg.go",
+		Symbol:      "PackageLevel",
+		Tags:        []string{"go"},
+		Done:        done,
+	}); err != nil {
+		t.Fatalf("AddToQueue failed: %v", err)
+	}
+	<-done
+
+	// 使用包级函数
+	results, err := Search(context.Background(), dir, SearchBM25, "level search", 10)
+	if err != nil {
+		t.Fatalf("Package-level Search failed: %v", err)
+	}
+	if len(results) == 0 {
+		t.Fatal("expected non-empty results from package-level Search")
+	}
+	found := false
+	for _, r := range results {
+		if r.Symbol == "PackageLevel" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected 'PackageLevel' in search results")
 	}
 }

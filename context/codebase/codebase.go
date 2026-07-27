@@ -406,10 +406,11 @@ func (cdb *CodebaseDB) ensureSchema() error {
 		return cdb.createTables()
 	}
 
-	return nil
+	// 检查并迁移 FTS5 表（兼容已有数据库文件）
+	return cdb.ensureFTSSchema()
 }
 
-// createTables 创建所有表
+// createTables 创建所有表和 FTS 触发器
 func (cdb *CodebaseDB) createTables() error {
 	// vec0 虚拟表（维度在 DDL 中固定）
 	vecSQL := fmt.Sprintf(
@@ -439,6 +440,47 @@ func (cdb *CodebaseDB) createTables() error {
 		return fmt.Errorf("create items table: %w", err)
 	}
 
+	// FTS5 全文搜索表（BM25 关键词检索）
+	ftsSQL := `CREATE VIRTUAL TABLE IF NOT EXISTS codebase_fts USING fts5(
+		symbol,
+		tags,
+		embed_text,
+		content='codebase_items',
+		content_rowid='id',
+		tokenize='unicode61 remove_diacritics 2'
+	)`
+	if _, err := cdb.db.Exec(ftsSQL); err != nil {
+		return fmt.Errorf("create fts5 table: %w", err)
+	}
+
+	// FTS5 内容同步触发器
+	if _, err := cdb.db.Exec(`
+		CREATE TRIGGER IF NOT EXISTS codebase_items_ai AFTER INSERT ON codebase_items BEGIN
+			INSERT INTO codebase_fts(rowid, symbol, tags, embed_text)
+			VALUES (new.id, new.symbol, new.tags, new.embed_text);
+		END
+	`); err != nil {
+		return fmt.Errorf("create fts insert trigger: %w", err)
+	}
+	if _, err := cdb.db.Exec(`
+		CREATE TRIGGER IF NOT EXISTS codebase_items_ad AFTER DELETE ON codebase_items BEGIN
+			INSERT INTO codebase_fts(codebase_fts, rowid, symbol, tags, embed_text)
+			VALUES ('delete', old.id, old.symbol, old.tags, old.embed_text);
+		END
+	`); err != nil {
+		return fmt.Errorf("create fts delete trigger: %w", err)
+	}
+	if _, err := cdb.db.Exec(`
+		CREATE TRIGGER IF NOT EXISTS codebase_items_au AFTER UPDATE ON codebase_items BEGIN
+			INSERT INTO codebase_fts(codebase_fts, rowid, symbol, tags, embed_text)
+			VALUES ('delete', old.id, old.symbol, old.tags, old.embed_text);
+			INSERT INTO codebase_fts(rowid, symbol, tags, embed_text)
+			VALUES (new.id, new.symbol, new.tags, new.embed_text);
+		END
+	`); err != nil {
+		return fmt.Errorf("create fts update trigger: %w", err)
+	}
+
 	// meta 表
 	if _, err := cdb.db.Exec(`
 		CREATE TABLE IF NOT EXISTS codebase_meta(
@@ -463,14 +505,83 @@ func (cdb *CodebaseDB) createTables() error {
 	return nil
 }
 
-// dropTables 删除 vec0 和 items 表（保留 meta 表用于校验）
+// dropTables 删除 vec0、FTS5 和 items 表（保留 meta 表用于校验）
 func (cdb *CodebaseDB) dropTables() error {
+	if _, err := cdb.db.Exec("DROP TABLE IF EXISTS codebase_fts"); err != nil {
+		return fmt.Errorf("drop fts table: %w", err)
+	}
 	if _, err := cdb.db.Exec("DROP TABLE IF EXISTS codebase_vec"); err != nil {
 		return fmt.Errorf("drop vec table: %w", err)
 	}
 	if _, err := cdb.db.Exec("DROP TABLE IF EXISTS codebase_items"); err != nil {
 		return fmt.Errorf("drop items table: %w", err)
 	}
+	return nil
+}
+
+// ensureFTSSchema 检查 FTS5 表是否存在，不存在则创建并重建索引（迁移路径）
+func (cdb *CodebaseDB) ensureFTSSchema() error {
+	// 检查 FTS 表是否已存在
+	var tableName string
+	err := cdb.db.QueryRow(
+		"SELECT name FROM sqlite_master WHERE type='table' AND name='codebase_fts'",
+	).Scan(&tableName)
+	if err == nil {
+		return nil // 已存在
+	}
+	if err != sql.ErrNoRows {
+		return fmt.Errorf("check fts table: %w", err)
+	}
+
+	cdb.logger.Info("migrating: creating FTS5 table and rebuilding index")
+
+	// 创建 FTS5 虚拟表
+	ftsSQL := `CREATE VIRTUAL TABLE IF NOT EXISTS codebase_fts USING fts5(
+		symbol,
+		tags,
+		embed_text,
+		content='codebase_items',
+		content_rowid='id',
+		tokenize='unicode61 remove_diacritics 2'
+	)`
+	if _, err := cdb.db.Exec(ftsSQL); err != nil {
+		return fmt.Errorf("create fts5 table: %w", err)
+	}
+
+	// 创建同步触发器
+	if _, err := cdb.db.Exec(`
+		CREATE TRIGGER IF NOT EXISTS codebase_items_ai AFTER INSERT ON codebase_items BEGIN
+			INSERT INTO codebase_fts(rowid, symbol, tags, embed_text)
+			VALUES (new.id, new.symbol, new.tags, new.embed_text);
+		END
+	`); err != nil {
+		return fmt.Errorf("create fts insert trigger: %w", err)
+	}
+	if _, err := cdb.db.Exec(`
+		CREATE TRIGGER IF NOT EXISTS codebase_items_ad AFTER DELETE ON codebase_items BEGIN
+			INSERT INTO codebase_fts(codebase_fts, rowid, symbol, tags, embed_text)
+			VALUES ('delete', old.id, old.symbol, old.tags, old.embed_text);
+		END
+	`); err != nil {
+		return fmt.Errorf("create fts delete trigger: %w", err)
+	}
+	if _, err := cdb.db.Exec(`
+		CREATE TRIGGER IF NOT EXISTS codebase_items_au AFTER UPDATE ON codebase_items BEGIN
+			INSERT INTO codebase_fts(codebase_fts, rowid, symbol, tags, embed_text)
+			VALUES ('delete', old.id, old.symbol, old.tags, old.embed_text);
+			INSERT INTO codebase_fts(rowid, symbol, tags, embed_text)
+			VALUES (new.id, new.symbol, new.tags, new.embed_text);
+		END
+	`); err != nil {
+		return fmt.Errorf("create fts update trigger: %w", err)
+	}
+
+	// 重建 FTS 索引（适用于已有数据的数据库）
+	if _, err := cdb.db.Exec("INSERT INTO codebase_fts(codebase_fts) VALUES('rebuild')"); err != nil {
+		return fmt.Errorf("rebuild fts index: %w", err)
+	}
+
+	cdb.logger.Info("FTS5 table created and index rebuilt")
 	return nil
 }
 
