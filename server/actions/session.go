@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/cxykevin/alkaid0/config"
+	"github.com/cxykevin/alkaid0/context/codebase"
 	cfgStructs "github.com/cxykevin/alkaid0/config/structs"
 	reqStructs "github.com/cxykevin/alkaid0/provider/request/structs"
 	"github.com/cxykevin/alkaid0/storage"
@@ -420,6 +421,11 @@ func loadSession(cwd string, id *uint32, knowID bool) (*structs.Chats, error) {
 		db, err := loadDB(cwd)
 		if err != nil {
 			return nil, err
+		}
+
+		// Codebase 初始化（懒初始化，首次使用时自动连接）
+		if err := codebase.Initialize(); err != nil {
+			logger.Warn("codebase init: %v (continuing without codebase)", err)
 		}
 
 		if !knowID {

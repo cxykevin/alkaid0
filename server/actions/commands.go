@@ -1,11 +1,17 @@
 package actions
 
 import (
+	"context"
 	"fmt"
+	"runtime"
 	"strings"
+	"time"
 
 	"github.com/cxykevin/alkaid0/config"
+	"github.com/cxykevin/alkaid0/context/codebase"
+	"github.com/cxykevin/alkaid0/product"
 	"github.com/cxykevin/alkaid0/storage/structs"
+	u "github.com/cxykevin/alkaid0/utils"
 )
 
 // cmdObj cmd 对象描述
@@ -75,6 +81,125 @@ var commandMaps = map[string]*cmdObj{
 			default:
 				return false, fmt.Errorf("Usage: /background on|off")
 			}
+		},
+	},
+	"/index": {
+		Description: "Scan working dir and build codebase index (extract LSP symbols → submit embedding tasks)",
+		Hint:        "(no args) or 'clean' | 'status'",
+		Function: func(obj *sessionObj, arg string) (bool, error) {
+			sessionID := cwd2SessionID(obj.cwd, obj.id)
+			switch strings.TrimSpace(arg) {
+			case "clean":
+				if err := codebase.CleanDirectory(obj.cwd); err != nil {
+					return false, fmt.Errorf("clean codebase: %w", err)
+				}
+				broadcastSessionUpdate(sessionID, SessionUpdate{
+					SessionID: sessionID,
+					Update: SessionUpdateUpdate{
+						SessionUpdate: "alk.cxykevin.top/session_stop",
+						Content: map[string]string{
+							"stopReason": "end_turn",
+						},
+					},
+				}, 0)
+				return false, nil
+			case "status":
+				status := codebase.GetIndexStatus(obj.cwd)
+				r := "No index in progress."
+				if status != nil {
+					r = fmt.Sprintf("Indexing: **%s** | %d/%d processed | %d remaining | current: %s",
+						status.Status, status.Processed, status.Total, status.Remaining, status.CurrentFile)
+					if status.Error != "" {
+						r += fmt.Sprintf("\nError: %s", status.Error)
+					}
+				}
+				_ = broadcastSessionUpdate(sessionID, SessionUpdate{
+					SessionID: sessionID,
+					Update: SessionUpdateUpdate{
+						SessionUpdate: "agent_message_chunk",
+						Content: u.H{
+							"type": "text",
+							"text": r,
+						},
+					},
+				}, 0)
+				return false, nil
+			case "cancel":
+				if err := codebase.CancelIndex(obj.cwd); err != nil {
+					return false, fmt.Errorf("cancel index: %w", err)
+				}
+				_ = broadcastSessionUpdate(sessionID, SessionUpdate{
+					SessionID: sessionID,
+					Update: SessionUpdateUpdate{
+						SessionUpdate: "agent_message_chunk",
+						Content: u.H{
+							"type": "text",
+							"text": "Index cancelled.",
+						},
+					},
+				}, 0)
+				return false, nil
+			default:
+				// arg 为空或其他情况 → 开始索引
+			}
+			go func() {
+				broadcastFn := func(status codebase.IndexStatus) {
+					_ = broadcastSessionUpdate(sessionID, SessionUpdate{
+						SessionID: sessionID,
+						Update: SessionUpdateUpdate{
+							SessionUpdate: "alk.cxykevin.top/context/embedding/status",
+							Content:       status,
+						},
+					}, 0)
+				}
+				broadcastFn(codebase.IndexStatus{Status: "scanning"})
+				if err := codebase.RunIndex(context.Background(), obj.cwd, broadcastFn); err != nil {
+					broadcastFn(codebase.IndexStatus{
+						Status: "error",
+						Error:  err.Error(),
+					})
+					return
+				}
+				broadcastFn(codebase.IndexStatus{Status: "completed"})
+			}()
+			return false, nil
+		},
+	},
+	"/version": {
+		Description: "Show Alkaid0 version information",
+		Hint:        "(no args)",
+		Function: func(obj *sessionObj, arg string) (bool, error) {
+			sessionID := cwd2SessionID(obj.cwd, obj.id)
+			versionInfo := fmt.Sprintf(`**Version:**
+  - Version: **%s** (Number %d)
+  - Commit ID: %s
+**Build:**
+  - Time: %d
+  - Note: %s
+**System:**
+  - OS: %s
+  - Arch: %s
+  - Current Time: %d`,
+				product.Version,
+				product.VersionID,
+				product.CommitID,
+				product.BuildTime,
+				product.BuildNote,
+				runtime.GOOS,
+				runtime.GOARCH,
+				time.Now().Unix(),
+			)
+			_ = broadcastSessionUpdate(sessionID, SessionUpdate{
+				SessionID: sessionID,
+				Update: SessionUpdateUpdate{
+					SessionUpdate: "agent_message_chunk",
+					Content: u.H{
+						"type": "text",
+						"text": versionInfo,
+					},
+				},
+			}, 0)
+			return false, nil
 		},
 	},
 }

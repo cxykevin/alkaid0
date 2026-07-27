@@ -80,8 +80,10 @@ func (c *Client) Start(ctx context.Context, cfg LanguageServerConfig) error {
 
 	c.logger.Info("starting LSP server: %s %v (workdir=%s)", cfg.Command, cfg.Args, c.workdir)
 
-	// 创建命令
-	cmd := exec.CommandContext(ctx, cfg.Command, cfg.Args...)
+	// 创建命令（使用 exec.Command 而非 exec.CommandContext，
+	// 因为 ctx 在 getClient 中会被 defer cancel() 撤销，导致进程被意外杀死。
+	// 进程生命周期由 Client.Close() / Shutdown() 管理）
+	cmd := exec.Command(cfg.Command, cfg.Args...)
 	cmd.Dir = c.workdir
 
 	stdin, err := cmd.StdinPipe()

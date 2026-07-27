@@ -99,6 +99,28 @@ func languageKey(workdir, language string) string {
 	return workdir + "|" + language
 }
 
+// SupportedExtensions 返回所有支持的扩展名列表（用户配置 + 内置默认值）
+func SupportedExtensions() []string {
+	cfg := config.GlobalConfigSafe()
+	seen := make(map[string]bool)
+
+	// 收集用户配置中自定义的扩展名
+	for ext := range cfg.LSP.LanguageServers {
+		seen[ext] = true
+	}
+
+	// 收集内置默认值
+	for ext := range defaultLanguageServers {
+		seen[ext] = true
+	}
+
+	result := make([]string, 0, len(seen))
+	for ext := range seen {
+		result = append(result, ext)
+	}
+	return result
+}
+
 // resolver 接口组合，便于测试替换
 type resolver interface {
 	resolveLanguageServer(ext string) (LanguageServerConfig, error)

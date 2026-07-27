@@ -155,6 +155,111 @@ func DirectoryStatus(directory string) *DirStatus {
 }
 
 // CleanSymbols 删除指定文件中不在 activeSymbols 列表中的所有符号片段
+
+// CleanDirectory 清空指定目录的 codebase 数据（删表重建，保留库文件）
+func CleanDirectory(directory string) error {
+	cdb, err := getOrCreateDB(directory)
+	if err != nil {
+		return fmt.Errorf("get db: %w", err)
+	}
+
+	// 先停止 worker（内部有自己的锁），再清数据
+	cdb.stopWorker()
+
+	cdb.mu.Lock()
+
+	if cdb.queue != nil {
+		cdb.queue.Clear()
+	}
+
+	if err := cdb.dropTables(); err != nil {
+		cdb.mu.Unlock()
+		return fmt.Errorf("drop tables: %w", err)
+	}
+	if err := cdb.createTables(); err != nil {
+		cdb.mu.Unlock()
+		return fmt.Errorf("create tables: %w", err)
+	}
+
+	cdb.mu.Unlock()
+
+	// 重启 worker
+	cdb.startWorker()
+
+	return nil
+}
+
+// GetFilePaths 返回 codebase 中所有已索引的文件路径列表
+func GetFilePaths(directory string) ([]string, error) {
+	cdb, err := getOrCreateDB(directory)
+	if err != nil {
+		return nil, fmt.Errorf("get db: %w", err)
+	}
+	cdb.mu.RLock()
+	defer cdb.mu.RUnlock()
+	if err := cdb.ensureDBOpen(); err != nil {
+		return nil, err
+	}
+	rows, err := cdb.db.Query("SELECT DISTINCT file_path FROM codebase_items")
+	if err != nil {
+		return nil, fmt.Errorf("query file paths: %w", err)
+	}
+	defer rows.Close()
+	var paths []string
+	for rows.Next() {
+		var p string
+		if err := rows.Scan(&p); err != nil {
+			return nil, fmt.Errorf("scan path: %w", err)
+		}
+		paths = append(paths, p)
+	}
+	return paths, rows.Err()
+}
+
+// RemoveFile 删除指定文件的所有索引条目（含向量）
+func RemoveFile(directory, filePath string) error {
+	cdb, err := getOrCreateDB(directory)
+	if err != nil {
+		return fmt.Errorf("get db: %w", err)
+	}
+	cdb.mu.Lock()
+	defer cdb.mu.Unlock()
+	if err := cdb.ensureDBOpen(); err != nil {
+		return err
+	}
+	tx, err := cdb.db.Begin()
+	if err != nil {
+		return fmt.Errorf("begin tx: %w", err)
+	}
+	defer tx.Rollback()
+	// 获取待删除 ID
+	rows, err := tx.Query("SELECT id FROM codebase_items WHERE file_path=?", filePath)
+	if err != nil {
+		return fmt.Errorf("query ids: %w", err)
+	}
+	var ids []int64
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			rows.Close()
+			return fmt.Errorf("scan id: %w", err)
+		}
+		ids = append(ids, id)
+	}
+	rows.Close()
+	// 删除向量
+	for _, id := range ids {
+		if _, err := tx.Exec("DELETE FROM codebase_vec WHERE id=?", id); err != nil {
+			return fmt.Errorf("delete vec id=%d: %w", id, err)
+		}
+	}
+	// 删除条目
+	if _, err := tx.Exec("DELETE FROM codebase_items WHERE file_path=?", filePath); err != nil {
+		return fmt.Errorf("delete items: %w", err)
+	}
+	return tx.Commit()
+}
+
 // symbol=""（整个文件）的记录不会被删除；同时清理对应的 vec0 向量
 func CleanSymbols(directory, filePath string, activeSymbols []string) error {
 	cdb, err := getOrCreateDB(directory)
@@ -268,7 +373,9 @@ func getOrCreateDB(directory string) (*CodebaseDB, error) {
 	VecDBsLock.Unlock()
 
 	if embedModelCfg == nil {
-		return nil, fmt.Errorf("codebase not initialized, call Initialize() first")
+		if err := Initialize(); err != nil {
+			return nil, fmt.Errorf("codebase auto-init: %w", err)
+		}
 	}
 
 	cdb := &CodebaseDB{
