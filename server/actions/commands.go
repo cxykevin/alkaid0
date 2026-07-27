@@ -1,9 +1,11 @@
 package actions
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"runtime"
+	"slices"
 	"strings"
 	"time"
 
@@ -84,8 +86,8 @@ var commandMaps = map[string]*cmdObj{
 		},
 	},
 	"/index": {
-		Description: "Scan working dir and build codebase index (extract LSP symbols → submit embedding tasks)",
-		Hint:        "(no args) or 'clean' | 'status'",
+		Description: "Build codebase index (extract LSP symbols → submit embedding tasks). Subcommands: clean (clear db), status (show progress), cancel (stop running index)",
+		Hint:        "(no args) or 'clean' | 'status' | 'cancel'",
 		Function: func(obj *sessionObj, arg string) (bool, error) {
 			sessionID := cwd2SessionID(obj.cwd, obj.id)
 			switch strings.TrimSpace(arg) {
@@ -202,4 +204,41 @@ var commandMaps = map[string]*cmdObj{
 			return false, nil
 		},
 	},
+
+}
+
+func init() {
+	commandMaps["/help"] = &cmdObj{
+		Description: "Show this help message",
+		Hint:        "(no args)",
+		Function: func(obj *sessionObj, arg string) (bool, error) {
+			sessionID := cwd2SessionID(obj.cwd, obj.id)
+			var b strings.Builder
+			b.WriteString("**Available commands:**\n\n")
+			type cmdEntry struct {
+				name string
+				hint string
+				desc string
+			}
+			entries := make([]cmdEntry, 0, len(commandMaps))
+			for name, cmd := range commandMaps {
+				entries = append(entries, cmdEntry{name, cmd.Hint, cmd.Description})
+			}
+			slices.SortFunc(entries, func(a, b cmdEntry) int { return cmp.Compare(a.name, b.name) })
+			for _, e := range entries {
+				b.WriteString(fmt.Sprintf("  **%s** %s\n  > %s\n", e.name, e.hint, e.desc))
+			}
+			_ = broadcastSessionUpdate(sessionID, SessionUpdate{
+				SessionID: sessionID,
+				Update: SessionUpdateUpdate{
+					SessionUpdate: "agent_message_chunk",
+					Content: u.H{
+						"type": "text",
+						"text": b.String(),
+					},
+				},
+			}, 0)
+			return false, nil
+		},
+	}
 }
