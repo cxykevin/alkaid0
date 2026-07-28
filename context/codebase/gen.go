@@ -9,8 +9,8 @@ import (
 	"github.com/cxykevin/alkaid0/config/structs"
 	"github.com/cxykevin/alkaid0/log"
 
-	_ "modernc.org/sqlite/vec"       // 初始化 sqlite-vec 扩展
 	_ "github.com/glebarez/go-sqlite" // 注册 "sqlite" database/sql 驱动
+	_ "modernc.org/sqlite/vec"        // 初始化 sqlite-vec 扩展
 )
 
 var logger *log.LogsObj

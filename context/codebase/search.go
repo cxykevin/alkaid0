@@ -41,7 +41,7 @@ type SearchResult struct {
 	Tags        string  `json:"tags"`
 	FullContent string  `json:"full_content"`
 	EmbedText   string  `json:"embed_text"`
-	Score       float64 `json:"score,omitempty"`   // BM25 score（越低越相关），仅 BM25 搜索时有效
+	Score       float64 `json:"score,omitempty"`    // BM25 score（越低越相关），仅 BM25 搜索时有效
 	Distance    float64 `json:"distance,omitempty"` // 向量距离（越低越相似），仅向量搜索时有效
 }
 
@@ -342,11 +342,11 @@ func (cdb *CodebaseDB) searchHybrid(ctx context.Context, query string, limit int
 	//   groupA — BM25 命中（+ 可能也有向量命中）
 	//   groupB — 仅向量命中且余弦相似度通过阈值
 	type scored struct {
-		result     SearchResult
-		bm25Score  float64
-		vecDist    float64
-		hasBM25    bool
-		hasVec     bool
+		result    SearchResult
+		bm25Score float64
+		vecDist   float64
+		hasBM25   bool
+		hasVec    bool
 	}
 	merged := make(map[int64]*scored)
 
@@ -450,7 +450,7 @@ func (cdb *CodebaseDB) searchHybrid(ctx context.Context, query string, limit int
 
 	// 组内排序
 	sortScored := func(list []*scored) {
-		for i := 0; i < len(list); i++ {
+		for i := range list {
 			for j := i + 1; j < len(list); j++ {
 				if list[j].result.Score < list[i].result.Score {
 					list[i], list[j] = list[j], list[i]

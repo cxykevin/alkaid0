@@ -62,10 +62,10 @@ func TestPathToURI(t *testing.T) {
 
 func TestExtractHoverInfo(t *testing.T) {
 	tests := []struct {
-		name          string
-		data          string // JSON hover response
-		wantSig       string
-		wantDoc       string
+		name    string
+		data    string // JSON hover response
+		wantSig string
+		wantDoc string
 	}{
 		{
 			name:    "markdown with code block signature",

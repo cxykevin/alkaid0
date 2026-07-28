@@ -2,8 +2,8 @@ package codebase
 
 import (
 	"context"
-	"fmt"
 	"database/sql"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -33,9 +33,9 @@ func setupCodebase(t *testing.T, dim int) (string, func()) {
 			EmbeddingModelID: 1,
 			Models: map[int32]structs.ModelConfig{
 				1: {
-					ModelName: "test-embedding",
-					ModelID:   "test-embedding",
-					Type:      structs.ModelTypeEmbedding,
+					ModelName:              "test-embedding",
+					ModelID:                "test-embedding",
+					Type:                   structs.ModelTypeEmbedding,
 					ProviderURL:            "http://localhost:56108/v1",
 					ProviderKey:            "sk-test",
 					ProviderSpecificConfig: structs.ProviderSpecificConfig{Dimension: dim},
@@ -261,9 +261,9 @@ func TestSchemaMigrationDimChange(t *testing.T) {
 			EmbeddingModelID: 1,
 			Models: map[int32]structs.ModelConfig{
 				1: {
-					ModelName: "test-embedding",
-					ModelID:   "test-embedding",
-					Type:      structs.ModelTypeEmbedding,
+					ModelName:              "test-embedding",
+					ModelID:                "test-embedding",
+					Type:                   structs.ModelTypeEmbedding,
 					ProviderURL:            "http://localhost:56108/v1",
 					ProviderKey:            "sk-test",
 					ProviderSpecificConfig: structs.ProviderSpecificConfig{Dimension: 8},
@@ -311,9 +311,9 @@ func TestSchemaMigrationModelNameChange(t *testing.T) {
 			EmbeddingModelID: 1,
 			Models: map[int32]structs.ModelConfig{
 				1: {
-					ModelName: "new-embedding-model",
-					ModelID:   "test-embedding",
-					Type:      structs.ModelTypeEmbedding,
+					ModelName:              "new-embedding-model",
+					ModelID:                "test-embedding",
+					Type:                   structs.ModelTypeEmbedding,
 					ProviderURL:            "http://localhost:56108/v1",
 					ProviderKey:            "sk-test",
 					ProviderSpecificConfig: structs.ProviderSpecificConfig{Dimension: 4},
@@ -492,11 +492,11 @@ func TestCleanSymbols(t *testing.T) {
 		symbol string
 		tags   string
 	}{
-		{"", "[]"},          // 整个文件
-		{"FuncA", "[]"},     // 保留
-		{"FuncB", "[]"},     // 保留
-		{"FuncC", "[]"},     // 删除
-		{"FuncD", "[]"},     // 删除
+		{"", "[]"},      // 整个文件
+		{"FuncA", "[]"}, // 保留
+		{"FuncB", "[]"}, // 保留
+		{"FuncC", "[]"}, // 删除
+		{"FuncD", "[]"}, // 删除
 	}
 
 	for _, ins := range inserts {
@@ -590,9 +590,9 @@ func TestGetDimFromCfg(t *testing.T) {
 			EmbeddingModelID: 1,
 			Models: map[int32]structs.ModelConfig{
 				1: {
-					ModelName: "test-embedding",
-					ModelID:   "test-embedding",
-					Type:      structs.ModelTypeEmbedding,
+					ModelName:              "test-embedding",
+					ModelID:                "test-embedding",
+					Type:                   structs.ModelTypeEmbedding,
 					ProviderSpecificConfig: structs.ProviderSpecificConfig{Dimension: 128},
 				},
 			},
@@ -642,9 +642,9 @@ func TestDBPath(t *testing.T) {
 			EmbeddingModelID: 1,
 			Models: map[int32]structs.ModelConfig{
 				1: {
-					ModelName: "test-embedding",
-					ModelID:   "test-embedding",
-					Type:      structs.ModelTypeEmbedding,
+					ModelName:              "test-embedding",
+					ModelID:                "test-embedding",
+					Type:                   structs.ModelTypeEmbedding,
 					ProviderURL:            "http://localhost:56108/v1",
 					ProviderKey:            "sk-test",
 					ProviderSpecificConfig: structs.ProviderSpecificConfig{Dimension: 4},
@@ -679,13 +679,13 @@ func TestExtractKeywords(t *testing.T) {
 		want  []string
 	}{
 		{"", nil},
-		{"a", nil},                    // 太短
-		{"the", nil},                  // 停用词
+		{"a", nil},   // 太短
+		{"the", nil}, // 停用词
 		{"hello", []string{"hello"}},
 		{"the hello world", []string{"hello", "world"}},
 		{"function edit file", []string{"function", "edit", "file"}},
 		{"EditFile", []string{"editfile"}},
-		{"1 2 3", nil},               // 纯数字
+		{"1 2 3", nil}, // 纯数字
 	}
 	for _, tt := range tests {
 		got := extractKeywords(tt.input)
@@ -1259,7 +1259,7 @@ func TestSearchDefaultLimit(t *testing.T) {
 	defer cdb.mu.RUnlock()
 
 	// 插入超过 10 条
-	for i := 0; i < 15; i++ {
+	for i := range 15 {
 		sym := fmt.Sprintf("Func%d", i)
 		insertTestItem(t, cdb, "multi.go", sym,
 			fmt.Sprintf("function %d does something", i),

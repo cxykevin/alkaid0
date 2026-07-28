@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -143,10 +144,10 @@ var privacyNamePrefixes = []string{
 // gitignorePattern 单条 gitignore 规则
 type gitignorePattern struct {
 	pattern  string
-	negate   bool   // 以 ! 开头
-	dirOnly  bool   // 以 / 结尾，仅匹配目录
-	rooted   bool   // 以 / 开头，从根目录匹配
-	hasSlash bool   // 模式中包含 /
+	negate   bool // 以 ! 开头
+	dirOnly  bool // 以 / 结尾，仅匹配目录
+	rooted   bool // 以 / 开头，从根目录匹配
+	hasSlash bool // 模式中包含 /
 }
 
 // loadGitignore 加载 .gitignore 文件
@@ -242,7 +243,7 @@ func matchPattern(p gitignorePattern, path string) bool {
 			return true
 		}
 		// 也检查路径的每个段
-		for _, part := range strings.Split(path, "/") {
+		for part := range strings.SplitSeq(path, "/") {
 			if ok, _ := filepath.Match(pattern, part); ok {
 				return true
 			}
@@ -295,7 +296,7 @@ func matchDoubleStar(pattern, path string) bool {
 			return true
 		}
 		// 检查每一段
-		for _, part := range strings.Split(path, "/") {
+		for part := range strings.SplitSeq(path, "/") {
 			if ok, _ := filepath.Match(suffix, part); ok {
 				return true
 			}
@@ -349,16 +350,8 @@ func getWhitelistExts() map[string]bool {
 // isBinary 检测数据是否为二进制（前 8KB 中是否有空字节）
 func isBinary(data []byte) bool {
 	const maxCheck = 8192
-	checkLen := len(data)
-	if checkLen > maxCheck {
-		checkLen = maxCheck
-	}
-	for _, b := range data[:checkLen] {
-		if b == 0 {
-			return true
-		}
-	}
-	return false
+	checkLen := min(len(data), maxCheck)
+	return slices.Contains(data[:checkLen], 0)
 }
 
 // isPrivacyFile 检查文件路径是否为隐私文件
@@ -556,7 +549,7 @@ func RunIndex(ctx context.Context, cwd string, broadcastFn func(IndexStatus)) er
 			return nil
 		}
 
-			scannedPaths[relPath] = true
+		scannedPaths[relPath] = true
 		files = append(files, fileInfo{
 			path:    path,
 			relPath: relPath,

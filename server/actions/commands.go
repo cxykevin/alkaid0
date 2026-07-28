@@ -204,7 +204,6 @@ var commandMaps = map[string]*cmdObj{
 			return false, nil
 		},
 	},
-
 }
 
 func init() {

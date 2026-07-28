@@ -141,7 +141,7 @@ type InitializeParams struct {
 
 // ClientCapabilities LSP 客户端能力
 type ClientCapabilities struct {
-	TextDocument TextDocumentClientCapabilities `json:"textDocument,omitempty"`
+	TextDocument TextDocumentClientCapabilities `json:"textDocument"`
 }
 
 // TextDocumentClientCapabilities LSP 文本文档客户端能力

@@ -28,8 +28,8 @@ type ContextEngineConfig struct {
 // AgentsConfig 代理配置结构
 type AgentsConfig struct {
 	Agents                  map[string]AgentConfig
-	IgnoreBuiltinAgents     bool                `default:"false"`
-	GlobalPrompt            string              `default:""`
+	IgnoreBuiltinAgents     bool   `default:"false"`
+	GlobalPrompt            string `default:""`
 	SummaryModel            int32
 	MaxCallCount            int32               `default:"50"`
 	DefaultAutoApprove      string              `default:"" json:"AutoApprove"` // 全局默认自动批准表达式
@@ -38,5 +38,5 @@ type AgentsConfig struct {
 	DisablePromptPreprocess bool                `default:"false"` // 禁用提示词预处理（prompt分类器）
 	UseShell                string              `default:""`
 	DisableSandbox          bool                `default:"false"`
-	ContextEngine           ContextEngineConfig `json:"contextEngine,omitempty"`
+	ContextEngine           ContextEngineConfig `json:"contextEngine"`
 }

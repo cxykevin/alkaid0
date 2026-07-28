@@ -1,8 +1,8 @@
 package codebase
 
 import (
-	"context"
 	"container/list"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"sync"

@@ -3,6 +3,7 @@ package lsp
 import (
 	"context"
 	"fmt"
+	"maps"
 	"sync"
 	"time"
 
@@ -176,9 +177,7 @@ func (m *Manager) reaperLoop() {
 func (m *Manager) reapIdle() {
 	m.clientsMu.Lock()
 	clients := make(map[string]*Client, len(m.clients))
-	for k, c := range m.clients {
-		clients[k] = c
-	}
+	maps.Copy(clients, m.clients)
 	m.clientsMu.Unlock()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)

@@ -189,7 +189,7 @@ func TestTransportMultipleRequests(t *testing.T) {
 	defer mock.close()
 
 	go func() {
-		for i := 0; i < 3; i++ {
+		for i := range 3 {
 			req := mock.nextRequest(10 * time.Second)
 			if req == nil {
 				return

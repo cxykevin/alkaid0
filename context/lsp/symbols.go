@@ -379,8 +379,8 @@ func pathToURI(absPath string) string {
 // languageFromURI 从 URI 推断语言
 // 实际上从 extFromPath 获取更可靠，这里作为备选
 func languageFromURI(uri string) string {
-	if strings.HasPrefix(uri, "file://") {
-		path := strings.TrimPrefix(uri, "file://")
+	if after, ok := strings.CutPrefix(uri, "file://"); ok {
+		path := after
 		ext := extFromPath(path)
 		return languageIDFromExt(ext)
 	}
