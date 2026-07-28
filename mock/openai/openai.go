@@ -526,8 +526,10 @@ func startServe(listener net.Listener) {
 
 // StartServerTask 启动服务器任务。
 // serverOnce.Do 保证每个进程只启动一次。
+// 始终使用随机端口（:0），避免并行测试冲突。
 func StartServerTask() {
 	serverOnce.Do(func() {
+		Addr = ":0"
 		waitChan = make(chan bool, 1)
 		go acquireServer()
 		<-waitChan

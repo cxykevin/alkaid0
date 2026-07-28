@@ -334,10 +334,8 @@ func TestStartWithContext(t *testing.T) {
 // TestStreamingChatIntegration 测试流式聊天集成（使用 mock OpenAI 服务器）
 // 验证完整的消息发送 → LLM 流式响应 → stop reason 生命周期
 func TestStreamingChatIntegration(t *testing.T) {
-	setupConfigForTest()
-
-	// 启动 mock 服务器（sync.Once 确保只启动一次）
 	openai.StartServerTask()
+	setupConfigForTest()
 
 	db := setupTestDB(t)
 	defer u.Unwrap(db.DB()).Close()

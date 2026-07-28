@@ -13,6 +13,7 @@ import (
 	_ "embed" // embed logo
 
 	"github.com/cxykevin/alkaid0/config"
+	"github.com/cxykevin/alkaid0/context/codebase"
 	"github.com/cxykevin/alkaid0/context/lsp"
 	"github.com/cxykevin/alkaid0/helper"
 	"github.com/cxykevin/alkaid0/log"
@@ -21,6 +22,7 @@ import (
 	"github.com/cxykevin/alkaid0/server"
 	"github.com/cxykevin/alkaid0/server/client/jsonrpc/connect"
 	"github.com/cxykevin/alkaid0/tools/index"
+	"github.com/cxykevin/alkaid0/tools/tools/search"
 )
 
 const alkaid0IgnoreEntry = "\n# alkaid0\n.alkaid0/\n.alk_*\n"
@@ -115,6 +117,35 @@ func Startup() {
 	}
 	ensureGlobalGitIgnore()
 	index.Load()
+
+	// Codebase 搜索引擎初始化
+	if err := codebase.Initialize(); err != nil {
+		logger.Warn("codebase init: %v (context search unavailable)", err)
+	}
+	search.SetContextSearchFn(func(ctx context.Context, directory string, searchType int, query string, limit int) ([]search.ContextSearchResult, error) {
+		// 检查 codebase 是否有索引数据，没有则跳过（避免空调用 embedding API）
+		paths, err := codebase.GetFilePaths(directory)
+		if err != nil || len(paths) == 0 {
+			if err != nil {
+				logger.Debug("codebase get paths: %v (skipping context search)", err)
+			}
+			return nil, nil
+		}
+		results, err := codebase.Search(ctx, directory, codebase.SearchType(searchType), query, limit)
+		if err != nil {
+			return nil, err
+		}
+		out := make([]search.ContextSearchResult, len(results))
+		for i, r := range results {
+			out[i] = search.ContextSearchResult{
+				FilePath: r.FilePath,
+				Symbol:   r.Symbol,
+				Content:  r.EmbedText,
+				Score:    r.Score,
+			}
+		}
+		return out, nil
+	})
 
 	// LSP 客户端初始化
 	if err := lsp.Initialize(); err != nil {

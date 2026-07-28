@@ -3,5 +3,6 @@
     ToolCall.Name == "activate_agent" ||
     ToolCall.Name == "deactivate_agent" ||
     ToolCall.Name == "agent" ||
-    ToolCall.Name == "trace"
+    ToolCall.Name == "trace" ||
+    ToolCall.Name == "search"
 )
