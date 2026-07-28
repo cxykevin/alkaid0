@@ -428,6 +428,15 @@ func loadSession(cwd string, id *uint32, knowID bool) (*structs.Chats, error) {
 			logger.Warn("codebase init: %v (continuing without codebase)", err)
 		}
 
+		// 如果配置了 embedding 模型，后台启动 codebase 索引
+		if codebase.IsEmbeddingConfigured() {
+			go func() {
+				if err := codebase.RunIndex(context.Background(), cwd, nil); err != nil {
+					logger.Debug("auto index: %v", err)
+				}
+			}()
+		}
+
 		if !knowID {
 			idv, err := funcs.CreateChat(db)
 			*id = idv

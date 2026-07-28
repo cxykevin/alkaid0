@@ -49,6 +49,12 @@ func GetDimFromCfg() int {
 	return dim
 }
 
+// IsEmbeddingConfigured 检查是否配置了 embedding 模型
+func IsEmbeddingConfigured() bool {
+	_, err := resolveModelFromCfg()
+	return err == nil
+}
+
 // resolveModelFromCfg 从配置中找 embedding 模型的 ModelConfig
 func resolveModelFromCfg() (*structs.ModelConfig, error) {
 	cfg := config.GlobalConfigSafe()
