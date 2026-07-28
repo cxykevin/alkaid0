@@ -3,6 +3,7 @@ package codebase
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -401,6 +402,31 @@ func throttledBroadcast(fn func(IndexStatus)) func(IndexStatus) {
 	}
 }
 
+// truncateContent 按文件类型限制索引内容行数
+func truncateContent(ext string, content []byte) []byte {
+	lines := bytes.Split(content, []byte{'\n'})
+	switch ext {
+	case ".txt":
+		if len(lines) > 5 {
+			lines = lines[:5]
+		}
+	case ".json":
+		var buf bytes.Buffer
+		if err := json.Indent(&buf, content, "", "  "); err == nil {
+			content = buf.Bytes()
+			lines = bytes.Split(content, []byte{'\n'})
+		}
+		if len(lines) > 20 {
+			lines = lines[:20]
+		}
+	case ".yaml", ".yml":
+		if len(lines) > 20 {
+			lines = lines[:20]
+		}
+	}
+	return bytes.Join(lines, []byte{'\n'})
+}
+
 // RunIndex 扫描 cwd 下的合规文件，逐个提取 LSP 符号并提交嵌入任务。
 // broadcastFn 可选，每次状态变更时调用以广播进度。
 func RunIndex(ctx context.Context, cwd string, broadcastFn func(IndexStatus)) error {
@@ -544,10 +570,8 @@ func RunIndex(ctx context.Context, cwd string, broadcastFn func(IndexStatus)) er
 			return nil
 		}
 
-		// 7) 行数检查（> 5000 行跳过）
-		if bytes.Count(content, []byte{'\n'}) > 5000 {
-			return nil
-		}
+		// 7) 内容截断：按文件类型限制索引行数
+		content = truncateContent(ext, content)
 
 		scannedPaths[relPath] = true
 		files = append(files, fileInfo{

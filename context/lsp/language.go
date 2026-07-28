@@ -34,6 +34,10 @@ var defaultLanguageServers = map[string]LanguageServerConfig{
 	".ts":   {Command: "typescript-language-server", Args: []string{"--stdio"}},
 	".tsx":  {Command: "typescript-language-server", Args: []string{"--stdio"}},
 	".vue":  {Command: "vue-language-server", Args: []string{"--stdio"}},
+	".json": {Command: "json-languageserver", Args: []string{"--stdio"}},
+	".yaml": {Command: "yaml-language-server", Args: []string{"--stdio"}},
+	".yml":  {Command: "yaml-language-server", Args: []string{"--stdio"}},
+	".txt":  {Command: "true"},
 }
 
 // extToLanguageID 文件扩展名到 LSP 语言 ID 的映射
@@ -56,6 +60,10 @@ var extToLanguageID = map[string]string{
 	".ts":   "typescript",
 	".tsx":  "typescript",
 	".vue":  "vue",
+	".json": "json",
+	".yaml": "yaml",
+	".yml":  "yaml",
+	".txt":  "text",
 }
 
 // extFromPath 从文件路径获取小写扩展名
