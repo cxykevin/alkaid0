@@ -16,7 +16,7 @@ func setupTestConfig() {
 	config.GlobalConfig.Agent.SummaryModel = 100
 	config.GlobalConfig.Model.Models[100] = cfgStruct.ModelConfig{
 		ModelID:     "echo-chat-flash",
-		ProviderURL: "http://localhost:56108/v1",
+		ProviderURL: openai.BaseURL,
 		ProviderKey: "mock-key",
 		ModelName:   "Echo Mock Model",
 	}

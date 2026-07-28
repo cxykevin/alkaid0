@@ -22,7 +22,7 @@ func setupCancelTestConfig(modelID int32, modelName string) {
 	config.GlobalConfig.Model.Models = make(map[int32]cfgStruct.ModelConfig)
 	config.GlobalConfig.Model.Models[modelID] = cfgStruct.ModelConfig{
 		ModelID:     modelName,
-		ProviderURL: "http://localhost:56108/v1",
+		ProviderURL: openai.BaseURL,
 		ProviderKey: "mock-key",
 		ModelName:   "Cancel Test Model",
 	}

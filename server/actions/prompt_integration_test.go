@@ -25,7 +25,7 @@ func setupConfigForTest() {
 			1: {
 				ModelName:   "test-chat",
 				ModelID:     "test-chat",
-				ProviderURL: "http://localhost:56108/v1",
+				ProviderURL: openai.BaseURL,
 				ProviderKey: apiKey,
 			},
 		},

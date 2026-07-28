@@ -6,6 +6,7 @@ import (
 
 	"github.com/cxykevin/alkaid0/config"
 	cfgStruct "github.com/cxykevin/alkaid0/config/structs"
+	"github.com/cxykevin/alkaid0/mock/openai"
 	"github.com/cxykevin/alkaid0/storage/structs"
 	u "github.com/cxykevin/alkaid0/utils"
 	"gorm.io/driver/sqlite"
@@ -76,7 +77,7 @@ func TestSummary_EmptyChat(t *testing.T) {
 				1: {
 					ModelName:   "test-model",
 					ModelID:     "test-model-id",
-					ProviderURL: "http://localhost:56108/v1",
+					ProviderURL: openai.BaseURL,
 					ProviderKey: "sk-test",
 				},
 			},
@@ -119,7 +120,7 @@ func TestSummary_NonExistentChat(t *testing.T) {
 				1: {
 					ModelName:   "test-model",
 					ModelID:     "test-model-id",
-					ProviderURL: "http://localhost:56108/v1",
+					ProviderURL: openai.BaseURL,
 					ProviderKey: "sk-test",
 				},
 			},
@@ -152,7 +153,7 @@ func TestSummarySession(t *testing.T) {
 				1: {
 					ModelName:   "test-model",
 					ModelID:     "test-model-id",
-					ProviderURL: "http://localhost:56108/v1",
+					ProviderURL: openai.BaseURL,
 					ProviderKey: "sk-test",
 				},
 			},
@@ -203,7 +204,7 @@ func TestSummarySession_WithAgent(t *testing.T) {
 				1: {
 					ModelName:   "test-model",
 					ModelID:     "test-model-id",
-					ProviderURL: "http://localhost:56108/v1",
+					ProviderURL: openai.BaseURL,
 					ProviderKey: "sk-test",
 				},
 			},

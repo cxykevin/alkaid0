@@ -25,7 +25,7 @@ func TestMain(m *testing.M) {
 }
 
 func TestSimpleOpenAIRequest(t *testing.T) {
-	baseURL := "http://localhost:56108/v1"
+	baseURL := openai.BaseURL
 	apiKey := "sk-abc"
 	model := "test-chat-flash-thinking"
 
@@ -61,7 +61,7 @@ func TestSimpleOpenAIRequest(t *testing.T) {
 }
 
 func TestSimpleOpenAIEmbedding(t *testing.T) {
-	baseURL := "http://localhost:56108/v1"
+	baseURL := openai.BaseURL
 	apiKey := "sk-abc"
 	model := "test-embedding"
 
@@ -90,7 +90,7 @@ func TestSimpleOpenAIEmbedding(t *testing.T) {
 
 // TestEmptyMessages 测试空消息输入
 func TestEmptyMessages(t *testing.T) {
-	baseURL := "http://localhost:56108/v1"
+	baseURL := openai.BaseURL
 	apiKey := "sk-abc"
 	model := "test-chat-flash-thinking"
 	body := structs.ChatCompletionRequest{
@@ -127,7 +127,7 @@ func TestInvalidBaseURL(t *testing.T) {
 
 // TestCallbackError 测试回调返回 error
 func TestCallbackError(t *testing.T) {
-	baseURL := "http://localhost:56108/v1"
+	baseURL := openai.BaseURL
 	apiKey := "sk-abc"
 	model := "test-chat-flash-thinking"
 	body := structs.ChatCompletionRequest{
@@ -144,7 +144,7 @@ func TestCallbackError(t *testing.T) {
 
 // TestEmbeddingEmptyInput 测试嵌入空输入
 func TestEmbeddingEmptyInput(t *testing.T) {
-	baseURL := "http://localhost:56108/v1"
+	baseURL := openai.BaseURL
 	apiKey := "sk-abc"
 	model := "test-embedding"
 	body := structs.EmbeddingRequest{
@@ -179,7 +179,7 @@ func TestEmbeddingInvalidBaseURL(t *testing.T) {
 
 // TestConcurrentRequests 测试并发请求
 func TestConcurrentRequests(t *testing.T) {
-	baseURL := "http://localhost:56108/v1"
+	baseURL := openai.BaseURL
 	apiKey := "sk-abc"
 	model := "test-chat-flash-thinking"
 

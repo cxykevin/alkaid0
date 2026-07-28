@@ -92,7 +92,18 @@ import (
 // Addr 服务端口号
 // 格式: ":端口" 或 "主机:端口"
 // 示例: ":56108" 监听所有接口的 56108 端口
-const Addr = ":56108"
+// 测试中改为 ":0" 使用随机端口，避免并行冲突
+var Addr = ":56108"
+
+// BaseURL 是当前 mock 服务器的基础 URL（含端口），测试通过此函数获取服务地址。
+// 在 StartServerTask 返回后可用。
+var BaseURL string
+
+// SetAddr 在测试中设置监听地址，":0" 表示随机端口。
+// 测试 init() 阶段调用，确保服务器启动时使用正确的地址。
+func SetAddr(addr string) {
+	Addr = addr
+}
 
 // Models 可用的模型列表
 var Models = []Model{
@@ -469,99 +480,31 @@ func handleModels(w http.ResponseWriter, r *http.Request) {
 
 var (
 	waitChan   chan bool
-	closeOnce  sync.Once // 保证 waitChan 只关闭一次，防止接管路径重复关闭 panic
 	serverOnce sync.Once
 )
 
-// isServerAlive 检查 mock 服务器是否在正常运行
-func isServerAlive() bool {
-	client := &http.Client{Timeout: 100 * time.Millisecond}
-	resp, err := client.Get("http://localhost" + Addr + "/v1/models")
-	if err != nil {
-		return false
-	}
-	resp.Body.Close()
-	return true
-}
-
-// signalReady 安全地通知 StartServerTask 解除阻塞
-func signalReady() {
-	closeOnce.Do(func() {
-		if waitChan != nil {
-			close(waitChan)
-		}
-	})
-}
-
-// acquireServer 阻塞直到当前进程获得一个可工作的服务器。
-//
-// 路径 A：直接监听成功 → 启动自己的服务
-// 路径 B：端口被占用，但 HTTP 检测到已有 mock 服务 → 监控该服务，它死后立即接管
-// 路径 C：端口 TIME_WAIT → 200ms 重试（最多 30 次 ≈ 6 秒）
+// acquireServer 阻塞直到当前进程成功绑定端口并启动服务器。
+// 每个进程有自己的服务器实例，不共享、不依赖其他进程。
+// Addr 为 ":0" 时监听随机端口，并行测试中每个包获得独立服务器。
 func acquireServer() {
-	// 路径 A ─ 直接启动
-	listener, err := net.Listen("tcp", Addr)
-	if err == nil {
-		signalReady()
-		startServe(listener)
-		return
-	}
-
-	// 路径 B/C ─ 端口被占用，进入监控/接管循环
-	ticker := time.NewTicker(200 * time.Millisecond)
-	defer ticker.Stop()
-
-	deadline := time.After(30 * time.Second)
-	tryBind := true // 第一次尝试 bind（已经失败），之后交替检查 alive / bind
-
-	for {
-		select {
-		case <-ticker.C:
-			if tryBind {
-				listener, err = net.Listen("tcp", Addr)
-				if err == nil {
-					fmt.Printf("[mock] acquired port %s after retry\n", Addr)
-					signalReady()
-					startServe(listener)
-					return
-				}
-				// bind 失败，下一轮检查 alive
-				tryBind = false
-			} else {
-				if isServerAlive() {
-					fmt.Printf("[mock] sharing port %s (existing server detected)\n", Addr)
-					signalReady()
-					// 监控：共享服务器退出时自动接管
-					waitForDeadThenAcquire()
-					return
-				}
-				tryBind = true
+	for range 150 { // 最多重试 30s（150 × 200ms）
+		listener, err := net.Listen("tcp", Addr)
+		if err == nil {
+			// 提取实际端口（Addr 为 ":0" 时由 OS 分配）
+			_, port, _ := net.SplitHostPort(listener.Addr().String())
+			BaseURL = fmt.Sprintf("http://localhost:%s/v1", port)
+			if waitChan != nil {
+				close(waitChan)
 			}
-		case <-deadline:
-			fmt.Printf("[mock] failed to acquire port %s within 30s\n", Addr)
-			signalReady()
+			startServe(listener)
 			return
 		}
+		time.Sleep(200 * time.Millisecond)
 	}
-}
-
-// waitForDeadThenAcquire 阻塞直到共享服务器死亡，然后立即接管端口。
-func waitForDeadThenAcquire() {
-	ticker := time.NewTicker(200 * time.Millisecond)
-	defer ticker.Stop()
-	for range ticker.C {
-		if isServerAlive() {
-			continue
-		}
-		// 服务器已死，尝试接管
-		listener, err := net.Listen("tcp", Addr)
-		if err != nil {
-			continue
-		}
-		fmt.Printf("[mock] taking over port %s (previous server died)\n", Addr)
-		signalReady() // 已经在 waitForDead 中用过了，但这是新路径的第二次 signal
-		startServe(listener)
-		return
+	// 超时：通知 StartServerTask 解除阻塞，测试快速失败
+	fmt.Printf("[mock] failed to bind %s after 150 retries\n", Addr)
+	if waitChan != nil {
+		close(waitChan)
 	}
 }
 
@@ -596,12 +539,14 @@ func StartServerTask() {
 // 	StartServer()
 // }
 
-// init 在包被导入时自动检查环境变量并启动 mock 服务器。
+// init 在包被导入时自动启动 mock 服务器（随机端口）。
 // 任何测试文件 import "mock/openai" 后，服务器会自动在后台启动，
-// 无需每个 TestMain 或测试函数手动调用 StartServerTask。
-// 生产环境中 ALKAID0_DEBUG_MOCKSERVER 未设置，init 直接返回，无任何开销。
+// 通过 openai.BaseURL 获取服务地址。
+// 生产环境中 ALKAID0_DEBUG_MOCKSERVER 未设置，init 直接返回。
 func init() {
 	if os.Getenv("ALKAID0_DEBUG_MOCKSERVER") == "true" {
+		// 使用随机端口避免并行测试冲突
+		Addr = ":0"
 		StartServerTask()
 	}
 }
