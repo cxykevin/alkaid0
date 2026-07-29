@@ -23,6 +23,7 @@ import (
 	"github.com/cxykevin/alkaid0/server/client/jsonrpc/connect"
 	"github.com/cxykevin/alkaid0/tools/index"
 	"github.com/cxykevin/alkaid0/tools/tools/search"
+	"github.com/cxykevin/alkaid0/tools/tools/trace"
 )
 
 const alkaid0IgnoreEntry = "\n# alkaid0\n.alkaid0/\n.alk_*\n"
@@ -142,9 +143,20 @@ func Startup() {
 				Symbol:   r.Symbol,
 				Content:  r.EmbedText,
 				Score:    r.Score,
+				Tags:     r.Tags,
 			}
 		}
 		return out, nil
+	})
+
+	// Trace 后台索引注入（打 tempfs 标签）
+	trace.SetIndexTaskFn(func(directory string, filePath string, fullContent string, embedText string, tags []string) error {
+		return codebase.AddToQueue(directory, codebase.EmbedTask{
+			FilePath:    filePath,
+			FullContent: fullContent,
+			EmbedText:   embedText,
+			Tags:        tags,
+		})
 	})
 
 	// LSP 客户端初始化

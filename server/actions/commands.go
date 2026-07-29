@@ -163,6 +163,7 @@ var commandMaps = map[string]*cmdObj{
 					return
 				}
 				broadcastFn(codebase.IndexStatus{Status: "completed"})
+				indexTempfsAndChatHistory(obj.cwd)
 			}()
 			return false, nil
 		},

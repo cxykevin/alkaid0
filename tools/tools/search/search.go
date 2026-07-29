@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 
 	"github.com/cxykevin/alkaid0/log"
@@ -36,6 +37,16 @@ var paras = map[string]parser.ToolParameters{
 		Required:    true,
 		Description: "Whether to search online. Currently only false is supported. Must Be Second Parameter",
 	},
+	"path": {
+		Type:        parser.ToolTypeString,
+		Required:    false,
+		Description: "Search path (directory). Defaults to workspace root if empty",
+	},
+	"recursive": {
+		Type:        parser.ToolTypeBoolean,
+		Required:    false,
+		Description: "Whether to search recursively into subdirectories. Default is true",
+	},
 	"include_gitignored": {
 		Type:        parser.ToolTypeBoolean,
 		Required:    false,
@@ -45,11 +56,6 @@ var paras = map[string]parser.ToolParameters{
 		Type:        parser.ToolTypeNumber,
 		Required:    false,
 		Description: "Maximum results per search source. Default is 10",
-	},
-	"context_search_type": {
-		Type:        parser.ToolTypeString,
-		Required:    false,
-		Description: "Context engine search mode: \"auto\" (BM25+vector hybrid), \"bm25\" (keyword only), \"vector\" (semantic only). Default is \"auto\"",
 	},
 }
 
@@ -75,17 +81,17 @@ type searchResult struct {
 // ---------------------------------------------------------------------------
 
 var dirBlacklists = map[string]bool{
-	".alkaid0_skip": true,
-	".git":          true,
-	".alkaid0":      true,
-	".alkaid":       true,
-	".cursor":       true,
-	".github":       true,
-	"CLAUDE.md":     true,
-	"GEMINI.md":     true,
-	"AGENTS.md":     true,
-	"IFLOW.md":      true,
-	".env":          true,
+	".alkaid0_skip":    true,
+	".git":             true,
+	".alkaid0":         true,
+	".alkaid":          true,
+	".cursor":          true,
+	".github":          true,
+	"CLAUDE.md":        true,
+	"GEMINI.md":        true,
+	"AGENTS.md":        true,
+	"IFLOW.md":         true,
+	".env":             true,
 	".env.example":     true,
 	".env.local":       true,
 	".env.production":  true,
@@ -122,52 +128,52 @@ var dirBlacklists = map[string]bool{
 
 // binaryExts 常见二进制文件扩展名，跳过
 var binaryExts = map[string]bool{
-	".png":  true,
-	".jpg":  true,
-	".jpeg": true,
-	".gif":  true,
-	".bmp":  true,
-	".ico":  true,
-	".svg":  true,
-	".webp": true,
-	".woff": true,
-	".woff2": true,
-	".ttf":  true,
-	".eot":  true,
-	".otf":  true,
-	".pdf":  true,
-	".zip":  true,
-	".tar":  true,
-	".gz":   true,
-	".bz2":  true,
-	".xz":   true,
-	".zst":  true,
-	".7z":   true,
-	".rar":  true,
-	".exe":  true,
-	".dll":  true,
-	".so":   true,
-	".dylib": true,
-	".bin":  true,
-	".o":    true,
-	".a":    true,
-	".lib":  true,
-	".obj":  true,
-	".pyc":  true,
-	".pyo":  true,
-	".class": true,
-	".jar":  true,
-	".war":  true,
-	".deb":  true,
-	".rpm":  true,
+	".png":      true,
+	".jpg":      true,
+	".jpeg":     true,
+	".gif":      true,
+	".bmp":      true,
+	".ico":      true,
+	".svg":      true,
+	".webp":     true,
+	".woff":     true,
+	".woff2":    true,
+	".ttf":      true,
+	".eot":      true,
+	".otf":      true,
+	".pdf":      true,
+	".zip":      true,
+	".tar":      true,
+	".gz":       true,
+	".bz2":      true,
+	".xz":       true,
+	".zst":      true,
+	".7z":       true,
+	".rar":      true,
+	".exe":      true,
+	".dll":      true,
+	".so":       true,
+	".dylib":    true,
+	".bin":      true,
+	".o":        true,
+	".a":        true,
+	".lib":      true,
+	".obj":      true,
+	".pyc":      true,
+	".pyo":      true,
+	".class":    true,
+	".jar":      true,
+	".war":      true,
+	".deb":      true,
+	".rpm":      true,
 	".AppImage": true,
-	".dmg":  true,
-	".iso":  true,
-	".img":  true,
-	".lock": true,
-	".db":   true,
-	".sqlite": true,
-	".sqlite3": true,
+	".dmg":      true,
+	".iso":      true,
+	".img":      true,
+	".lock":     true,
+	".db":       true,
+	".sqlite":   true,
+	".sqlite3":  true,
 }
 
 // ---------------------------------------------------------------------------
@@ -327,6 +333,16 @@ func updateInfo(session *structs.Chats, mp map[string]*any, cross []*any, toolID
 			respString += "Online: " + u.Ternary(online, "true", "false") + "\n"
 		}
 	}
+	if pathPtr, ok := mp["path"]; ok && pathPtr != nil {
+		if path, ok := (*pathPtr).(string); ok && path != "" {
+			respString += "Path: " + path + "\n"
+		}
+	}
+	if recursivePtr, ok := mp["recursive"]; ok && recursivePtr != nil {
+		if recursive, ok := (*recursivePtr).(bool); ok {
+			respString += "Recursive: " + u.Ternary(recursive, "true", "false") + "\n"
+		}
+	}
 	respObj := []u.H{{
 		"type": "content",
 		"content": u.H{
@@ -368,11 +384,19 @@ func runSearch(session *structs.Chats, mp map[string]*any, cross []*any) (bool, 
 
 	includeGitignored, _ := getBoolParamDefault(mp, "include_gitignored", false)
 	maxResults, _ := getIntParamDefault(mp, "max_results", 10)
-	contextSearchType, _ := getStringParamDefault(mp, "context_search_type", "auto")
+	recursive, _ := getBoolParamDefault(mp, "recursive", true)
 
+	// 确定搜索根路径
 	root := session.Root
 	if root == "" {
 		root = "."
+	}
+	if searchPath, _ := getStringParamDefault(mp, "path", ""); searchPath != "" {
+		if filepath.IsAbs(searchPath) {
+			root = searchPath
+		} else {
+			root = filepath.Join(root, searchPath)
+		}
 	}
 
 	ctx := session.GetContext()
@@ -380,11 +404,45 @@ func runSearch(session *structs.Chats, mp map[string]*any, cross []*any) (bool, 
 		ctx = context.Background()
 	}
 
+	// 编译正则（支持 /pattern/flags 格式或通配符表达式）
+	var re *regexp.Regexp
+	grepQuery := query
+	ctxQuery := query
+	grepMax := maxResults
+	ctxMax := maxResults
+
+	// 检查是否为 /pattern/flags 格式的原始正则
+	if pattern, flags, ok := parseDelimitedRegex(query); ok {
+		// 原始正则，直接编译
+		reExpr := buildRegex(pattern, flags)
+		var err error
+		re, err = regexp.Compile(reExpr)
+		if err == nil {
+			grepQuery = pattern
+			ctxQuery = extractKeywords(pattern)
+			// 80% 给 grep，20% 给 context
+			grepMax = max(int(float64(maxResults)*0.8), 1)
+			ctxMax = max(maxResults-grepMax, 1)
+		}
+	} else if isGrepExpr(query) {
+		var err error
+		re, err = wildcardToRegex(query)
+		if err == nil {
+			// 提取纯关键词给 Context Engine
+			ctxQuery = extractKeywords(query)
+			// 80% 给 grep，20% 给 context
+			grepMax = max(int(float64(maxResults)*0.8), 1)
+			ctxMax = max(maxResults-grepMax, 1)
+		} else {
+			// 编译失败就当普通查询
+		}
+	}
+
 	// 阶段一：AI Grep
-	grepResults := aiGrep(ctx, root, query, includeGitignored, maxResults)
+	grepResults := aiGrep(ctx, root, grepQuery, includeGitignored, recursive, re, grepMax)
 
 	// 阶段二：Context Engine 搜索
-	ctxResults := contextSearch(ctx, root, query, contextSearchType, maxResults)
+	ctxResults := contextSearch(ctx, root, ctxQuery, "auto", ctxMax)
 
 	// 合并结果
 	results := make([]searchResult, 0)
@@ -415,7 +473,7 @@ func runSearch(session *structs.Chats, mp map[string]*any, cross []*any) (bool, 
 // AI Grep
 // ---------------------------------------------------------------------------
 
-func aiGrep(ctx context.Context, root, query string, includeGitignored bool, maxResults int) []grepResult {
+func aiGrep(ctx context.Context, root, query string, includeGitignored bool, recursive bool, re *regexp.Regexp, maxResults int) []grepResult {
 	giPatterns := loadGitignore(root)
 	var results []grepResult
 
@@ -462,6 +520,9 @@ func aiGrep(ctx context.Context, root, query string, includeGitignored bool, max
 
 		// 跳过目录（黑名单已过滤，剩下的目录需要递归进去）
 		if d.IsDir() {
+			if !recursive {
+				return filepath.SkipDir
+			}
 			return nil
 		}
 
@@ -478,7 +539,7 @@ func aiGrep(ctx context.Context, root, query string, includeGitignored bool, max
 		}
 
 		// 读取并搜索文件内容
-		fileResults := grepFile(path, relPath, query, maxResults-len(results))
+		fileResults := grepFile(path, relPath, query, re, maxResults-len(results))
 		results = append(results, fileResults...)
 
 		return nil
@@ -490,7 +551,7 @@ func aiGrep(ctx context.Context, root, query string, includeGitignored bool, max
 	return results
 }
 
-func grepFile(path, relPath, query string, maxResults int) []grepResult {
+func grepFile(path, relPath, query string, re *regexp.Regexp, maxResults int) []grepResult {
 	f, err := os.Open(path)
 	if err != nil {
 		return nil
@@ -504,7 +565,13 @@ func grepFile(path, relPath, query string, maxResults int) []grepResult {
 	for scanner.Scan() {
 		lineNum++
 		line := scanner.Text()
-		if strings.Contains(line, query) {
+		match := false
+		if re != nil {
+			match = re.MatchString(line)
+		} else {
+			match = strings.Contains(line, query)
+		}
+		if match {
 			results = append(results, grepResult{
 				FilePath: relPath,
 				Line:     lineNum,
@@ -519,6 +586,118 @@ func grepFile(path, relPath, query string, maxResults int) []grepResult {
 }
 
 // ---------------------------------------------------------------------------
+// grep 表达式检测与关键词提取
+// ---------------------------------------------------------------------------
+
+// isGrepExpr 判断查询字符串是否包含显式通配符（*, ?, [...]）
+func isGrepExpr(query string) bool {
+	// 含有 *
+	if strings.Contains(query, "*") {
+		return true
+	}
+	// 含有 ?
+	if strings.Contains(query, "?") {
+		return true
+	}
+	// 含有字符类 [...]
+	if strings.Contains(query, "[") && strings.Contains(query, "]") {
+		return true
+	}
+	return false
+}
+
+// wildcardToRegex 将通配符模式（*, ?）转换为正则表达式
+func wildcardToRegex(pattern string) (*regexp.Regexp, error) {
+	var buf strings.Builder
+	buf.WriteString("(?s)")
+	for i := 0; i < len(pattern); i++ {
+		ch := pattern[i]
+		switch {
+		case ch == '*':
+			buf.WriteString(".*")
+		case ch == '?':
+			buf.WriteString(".")
+		case ch == '[':
+			// 字符类 [...] 原样保留
+			buf.WriteByte(ch)
+			i++
+			for i < len(pattern) && pattern[i] != ']' {
+				buf.WriteByte(pattern[i])
+				i++
+			}
+			if i < len(pattern) {
+				buf.WriteByte(pattern[i])
+			}
+		case ch == '.' || ch == '+' || ch == '^' || ch == '$' ||
+			ch == '|' || ch == '(' || ch == ')' || ch == '{' || ch == '}' || ch == '\\':
+			buf.WriteByte('\\')
+			buf.WriteByte(ch)
+		default:
+			buf.WriteByte(ch)
+		}
+	}
+	return regexp.Compile(buf.String())
+}
+
+// extractKeywords 从通配符/正则表达式中提取纯关键词用于 Context Engine 搜索
+func extractKeywords(expr string) string {
+	// 去掉字符类
+	re := regexp.MustCompile(`\[[^\]]*\]`)
+	result := re.ReplaceAllString(expr, " ")
+	// 去掉通配符 * 和 ?
+	result = strings.ReplaceAll(result, "*", " ")
+	result = strings.ReplaceAll(result, "?", " ")
+	// 去掉量词和特殊字符
+	re = regexp.MustCompile(`[+^$|.()\\{}\[\]]+`)
+	result = re.ReplaceAllString(result, " ")
+	// 去掉多余的空白
+	re = regexp.MustCompile(`\s+`)
+	result = strings.TrimSpace(re.ReplaceAllString(result, " "))
+	return result
+}
+
+// parseDelimitedRegex 解析 /pattern/flags 格式的正则表达式
+func parseDelimitedRegex(query string) (pattern, flags string, ok bool) {
+	if len(query) < 3 || query[0] != '/' {
+		return "", "", false
+	}
+	// 找到结尾的 /
+	lastSlash := strings.LastIndex(query, "/")
+	if lastSlash <= 0 {
+		return "", "", false
+	}
+	pattern = query[1:lastSlash]
+	if pattern == "" {
+		return "", "", false
+	}
+	flags = query[lastSlash+1:]
+	// 验证 flags：只允许字母
+	for _, f := range flags {
+		if !((f >= 'a' && f <= 'z') || (f >= 'A' && f <= 'Z')) {
+			return "", "", false
+		}
+	}
+	return pattern, flags, true
+}
+
+// buildRegex 根据 pattern 和 flags 构建 Go 正则表达式字符串
+func buildRegex(pattern, flags string) string {
+	var prefix strings.Builder
+	for _, f := range flags {
+		switch f {
+		case 'i':
+			prefix.WriteString("(?i)")
+		case 'm':
+			prefix.WriteString("(?m)")
+		case 's':
+			prefix.WriteString("(?s)")
+		}
+		// 'g' 在 Go 中无意义（MatchString 默认全局）
+	}
+	return prefix.String() + pattern
+}
+
+// ---------------------------------------------------------------------------
 // Context Engine 搜索（通过函数指针解耦，由 ui/startup 注册）
 // ---------------------------------------------------------------------------
 
@@ -528,6 +707,7 @@ type ContextSearchResult struct {
 	Symbol   string
 	Content  string
 	Score    float64
+	Tags     string
 }
 
 // ContextSearchFn 上下文搜索函数类型
@@ -569,7 +749,7 @@ func contextSearch(ctx context.Context, root, query, searchTypeStr string, maxRe
 		return nil
 	}
 
-	out := make([]searchResult, 0, len(results))
+	var normal, tagged []searchResult
 	for _, r := range results {
 		content := r.Symbol
 		if content == "" {
@@ -578,15 +758,25 @@ func contextSearch(ctx context.Context, root, query, searchTypeStr string, maxRe
 				content = content[:200] + "..."
 			}
 		}
-		out = append(out, searchResult{
+		sr := searchResult{
 			Source:   "context",
 			FilePath: r.FilePath,
 			Content:  content,
 			Symbol:   r.Symbol,
 			Score:    r.Score,
-		})
+		}
+		// tempfs/chathistory 排到底部，限制总数不超过 3 条
+		if strings.Contains(r.Tags, "tempfs") || strings.Contains(r.Tags, "chathistory") {
+			tagged = append(tagged, sr)
+		} else {
+			normal = append(normal, sr)
+		}
 	}
-	return out
+	// 限制 tagged 结果最多 3 条
+	if len(tagged) > 3 {
+		tagged = tagged[:3]
+	}
+	return append(normal, tagged...)
 }
 
 // ---------------------------------------------------------------------------
@@ -739,4 +929,3 @@ func load() string {
 func init() {
 	index.AddIndex(load)
 }
-

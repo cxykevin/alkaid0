@@ -117,7 +117,7 @@ func TestGrepFile(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	results := grepFile(filePath, "test.txt", "query", 10)
+	results := grepFile(filePath, "test.txt", "query", nil, 10)
 	if len(results) != 2 {
 		t.Fatalf("expected 2 results, got %d", len(results))
 	}
@@ -137,7 +137,7 @@ func TestGrepFileMaxResults(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	results := grepFile(filePath, "test.txt", "query", 1)
+	results := grepFile(filePath, "test.txt", "query", nil, 1)
 	if len(results) != 1 {
 		t.Fatalf("expected 1 result (limited), got %d", len(results))
 	}
@@ -148,10 +148,10 @@ func TestAiGrep(t *testing.T) {
 
 	// 创建一些文件
 	files := map[string]string{
-		"main.go":         "package main\nfunc main() {\n\tprintln(\"hello\")\n}",
-		"utils.go":        "package main\nfunc helper() {\n\tprintln(\"hello world\")\n}",
-		"test.log":        "this is a log file\n",
-		"README.md":       "# Project\nHello world\n",
+		"main.go":           "package main\nfunc main() {\n\tprintln(\"hello\")\n}",
+		"utils.go":          "package main\nfunc helper() {\n\tprintln(\"hello world\")\n}",
+		"test.log":          "this is a log file\n",
+		"README.md":         "# Project\nHello world\n",
 		"node_modules/a.js": "ignored\n",
 	}
 
@@ -166,7 +166,7 @@ func TestAiGrep(t *testing.T) {
 	}
 
 	// 搜索 "hello"
-	results := aiGrep(context.Background(), dir, "hello", false, 10)
+	results := aiGrep(context.Background(), dir, "hello", false, true, nil, 10)
 	if len(results) == 0 {
 		t.Fatal("expected at least 1 result for 'hello'")
 	}
@@ -192,7 +192,7 @@ func TestAiGrepWithGitignore(t *testing.T) {
 	}
 
 	files := map[string]string{
-		"main.go": "package main\nfunc hello() {}\n",
+		"main.go":   "package main\nfunc hello() {}\n",
 		"debug.log": "hello from log\n",
 	}
 
@@ -207,7 +207,7 @@ func TestAiGrepWithGitignore(t *testing.T) {
 	}
 
 	// includeGitignored=false 时，debug.log 应被忽略
-	results := aiGrep(context.Background(), dir, "hello", false, 10)
+	results := aiGrep(context.Background(), dir, "hello", false, true, nil, 10)
 	for _, r := range results {
 		if r.FilePath == "debug.log" {
 			t.Error("debug.log should be ignored by gitignore")
@@ -215,7 +215,7 @@ func TestAiGrepWithGitignore(t *testing.T) {
 	}
 
 	// includeGitignored=true 时，debug.log 应被搜到
-	results = aiGrep(context.Background(), dir, "hello", true, 10)
+	results = aiGrep(context.Background(), dir, "hello", true, true, nil, 10)
 	foundLog := false
 	for _, r := range results {
 		if r.FilePath == "debug.log" {
@@ -248,7 +248,7 @@ func TestAiGrepBlacklist(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	results := aiGrep(context.Background(), dir, "query", false, 10)
+	results := aiGrep(context.Background(), dir, "query", false, true, nil, 10)
 	for _, r := range results {
 		if r.FilePath == ".alkaid0/secret.txt" || r.FilePath == ".git/secret.txt" || r.FilePath == ".env/secret.txt" {
 			t.Errorf("blacklisted path should not appear: %s", r.FilePath)
@@ -264,7 +264,7 @@ func TestAiGrepBinaryExts(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	results := aiGrep(context.Background(), dir, "query", false, 10)
+	results := aiGrep(context.Background(), dir, "query", false, true, nil, 10)
 	for _, r := range results {
 		if r.FilePath == "image.png" {
 			t.Error("binary file .png should be skipped")

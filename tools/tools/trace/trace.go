@@ -314,6 +314,16 @@ func Trace(session *structs.Chats, mp map[string]*any, push []*any) (bool, []*an
 				"error":   &errMsg,
 			}, nil
 		}
+		// 后台静默索引（打 tempfs 标签）
+		go func() {
+			idxPath := path
+			if vpath, ok := strings.CutPrefix(idxPath, "@temp/"); ok {
+				idxPath = vpath
+			}
+			if indexTaskFn != nil {
+				indexTaskFn(session.Root, idxPath, str, str, []string{"tempfs"})
+			}
+		}()
 	}
 
 	// TODO: RAG trace
@@ -541,6 +551,13 @@ func AddTempObject(session *structs.Chats, path string, content string, ro bool)
 		logger.Warn("add trace failed: %v", err)
 		return err
 	}
+
+	// 后台静默索引（打 tempfs 标签）
+	go func() {
+		if indexTaskFn != nil {
+			indexTaskFn(session.Root, path, content, content, []string{"tempfs"})
+		}
+	}()
 	err = session.DB.Model(&structs.Chats{}).Where("id = ?", session.ID).Update("trace_id", session.TraceID).Error
 	if err != nil {
 		logger.Warn("add trace failed: %v", err)
@@ -569,6 +586,22 @@ func AddTempObject(session *structs.Chats, path string, content string, ro bool)
 
 // StoreTempObject 仅存储到 ReferFiles，不创建 Traces 记录。
 // 用于 prompt 分类器，避免 code/log 段被自动 trace。
+// ---------------------------------------------------------------------------
+// 后台索引（函数指针，由 ui/startup 注入，避免循环导入）
+// ---------------------------------------------------------------------------
+
+// IndexTaskFn 后台索引函数类型
+// directory: 工作目录, filePath: 文件相对路径, fullContent: 完整内容, embedText: 嵌入文本, tags: 标签列表
+type IndexTaskFn func(directory string, filePath string, fullContent string, embedText string, tags []string) error
+
+// indexTaskFn 函数指针，由 SetIndexTaskFn 在启动时注入
+var indexTaskFn IndexTaskFn
+
+// SetIndexTaskFn 设置后台索引函数
+func SetIndexTaskFn(fn IndexTaskFn) {
+	indexTaskFn = fn
+}
+
 func StoreTempObject(session *structs.Chats, path string, content string, ro bool) error {
 	err := session.DB.Create(structs.ReferFiles{
 		ChatID:   session.ID,

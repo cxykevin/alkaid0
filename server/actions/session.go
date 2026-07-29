@@ -434,6 +434,7 @@ func loadSession(cwd string, id *uint32, knowID bool) (*structs.Chats, error) {
 				if err := codebase.RunIndex(context.Background(), cwd, nil); err != nil {
 					logger.Debug("auto index: %v", err)
 				}
+				indexTempfsAndChatHistory(cwd)
 			}()
 		}
 
@@ -661,6 +662,49 @@ func loadSession(cwd string, id *uint32, knowID bool) (*structs.Chats, error) {
 	return sessions[sessID].session, nil
 }
 
+// indexChatHistory 将会话聊天历史打包索引到 codebase（打 chathistory 标签）
+func indexChatHistory(session *structs.Chats, cwd string) {
+	if session == nil || session.DB == nil {
+		return
+	}
+
+	var messages []structs.Messages
+	if err := session.DB.Where("chat_id = ? AND type IN (0, 1)", session.ID).
+		Order("id ASC").
+		Find(&messages).Error; err != nil {
+		logger.Warn("index chat history: query messages failed: %v", err)
+		return
+	}
+	if len(messages) == 0 {
+		logger.Debug("index chat history: no user/agent messages for session %d", session.ID)
+		return
+	}
+
+	var buf strings.Builder
+	for _, msg := range messages {
+		role := "User"
+		if msg.Type == 1 { // MessagesRoleAgent
+			role = "Assistant"
+		}
+		_, _ = fmt.Fprintf(&buf, "[%s]\n%s\n\n", role, msg.Delta)
+	}
+
+	contentStr := buf.String()
+	if contentStr == "" {
+		return
+	}
+
+	// 后台静默索引
+	go func() {
+		_ = codebase.AddToQueue(cwd, codebase.EmbedTask{
+			FilePath:    fmt.Sprintf("chathistory/%d", session.ID),
+			FullContent: contentStr,
+			EmbedText:   contentStr,
+			Tags:        []string{"chathistory"},
+		})
+	}()
+}
+
 // closeSession 关闭会话，引用计数递减，处理资源清理
 func closeSession(sessionID string) {
 	sessLock.Lock()
@@ -671,6 +715,7 @@ func closeSession(sessionID string) {
 		if obj.session.ReferCount <= int32(0) {
 			logger.Info("release session ID=%s", sessionID)
 			obj.loop.Cancel()
+			indexChatHistory(obj.session, obj.cwd)
 			closeDB(obj.cwd)
 			delete(sessions, sessionID)
 			delete(agentCallList, sessionID)
@@ -806,6 +851,7 @@ func scheduleSessionRelease(sessionID string) {
 
 		logger.Info("release session %s after %ds timeout", sessionID, timeout)
 		obj2.loop.Cancel()
+		indexChatHistory(obj2.session, obj2.cwd)
 		closeDB(obj2.cwd)
 		delete(sessions, sessionID)
 		delete(agentCallList, sessionID)
