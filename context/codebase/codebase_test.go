@@ -30,7 +30,6 @@ func setupCodebase(t *testing.T, dim int) (string, func()) {
 
 	restore := config.GlobalConfigSwap(structs.Config{
 		Model: structs.ModelsConfig{
-			EmbeddingModelID: 1,
 			Models: map[int32]structs.ModelConfig{
 				1: {
 					ModelName:              "test-embedding",
@@ -41,6 +40,9 @@ func setupCodebase(t *testing.T, dim int) (string, func()) {
 					ProviderSpecificConfig: structs.ProviderSpecificConfig{Dimension: dim},
 				},
 			},
+		},
+		Context: structs.ContextConfig{
+			EmbeddingModelID: 1,
 		},
 	})
 
@@ -258,7 +260,6 @@ func TestSchemaMigrationDimChange(t *testing.T) {
 
 	config.GlobalConfigSwap(structs.Config{
 		Model: structs.ModelsConfig{
-			EmbeddingModelID: 1,
 			Models: map[int32]structs.ModelConfig{
 				1: {
 					ModelName:              "test-embedding",
@@ -269,6 +270,9 @@ func TestSchemaMigrationDimChange(t *testing.T) {
 					ProviderSpecificConfig: structs.ProviderSpecificConfig{Dimension: 8},
 				},
 			},
+		},
+		Context: structs.ContextConfig{
+			EmbeddingModelID: 1,
 		},
 	})
 
@@ -308,7 +312,6 @@ func TestSchemaMigrationModelNameChange(t *testing.T) {
 	// 修改 modelName
 	config.GlobalConfigSwap(structs.Config{
 		Model: structs.ModelsConfig{
-			EmbeddingModelID: 1,
 			Models: map[int32]structs.ModelConfig{
 				1: {
 					ModelName:              "new-embedding-model",
@@ -319,6 +322,9 @@ func TestSchemaMigrationModelNameChange(t *testing.T) {
 					ProviderSpecificConfig: structs.ProviderSpecificConfig{Dimension: 4},
 				},
 			},
+		},
+		Context: structs.ContextConfig{
+			EmbeddingModelID: 1,
 		},
 	})
 
@@ -587,7 +593,6 @@ func TestGetDimFromCfg(t *testing.T) {
 	// 设置一个有效的 embedding 配置
 	restore := config.GlobalConfigSwap(structs.Config{
 		Model: structs.ModelsConfig{
-			EmbeddingModelID: 1,
 			Models: map[int32]structs.ModelConfig{
 				1: {
 					ModelName:              "test-embedding",
@@ -596,6 +601,9 @@ func TestGetDimFromCfg(t *testing.T) {
 					ProviderSpecificConfig: structs.ProviderSpecificConfig{Dimension: 128},
 				},
 			},
+		},
+		Context: structs.ContextConfig{
+			EmbeddingModelID: 1,
 		},
 	})
 	defer restore()
@@ -639,7 +647,6 @@ func TestDBPath(t *testing.T) {
 
 	restore := config.GlobalConfigSwap(structs.Config{
 		Model: structs.ModelsConfig{
-			EmbeddingModelID: 1,
 			Models: map[int32]structs.ModelConfig{
 				1: {
 					ModelName:              "test-embedding",
@@ -650,6 +657,9 @@ func TestDBPath(t *testing.T) {
 					ProviderSpecificConfig: structs.ProviderSpecificConfig{Dimension: 4},
 				},
 			},
+		},
+		Context: structs.ContextConfig{
+			EmbeddingModelID: 1,
 		},
 	})
 	defer restore()

@@ -43,9 +43,8 @@ type ModelConfig struct {
 
 // ModelsConfig 模型配置结构
 type ModelsConfig struct {
-	ProviderURL      string                `default:"https://openrouter.com/api/v1"` // 模型提供者URL
-	ProviderKey      string                `default:"sk-or-xxx"`                     // 模型提供者Key
-	DefaultModelID   int32                 `default:"0"`
-	EmbeddingModelID int32                 `default:"1"`
-	Models           map[int32]ModelConfig // 模型列表, value为模型配置
+	ProviderURL    string                `default:"https://openrouter.com/api/v1"` // 模型提供者URL
+	ProviderKey    string                `default:"sk-or-xxx"`                     // 模型提供者Key
+	DefaultModelID int32                 `default:"0"`
+	Models         map[int32]ModelConfig // 模型列表, value为模型配置
 }

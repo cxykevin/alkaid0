@@ -28,12 +28,12 @@ var globalManager *Manager
 // 从配置读取设置，若未启用则直接返回
 func Initialize() error {
 	cfg := config.GlobalConfigSafe()
-	if !cfg.LSP.Enabled {
+	if !cfg.Context.LSP.Enabled {
 		logger.Info("LSP client disabled by config")
 		return nil
 	}
 
-	timeout := time.Duration(cfg.LSP.IdleTimeout) * time.Second
+	timeout := time.Duration(cfg.Context.LSP.IdleTimeout) * time.Second
 	if timeout <= 0 {
 		timeout = 600 * time.Second // 默认 10 分钟
 	}
@@ -53,7 +53,7 @@ func Initialize() error {
 	// 注册配置热重载钩子
 	config.AddReloadHook(func() {
 		cfg := config.GlobalConfigSafe()
-		newTimeout := time.Duration(cfg.LSP.IdleTimeout) * time.Second
+		newTimeout := time.Duration(cfg.Context.LSP.IdleTimeout) * time.Second
 		if newTimeout > 0 {
 			globalManager.clientsMu.Lock()
 			globalManager.idleTimeout = newTimeout

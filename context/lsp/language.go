@@ -77,8 +77,8 @@ func extFromPath(filePath string) string {
 func resolveLanguageServer(ext string) (LanguageServerConfig, error) {
 	// 尝试用户配置覆盖
 	cfg := config.GlobalConfigSafe()
-	if cfg.LSP.LanguageServers != nil {
-		if userCfg, ok := cfg.LSP.LanguageServers[ext]; ok {
+	if cfg.Context.LSP.LanguageServers != nil {
+		if userCfg, ok := cfg.Context.LSP.LanguageServers[ext]; ok {
 			return LanguageServerConfig{
 				Command: userCfg.Command,
 				Args:    userCfg.Args,
@@ -115,7 +115,7 @@ func SupportedExtensions() []string {
 	seen := make(map[string]bool)
 
 	// 收集用户配置中自定义的扩展名
-	for ext := range cfg.LSP.LanguageServers {
+	for ext := range cfg.Context.LSP.LanguageServers {
 		seen[ext] = true
 	}
 

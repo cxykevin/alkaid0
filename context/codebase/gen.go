@@ -60,12 +60,12 @@ func resolveModelFromCfg() (*structs.ModelConfig, error) {
 	cfg := config.GlobalConfigSafe()
 
 	// 先按 EmbeddingModelID 找
-	if cfg.Model.EmbeddingModelID != 0 {
-		if mc, ok := cfg.Model.Models[cfg.Model.EmbeddingModelID]; ok {
+	if cfg.Context.EmbeddingModelID != 0 {
+		if mc, ok := cfg.Model.Models[cfg.Context.EmbeddingModelID]; ok {
 			if mc.Type == structs.ModelTypeEmbedding {
 				return &mc, nil
 			}
-			logger.Warn("EmbeddingModelID %d type=%s, not embedding, searching...", cfg.Model.EmbeddingModelID, mc.Type)
+			logger.Warn("EmbeddingModelID %d type=%s, not embedding, searching...", cfg.Context.EmbeddingModelID, mc.Type)
 		}
 	}
 
