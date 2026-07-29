@@ -121,7 +121,11 @@
                             "Type": {
                                 "type": "string",
                                 "description": "模型类型：\"\"(LLM)、\"embedding\"、\"rerank\"",
-                                "enum": ["", "embedding", "rerank"],
+                                "enum": [
+                                    "",
+                                    "embedding",
+                                    "rerank"
+                                ],
                                 "default": ""
                             },
                             "ProviderSpecificConfig": {
@@ -302,32 +306,6 @@
                     "type": "boolean",
                     "description": "全局禁用 Sandbox 执行",
                     "default": false
-                },
-                "ContextEngine": {
-                    "type": "object",
-                    "description": "上下文搜索引擎参数调优",
-                    "properties": {
-                        "BM25Weight": {
-                            "type": "number",
-                            "description": "BM25 搜索权重（0~1），向量搜索权重为 1-BM25Weight",
-                            "minimum": 0,
-                            "maximum": 1,
-                            "default": 0.7
-                        },
-                        "VectorMinSimilarity": {
-                            "type": "number",
-                            "description": "向量最小余弦相似度保留阈值（0~1）",
-                            "minimum": 0,
-                            "maximum": 1,
-                            "default": 0.5
-                        },
-                        "BM25RetentionScore": {
-                            "type": "number",
-                            "description": "BM25 保留阈值，高于此值的项被丢弃（0 表示不限）",
-                            "minimum": 0,
-                            "default": 0.0
-                        }
-                    }
                 }
             }
         },
@@ -397,7 +375,9 @@
                             "description": "自定义语言服务器映射，key 为文件扩展名（如 \".go\"）",
                             "additionalProperties": {
                                 "type": "object",
-                                "required": ["Command"],
+                                "required": [
+                                    "Command"
+                                ],
                                 "properties": {
                                     "Command": {
                                         "type": "string",
@@ -425,6 +405,36 @@
                     "type": "integer",
                     "description": "嵌入模型在 Models 映射中的 key",
                     "default": 1
+                },
+                "OnlineSearch": {
+                    "type": "object",
+                    "description": "在线搜索配置项"
+                },
+                "Codebase": {
+                    "type": "object",
+                    "description": "代码库搜索引擎参数调优",
+                    "properties": {
+                        "BM25Weight": {
+                            "type": "number",
+                            "description": "BM25 搜索权重（0~1），向量搜索权重为 1-BM25Weight",
+                            "minimum": 0,
+                            "maximum": 1,
+                            "default": 0.7
+                        },
+                        "VectorMinSimilarity": {
+                            "type": "number",
+                            "description": "向量最小余弦相似度保留阈值（0~1）",
+                            "minimum": 0,
+                            "maximum": 1,
+                            "default": 0.5
+                        },
+                        "BM25RetentionScore": {
+                            "type": "number",
+                            "description": "BM25 保留阈值，高于此值的项被丢弃（0 表示不限）",
+                            "minimum": 0,
+                            "default": 0.0
+                        }
+                    }
                 }
             }
         },

@@ -2,7 +2,7 @@ Search tool — search the codebase using AI rules (grep) and context engine (BM
 
 ## Parameters
 - `query` (string, required): The search query. See "Query Modes" below for supported patterns.
-- `online` (boolean, required): Whether to search online. Currently only `false` is supported.
+- `online` (boolean, required): Whether to search online. If true, searches the internet via configured search engines (Bing/GitHub/arXiv/Tavily) and summarizes results via LLM.
 - `path` (string, optional, default: workspace root): Search path (directory). Can be absolute or relative to workspace root.
 - `recursive` (boolean, optional, default: true): Whether to search recursively into subdirectories.
 - `include_gitignored` (boolean, optional, default: false): Whether to also search files matching `.gitignore` patterns.
@@ -34,8 +34,11 @@ No special wildcards or delimiters. Simple substring matching.
 - No weighting; both grep and context use full `max_results`.
 
 ## Behavior
+
 When `online=false`, performs two-phase local search:
 1. **AI Grep**: Search file contents respecting `.alkaid0`, `.gitignore`, and sensitive path exclusions.
 2. **Context Engine**: Search indexed codebase with BM25 + vector hybrid retrieval.
 
 Results are merged with source markers (`grep` / `context`).
+
+When `online=true`, searches the internet via configured search engines (Bing, GitHub, arXiv, Tavily) and summarizes the results via LLM before returning.

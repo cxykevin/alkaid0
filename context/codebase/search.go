@@ -278,14 +278,14 @@ func (cdb *CodebaseDB) searchVectorOnly(ctx context.Context, query string, limit
 //
 // - 排序：BM25 匹配的项在前（BM25 权重更高），仅向量匹配的在阈值内保留在后
 // - BM25 或向量搜索各自失败时，仅用另一方的结果
-// - 配置通过 config.Agents.ContextEngine 控制：
+// - 配置通过 config.Context.Codebase 控制：
 //   - BM25Weight: BM25 权重（默认 0.7），向量权重 = 1-BM25Weight
 //   - VectorMinSimilarity: 向量最小余弦相似度保留阈值（默认 0.5）
 //   - BM25RetentionScore: BM25 保留阈值（0 不限制）
 func (cdb *CodebaseDB) searchHybrid(ctx context.Context, query string, limit int) ([]SearchResult, error) {
 	// 加载搜索引擎配置
 	cfg := config.GlobalConfigSafe()
-	ec := cfg.Agent.ContextEngine
+	ec := cfg.Context.Codebase
 	bm25Weight := clampWeight(ec.BM25Weight, 0.7)
 	vecWeight := 1.0 - bm25Weight
 

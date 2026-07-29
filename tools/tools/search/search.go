@@ -3,12 +3,13 @@ package search
 import (
 	"bufio"
 	"context"
-	_ "embed"
+	_ "embed" // embed
 	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/cxykevin/alkaid0/log"
 	"github.com/cxykevin/alkaid0/provider/parser"
@@ -17,12 +18,20 @@ import (
 	"github.com/cxykevin/alkaid0/tools/index"
 	"github.com/cxykevin/alkaid0/tools/toolobj"
 	u "github.com/cxykevin/alkaid0/utils"
+
+	searchengine "github.com/cxykevin/alkaid0-search-engine/search"
+	"github.com/cxykevin/alkaid0/config"
 )
 
 const toolName = "search"
 
 //go:embed prompt.md
 var prompt string
+
+// SummaryPrompt 搜索摘要提示词
+//
+//go:embed search_summary.md
+var SummaryPrompt string
 
 var logger = log.New("tools:search")
 
@@ -35,7 +44,7 @@ var paras = map[string]parser.ToolParameters{
 	"online": {
 		Type:        parser.ToolTypeBoolean,
 		Required:    true,
-		Description: "Whether to search online. Currently only false is supported. Must Be Second Parameter",
+		Description: "Whether to search online. If true, searches the internet via configured search engines (Bing/GitHub/arXiv/Tavily) and summarizes results via LLM. Must Be Second Parameter",
 	},
 	"path": {
 		Type:        parser.ToolTypeString,
@@ -379,7 +388,7 @@ func runSearch(session *structs.Chats, mp map[string]*any, cross []*any) (bool, 
 		return errResult(err.Error(), cross)
 	}
 	if online {
-		return errResult("online search is not yet supported", cross)
+		return runOnlineSearch(session, mp, cross)
 	}
 
 	includeGitignored, _ := getBoolParamDefault(mp, "include_gitignored", false)
@@ -892,6 +901,85 @@ func errResult(msg string, cross []*any) (bool, []*any, map[string]*any, error) 
 	s := any(f)
 	e := any(msg)
 	return false, cross, map[string]*any{"success": &s, "error": &e}, nil
+}
+
+// ---------------------------------------------------------------------------
+// Online Search — runOnlineSearch (online=true)
+// ---------------------------------------------------------------------------
+
+// SummarizeFn 搜索结果总结函数类型，由 SetSummarizeFn 注入以避免循环导入
+type SummarizeFn func(ctx context.Context, rawResult, query string, modelID int32) (string, error)
+
+// summarizeFn 函数指针，由 SetSummarizeFn 在启动时注入
+var summarizeFn SummarizeFn
+
+// SetSummarizeFn 设置搜索结果总结函数（在 ui/startup 中调用，避免循环导入）
+func SetSummarizeFn(fn SummarizeFn) {
+	summarizeFn = fn
+}
+
+// runOnlineSearch 执行在线搜索，并通过 LLM 总结结果
+func runOnlineSearch(_ *structs.Chats, mp map[string]*any, cross []*any) (bool, []*any, map[string]*any, error) {
+	query, err := getStringParam(mp, "query")
+	if err != nil {
+		return errResult(err.Error(), cross)
+	}
+
+	// 读取在线搜索配置
+	onCfg := config.GlobalConfig.Context.OnlineSearch
+
+	// 构建搜索引擎配置
+	seCfg := onCfg
+
+	// 执行搜索
+	searchCtx, cancel := context.WithTimeout(context.Background(), time.Duration(onCfg.Timeout)*time.Second)
+	defer cancel()
+
+	rawResult, err := searchengine.Search(searchCtx, query, &seCfg)
+	if err != nil {
+		logger.Error("online search failed: %v", err)
+		return errResult(fmt.Sprintf("online search failed: %v", err), cross)
+	}
+
+	// 获取总结模型
+	summaryModelID := config.GlobalConfig.Context.SearchSummaryModel
+	if summaryModelID == 0 {
+		summaryModelID = config.GlobalConfig.Agent.SummaryModel
+	}
+	if summaryModelID == 0 {
+		summaryModelID = config.GlobalConfig.Model.DefaultModelID
+	}
+
+	// 通过函数指针调用 LLM 总结
+	if summarizeFn == nil {
+		logger.Error("summarize function not set (call SetSummarizeFn in startup)")
+		// 降级返回原始搜索结果
+		outAny := any(rawResult)
+		successAny := any(true)
+		return false, cross, map[string]*any{
+			"success": &successAny,
+			"output":  &outAny,
+		}, nil
+	}
+
+	summary, err := summarizeFn(context.Background(), rawResult, query, summaryModelID)
+	if err != nil {
+		logger.Error("failed to summarize search result: %v", err)
+		// 总结失败时降级返回原始搜索结果
+		outAny := any(rawResult)
+		successAny := any(true)
+		return false, cross, map[string]*any{
+			"success": &successAny,
+			"output":  &outAny,
+		}, nil
+	}
+
+	outAny := any(summary)
+	successAny := any(true)
+	return false, cross, map[string]*any{
+		"success": &successAny,
+		"output":  &outAny,
+	}, nil
 }
 
 // ---------------------------------------------------------------------------

@@ -68,25 +68,51 @@ C:\ProgramData\alkaid0\config.json
 ```json
 {
     "$schema": "https://raw.githubusercontent.com/cxykevin/alkaid0/refs/heads/main/docs/schemas/config.json",
+
     "Version": 1,
+    "ThemeID": 0,
     "Model": {
-        "ProviderURL": "https://openrouter.com/api/v1（这里暂时没有用）",
-        "ProviderKey": "sk-or-xxx（这里暂时没有用）",
+        "ProviderURL": "https://openrouter.com/api/v1(这里没用)",
+        "ProviderKey": "sk-or-xxx(这里没用)",
         "DefaultModelID": 1,
         "Models": {
-            "1": {
+            "0": {
                 "ModelName": "模型名",
                 "ModelID": "模型ID",
+                "ModelDescription": "模型描述（可选）",
+                "ModelAddPrompt": "附加系统提示词（可选）",
+                "ModelTopP": -1,
+                "ModelTopK": -1,
+                "ModelTemperature": -1,
+                "TokenLimit": 8192,
                 "ProviderURL": "https://模型供应商/v1",
                 "ProviderKey": "sk-模型密钥",
-                "EnableThinking": true, 
+                "EnableThinking": true,
+                "EnableToolCalling": false,
                 "CompressSize": 128000,
+                "Hide": false,
+                "Type": "",
                 "ProviderSpecificConfig": {
                     "EnableDeepseekThinking": false,
                     "EnableReasoningEffort": true,
                     "EnableTopP": false,
                     "EnableTopK": false,
-                    "EnableTemperature": false
+                    "EnableTemperature": false,
+                    "EnableUsage": true,
+                    "Dimension": 0
+                }
+            },
+            "1": {
+                "ModelName": "embedding模型名",
+                "ModelID": "embedding模型ID",
+                "ProviderURL": "https://模型供应商/v1",
+                "ProviderKey": "sk-模型密钥",
+                "EnableThinking": true,
+                "EnableToolCalling": false,
+                "Hide": true,
+                "Type": "embedding",
+                "ProviderSpecificConfig": {
+                    "Dimension": 1024
                 }
             }
         }
@@ -96,25 +122,83 @@ C:\ProgramData\alkaid0\config.json
             "frontend": {
                 "AgentName": "前端工程",
                 "AgentDescription": "前端工程Agent",
+                "AgentShortDescription": "擅长前端开发的前端工程Agent",
                 "AgentPrompt": "你是一个前端工程师，请根据用户的需求，提供前端工程解决方案。",
-                "AgentModel": 1,
+                "AgentModel": 0,
                 "AutoApprove": "",
-                "AutoReject": ""
+                "AutoReject": "",
+                "DisableSandbox": false
             }
         },
+        "IgnoreBuiltinAgents": false,
         "GlobalPrompt": "始终使用中文回答",
-        "SummaryModel": 1,
+        "SummaryModel": 0,
         "MaxCallCount": 50,
         "AutoApprove": "",
-        "AutoReject": ""
+        "AutoReject": "",
+        "IgnoreDefaultRules": false,
+        "DisablePromptPreprocess": false,
+        "UseShell": "",
+        "TerminalEnvs": {
+            "LANG": "zh_CN.UTF-8"
+        },
+        "DisableSandbox": false
     },
-    "ThemeID": 0,
+    "ignoreSignals": false,
+    "Context": {
+        "LSP": {
+            "Enabled": false,
+            "IdleTimeout": 600,
+            "LanguageServers": {
+                ".go": {
+                    "Command": "gopls",
+                    "Args": ["serve"]
+                }
+            }
+        },
+        "EmbeddingModelID": 1,
+        "SearchSummaryModel": 0,
+        "OnlineSearch": {
+            "timeout": 30,
+            "proxy_url": "",
+            "retry_count": 3,
+            "bing": {
+                "enable": true,
+                "min_delay": 2,
+                "max_delay": 5,
+                "max_results": 10
+            },
+            "github": {
+                "enable": false,
+                "token": "ghp_xxx",
+                "max_results": 5
+            },
+            "arxiv": {
+                "enable": false,
+                "max_results": 5
+            },
+            "tavily": {
+                "enable": false,
+                "api_key": "tvly-xxx",
+                "search_depth": "basic",
+                "include_answer": false,
+                "include_raw_content": false,
+                "max_results": 10
+            }
+        },
+        "Codebase": {
+            "BM25Weight": 0.7,
+            "VectorMinSimilarity": 0.5,
+            "BM25RetentionScore": 0.0
+        }
+    },
     "Server": {
-        "Key": "<你的 webcsocket key>",
+        "Key": "<你的 websocket key>",
         "Path": "/acp",
         "Host": "127.0.0.1",
         "Port": 7433,
-        "DisableStdioServer": false
+        "DisableStdioServer": false,
+        "SessionTimeout": 60
     }
 }
 ```

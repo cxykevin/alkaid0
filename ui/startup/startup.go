@@ -7,6 +7,7 @@ import (
 	"os/signal"
 	"runtime"
 	"runtime/debug"
+	"strings"
 	"syscall"
 	"time"
 
@@ -19,6 +20,9 @@ import (
 	"github.com/cxykevin/alkaid0/log"
 	"github.com/cxykevin/alkaid0/mock/openai"
 	"github.com/cxykevin/alkaid0/product"
+	"github.com/cxykevin/alkaid0/provider/request"
+	"github.com/cxykevin/alkaid0/provider/request/build"
+	reqstructs "github.com/cxykevin/alkaid0/provider/request/structs"
 	"github.com/cxykevin/alkaid0/server"
 	"github.com/cxykevin/alkaid0/server/client/jsonrpc/connect"
 	"github.com/cxykevin/alkaid0/tools/index"
@@ -147,6 +151,42 @@ func Startup() {
 			}
 		}
 		return out, nil
+	})
+
+	// 在线搜索结果总结注入
+	search.SetSummarizeFn(func(ctx context.Context, rawResult, query string, modelID int32) (string, error) {
+		modelConfig, err := build.GetModelConfig(modelID)
+		if err != nil {
+			return "", fmt.Errorf("get model config: %w", err)
+		}
+
+		messages := []reqstructs.Message{
+			{Role: reqstructs.RoleSystem, Content: search.SummaryPrompt},
+			{Role: reqstructs.RoleUser, Content: rawResult},
+		}
+
+		req := reqstructs.ChatCompletionRequest{
+			Messages: messages,
+		}
+
+		var sb strings.Builder
+		err = request.SimpleOpenAIRequest(ctx, modelConfig.ProviderURL, modelConfig.ProviderKey,
+			modelConfig.ModelName, req,
+			func(resp reqstructs.ChatCompletionResponse) error {
+				if len(resp.Choices) > 0 {
+					sb.WriteString(resp.Choices[0].Delta.Content)
+				}
+				return nil
+			})
+		if err != nil {
+			return "", fmt.Errorf("summarize request: %w", err)
+		}
+
+		result := strings.TrimSpace(sb.String())
+		if result == "" {
+			return "", fmt.Errorf("summarize returned empty result")
+		}
+		return result, nil
 	})
 
 	// Trace 后台索引注入（打 tempfs 标签）
