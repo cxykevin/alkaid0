@@ -6,8 +6,8 @@ github.com/andybalholm/cascadia v1.3.3 h1:AG2YHrzJIm4BZ19iwJ/DAua6Btl3IwJX+VI4kk
 github.com/andybalholm/cascadia v1.3.3/go.mod h1:xNd9bqTn98Ln4DwST8/nG+H0yuB8Hmgu1YHNnWw0GeA=
 github.com/cxykevin/alkaid0-prompt-splitter v0.0.5 h1:2K+BEw3Eei3VQhjzIRxFfjnOPz+kWBynJuJpF/CbdjQ=
 github.com/cxykevin/alkaid0-prompt-splitter v0.0.5/go.mod h1:BY1f5IxrorB6ynj2GWXNVH9+g9LbPI50+AR8qEwb70A=
-github.com/cxykevin/alkaid0-search-engine v0.0.1 h1:ybcV6JsYFcF7ajZAVwy8eY5BQ9kq8DJztWo2nfWbVTA=
-github.com/cxykevin/alkaid0-search-engine v0.0.1/go.mod h1:dpSLptWYgAQfhgqrqPB0iz+WEXck6ldqcMGgS+u+g6g=
+github.com/cxykevin/alkaid0-search-engine v0.0.2 h1:uIySGgHlUC0Spk8s6r1bVBluvv3LRwFvMJcqeQymkKY=
+github.com/cxykevin/alkaid0-search-engine v0.0.2/go.mod h1:dpSLptWYgAQfhgqrqPB0iz+WEXck6ldqcMGgS+u+g6g=
 github.com/davecgh/go-spew v1.1.1 h1:vj9j/u1bqnvCEfJOwUhtlOARqs3+rkHYY13jYWTU97c=
 github.com/davecgh/go-spew v1.1.1/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=
 github.com/dustin/go-humanize v1.0.1 h1:GzkhY7T5VNhEkwH0PVJgjz+fX1rhBrR7pRT3mDkpeCY=

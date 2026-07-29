@@ -527,7 +527,7 @@ func TestRunCmdContextCancel(t *testing.T) {
 
 	done := make(chan struct{})
 	go func() {
-		_ = runCmd(cmd, &buf, ctx, "sleep 10")
+		_ = runCmd(ctx, cmd, &buf, "sleep 10")
 		close(done)
 	}()
 
@@ -570,7 +570,7 @@ func TestRunCmdTimeout(t *testing.T) {
 
 	done := make(chan struct{})
 	go func() {
-		_ = runCmd(cmd, &buf, context.Background(), "sleep 10")
+		_ = runCmd(context.Background(), cmd, &buf, "sleep 10")
 		close(done)
 	}()
 

@@ -91,7 +91,7 @@ func (cdb *CodebaseDB) embedAndStore(ctx context.Context, task *EmbedTask) error
 	}
 	if existingHash == hash {
 		// hash 相同：跳过 API 和向量写入，但更新元数据（full_content, tags）
-		cdb.logger.Info("skip %s:%s (hash unchanged)", task.FilePath, task.Symbol)
+		cdb.logger.Debug("skip %s:%s (hash unchanged)", task.FilePath, task.Symbol)
 		return cdb.updateMetadata(task.FilePath, task.Symbol, task.FullContent, task.Tags)
 	}
 

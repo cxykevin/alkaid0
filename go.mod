@@ -4,7 +4,7 @@ go 1.26.5
 
 require (
 	github.com/cxykevin/alkaid0-prompt-splitter v0.0.5
-	github.com/cxykevin/alkaid0-search-engine v0.0.1
+	github.com/cxykevin/alkaid0-search-engine v0.0.2
 	github.com/expr-lang/expr v1.17.8
 	github.com/glebarez/go-sqlite v1.22.0
 	github.com/glebarez/sqlite v1.11.0

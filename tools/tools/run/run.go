@@ -355,7 +355,7 @@ func runTask(session *structs.Chats, mp map[string]*any, cross []*any) (bool, []
 	ctx := session.GetContext()
 
 	// 使用 PTY 运行命令（Unix），若不可用则回退到缓冲区模式（Windows）
-	err = runCmd(c, &buf, ctx, command)
+	err = runCmd(ctx, c, &buf, command)
 
 	errString := ""
 	if err != nil {
@@ -398,7 +398,7 @@ func runTask(session *structs.Chats, mp map[string]*any, cross []*any) (bool, []
 			// 监听context的Done信号
 			ctx2 := session.GetContext()
 
-			err2 = runCmd(c2, &buf2, ctx2, command)
+			err2 = runCmd(ctx2, c2, &buf2, command)
 
 			if err2 != nil {
 				errString += fmt.Sprintf("[System] Command Execute Error: %v\n", err2)
@@ -430,7 +430,7 @@ func runTask(session *structs.Chats, mp map[string]*any, cross []*any) (bool, []
 		}
 	}
 
-	outStr := errString + buf.String()
+	outStr := "[agent execute] $ " + command + "\n\n" + errString + buf.String()
 	// gettime
 	timeStr := time.Now().Format("20060102-150405")
 	path := "run/" + toolID + "-" + timeStr
@@ -455,7 +455,7 @@ func runTask(session *structs.Chats, mp map[string]*any, cross []*any) (bool, []
 
 // runCmd 执行命令，优先使用 PTY，否则回退到缓冲区模式。
 // runCmd 内部处理 context 取消监听和输出收集。
-func runCmd(c *sandbox.Command, buf *bytes.Buffer, ctx context.Context, command string) error {
+func runCmd(ctx context.Context, c *sandbox.Command, buf *bytes.Buffer, command string) error {
 	master, slave, ptyErr := openPTYForCmd()
 	if ptyErr == nil {
 		// 先打开 PTY，再启动 context 监听，确保监听 goroutine 能访问 master

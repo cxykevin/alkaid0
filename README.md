@@ -152,7 +152,7 @@ C:\ProgramData\alkaid0\config.json
             "LanguageServers": {
                 ".go": {
                     "Command": "gopls",
-                    "Args": ["serve"]
+                    "Args": []
                 }
             }
         },

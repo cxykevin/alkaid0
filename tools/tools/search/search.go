@@ -941,40 +941,49 @@ func runOnlineSearch(_ *structs.Chats, mp map[string]*any, cross []*any) (bool, 
 		return errResult(fmt.Sprintf("online search failed: %v", err), cross)
 	}
 
+	// TODO: AI 总结暂时注释（功能有问题）
 	// 获取总结模型
-	summaryModelID := config.GlobalConfig.Context.SearchSummaryModel
-	if summaryModelID == 0 {
-		summaryModelID = config.GlobalConfig.Agent.SummaryModel
-	}
-	if summaryModelID == 0 {
-		summaryModelID = config.GlobalConfig.Model.DefaultModelID
-	}
+	//summaryModelID := config.GlobalConfig.Context.SearchSummaryModel
+	//if summaryModelID == 0 {
+	//	summaryModelID = config.GlobalConfig.Agent.SummaryModel
+	//}
+	//if summaryModelID == 0 {
+	//	summaryModelID = config.GlobalConfig.Model.DefaultModelID
+	//}
+	//
+	//// 通过函数指针调用 LLM 总结
+	//if summarizeFn == nil {
+	//	logger.Error("summarize function not set (call SetSummarizeFn in startup)")
+	//	// 降级返回原始搜索结果
+	//	outAny := any(rawResult)
+	//	successAny := any(true)
+	//	return false, cross, map[string]*any{
+	//		"success": &successAny,
+	//		"output":  &outAny,
+	//	}, nil
+	//}
+	//
+	//summary, err := summarizeFn(context.Background(), rawResult, query, summaryModelID)
+	//if err != nil {
+	//	logger.Error("failed to summarize search result: %v", err)
+	//	// 总结失败时降级返回原始搜索结果
+	//	outAny := any(rawResult)
+	//	successAny := any(true)
+	//	return false, cross, map[string]*any{
+	//		"success": &successAny,
+	//		"output":  &outAny,
+	//	}, nil
+	//}
+	//
+	//outAny := any(summary)
+	//successAny := any(true)
+	//return false, cross, map[string]*any{
+	//	"success": &successAny,
+	//	"output":  &outAny,
+	//}, nil
 
-	// 通过函数指针调用 LLM 总结
-	if summarizeFn == nil {
-		logger.Error("summarize function not set (call SetSummarizeFn in startup)")
-		// 降级返回原始搜索结果
-		outAny := any(rawResult)
-		successAny := any(true)
-		return false, cross, map[string]*any{
-			"success": &successAny,
-			"output":  &outAny,
-		}, nil
-	}
-
-	summary, err := summarizeFn(context.Background(), rawResult, query, summaryModelID)
-	if err != nil {
-		logger.Error("failed to summarize search result: %v", err)
-		// 总结失败时降级返回原始搜索结果
-		outAny := any(rawResult)
-		successAny := any(true)
-		return false, cross, map[string]*any{
-			"success": &successAny,
-			"output":  &outAny,
-		}, nil
-	}
-
-	outAny := any(summary)
+	// 直接返回原始搜索结果
+	outAny := any(rawResult)
 	successAny := any(true)
 	return false, cross, map[string]*any{
 		"success": &successAny,

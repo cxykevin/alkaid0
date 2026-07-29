@@ -171,7 +171,7 @@ func Startup() {
 
 		var sb strings.Builder
 		err = request.SimpleOpenAIRequest(ctx, modelConfig.ProviderURL, modelConfig.ProviderKey,
-			modelConfig.ModelName, req,
+			modelConfig.ModelID, req,
 			func(resp reqstructs.ChatCompletionResponse) error {
 				if len(resp.Choices) > 0 {
 					sb.WriteString(resp.Choices[0].Delta.Content)
