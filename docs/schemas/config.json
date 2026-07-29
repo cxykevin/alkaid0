@@ -290,6 +290,14 @@
                     "description": "默认使用的 Shell",
                     "default": ""
                 },
+                "TerminalEnvs": {
+                    "type": "object",
+                    "description": "终端启动时注入的环境变量",
+                    "additionalProperties": {
+                        "type": "string"
+                    },
+                    "default": {}
+                },
                 "DisableSandbox": {
                     "type": "boolean",
                     "description": "全局禁用 Sandbox 执行",
