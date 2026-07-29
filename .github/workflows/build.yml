@@ -19,7 +19,7 @@ jobs:
       - name: 安装 Go
         uses: actions/setup-go@v6
         with:
-          go-version: "1.26.2"
+          go-version: "1.26.5"
           check-latest: true
 
       - name: 安装交叉编译工具链和 UPX
@@ -78,7 +78,7 @@ jobs:
       - name: 安装 Go
         uses: actions/setup-go@v6
         with:
-          go-version: "1.26.2"
+          go-version: "1.26.5"
           check-latest: true
 
       - name: 执行代码生成
@@ -119,7 +119,7 @@ jobs:
       - name: 安装 Go
         uses: actions/setup-go@v6
         with:
-          go-version: "1.26.2"
+          go-version: "1.26.5"
           check-latest: true
 
       - name: 静态分析
