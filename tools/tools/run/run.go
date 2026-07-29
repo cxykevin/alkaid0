@@ -312,6 +312,11 @@ func runTask(session *structs.Chats, mp map[string]*any, cross []*any) (bool, []
 	env = append(env, "GIT_PAGER=cat")
 	env = append(env, "DEBIAN_FRONTEND=noninteractive")
 
+	// 用户配置的终端环境变量
+	for k, v := range config.GlobalConfig.Agent.TerminalEnvs {
+		env = append(env, k+"="+v)
+	}
+
 	// 只有显式指定了超时时才设置 sandbox timeout，否则为 0（无超时）
 	var sandTimeout time.Duration
 	if timeout > 0 {

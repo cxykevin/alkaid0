@@ -31,12 +31,14 @@ type AgentsConfig struct {
 	IgnoreBuiltinAgents     bool   `default:"false"`
 	GlobalPrompt            string `default:""`
 	SummaryModel            int32
-	MaxCallCount            int32               `default:"50"`
-	DefaultAutoApprove      string              `default:"" json:"AutoApprove"` // 全局默认自动批准表达式
-	DefaultAutoReject       string              `default:"" json:"AutoReject"`  // 全局默认自动拒绝表达式
-	IgnoreDefaultRules      bool                `default:"false"`
-	DisablePromptPreprocess bool                `default:"false"` // 禁用提示词预处理（prompt分类器）
-	UseShell                string              `default:""`
-	DisableSandbox          bool                `default:"false"`
-	ContextEngine           ContextEngineConfig `json:"contextEngine"`
+	MaxCallCount            int32  `default:"50"`
+	DefaultAutoApprove      string `default:"" json:"AutoApprove"` // 全局默认自动批准表达式
+	DefaultAutoReject       string `default:"" json:"AutoReject"`  // 全局默认自动拒绝表达式
+	IgnoreDefaultRules      bool   `default:"false"`
+	DisablePromptPreprocess bool   `default:"false"` // 禁用提示词预处理（prompt分类器）
+	UseShell                string `default:""`
+	// TerminalEnvs 终端启动时注入的环境变量
+	TerminalEnvs   map[string]string
+	DisableSandbox bool                `default:"false"`
+	ContextEngine  ContextEngineConfig `json:"contextEngine"`
 }
