@@ -20,6 +20,7 @@ import (
 	"github.com/cxykevin/alkaid0/log"
 	"github.com/cxykevin/alkaid0/mock/openai"
 	"github.com/cxykevin/alkaid0/product"
+	"github.com/cxykevin/alkaid0/prompts"
 	"github.com/cxykevin/alkaid0/provider/request"
 	"github.com/cxykevin/alkaid0/provider/request/build"
 	reqstructs "github.com/cxykevin/alkaid0/provider/request/structs"
@@ -160,9 +161,20 @@ func Startup() {
 			return "", fmt.Errorf("get model config: %w", err)
 		}
 
+		// 渲染总结提示词模板（注入原始搜索问题）
+		summaryTmpl := prompts.Load("search_summary", search.SummaryPrompt)
+		systemPrompt, err := prompts.Render(summaryTmpl, map[string]string{"Query": query})
+		if err != nil {
+			logger.Warn("render search summary prompt: %v, fallback to raw", err)
+			systemPrompt = search.SummaryPrompt
+		}
+
+		// 拼接搜索问题 + 原始结果，让 AI 根据问题总结相关内容
+		userContent := fmt.Sprintf("Search query: %s\n\nSearch results:\n%s", query, rawResult)
+
 		messages := []reqstructs.Message{
-			{Role: reqstructs.RoleSystem, Content: search.SummaryPrompt},
-			{Role: reqstructs.RoleUser, Content: rawResult},
+			{Role: reqstructs.RoleSystem, Content: systemPrompt},
+			{Role: reqstructs.RoleUser, Content: userContent},
 		}
 
 		req := reqstructs.ChatCompletionRequest{

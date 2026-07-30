@@ -23,84 +23,19 @@ Edit or create file or virtual objects. To trigger LSP diagnostics on a file wit
   - `diagnostics: [...]` — a list of syntax errors and warnings found (line numbers are 1-based). Check these and fix any issues in subsequent edits.
   - **LSP languages** (Go, Python, Rust, C/C++, Java, Kotlin, C#, JS/TS, Vue): formatting + diagnostics via language server.
   - **Native syntax check** (JSON5, JSONL, YAML, TOML, INI, Markdown): parsed directly for syntax errors. Markdown checks for unclosed code fences.
+- **Editing `@tree` (virtual file tree)**: Use `path: "@tree"` to edit the workspace file tree structure:
+  - Copy: add a new indented line with the same backticked ID as the source.
+  - Delete: remove the line (and indented children) for the entry to delete.
+  - Move/Rename: change the name text or move the line while keeping the backticked ID.
+  - Indent with exactly **4 spaces** per level. New file entries must be followed by an actual file edit.
+  - **DO NOT** expand collapsed directories (`... (N files)`).
 
-##### Example Task:
+#### Quick Examples:
 
-###### Task One:
-
-*   **User Request:** Create a simple `helloworld.py`
-
-*   **Current State in Context:**
-    (File not found)
-
-*   **Your Action (Edit @tree):**
-    1. Using `@all` to create the entire file content.
-    
-*   **Your Output:**
-
-<tools>
-[
-    {
-        "name": "edit",
-        "id": "edit_helloworld",
-        "parameters": {
-            "path": "helloworld.py",
-            "target": "@all",
-            "text": "print('hello world')\n"
-        }
-    }
-]
-</tools>
-
-*   **Resulting State:**
-    ```
-    1|print('hello world')
-    2|
-    ```
-
-###### Task Two:
-
-*   **User Request:** Replace the output logic in `main.cpp` to output helloworld.
-
-*   **Current State in Context:**
-    ```
-    1|#include <iostream>
-    2|using namespace std;
-    3|func main() {
-    4|    int a, b;
-    5|    cin >> a >> b;
-    6|    cout << a + b << endl;
-    7|    return 0;
-    8|}
-    9|
-    ```
-
-*   **Your Action (Edit @tree):**
-    1. Using the edit tool replacing full of old logic.
-    
-*   **Your Output:**
-
-<tools>
-[
-    {
-        "name": "edit",
-        "id": "edit_algorithm",
-        "parameters": {
-            "path": "main.cpp",
-            "target": "int a, b;\n    cin >> a >> b;\n    cout << a + b",
-            "text": "cout << \"hello world\""
-        }
-    }
-]
-</tools>
-
-*   **Resulting State:**
-    ```
-    1|#include <iostream>
-    2|using namespace std;
-    3|func main() {
-    4|    cout << "hello world" << endl;
-    5|    return 0;
-    6|}
-    7|
-    ```
+- Create file: `{"path":"hello.py","target":"@all","text":"print('hello world')\n"}`
+- Replace line: `{"path":"app.go","target":"@ln:42","text":"\treturn fmt.Errorf(\"failed: %w\", err)"}`
+- Replace substring: `{"path":"main.go","target":"old_func ()","text":"new_func ()"}`
+- Append to file: `{"path":"log.txt","target":"","text":"new entry"}`
+- Trigger diagnostics (no change): `{"path":"main.go","target":"","text":""}`
+- Tree copy entry: `{"path":"@tree","target":"hello","text":"hello\n  - bar_copy '1'"}`
+- Tree delete entry: `{"path":"@tree","target":"@ln:4","text":""}`

@@ -21,3 +21,10 @@ Start a task to run something likes code, command, and so on.
 - `"bash"`: Linux.
 - `"zsh"`: MacOS.
 - `"powershell"`: Windows.
+
+#### Quick Examples:
+
+- Build project: `{"type":"shell","reason":"build project","command":"go build ./..."}`
+- Run tests: `{"type":"shell","reason":"run tests","command":"go test ./...","timeout":120}`
+- Quick command no sandbox: `{"type":"shell","reason":"check disk","command":"df -h","sandbox":false}`
+

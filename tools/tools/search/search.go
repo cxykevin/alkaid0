@@ -941,49 +941,56 @@ func runOnlineSearch(_ *structs.Chats, mp map[string]*any, cross []*any) (bool, 
 		return errResult(fmt.Sprintf("online search failed: %v", err), cross)
 	}
 
-	// TODO: AI 总结暂时注释（功能有问题）
 	// 获取总结模型
-	//summaryModelID := config.GlobalConfig.Context.SearchSummaryModel
-	//if summaryModelID == 0 {
-	//	summaryModelID = config.GlobalConfig.Agent.SummaryModel
-	//}
-	//if summaryModelID == 0 {
-	//	summaryModelID = config.GlobalConfig.Model.DefaultModelID
-	//}
-	//
-	//// 通过函数指针调用 LLM 总结
-	//if summarizeFn == nil {
-	//	logger.Error("summarize function not set (call SetSummarizeFn in startup)")
-	//	// 降级返回原始搜索结果
-	//	outAny := any(rawResult)
-	//	successAny := any(true)
-	//	return false, cross, map[string]*any{
-	//		"success": &successAny,
-	//		"output":  &outAny,
-	//	}, nil
-	//}
-	//
-	//summary, err := summarizeFn(context.Background(), rawResult, query, summaryModelID)
-	//if err != nil {
-	//	logger.Error("failed to summarize search result: %v", err)
-	//	// 总结失败时降级返回原始搜索结果
-	//	outAny := any(rawResult)
-	//	successAny := any(true)
-	//	return false, cross, map[string]*any{
-	//		"success": &successAny,
-	//		"output":  &outAny,
-	//	}, nil
-	//}
-	//
-	//outAny := any(summary)
-	//successAny := any(true)
-	//return false, cross, map[string]*any{
-	//	"success": &successAny,
-	//	"output":  &outAny,
-	//}, nil
+	summaryModelID := config.GlobalConfig.Context.SearchSummaryModel
+	if summaryModelID == 0 {
+		summaryModelID = config.GlobalConfig.Agent.SummaryModel
+	}
+	if summaryModelID == 0 {
+		summaryModelID = config.GlobalConfig.Model.DefaultModelID
+	}
+	found := summaryModelID != 0
+	if !found {
+		// 兜底：取 Models 中第一个可用模型
+		for id := range config.GlobalConfig.Model.Models {
+			summaryModelID = id
+			found = true
+			break
+		}
+	}
+	if found {
+		logger.Info("search summary using modelID=%d", summaryModelID)
+	} else {
+		logger.Warn("no model configured for search summary, returning raw results")
+	}
 
-	// 直接返回原始搜索结果
-	outAny := any(rawResult)
+	// 通过函数指针调用 LLM 总结
+	if summarizeFn == nil {
+		logger.Error("summarize function not set (call SetSummarizeFn in startup)")
+		// 降级返回原始搜索结果
+		outAny := any(rawResult)
+		successAny := any(true)
+		return false, cross, map[string]*any{
+			"success": &successAny,
+			"output":  &outAny,
+		}, nil
+	}
+
+	summary, err := summarizeFn(context.Background(), rawResult, query, summaryModelID)
+	if err != nil {
+		logger.Error("failed to summarize search result: %v", err)
+		// 总结失败时降级返回原始搜索结果
+		logger.Info("falling back to raw search results for query: %s", query)
+		outAny := any(rawResult)
+		successAny := any(true)
+		return false, cross, map[string]*any{
+			"success": &successAny,
+			"output":  &outAny,
+		}, nil
+	}
+
+	logger.Info("search summary completed for query: %s (len=%d)", query, len(summary))
+	outAny := any(summary)
 	successAny := any(true)
 	return false, cross, map[string]*any{
 		"success": &successAny,

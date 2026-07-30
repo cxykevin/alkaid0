@@ -23,51 +23,9 @@ Indent: `4 spaces`
 
 **DO NOT INCLUDE LINE NUMBERS IN EDITING!**
 
-###### Example Task:
 
-*   **User Request:** "Copy `bar` from `foo` to `hello` as `bar_copy`, then delete `world`."
 
-*   **Current State in Context:**
-    ```
-    1|foo
-    2|    - bar `1`
-    3|hello
-    4|    - world `2`
-    ```
-
-*   **Your Action (Edit @tree):**
-    1. Add `- bar_copy '1'` under the `hello` directory.
-    2. Remove the line `- world '2'`.
-    
-*   **Your Output:**
-
-<tools>
-[
-    {
-        "name": "edit",
-        "id": "edit_tree_copy",
-        "parameters": {
-            "path": "@tree",
-            "target": "hello\n",
-            "text": "hello\n    - bar_copy '1'"
-        }
-    },
-    {
-        "name": "edit",
-        "id": "edit_tree_remove_world",
-        "parameters": {
-            "path": "@tree",
-            "target": "@ln:1-1",
-            "text": ""
-        }
-    }
-]
-</tools>
-
-*   **Resulting State:**
-    ```
-    1|foo
-    2|    - bar `1`
-    3|hello
-    4|    - bar_copy `1`
-    ```
+#### Quick Examples:
+- Copy entry: `{"path":"@tree","target":"hello","text":"hello
+    - bar_copy '1'"}`
+- Delete entry: `{"path":"@tree","target":"@ln:4","text":""}`
