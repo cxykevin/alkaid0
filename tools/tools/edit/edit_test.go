@@ -213,20 +213,39 @@ func TestWriteFile(t *testing.T) {
 		t.Fatalf("replace substring mismatch: %q", s)
 	}
 
-	// replace substring on non-existent file -> expect error in ret
+	// @ln:2 on non-existent file -> should error
+	mp = map[string]*any{"path": new(any("noexist_ln2.txt")), "target": new(any("@ln:2")), "text": new(any("x"))}
+	_, _, ret, _ = writeFile(session, mp, nil)
+	if ret == nil || ret["success"] == nil {
+		t.Fatalf("unexpected return map for noexist_ln2")
+	}
+	if v := *ret["success"]; v != nil {
+		if bv, ok := v.(bool); ok && bv {
+			t.Fatalf("expected failure for @ln:2 on non-existent file")
+		}
+	}
+
+	// replace substring on non-existent file -> should error
 	mp = map[string]*any{"path": new(any("noexist.txt")), "target": new(any("x")), "text": new(any("y"))}
 	_, _, ret, _ = writeFile(session, mp, nil)
 	if ret == nil || ret["success"] == nil {
 		t.Fatalf("unexpected return map for noexist")
 	}
-	if ret["success"] == nil {
-		t.Fatalf("unexpected return map for noexist")
-	}
-	if v := *ret["success"]; v == nil {
-		t.Fatalf("unexpected success value nil for noexist")
-	} else {
+	if v := *ret["success"]; v != nil {
 		if bv, ok := v.(bool); ok && bv {
 			t.Fatalf("expected failure for replace on non-existent file")
+		}
+	}
+
+	// @regex on non-existent file -> should error
+	mp = map[string]*any{"path": new(any("noexist_regex.txt")), "target": new(any("@regex:/foo/")), "text": new(any("bar"))}
+	_, _, ret, _ = writeFile(session, mp, nil)
+	if ret == nil || ret["success"] == nil {
+		t.Fatalf("unexpected return map for noexist_regex")
+	}
+	if v := *ret["success"]; v != nil {
+		if bv, ok := v.(bool); ok && bv {
+			t.Fatalf("expected failure for @regex on non-existent file")
 		}
 	}
 
@@ -254,7 +273,7 @@ func TestWriteFile(t *testing.T) {
 	mp = map[string]*any{"path": new(any("rx.txt")), "target": new(any("@regex:/foo/i")), "text": new(any("bar"))}
 	_, _, ret, _ = writeFile(session, mp, nil)
 	data, _ = os.ReadFile(filepath.Join(tmpdir, "rx.txt"))
-	if string(data) != "Hello bar FOO world" {
+	if string(data) != "Hello bar FOO world\n" {
 		t.Fatalf("regex write mismatch: %q", string(data))
 	}
 }

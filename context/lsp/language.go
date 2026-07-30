@@ -34,6 +34,10 @@ var defaultLanguageServers = map[string]LanguageServerConfig{
 	".ts":   {Command: "typescript-language-server", Args: []string{"--stdio"}},
 	".tsx":  {Command: "typescript-language-server", Args: []string{"--stdio"}},
 	".vue":  {Command: "vue-language-server", Args: []string{"--stdio"}},
+	".css":  {Command: "vscode-css-language-server", Args: []string{"--stdio"}},
+	".scss": {Command: "vscode-css-language-server", Args: []string{"--stdio"}},
+	".sass": {Command: "vscode-css-language-server", Args: []string{"--stdio"}},
+	".less": {Command: "vscode-css-language-server", Args: []string{"--stdio"}},
 	// .json/.yaml/.yml/.txt: 不支持 LSP（见 noLSPExtensions），无需启动进程
 }
 
@@ -87,6 +91,10 @@ var extToLanguageID = map[string]string{
 	".ts":    "typescript",
 	".tsx":   "typescript",
 	".vue":   "vue",
+	".css":   "css",
+	".scss":  "scss",
+	".sass":  "sass",
+	".less":  "less",
 	".json":  "json",
 	".jsonl": "jsonl",
 	".toml":  "toml",

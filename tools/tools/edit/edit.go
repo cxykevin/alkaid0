@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/cxykevin/alkaid0/context/lsp"
 	"github.com/cxykevin/alkaid0/log"
 	"github.com/cxykevin/alkaid0/provider/parser"
 	"github.com/cxykevin/alkaid0/storage/structs"
@@ -176,15 +177,59 @@ func CheckTargetText(mp map[string]*any) (string, string, error) {
 }
 
 // ProcessString 执行字符串编辑
+// extractLineFromTarget 从 @lnN 或 @insertN 中提取起始行号
+func extractLineFromTarget(target string) (int, bool) {
+	var parts string
+	switch {
+	case strings.HasPrefix(target, "@ln:"):
+		parts = strings.TrimPrefix(target, "@ln:")
+	case strings.HasPrefix(target, "@insert:"):
+		parts = strings.TrimPrefix(target, "@insert:")
+	default:
+		return 0, false
+	}
+	// 处理 @ln:N-M 范围语法
+	if idx := strings.Index(parts, "-"); idx >= 0 {
+		parts = parts[:idx]
+	}
+	n, err := strconv.Atoi(parts)
+	if err != nil {
+		return 0, false
+	}
+	return n, true
+}
+
 func ProcessString(content, target, text string, fileExists bool) (string, error) {
 	var newContent string
 	var err error
+
+	// 文件不存在时处理
+	if !fileExists {
+		// append / @all / @ln:1 / @insert:0-1 → 新建
+		// @regex / 子串替换 / @ln:N(N>1) / @insert:N(N>1) → 报错
+		switch {
+		case target == "":
+			// 追加模式新建
+		case target == "@all":
+			// 全量替换新建
+		case strings.HasPrefix(target, "@ln:") || strings.HasPrefix(target, "@insert:"):
+			if line, ok := extractLineFromTarget(target); !ok || line > 1 {
+				return "", fmt.Errorf("file does not exist, cannot target line %d", line)
+			}
+		default:
+			return "", errors.New("file does not exist, cannot replace content")
+		}
+		return text + "\n", nil
+	}
 
 	// 根据target执行不同的编辑操作
 	switch {
 	case target == "":
 		// 追加到文件末尾
-		if fileExists {
+		if text == "" {
+			// 空替空：不修改内容，仅用于触发 LSP 诊断
+			newContent = content
+		} else if fileExists {
 			if content != "" && !strings.HasSuffix(content, "\n") {
 				newContent = content + "\n" + text + "\n"
 			} else {
@@ -302,6 +347,9 @@ func writeFile(session *structs.Chats, mp map[string]*any, cross []*any) (bool, 
 
 	logger.Info("edit file \"%s\" mode \"%s\" in ID=%d,agentID=%s", path, target, session.ID, session.CurrentAgentID)
 	newContent, err := ProcessString(content, target, text, fileExists)
+	if err == nil {
+		newContent = normalizeTrailingNewline(newContent)
+	}
 	if err != nil {
 		logger.Warn("failed to process string: %v", err)
 		boolx := false
@@ -343,9 +391,33 @@ func writeFile(session *structs.Chats, mp map[string]*any, cross []*any) (bool, 
 
 	boolx := true
 	success := any(boolx)
-	return false, cross, map[string]*any{
+
+	// 编辑成功后调用 LSP 格式化和语法检查
+	fmtResult := lsp.FormatAndDiagnose(session.Root, path)
+	if fmtResult.Error != "" {
+		logger.Warn("LSP format+diagnose for %s: %s", path, fmtResult.Error)
+	}
+
+	resultMap := map[string]*any{
 		"success": &success,
-	}, nil
+	}
+
+	if fmtResult.Formatted {
+		formatBool := any(fmtResult.Formatted)
+		resultMap["format_applied"] = &formatBool
+	}
+
+	if len(fmtResult.Diagnostics) > 0 {
+		// 将诊断信息作为额外字段返回，AI 将看到并可以修复
+		diagAny := any(fmtResult.Diagnostics)
+		resultMap["diagnostics"] = &diagAny
+	}
+
+	return false, cross, resultMap, nil
+}
+
+func normalizeTrailingNewline(s string) string {
+	return strings.TrimRight(s, "\n") + "\n"
 }
 
 func handleLineReplace(lines []string, target, text string) (string, error) {

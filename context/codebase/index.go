@@ -646,9 +646,6 @@ func RunIndex(ctx context.Context, cwd string, broadcastFn func(IndexStatus)) er
 		return fmt.Errorf("no supported extensions found (LSP not configured)")
 	}
 
-	// 新索引周期，重置 LSP 失败计数
-	lsp.ResetLSPFailures()
-
 	gi := loadGitignore(cwd)
 
 	absCwd, err := filepath.Abs(cwd)

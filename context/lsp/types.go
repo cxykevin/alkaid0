@@ -179,6 +179,80 @@ type ServerInfo struct {
 	Version string `json:"version,omitempty"`
 }
 
+// ---------------------------------------------------------------------------
+// 格式化 (textDocument/formatting) 相关类型
+// ---------------------------------------------------------------------------
+
+// DocumentFormattingParams textDocument/formatting 请求参数
+type DocumentFormattingParams struct {
+	TextDocument TextDocumentIdentifier `json:"textDocument"`
+	Options      FormattingOptions      `json:"options"`
+}
+
+// FormattingOptions 格式化选项
+type FormattingOptions struct {
+	TabSize      int  `json:"tabSize"`
+	InsertSpaces bool `json:"insertSpaces"`
+}
+
+// TextEdit LSP 文本编辑
+type TextEdit struct {
+	Range   Range  `json:"range"`
+	NewText string `json:"newText"`
+}
+
+// ---------------------------------------------------------------------------
+// 诊断 (textDocument/publishDiagnostics) 相关类型
+// ---------------------------------------------------------------------------
+
+// DiagnosticSeverity 诊断严重程度
+type DiagnosticSeverity int
+
+const (
+	DiagnosticSeverityError       DiagnosticSeverity = 1
+	DiagnosticSeverityWarning     DiagnosticSeverity = 2
+	DiagnosticSeverityInformation DiagnosticSeverity = 3
+	DiagnosticSeverityHint        DiagnosticSeverity = 4
+)
+
+// Diagnostic LSP 诊断信息
+type Diagnostic struct {
+	Range    Range              `json:"range"`
+	Severity DiagnosticSeverity `json:"severity,omitempty"`
+	Source   string             `json:"source,omitempty"`
+	Code     any                `json:"code,omitempty"`     // string | int, LSP 诊断错误码
+	Message  string             `json:"message"`
+}
+
+// PublishDiagnosticsParams textDocument/publishDiagnostics 通知参数
+type PublishDiagnosticsParams struct {
+	URI         string       `json:"uri"`
+	Diagnostics []Diagnostic `json:"diagnostics"`
+}
+
+// ---------------------------------------------------------------------------
+// didChange 相关类型
+// ---------------------------------------------------------------------------
+
+// DidChangeTextDocumentParams textDocument/didChange 通知参数
+type DidChangeTextDocumentParams struct {
+	TextDocument   VersionedTextDocumentIdentifier  `json:"textDocument"`
+	ContentChanges []TextDocumentContentChangeEvent `json:"contentChanges"`
+}
+
+// VersionedTextDocumentIdentifier 带版本号的文档标识
+type VersionedTextDocumentIdentifier struct {
+	URI     string `json:"uri"`
+	Version int    `json:"version"`
+}
+
+// TextDocumentContentChangeEvent 文档内容变更事件
+type TextDocumentContentChangeEvent struct {
+	Range       *Range `json:"range,omitempty"`
+	RangeLength int    `json:"rangeLength,omitempty"`
+	Text        string `json:"text"`
+}
+
 // TextDocumentItem LSP 文本文档项
 type TextDocumentItem struct {
 	URI        string `json:"uri"`

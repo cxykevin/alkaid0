@@ -11,6 +11,7 @@ import (
 
 	"github.com/cxykevin/alkaid0/config"
 	"github.com/cxykevin/alkaid0/context/codebase"
+	"github.com/cxykevin/alkaid0/context/lsp"
 	"github.com/cxykevin/alkaid0/product"
 	"github.com/cxykevin/alkaid0/storage/structs"
 	u "github.com/cxykevin/alkaid0/utils"
@@ -86,12 +87,13 @@ var commandMaps = map[string]*cmdObj{
 		},
 	},
 	"/index": {
-		Description: "Build codebase index (extract LSP symbols → submit embedding tasks). Subcommands: clean (clear db), status (show progress), cancel (stop running index)",
-		Hint:        "(no args) or 'clean' | 'status' | 'cancel'",
+		Description: "Build codebase index (extract LSP symbols → submit embedding tasks). Subcommands: clean (clear db), status (show progress), cancel (stop running index), lsp-reset (reset LSP fail counters)",
+		Hint:        "(no args) or 'clean' | 'status' | 'cancel' | 'lsp-reset'",
 		Function: func(obj *sessionObj, arg string) (bool, error) {
 			sessionID := cwd2SessionID(obj.cwd, obj.id)
 			switch strings.TrimSpace(arg) {
 			case "clean":
+				lsp.ResetLSPFailures()
 				if err := codebase.CleanDirectory(obj.cwd); err != nil {
 					return false, fmt.Errorf("clean codebase: %w", err)
 				}
@@ -101,6 +103,19 @@ var commandMaps = map[string]*cmdObj{
 						SessionUpdate: "alk.cxykevin.top/session_stop",
 						Content: map[string]string{
 							"stopReason": "end_turn",
+						},
+					},
+				}, 0)
+				return false, nil
+			case "lsp-reset":
+				lsp.ResetLSPFailures()
+				_ = broadcastSessionUpdate(sessionID, SessionUpdate{
+					SessionID: sessionID,
+					Update: SessionUpdateUpdate{
+						SessionUpdate: "agent_message_chunk",
+						Content: u.H{
+							"type": "text",
+							"text": "LSP failure counters reset.",
 						},
 					},
 				}, 0)
@@ -127,6 +142,7 @@ var commandMaps = map[string]*cmdObj{
 				}, 0)
 				return false, nil
 			case "cancel":
+				lsp.ResetLSPFailures()
 				if err := codebase.CancelIndex(obj.cwd); err != nil {
 					return false, fmt.Errorf("cancel index: %w", err)
 				}
@@ -142,6 +158,7 @@ var commandMaps = map[string]*cmdObj{
 				}, 0)
 				return false, nil
 			default:
+				lsp.ResetLSPFailures()
 				// arg 为空或其他情况 → 开始索引
 			}
 			go func() {

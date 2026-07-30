@@ -3,6 +3,7 @@ module github.com/cxykevin/alkaid0
 go 1.26.5
 
 require (
+	github.com/BurntSushi/toml v1.6.0
 	github.com/cxykevin/alkaid0-prompt-splitter v0.0.5
 	github.com/cxykevin/alkaid0-search-engine v0.0.2
 	github.com/expr-lang/expr v1.17.8
@@ -10,9 +11,11 @@ require (
 	github.com/glebarez/sqlite v1.11.0
 	github.com/gorilla/websocket v1.5.3
 	github.com/shirou/gopsutil/v4 v4.26.6
+	github.com/titanous/json5 v1.0.0
 	golang.org/x/net v0.57.0
 	golang.org/x/sys v0.47.0
 	golang.org/x/text v0.40.0
+	gopkg.in/yaml.v3 v3.0.1
 	gorm.io/driver/sqlite v1.6.0
 	gorm.io/gorm v1.31.2
 	modernc.org/sqlite v1.54.0

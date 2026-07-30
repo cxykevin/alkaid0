@@ -11,6 +11,9 @@ import (
 	"sync/atomic"
 )
 
+// NotificationHandler 处理服务器推送通知的回调
+type NotificationHandler func(method string, params json.RawMessage)
+
 // Transport JSON-RPC 2.0 传输层，基于 Content-Length 帧协议（LSP 标准）
 type Transport struct {
 	stdin  io.WriteCloser
@@ -19,6 +22,8 @@ type Transport struct {
 	pending   map[int64]chan<- *jsonrpcResponse
 	pendingMu sync.Mutex
 	nextID    atomic.Int64
+
+	notifHandler NotificationHandler
 
 	closeOnce sync.Once
 	closed    chan struct{}
@@ -97,6 +102,11 @@ func (t *Transport) SendNotification(method string, params any) error {
 		Params:  params,
 	}
 	return t.writeMessage(notif)
+}
+
+// SetNotificationHandler 设置服务器推送通知的处理回调
+func (t *Transport) SetNotificationHandler(handler NotificationHandler) {
+	t.notifHandler = handler
 }
 
 // Close 关闭传输层
@@ -210,7 +220,14 @@ func (t *Transport) readMessage() (*jsonrpcResponse, error) {
 	var raw map[string]any
 	if err := json.Unmarshal(body, &raw); err == nil {
 		if _, hasID := raw["id"]; !hasID {
-			return nil, nil // 通知消息
+			// 通知消息 — 分发到处理回调
+			if t.notifHandler != nil {
+				if method, ok := raw["method"].(string); ok {
+					paramsRaw, _ := json.Marshal(raw["params"])
+					t.notifHandler(method, paramsRaw)
+				}
+			}
+			return nil, nil
 		}
 	}
 

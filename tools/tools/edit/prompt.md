@@ -2,7 +2,7 @@
 
 #### Description:
 
-Edit or create file or virtual objects.
+Edit or create file or virtual objects. To trigger LSP diagnostics on a file without making changes, use `target: ""` and `text: ""` (empty values) — the tool will run LSP formatting and syntax checks and return the results in `diagnostics` without modifying the file.
 
 #### Target parameters (determines where and how to edit):
 
@@ -18,6 +18,11 @@ Edit or create file or virtual objects.
 
 - A space is automatically added at the end of the inserted text.
 - If file does not exist, always using `@all` instead of other targets.
+- **Post-edit Auto Formatting & Diagnostics**: After a successful edit, the system automatically checks the file for syntax issues. The result may include:
+  - `format_applied: true` — the file was auto-formatted (only for LSP-supported languages).
+  - `diagnostics: [...]` — a list of syntax errors and warnings found (line numbers are 1-based). Check these and fix any issues in subsequent edits.
+  - **LSP languages** (Go, Python, Rust, C/C++, Java, Kotlin, C#, JS/TS, Vue): formatting + diagnostics via language server.
+  - **Native syntax check** (JSON5, JSONL, YAML, TOML, INI, Markdown): parsed directly for syntax errors. Markdown checks for unclosed code fences.
 
 ##### Example Task:
 
