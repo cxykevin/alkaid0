@@ -191,12 +191,15 @@ func Startup() {
 
 	// Trace 后台索引注入（打 tempfs 标签）
 	trace.SetIndexTaskFn(func(directory string, filePath string, fullContent string, embedText string, tags []string) error {
-		return codebase.AddToQueue(directory, codebase.EmbedTask{
-			FilePath:    filePath,
-			FullContent: fullContent,
-			EmbedText:   embedText,
-			Tags:        tags,
-		})
+		if same, _ := codebase.CheckContentHash(directory, filePath, "", embedText); !same {
+			return codebase.AddToQueue(directory, codebase.EmbedTask{
+				FilePath:    filePath,
+				FullContent: fullContent,
+				EmbedText:   embedText,
+				Tags:        tags,
+			})
+		}
+		return nil
 	})
 
 	// LSP 客户端初始化

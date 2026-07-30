@@ -102,6 +102,25 @@ func AddToQueue(directory string, task EmbedTask) error {
 	return nil
 }
 
+// CheckContentHash 检查指定文件+符号的嵌入哈希是否与当前内容一致
+// 如果一致（内容未变）返回 true，可跳过入队
+func CheckContentHash(directory, filePath, symbol, content string) (bool, error) {
+	cdb, err := getOrCreateDB(directory)
+	if err != nil {
+		return false, err
+	}
+
+	existingHash, err := cdb.checkExistingHash(filePath, symbol)
+	if err != nil {
+		return false, err
+	}
+	if existingHash == "" {
+		return false, nil
+	}
+
+	return existingHash == embedHash(content), nil
+}
+
 // StopDirectory 停止指定目录的 worker，清空队列中待处理的任务
 func StopDirectory(directory string) error {
 	cdb, err := getOrCreateDB(directory)

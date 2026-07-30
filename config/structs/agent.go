@@ -27,5 +27,5 @@ type AgentsConfig struct {
 	UseShell                string `default:""`
 	// TerminalEnvs 终端启动时注入的环境变量
 	TerminalEnvs   map[string]string
-	DisableSandbox bool                `default:"false"`
+	DisableSandbox bool `default:"false"`
 }

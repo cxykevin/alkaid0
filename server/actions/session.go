@@ -696,12 +696,15 @@ func indexChatHistory(session *structs.Chats, cwd string) {
 
 	// 后台静默索引
 	go func() {
-		_ = codebase.AddToQueue(cwd, codebase.EmbedTask{
-			FilePath:    fmt.Sprintf("chathistory/%d", session.ID),
-			FullContent: contentStr,
-			EmbedText:   contentStr,
-			Tags:        []string{"chathistory"},
-		})
+		filePath := fmt.Sprintf("chathistory/%d", session.ID)
+		if same, _ := codebase.CheckContentHash(cwd, filePath, "", contentStr); !same {
+			_ = codebase.AddToQueue(cwd, codebase.EmbedTask{
+				FilePath:    filePath,
+				FullContent: contentStr,
+				EmbedText:   contentStr,
+				Tags:        []string{"chathistory"},
+			})
+		}
 	}()
 }
 

@@ -78,13 +78,31 @@ func TestDefaultEntriesHaveCommand(t *testing.T) {
 }
 
 func TestLanguageIDEntries(t *testing.T) {
+	// 构建所有有 LSP 服务器或无 LSP 但受支持的扩展名集合
+	supported := make(map[string]bool)
+	for ext := range defaultLanguageServers {
+		supported[ext] = true
+	}
+	for _, ext := range noLSPExtensions {
+		supported[ext] = true
+	}
+
 	for ext, lang := range extToLanguageID {
 		if lang == "" {
 			t.Errorf("empty language ID for extension %s", ext)
 		}
-		// 验证每个扩展名也有默认服务器
-		if _, ok := defaultLanguageServers[ext]; !ok {
-			t.Errorf("missing default server for extension %s which has language ID %s", ext, lang)
+		// 验证每个扩展名要么有默认 LSP 服务器，要么在 noLSPExtensions 中
+		if !supported[ext] {
+			t.Errorf("extension %s (lang=%s) is not in defaultLanguageServers or noLSPExtensions", ext, lang)
+		}
+	}
+}
+
+func TestNoLSPExtensionsEmptyCommand(t *testing.T) {
+	// noLSPExtensions 中的扩展名不应在 defaultLanguageServers 中
+	for _, ext := range noLSPExtensions {
+		if _, ok := defaultLanguageServers[ext]; ok {
+			t.Errorf("extension %s should not have a default language server (use noLSPExtensions instead)", ext)
 		}
 	}
 }

@@ -2,6 +2,7 @@ package lsp
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"maps"
 	"sync"
@@ -10,12 +11,20 @@ import (
 	"github.com/cxykevin/alkaid0/config"
 )
 
+// ErrLSPDisabled 当 LSP 连续启动失败被禁用时返回
+var ErrLSPDisabled = errors.New("LSP disabled after consecutive failures")
+
 // Manager 管理多工作目录多语言的 LSP 客户端
 type Manager struct {
 	clients   map[string]*Client // key = languageKey(workdir, language)
 	clientsMu sync.Mutex
 
 	idleTimeout time.Duration
+
+	// failCount 记录每个 LSP 的连续启动失败次数 (key = languageKey)
+	// 达到阈值后本次索引周期内禁用该 LSP，避免反复尝试启动
+	failCount   map[string]int
+	failCountMu sync.Mutex
 
 	stopReaper chan struct{}
 	reaperWG   sync.WaitGroup
@@ -40,6 +49,7 @@ func Initialize() error {
 
 	globalManager = &Manager{
 		clients:     make(map[string]*Client),
+		failCount:   make(map[string]int),
 		idleTimeout: timeout,
 		stopReaper:  make(chan struct{}),
 	}
@@ -109,11 +119,25 @@ func GetSymbols(workdir, filePath string) ([]SymbolResult, error) {
 	return globalManager.GetSymbols(workdir, filePath)
 }
 
+// ResetLSPFailures 重置所有 LSP 的失败计数，供新索引周期开始前调用
+func ResetLSPFailures() {
+	if globalManager == nil {
+		return
+	}
+	globalManager.failCountMu.Lock()
+	for k := range globalManager.failCount {
+		delete(globalManager.failCount, k)
+	}
+	globalManager.failCountMu.Unlock()
+	logger.Info("reset LSP failure counters")
+}
+
 // ---------------------------------------------------------------------------
 // 内部方法
 // ---------------------------------------------------------------------------
 
 // getClient 获取或创建 LSP 客户端
+// 连续启动失败 3 次后，该工作目录下对应语言的 LSP 会被禁用（避免反复超时）
 func (m *Manager) getClient(workdir, filePath string) (*Client, error) {
 	ext := extFromPath(filePath)
 	langID := languageIDFromExt(ext)
@@ -125,6 +149,14 @@ func (m *Manager) getClient(workdir, filePath string) (*Client, error) {
 	}
 
 	key := languageKey(workdir, langID)
+
+	// 检查是否已被连续失败禁用
+	m.failCountMu.Lock()
+	if m.failCount[key] >= 3 {
+		m.failCountMu.Unlock()
+		return nil, fmt.Errorf("%w (key=%s)", ErrLSPDisabled, key)
+	}
+	m.failCountMu.Unlock()
 
 	// 查找已存在的客户端
 	m.clientsMu.Lock()
@@ -145,8 +177,18 @@ func (m *Manager) getClient(workdir, filePath string) (*Client, error) {
 	defer cancel()
 
 	if err := client.Start(ctx, serverCfg); err != nil {
+		m.failCountMu.Lock()
+		m.failCount[key]++
+		count := m.failCount[key]
+		m.failCountMu.Unlock()
+		logger.Warn("LSP %s start failed (%d/3): %v", key, count, err)
 		return nil, fmt.Errorf("start LSP %s: %w", key, err)
 	}
+
+	// 启动成功，重置失败计数
+	m.failCountMu.Lock()
+	delete(m.failCount, key)
+	m.failCountMu.Unlock()
 
 	m.clientsMu.Lock()
 	m.clients[key] = client

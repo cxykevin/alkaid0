@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 	"sync"
@@ -411,13 +412,116 @@ func truncateContent(ext string, content []byte) []byte {
 			lines = lines[:5]
 		}
 	case ".json":
-		var buf bytes.Buffer
-		if err := json.Indent(&buf, content, "", "  "); err == nil {
-			content = buf.Bytes()
-			lines = bytes.Split(content, []byte{'\n'})
+		// 使用 JSON5 清洗后格式化（支持注释、结尾逗号、顶层数组/字符串）
+		if cleaned := cleanJSON5(string(content)); cleaned != "" {
+			var buf bytes.Buffer
+			if err := json.Indent(&buf, []byte(cleaned), "", "  "); err == nil {
+				content = buf.Bytes()
+				lines = bytes.Split(content, []byte{'\n'})
+			}
 		}
 		if len(lines) > 20 {
 			lines = lines[:20]
+		}
+	case ".jsonl":
+		// jsonl：取第一行格式化，取前10行，最大500字符
+		firstLine := content
+		if idx := bytes.IndexByte(content, '\n'); idx >= 0 {
+			firstLine = content[:idx]
+		}
+		if cleaned := cleanJSON5(string(firstLine)); cleaned != "" {
+			var buf bytes.Buffer
+			if err := json.Indent(&buf, []byte(cleaned), "", "  "); err == nil {
+				formatted := buf.Bytes()
+				formattedLines := bytes.Split(formatted, []byte{'\n'})
+				if len(formattedLines) > 10 {
+					formattedLines = formattedLines[:10]
+				}
+				out := bytes.Join(formattedLines, []byte{'\n'})
+				if len(out) > 500 {
+					out = out[:500]
+				}
+				lines = bytes.Split(out, []byte{'\n'})
+			}
+		}
+	case ".toml", ".ini":
+		// 用正则提取顶层配置 key=value 和 [section] 结构，每个 section 至多3行
+		reKV := regexp.MustCompile(`^([a-zA-Z_][a-zA-Z0-9._-]*)\s*=`)
+		var tomlLines [][]byte
+		secLines := 0 // 当前 section 已保留的行数
+		for _, raw := range lines {
+			s := strings.TrimSpace(string(raw))
+			if s == "" {
+				continue
+			}
+			if strings.HasPrefix(s, "#") || strings.HasPrefix(s, ";") {
+				tomlLines = append(tomlLines, []byte(s))
+				continue
+			}
+			if strings.HasPrefix(s, "[") {
+				secLines = 0
+				tomlLines = append(tomlLines, []byte(s))
+				continue
+			}
+			if reKV.MatchString(s) && secLines < 3 {
+				secLines++
+				tomlLines = append(tomlLines, []byte(s))
+			}
+		}
+		if len(tomlLines) > 30 {
+			tomlLines = tomlLines[:30]
+		}
+		lines = tomlLines
+	case ".md", ".mdx":
+		// Markdown/MDX：只提取 h1-h3 标题行（保留 # 前缀便于搜索区分层级）
+		reHeading := regexp.MustCompile(`^#{1,3}\s`)
+		var mdLines [][]byte
+		for _, raw := range lines {
+			s := string(raw)
+			if reHeading.MatchString(s) {
+				mdLines = append(mdLines, raw)
+			}
+		}
+		if len(mdLines) > 30 {
+			mdLines = mdLines[:30]
+		}
+		lines = mdLines
+	case ".makefile":
+		// Makefile：提取 target 定义行和第一个命令
+		reTarget := regexp.MustCompile(`^[a-zA-Z0-9_.-]+:`)
+		var mkLines [][]byte
+		for _, raw := range lines {
+			s := string(raw)
+			if strings.HasPrefix(s, "\t") && len(mkLines) > 0 && len(mkLines) < 50 {
+				mkLines = append(mkLines, raw)
+				continue
+			}
+			if reTarget.MatchString(s) && len(mkLines) < 50 {
+				mkLines = append(mkLines, raw)
+			}
+		}
+		if len(mkLines) > 30 {
+			mkLines = mkLines[:30]
+		}
+		lines = mkLines
+	case ".dockerfile":
+		// Dockerfile：提取指令行
+		reDocker := regexp.MustCompile(`^(FROM|RUN|CMD|COPY|ADD|ENV|EXPOSE|ENTRYPOINT|LABEL|WORKDIR|ARG|VOLUME|USER|SHELL|STOPSIGNAL|HEALTHCHECK|MAINTAINER)\b`)
+		var dfLines [][]byte
+		for _, raw := range lines {
+			if len(dfLines) >= 30 {
+				break
+			}
+			s := strings.TrimSpace(string(raw))
+			if reDocker.MatchString(s) {
+				dfLines = append(dfLines, []byte(s))
+			}
+		}
+		lines = dfLines
+	case ".license":
+		// LICENSE：只取前 5 行（标准许可证模板头）
+		if len(lines) > 5 {
+			lines = lines[:5]
 		}
 	case ".yaml", ".yml":
 		if len(lines) > 20 {
@@ -425,6 +529,108 @@ func truncateContent(ext string, content []byte) []byte {
 		}
 	}
 	return bytes.Join(lines, []byte{'\n'})
+}
+
+// cleanJSON5 将 JSON5 内容清洗为标准 JSON，移除注释和结尾逗号。
+// 支持顶层对象 {}、数组 []、字符串 ""、数字等所有 JSON5 类型。
+func cleanJSON5(input string) string {
+	var out strings.Builder
+	out.Grow(len(input))
+
+	inStr := false     // 是否在字符串中
+	strChar := byte(0) // 当前字符串界定符 ' 或 "
+	escaped := false   // 是否刚遇到反斜杠
+
+	// 多行注释状态
+	inBlockComment := false
+	// 单行注释状态（到行尾）
+	inLineComment := false
+
+	flush := func(b byte) {
+		out.WriteByte(b)
+	}
+
+	for i := 0; i < len(input); i++ {
+		ch := input[i]
+
+		// ---- 字符串处理（优先于注释） ----
+		if inBlockComment {
+			if ch == '*' && i+1 < len(input) && input[i+1] == '/' {
+				i++ // 跳过 /
+				inBlockComment = false
+			}
+			continue
+		}
+
+		if inLineComment {
+			if ch == '\n' {
+				inLineComment = false
+				flush('\n')
+			}
+			continue
+		}
+
+		if inStr {
+			flush(ch)
+			if escaped {
+				escaped = false
+				continue
+			}
+			if ch == '\\' && !escaped {
+				escaped = true
+				continue
+			}
+			if ch == strChar {
+				inStr = false
+			}
+			continue
+		}
+
+		// ---- 注释检测（不在字符串内） ----
+		if ch == '/' && i+1 < len(input) {
+			next := input[i+1]
+			if next == '/' {
+				inLineComment = true
+				i++ // 跳过第二个 /
+				continue
+			}
+			if next == '*' {
+				inBlockComment = true
+				i++ // 跳过 *
+				continue
+			}
+		}
+
+		// ---- 字符串开始 ----
+		if ch == '"' || ch == '\'' {
+			inStr = true
+			strChar = ch
+			flush(ch)
+			continue
+		}
+
+		// ---- 逗号处理 ----
+		if ch == ',' {
+			// 向前扫描（跳过空白），判断是否在 } 或 ] 前
+			// 若是则跳过此逗号（清理结尾逗号）
+			j := i + 1
+			for j < len(input) {
+				ws := input[j]
+				if ws == ' ' || ws == '\t' || ws == '\n' || ws == '\r' {
+					j++
+					continue
+				}
+				break
+			}
+			if j < len(input) && (input[j] == '}' || input[j] == ']') {
+				continue // 跳过结尾逗号
+			}
+		}
+
+		flush(ch)
+	}
+
+	return out.String()
 }
 
 // RunIndex 扫描 cwd 下的合规文件，逐个提取 LSP 符号并提交嵌入任务。
@@ -439,6 +645,9 @@ func RunIndex(ctx context.Context, cwd string, broadcastFn func(IndexStatus)) er
 	if len(whitelist) == 0 {
 		return fmt.Errorf("no supported extensions found (LSP not configured)")
 	}
+
+	// 新索引周期，重置 LSP 失败计数
+	lsp.ResetLSPFailures()
 
 	gi := loadGitignore(cwd)
 
@@ -531,8 +740,13 @@ func RunIndex(ctx context.Context, cwd string, broadcastFn func(IndexStatus)) er
 			return nil
 		}
 
-		// 1) 扩展名白名单
+		// 1) 扩展名白名单（无扩展名文件通过文件名映射伪扩展名）
 		ext := strings.ToLower(filepath.Ext(path))
+		if ext == "" {
+			if mapped, ok := lsp.GetFileNameExt(filepath.Base(path)); ok {
+				ext = mapped
+			}
+		}
 		if !whitelist[ext] {
 			return nil
 		}
@@ -617,14 +831,17 @@ func RunIndex(ctx context.Context, cwd string, broadcastFn func(IndexStatus)) er
 		// 尝试 LSP 提取符号
 		symbols, lspErr := lsp.GetSymbols(cwd, f.path)
 		if lspErr != nil || len(symbols) == 0 {
-			// LSP 不可用或文件无符号：索引整个文件
-			_ = AddToQueue(cwd, EmbedTask{
-				EmbedText:   string(f.content),
-				FullContent: string(f.content),
-				FilePath:    f.relPath,
-				Symbol:      "",
-				Tags:        []string{"file"},
-			})
+			// LSP 不可用或文件无符号：索引整个文件（hash 未变则跳过）
+			embedText := string(f.content)
+			if same, _ := CheckContentHash(cwd, f.relPath, "", embedText); !same {
+				_ = AddToQueue(cwd, EmbedTask{
+					EmbedText:   embedText,
+					FullContent: string(f.content),
+					FilePath:    f.relPath,
+					Symbol:      "",
+					Tags:        []string{"file"},
+				})
+			}
 			continue
 		}
 
@@ -637,29 +854,34 @@ func RunIndex(ctx context.Context, cwd string, broadcastFn func(IndexStatus)) er
 		// 清理已删除的符号
 		_ = CleanSymbols(cwd, f.relPath, activeSymbols)
 
-		// 对每个符号创建嵌入任务（worker 内部会按 hash 跳过未变更的）
+		// 对每个符号创建嵌入任务（先查 hash，未变更则跳过）
 		for _, sym := range symbols {
 			embedText := sym.Signature
 			if embedText == "" {
 				embedText = sym.Code
 			}
-			_ = AddToQueue(cwd, EmbedTask{
-				EmbedText:   embedText,
-				FullContent: sym.Code,
-				FilePath:    f.relPath,
-				Symbol:      sym.Name,
-				Tags:        []string{sym.KindName},
-			})
+			if same, _ := CheckContentHash(cwd, f.relPath, sym.Name, embedText); !same {
+				_ = AddToQueue(cwd, EmbedTask{
+					EmbedText:   embedText,
+					FullContent: sym.Code,
+					FilePath:    f.relPath,
+					Symbol:      sym.Name,
+					Tags:        []string{sym.KindName},
+				})
+			}
 		}
 
-		// 同时索引整个文件（全局语义搜索兜底）
-		_ = AddToQueue(cwd, EmbedTask{
-			EmbedText:   string(f.content),
-			FullContent: string(f.content),
-			FilePath:    f.relPath,
-			Symbol:      "",
-			Tags:        []string{"file"},
-		})
+		// 同时索引整个文件（全局语义搜索兜底，hash 未变则跳过）
+		embedTextAll := string(f.content)
+		if same, _ := CheckContentHash(cwd, f.relPath, "", embedTextAll); !same {
+			_ = AddToQueue(cwd, EmbedTask{
+				EmbedText:   embedTextAll,
+				FullContent: string(f.content),
+				FilePath:    f.relPath,
+				Symbol:      "",
+				Tags:        []string{"file"},
+			})
+		}
 	}
 
 	// 删除已被移除的文件对应的索引条目

@@ -23,12 +23,16 @@ func indexTempfsAndChatHistory(cwd string) {
 		logger.Warn("index extras: query refer files failed: %v", err)
 	} else {
 		for i := range refs {
-			_ = codebase.AddToQueue(cwd, codebase.EmbedTask{
-				FilePath:    fmt.Sprintf("tempfs/%d/%s", refs[i].ChatID, refs[i].Path),
-				FullContent: refs[i].Content,
-				EmbedText:   refs[i].Content,
-				Tags:        []string{"tempfs"},
-			})
+			content := refs[i].Content
+			filePath := fmt.Sprintf("tempfs/%d/%s", refs[i].ChatID, refs[i].Path)
+			if same, _ := codebase.CheckContentHash(cwd, filePath, "", content); !same {
+				_ = codebase.AddToQueue(cwd, codebase.EmbedTask{
+					FilePath:    filePath,
+					FullContent: content,
+					EmbedText:   content,
+					Tags:        []string{"tempfs"},
+				})
+			}
 		}
 		logger.Info("index extras: queued %d tempfs files", len(refs))
 	}
@@ -59,12 +63,15 @@ func indexTempfsAndChatHistory(cwd string) {
 			}
 			contentStr := buf.String()
 			if contentStr != "" {
-				_ = codebase.AddToQueue(cwd, codebase.EmbedTask{
-					FilePath:    fmt.Sprintf("chathistory/%d", chats[ci].ID),
-					FullContent: contentStr,
-					EmbedText:   contentStr,
-					Tags:        []string{"chathistory"},
-				})
+				filePath := fmt.Sprintf("chathistory/%d", chats[ci].ID)
+				if same, _ := codebase.CheckContentHash(cwd, filePath, "", contentStr); !same {
+					_ = codebase.AddToQueue(cwd, codebase.EmbedTask{
+						FilePath:    filePath,
+						FullContent: contentStr,
+						EmbedText:   contentStr,
+						Tags:        []string{"chathistory"},
+					})
+				}
 			}
 		}
 		logger.Info("index extras: queued %d chathistory sessions", len(chats))
