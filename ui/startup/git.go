@@ -48,6 +48,8 @@ func ensureGlobalGitIgnore() {
 	}
 
 	if !fromConfig {
+		// 修改用户全局 git 配置前明确记录，便于用户知晓并可手动还原
+		logger.Info("setting git --global core.excludesfile to %s (by alkaid0)", expanded)
 		if err := setGitGlobalExcludePath(expanded); err != nil {
 			logger.Warn("set git global excludesfile failed: %v", err)
 			return
@@ -164,7 +166,11 @@ func appendIgnoreIfMissing(path string) error {
 		return err
 	}
 	content := string(data)
-	if strings.Contains(content, "\n.alk_*") || strings.HasSuffix(strings.TrimSpace(content), ".alk_*") {
+	// 分别判断 .alkaid0/ 与 .alk_* 两条目，缺哪个补哪个（追加整块，gitignore 幂等），
+	// 避免已含其一就提前返回导致另一条永不生效
+	hasAlkaid0 := strings.Contains(content, ".alkaid0/")
+	hasAlkStar := strings.Contains(content, ".alk_*")
+	if hasAlkaid0 && hasAlkStar {
 		return nil
 	}
 

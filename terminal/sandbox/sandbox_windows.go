@@ -16,6 +16,14 @@ type windowsCommandCleanup struct {
 	release func() error
 }
 
+// Clean 调用 release 还原目录权限/ACL（由 Command.Wait 统一 defer 调用）
+func (cl *windowsCommandCleanup) Clean() error {
+	if cl.release != nil {
+		return cl.release()
+	}
+	return nil
+}
+
 func (s *Sandbox) createIsolatedCommand(ctx context.Context, name string, args ...string) (*Command, error) {
 	if err := winSandbox.InitAlkaid0SandboxUser(); err != nil {
 		return nil, fmt.Errorf("初始化沙盒用户失败: %w", err)

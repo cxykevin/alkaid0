@@ -39,10 +39,8 @@ type Solver struct {
 
 // saveToolResponse 将工具调用响应序列化后存入缓存列表
 func (p *Solver) saveToolResponse(toolName string, toolID string, response map[string]*any) error {
-	// 判断map是否为空
-	if len(response) == 0 {
-		return nil
-	}
+	// 空结果也生成一条记录（序列化为 {}），否则 LLM 下一轮看不到任何工具返回，
+	// 会误以为工具未被调用而重复调用或产生幻觉。
 	var buf bytes.Buffer
 	encoder := json.NewEncoder(&buf)
 	encoder.SetEscapeHTML(false)
@@ -50,10 +48,14 @@ func (p *Solver) saveToolResponse(toolName string, toolID string, response map[s
 	if err != nil {
 		return err
 	}
+	content := strings.TrimSpace(buf.String())
+	if content == "" {
+		content = "{}"
+	}
 	p.toolResponses = append(p.toolResponses, toolSaveStruct{
 		Name:   toolName,
 		ID:     toolID,
-		Return: strings.TrimSpace(buf.String()),
+		Return: content,
 	})
 	logger.Debug("tool response saved: %s (ID: %s)", toolName, toolID)
 	return nil

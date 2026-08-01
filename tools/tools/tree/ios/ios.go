@@ -30,12 +30,15 @@ func Copy(origin, dist string) error {
 		d.Close()
 	}()
 	if info.Size() > maxCopySize {
-		// 尝试 FICLONE
-		err := cloneFile(int(s.Fd()), int(d.Fd()))
+		// 尝试 FICLONE（复用外层 err，使失败时 defer 的清理能生效）
+		err = cloneFile(int(s.Fd()), int(d.Fd()))
 		if err != nil {
-			// 不再尝试，不支持的文件系统
-			// 交给 AI 扔到长期任务
-			return err
+			// FICLONE 不支持（macOS 参数语义差异或普通文件系统），回退按块复制，
+			// 避免大文件克隆恒失败
+			_, copyErr := io.Copy(d, s)
+			if copyErr != nil {
+				return copyErr
+			}
 		}
 	} else {
 		_, err = io.Copy(d, s)

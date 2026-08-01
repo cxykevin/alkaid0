@@ -55,6 +55,12 @@ func (cdb *CodebaseDB) worker(ctx context.Context) {
 			cdb.logger.Error("stack: %s", string(buf[:n]))
 
 			if ctx.Err() == nil {
+				// 先清除旧的 worker 状态再重启，否则 startWorker 会因
+				// workerCancel 仍非 nil 而直接返回，导致 worker 永久死亡、队列停摆。
+				cdb.mu.Lock()
+				cdb.workerCancel = nil
+				cdb.workerCtx = nil
+				cdb.mu.Unlock()
 				cdb.startWorker()
 			}
 		}

@@ -212,6 +212,7 @@ func (c *Command) Start() error {
 
 // Wait 等待命令完成
 func (c *Command) Wait() error {
+	defer c.Clean()
 	err := c.cmd.Wait()
 	if err != nil {
 		logger.Warn("command %s finished with error: %v", c.name, err)
@@ -237,6 +238,22 @@ func (c *Command) Kill() error {
 		return c.cmd.Kill()
 	}
 	return errors.New("进程未启动")
+}
+
+// commandCleanup 命令临时资源清理接口（Windows 沙盒用于还原目录 ACL）
+type commandCleanup interface {
+	Clean() error
+}
+
+// Clean 释放命令关联的临时资源（如 Windows 目录 ACL 还原）。
+// 此前该清理函数从未被调用，导致 Windows 沙盒的目录权限/ACL 变更不还原。
+func (c *Command) Clean() error {
+	if c.temp != nil {
+		if cl, ok := c.temp.(commandCleanup); ok {
+			return cl.Clean()
+		}
+	}
+	return nil
 }
 
 // IsPathWritable 检查给定路径是否在沙盒允许的可写目录白名单内。

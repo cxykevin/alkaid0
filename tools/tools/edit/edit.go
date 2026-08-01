@@ -284,6 +284,8 @@ func writeFile(session *structs.Chats, mp map[string]*any, cross []*any) (bool, 
 			"error":   &errMsg,
 		}, nil
 	}
+	// 保存原始相对路径，供编辑成功后加入 trace 列表（下面 path 会被改写为绝对路径）
+	origRelPath := path
 
 	target, text, err := CheckTargetText(mp)
 	if err != nil {
@@ -384,7 +386,7 @@ func writeFile(session *structs.Chats, mp map[string]*any, cross []*any) (bool, 
 		}, nil
 	}
 
-	pathStr := any("")
+	pathStr := any(origRelPath)
 	trace.Trace(session, map[string]*any{
 		"path": &pathStr,
 	}, []*any{})

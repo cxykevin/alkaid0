@@ -73,11 +73,16 @@ func generateKey() string {
 }
 
 // ensureKey 检查 Server.Key 是否为空，若为空则自动生成并保存配置
+// 在写锁下修改 Server.Key，避免与运行时无锁读的字段（如各 RPC handler）形成数据竞争
 func ensureKey() {
-	if GlobalConfig.Server.Key == "" {
-		GlobalConfig.Server.Key = generateKey()
+	cfg, unlock := GlobalConfigForWrite()
+	if cfg.Server.Key == "" {
+		cfg.Server.Key = generateKey()
+		unlock()
 		Save()
+		return
 	}
+	unlock()
 }
 
 // Load 加载配置文件。
@@ -85,15 +90,16 @@ func ensureKey() {
 // 文件不存在或解析失败时会备份原文件（加上 .bak 后缀）并用默认配置兜底。
 // 加载完成后若 Server.Key 为空则自动生成随机密钥并保存。
 func Load() {
-	// 使用默认配置初始化（作为任何解析失败的 fallback）
-	model := structs.ModelsConfig{}
-	model = structs.BuildDefault(model)
+	// 使用默认配置初始化（作为任何解析失败的 fallback）。
+	// 用 BuildDefault 构建完整配置，确保 Server.Host/Port/Path 等字段有默认值
+	// （否则全新安装时 WebSocket 服务器会因空 Host/Port/Path 而启动失败）。
+	model := structs.BuildDefault(structs.ModelsConfig{})
+	cfg := structs.BuildDefault(structs.Config{})
+	cfg.Version = product.VersionID
+	cfg.Model = model
 
 	globalConfigMu.Lock()
-	GlobalConfig = &structs.Config{
-		Version: product.VersionID,
-		Model:   model,
-	}
+	GlobalConfig = &cfg
 	globalConfigMu.Unlock()
 
 	// 确定配置文件路径
@@ -128,9 +134,12 @@ func Load() {
 	globalConfigMu.Lock()
 	if err := json.Unmarshal(data, GlobalConfig); err != nil {
 		globalConfigMu.Unlock()
-		// 解析失败时备份原文件
+		// 解析失败时备份原文件，并重新生成默认配置与密钥，
+		// 避免服务器因 Key 为空而静默无法启动。
 		backupPath := expandedPath + ".bak"
 		_ = os.Rename(expandedPath, backupPath)
+		Save()
+		ensureKey()
 		return
 	}
 	globalConfigMu.Unlock()
@@ -140,8 +149,9 @@ func Load() {
 }
 
 // Save 将当前配置序列化为 JSON 并写入配置文件。
-// 写入完成后触发所有注册的重载钩子（reloadHooks），用于通知其他模块配置已变更。
-func Save() {
+// 采用原子写入（临时文件 + 重命名），避免写入失败/中断时破坏原配置；
+// 仅在写入成功后才触发重载钩子。错误返回给调用方，不再静默吞掉。
+func Save() error {
 	if configPath == "" {
 		Load()
 	}
@@ -149,18 +159,27 @@ func Save() {
 	expandedPath := configutil.ExpandPath(configPath)
 	dir := filepath.Dir(expandedPath)
 	if err := os.MkdirAll(dir, 0755); err != nil {
-		return
+		return err
 	}
 
 	globalConfigMu.RLock()
 	data, err := json.MarshalIndent(GlobalConfig, "", "  ")
 	globalConfigMu.RUnlock()
 	if err != nil {
-		return
+		return err
 	}
 
-	os.WriteFile(expandedPath, data, 0644)
+	// 原子写入：先写临时文件再重命名
+	tmp := expandedPath + ".tmp"
+	if err := os.WriteFile(tmp, data, 0644); err != nil {
+		return err
+	}
+	if err := os.Rename(tmp, expandedPath); err != nil {
+		_ = os.Remove(tmp)
+		return err
+	}
 	fireReloadHooks()
+	return nil
 }
 
 // reloadHooks 配置重载时的回调函数列表

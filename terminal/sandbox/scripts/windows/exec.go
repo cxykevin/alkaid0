@@ -257,7 +257,11 @@ func (c *Cmd) Start() error {
 	// if c.Dir != "" {
 	// 	dirPtr, _ = windows.UTF16PtrFromString(c.Dir)
 	// }
-	envPtr, _ := createEnvBlock(c.Env)
+	envPtr, err := createEnvBlock(c.Env)
+	if err != nil {
+		// 环境块含非法字符时返回错误，避免子进程拿到残缺环境
+		return err
+	}
 
 	var si windows.StartupInfoEx
 	si.Cb = uint32(unsafe.Sizeof(si))
@@ -265,8 +269,6 @@ func (c *Cmd) Start() error {
 	if useStdHandles {
 		si.Flags = windows.STARTF_USESTDHANDLES
 	}
-
-	var err error
 
 	// err = addPrivilegeToCurrentToken("SeSecurityPrivilege")
 	// if err != nil {

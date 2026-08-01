@@ -45,9 +45,13 @@ func ConfigSet(req ConfigSetRequest, _ func(string, any, *string) error, _ uint6
 		return nil, fmt.Errorf("invalid JSON config")
 	}
 
-	// 合并到 GlobalConfig（json.Unmarshal 到已存在的对象只覆盖 JSON 中出现的字段）
-	if err := json.Unmarshal(req.Config, config.GlobalConfig); err != nil {
-		return nil, fmt.Errorf("failed to apply config: %v", err)
+	// 合并到 GlobalConfig（json.Unmarshal 到已存在的对象只覆盖 JSON 中出现的字段）。
+	// 在写锁下完成合并，避免与并发读者（buildModelList、各 handler）形成数据竞争。
+	cfg, unlock := config.GlobalConfigForWrite()
+	unmarshalErr := json.Unmarshal(req.Config, cfg)
+	unlock()
+	if unmarshalErr != nil {
+		return nil, fmt.Errorf("failed to apply config: %v", unmarshalErr)
 	}
 
 	// 保存到文件并触发重载钩子

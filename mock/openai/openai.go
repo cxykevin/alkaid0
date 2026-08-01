@@ -379,9 +379,9 @@ func handleStreamingChatCompletion(w http.ResponseWriter, _ *http.Request, req C
 				Role:    "assistant",
 				Content: string(currentContent) + " ",
 			},
-			FinishReason: "stop",
 		}
 
+		// 仅最后一个 chunk 带 finish_reason，否则符合 OpenAI 规范的客户端会提前判定流结束
 		if i == len(words)-1 {
 			choice.FinishReason = "stop"
 		}
@@ -529,7 +529,11 @@ func startServe(listener net.Listener) {
 // 始终使用随机端口（:0），避免并行测试冲突。
 func StartServerTask() {
 	serverOnce.Do(func() {
-		Addr = ":0"
+		// 仅当 Addr 仍为默认值/未配置时才重置为随机端口；
+		// SetAddr 显式配置的端口应保留，否则 SetAddr 会失效
+		if Addr == "" || Addr == ":56108" {
+			Addr = ":0"
+		}
 		waitChan = make(chan bool, 1)
 		go acquireServer()
 		<-waitChan

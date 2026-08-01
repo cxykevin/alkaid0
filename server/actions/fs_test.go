@@ -1,6 +1,7 @@
 package actions
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -227,7 +228,7 @@ func TestGetPermissions_Format(t *testing.T) {
 // ---- fsOpWithTimeout 测试 ----
 
 func TestFsOpWithTimeout_Success(t *testing.T) {
-	val, err := fsOpWithTimeout(1*time.Second, func() (int, error) {
+	val, err := fsOpWithTimeout(1*time.Second, func(ctx context.Context) (int, error) {
 		return 42, nil
 	})
 	if err != nil {
@@ -239,7 +240,7 @@ func TestFsOpWithTimeout_Success(t *testing.T) {
 }
 
 func TestFsOpWithTimeout_Error(t *testing.T) {
-	_, err := fsOpWithTimeout(1*time.Second, func() (int, error) {
+	_, err := fsOpWithTimeout(1*time.Second, func(ctx context.Context) (int, error) {
 		return 0, fmt.Errorf("test error")
 	})
 	if err == nil || err.Error() != "test error" {
@@ -249,7 +250,7 @@ func TestFsOpWithTimeout_Error(t *testing.T) {
 
 func TestFsOpWithTimeout_Timeout(t *testing.T) {
 	start := time.Now()
-	_, err := fsOpWithTimeout(50*time.Millisecond, func() (int, error) {
+	_, err := fsOpWithTimeout(50*time.Millisecond, func(ctx context.Context) (int, error) {
 		time.Sleep(500 * time.Millisecond) // 远超超时
 		return 42, nil
 	})
@@ -263,7 +264,7 @@ func TestFsOpWithTimeout_Timeout(t *testing.T) {
 }
 
 func TestFsOpVoidWithTimeout_Success(t *testing.T) {
-	err := fsOpVoidWithTimeout(1*time.Second, func() error {
+	err := fsOpVoidWithTimeout(1*time.Second, func(ctx context.Context) error {
 		return nil
 	})
 	if err != nil {
@@ -272,7 +273,7 @@ func TestFsOpVoidWithTimeout_Success(t *testing.T) {
 }
 
 func TestFsOpVoidWithTimeout_Timeout(t *testing.T) {
-	err := fsOpVoidWithTimeout(50*time.Millisecond, func() error {
+	err := fsOpVoidWithTimeout(50*time.Millisecond, func(ctx context.Context) error {
 		time.Sleep(500 * time.Millisecond)
 		return nil
 	})
@@ -339,7 +340,7 @@ func TestFsValidation_InvalidSessionID(t *testing.T) {
 
 func TestFsValidation_ChmodEmptyMode(t *testing.T) {
 	tmpDir := t.TempDir()
-	sessionID := cwd2SessionID(tmpDir, 1)
+	sessionID := registerTestSession(t, tmpDir, 1)
 	_, err := FsChmod(FsChmodRequest{SessionID: sessionID, Path: "x", Mode: ""}, nil, 1)
 	if err == nil || !strings.Contains(err.Error(), "mode") {
 		t.Errorf("expected mode error, got %v", err)
@@ -348,7 +349,7 @@ func TestFsValidation_ChmodEmptyMode(t *testing.T) {
 
 func TestFsValidation_ChownEmptyOwner(t *testing.T) {
 	tmpDir := t.TempDir()
-	sessionID := cwd2SessionID(tmpDir, 1)
+	sessionID := registerTestSession(t, tmpDir, 1)
 	_, err := FsChown(FsChownRequest{SessionID: sessionID, Path: "x", Owner: ""}, nil, 1)
 	if err == nil || !strings.Contains(err.Error(), "owner") {
 		t.Errorf("expected owner error, got %v", err)
@@ -357,7 +358,7 @@ func TestFsValidation_ChownEmptyOwner(t *testing.T) {
 
 func TestFsValidation_ChmodInvalidMode(t *testing.T) {
 	tmpDir := t.TempDir()
-	sessionID := cwd2SessionID(tmpDir, 1)
+	sessionID := registerTestSession(t, tmpDir, 1)
 	_, err := FsChmod(FsChmodRequest{SessionID: sessionID, Path: "x", Mode: "invalid"}, nil, 1)
 	if err == nil || !strings.Contains(err.Error(), "invalid mode") {
 		t.Errorf("expected invalid mode error, got %v", err)
@@ -372,7 +373,7 @@ func TestFsStat_File(t *testing.T) {
 	content := "hello world"
 	os.WriteFile(testFile, []byte(content), 0644)
 
-	sessionID := cwd2SessionID(tmpDir, 1)
+	sessionID := registerTestSession(t, tmpDir, 1)
 	resp, err := FsStat(FsCommonRequest{SessionID: sessionID, Path: "test.txt"}, nil, 1)
 	if err != nil {
 		t.Fatalf("FsStat failed: %v", err)
@@ -399,7 +400,7 @@ func TestFsStat_Directory(t *testing.T) {
 	subDir := filepath.Join(tmpDir, "subdir")
 	os.MkdirAll(subDir, 0755)
 
-	sessionID := cwd2SessionID(tmpDir, 1)
+	sessionID := registerTestSession(t, tmpDir, 1)
 	resp, err := FsStat(FsCommonRequest{SessionID: sessionID, Path: "subdir"}, nil, 1)
 	if err != nil {
 		t.Fatalf("FsStat failed: %v", err)
@@ -414,7 +415,7 @@ func TestFsStat_Directory(t *testing.T) {
 
 func TestFsStat_NonExistent(t *testing.T) {
 	tmpDir := t.TempDir()
-	sessionID := cwd2SessionID(tmpDir, 1)
+	sessionID := registerTestSession(t, tmpDir, 1)
 	_, err := FsStat(FsCommonRequest{SessionID: sessionID, Path: "nonexistent.txt"}, nil, 1)
 	if err == nil {
 		t.Errorf("expected error for non-existent path")
@@ -423,7 +424,7 @@ func TestFsStat_NonExistent(t *testing.T) {
 
 func TestFsStat_RootDirectory(t *testing.T) {
 	tmpDir := t.TempDir()
-	sessionID := cwd2SessionID(tmpDir, 1)
+	sessionID := registerTestSession(t, tmpDir, 1)
 	resp, err := FsStat(FsCommonRequest{SessionID: sessionID, Path: ""}, nil, 1)
 	if err != nil {
 		t.Fatalf("FsStat(root) failed: %v", err)
@@ -443,7 +444,7 @@ func TestFsRead_File(t *testing.T) {
 	content := "hello world"
 	os.WriteFile(filepath.Join(tmpDir, "test.txt"), []byte(content), 0644)
 
-	sessionID := cwd2SessionID(tmpDir, 1)
+	sessionID := registerTestSession(t, tmpDir, 1)
 	resp, err := FsRead(FsReadRequest{SessionID: sessionID, Path: "test.txt"}, nil, 1)
 	if err != nil {
 		t.Fatalf("FsRead failed: %v", err)
@@ -462,7 +463,7 @@ func TestFsRead_WithOffset(t *testing.T) {
 	content := "hello world"
 	os.WriteFile(filepath.Join(tmpDir, "test.txt"), []byte(content), 0644)
 
-	sessionID := cwd2SessionID(tmpDir, 1)
+	sessionID := registerTestSession(t, tmpDir, 1)
 	resp, err := FsRead(FsReadRequest{SessionID: sessionID, Path: "test.txt", Offset: 6}, nil, 1)
 	if err != nil {
 		t.Fatalf("FsRead failed: %v", err)
@@ -481,7 +482,7 @@ func TestFsRead_WithLength(t *testing.T) {
 	content := "hello world this is a test"
 	os.WriteFile(filepath.Join(tmpDir, "test.txt"), []byte(content), 0644)
 
-	sessionID := cwd2SessionID(tmpDir, 1)
+	sessionID := registerTestSession(t, tmpDir, 1)
 	resp, err := FsRead(FsReadRequest{SessionID: sessionID, Path: "test.txt", Offset: 6, Length: 5}, nil, 1)
 	if err != nil {
 		t.Fatalf("FsRead failed: %v", err)
@@ -500,7 +501,7 @@ func TestFsRead_OffsetPastEnd(t *testing.T) {
 	content := "hi"
 	os.WriteFile(filepath.Join(tmpDir, "test.txt"), []byte(content), 0644)
 
-	sessionID := cwd2SessionID(tmpDir, 1)
+	sessionID := registerTestSession(t, tmpDir, 1)
 	resp, err := FsRead(FsReadRequest{SessionID: sessionID, Path: "test.txt", Offset: 100}, nil, 1)
 	if err != nil {
 		t.Fatalf("FsRead failed: %v", err)
@@ -520,7 +521,7 @@ func TestFsRead_Binary(t *testing.T) {
 	binaryData := []byte{0x00, 0x01, 0x02, 0xFF, 0xFE, 0x7F}
 	os.WriteFile(filepath.Join(tmpDir, "binary.bin"), binaryData, 0644)
 
-	sessionID := cwd2SessionID(tmpDir, 1)
+	sessionID := registerTestSession(t, tmpDir, 1)
 	resp, err := FsRead(FsReadRequest{SessionID: sessionID, Path: "binary.bin", Binary: true}, nil, 1)
 	if err != nil {
 		t.Fatalf("FsRead failed: %v", err)
@@ -548,7 +549,7 @@ func TestFsRead_Directory(t *testing.T) {
 	// 创建 .alkaid0 目录（应该被过滤掉）
 	os.MkdirAll(filepath.Join(tmpDir, ".alkaid0"), 0755)
 
-	sessionID := cwd2SessionID(tmpDir, 1)
+	sessionID := registerTestSession(t, tmpDir, 1)
 	resp, err := FsRead(FsReadRequest{SessionID: sessionID, Path: ""}, nil, 1)
 	if err != nil {
 		t.Fatalf("FsRead failed: %v", err)
@@ -603,7 +604,7 @@ func TestFsRead_NestedPath(t *testing.T) {
 	os.MkdirAll(nestedDir, 0755)
 	os.WriteFile(filepath.Join(nestedDir, "c.txt"), []byte("nested"), 0644)
 
-	sessionID := cwd2SessionID(tmpDir, 1)
+	sessionID := registerTestSession(t, tmpDir, 1)
 	resp, err := FsRead(FsReadRequest{SessionID: sessionID, Path: "a/b/c.txt"}, nil, 1)
 	if err != nil {
 		t.Fatalf("FsRead failed: %v", err)
@@ -730,7 +731,7 @@ func TestFsRead_NoSession_Directory(t *testing.T) {
 func TestFsRead_WithSession_AbsolutePath(t *testing.T) {
 	// 有 sessionId 时绝对路径应被拒绝（即使是读操作）
 	tmpDir := t.TempDir()
-	sessionID := cwd2SessionID(tmpDir, 1)
+	sessionID := registerTestSession(t, tmpDir, 1)
 	_, err := FsRead(FsReadRequest{SessionID: sessionID, Path: "/tmp"}, nil, 1)
 	if err == nil || !strings.Contains(err.Error(), "path must be relative") {
 		t.Errorf("expected rejection of absolute path with sessionId, got %v", err)
@@ -741,7 +742,7 @@ func TestFsRead_WithSession_AbsolutePath(t *testing.T) {
 
 func TestFsWrite_NewFile(t *testing.T) {
 	tmpDir := t.TempDir()
-	sessionID := cwd2SessionID(tmpDir, 1)
+	sessionID := registerTestSession(t, tmpDir, 1)
 
 	resp, err := FsWrite(FsWriteRequest{
 		SessionID: sessionID,
@@ -766,7 +767,7 @@ func TestFsWrite_Overwrite(t *testing.T) {
 	tmpDir := t.TempDir()
 	os.WriteFile(filepath.Join(tmpDir, "data.txt"), []byte("old"), 0644)
 
-	sessionID := cwd2SessionID(tmpDir, 1)
+	sessionID := registerTestSession(t, tmpDir, 1)
 	_, err := FsWrite(FsWriteRequest{
 		SessionID: sessionID,
 		Path:      "data.txt",
@@ -786,7 +787,7 @@ func TestFsWrite_Append(t *testing.T) {
 	tmpDir := t.TempDir()
 	os.WriteFile(filepath.Join(tmpDir, "log.txt"), []byte("first\n"), 0644)
 
-	sessionID := cwd2SessionID(tmpDir, 1)
+	sessionID := registerTestSession(t, tmpDir, 1)
 	resp, err := FsWrite(FsWriteRequest{
 		SessionID: sessionID,
 		Path:      "log.txt",
@@ -808,7 +809,7 @@ func TestFsWrite_Append(t *testing.T) {
 
 func TestFsWrite_AutoCreateParentDir(t *testing.T) {
 	tmpDir := t.TempDir()
-	sessionID := cwd2SessionID(tmpDir, 1)
+	sessionID := registerTestSession(t, tmpDir, 1)
 
 	_, err := FsWrite(FsWriteRequest{
 		SessionID: sessionID,
@@ -828,7 +829,7 @@ func TestFsWrite_AutoCreateParentDir(t *testing.T) {
 
 func TestFsWrite_Binary(t *testing.T) {
 	tmpDir := t.TempDir()
-	sessionID := cwd2SessionID(tmpDir, 1)
+	sessionID := registerTestSession(t, tmpDir, 1)
 
 	// base64("hello\x00world") = "aGVsbG8Ad29ybGQ="
 	resp, err := FsWrite(FsWriteRequest{
@@ -858,7 +859,7 @@ func TestFsWrite_Binary(t *testing.T) {
 
 func TestFsWrite_InvalidBase64(t *testing.T) {
 	tmpDir := t.TempDir()
-	sessionID := cwd2SessionID(tmpDir, 1)
+	sessionID := registerTestSession(t, tmpDir, 1)
 
 	_, err := FsWrite(FsWriteRequest{
 		SessionID: sessionID,
@@ -875,7 +876,7 @@ func TestFsWrite_InvalidBase64(t *testing.T) {
 
 func TestFsMkdir(t *testing.T) {
 	tmpDir := t.TempDir()
-	sessionID := cwd2SessionID(tmpDir, 1)
+	sessionID := registerTestSession(t, tmpDir, 1)
 
 	_, err := FsMkdir(FsCommonRequest{SessionID: sessionID, Path: "newdir"}, nil, 1)
 	if err != nil {
@@ -893,7 +894,7 @@ func TestFsMkdir(t *testing.T) {
 
 func TestFsMkdir_Recursive(t *testing.T) {
 	tmpDir := t.TempDir()
-	sessionID := cwd2SessionID(tmpDir, 1)
+	sessionID := registerTestSession(t, tmpDir, 1)
 
 	_, err := FsMkdir(FsCommonRequest{SessionID: sessionID, Path: "a/b/c/d/e"}, nil, 1)
 	if err != nil {
@@ -916,7 +917,7 @@ func TestFsRm_File(t *testing.T) {
 	testFile := filepath.Join(tmpDir, "delete_me.txt")
 	os.WriteFile(testFile, []byte("bye"), 0644)
 
-	sessionID := cwd2SessionID(tmpDir, 1)
+	sessionID := registerTestSession(t, tmpDir, 1)
 	_, err := FsRm(FsCommonRequest{SessionID: sessionID, Path: "delete_me.txt"}, nil, 1)
 	if err != nil {
 		t.Fatalf("FsRm failed: %v", err)
@@ -932,7 +933,7 @@ func TestFsRm_Directory(t *testing.T) {
 	os.MkdirAll(filepath.Join(tmpDir, "mydir", "sub"), 0755)
 	os.WriteFile(filepath.Join(tmpDir, "mydir", "sub", "f.txt"), []byte("x"), 0644)
 
-	sessionID := cwd2SessionID(tmpDir, 1)
+	sessionID := registerTestSession(t, tmpDir, 1)
 	_, err := FsRm(FsCommonRequest{SessionID: sessionID, Path: "mydir"}, nil, 1)
 	if err != nil {
 		t.Fatalf("FsRm failed: %v", err)
@@ -954,7 +955,7 @@ func TestFsChmod(t *testing.T) {
 	testFile := filepath.Join(tmpDir, "script.sh")
 	os.WriteFile(testFile, []byte("#!/bin/sh"), 0644)
 
-	sessionID := cwd2SessionID(tmpDir, 1)
+	sessionID := registerTestSession(t, tmpDir, 1)
 	_, err := FsChmod(FsChmodRequest{
 		SessionID: sessionID,
 		Path:      "script.sh",
@@ -979,7 +980,7 @@ func TestFsChown_NonExistentUser(t *testing.T) {
 	testFile := filepath.Join(tmpDir, "test.txt")
 	os.WriteFile(testFile, []byte("test"), 0644)
 
-	sessionID := cwd2SessionID(tmpDir, 1)
+	sessionID := registerTestSession(t, tmpDir, 1)
 	_, err := FsChown(FsChownRequest{
 		SessionID: sessionID,
 		Path:      "test.txt",
@@ -995,7 +996,7 @@ func TestFsChown_NonExistentUser(t *testing.T) {
 func TestFsRoundTrip(t *testing.T) {
 	// 完整测试：mkdir → write → stat → read → chmod → rm
 	tmpDir := t.TempDir()
-	sessionID := cwd2SessionID(tmpDir, 42)
+	sessionID := registerTestSession(t, tmpDir, 42)
 
 	// 1. mkdir
 	_, err := FsMkdir(FsCommonRequest{SessionID: sessionID, Path: "testdir"}, nil, 1)
@@ -1059,7 +1060,7 @@ func TestFs_EmptyFile(t *testing.T) {
 	testFile := filepath.Join(tmpDir, "empty.txt")
 	os.WriteFile(testFile, []byte{}, 0644)
 
-	sessionID := cwd2SessionID(tmpDir, 1)
+	sessionID := registerTestSession(t, tmpDir, 1)
 
 	// stat should have size=0 (non-nil pointer)
 	resp, err := FsStat(FsCommonRequest{SessionID: sessionID, Path: "empty.txt"}, nil, 1)
@@ -1085,7 +1086,7 @@ func TestFs_EmptyFile(t *testing.T) {
 func TestFs_PathSecurity(t *testing.T) {
 	// 确保无法通过任何方式访问 cwd 外的文件
 	tmpDir := t.TempDir()
-	sessionID := cwd2SessionID(tmpDir, 1)
+	sessionID := registerTestSession(t, tmpDir, 1)
 
 	// 创建外部文件
 	outsideFile := filepath.Join(os.TempDir(), "alkaid0_fs_test_outside.txt")

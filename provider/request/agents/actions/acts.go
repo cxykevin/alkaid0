@@ -1,6 +1,8 @@
 package actions
 
 import (
+	"fmt"
+
 	"github.com/cxykevin/alkaid0/library/chancall"
 	"github.com/cxykevin/alkaid0/storage/structs"
 )
@@ -52,7 +54,8 @@ func ListAgent(session *structs.Chats) ([]structs.SubAgents, error) {
 	}
 	ret, ok := res.([]structs.SubAgents)
 	if !ok {
-		return nil, err
+		// 类型断言失败时返回明确错误，而不是静默的 nil, err（err 在此路径必为 nil）
+		return nil, fmt.Errorf("ListAgent: unexpected result type %T", res)
 	}
 	return ret, nil
 }

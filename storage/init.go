@@ -33,7 +33,8 @@ func InitDB(dbPath string) (*gorm.DB, error) {
 	if strings.HasSuffix(dbPath, ":memory:") {
 		if os.Getenv("ALKAID0_TEST_LESS_MEMORY_MODE") != "" {
 			// 降级为临时文件模式，每个连接使用独立的临时数据库文件
-			dbPath = strings.ReplaceAll(dbPath, ":memory:", fmt.Sprintf("__lessmem_%d.db", atomic.AddInt32(&lessMemModeDBID, 1)))
+			// 临时 DB 放入系统临时目录，避免测试反复运行在项目数据目录累积 __lessmem_*.db 文件
+			dbPath = filepath.Join(os.TempDir(), fmt.Sprintf("alkaid0_lessmem_%d.db", atomic.AddInt32(&lessMemModeDBID, 1)))
 		} else {
 			dir := filepath.Dir(dbPath)
 			if dir != "." {
@@ -68,7 +69,8 @@ func InitDB(dbPath string) (*gorm.DB, error) {
 	}
 	logger.Info("database automigrate completed")
 
-	// 初始化全局配置
+	// 初始化全局配置（单行记录），并读入内存缓存
 	db.FirstOrCreate(&structs.Configs{})
+	_ = ReadGlobalConfigs(db)
 	return db, nil
 }

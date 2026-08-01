@@ -93,6 +93,8 @@ Environment Variables:
 func Startup() {
 	if len(os.Args) >= 2 && os.Args[1] == "acp" {
 		helper.StartHelper(os.Args[1:])
+		// helper 会话结束后直接返回，避免继续执行并启动完整的 WebSocket 服务器
+		return
 	}
 
 	fmt.Fprintln(os.Stderr, logoString)

@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/cxykevin/alkaid0/log"
@@ -165,15 +166,22 @@ func (m *Manager) FormatAndDiagnose(workdir, filePath string) *FormatResult {
 		}
 	}
 
-	// 注册通知处理器（保留原处理器链）
+	// 注册通知处理器（保留原处理器链）。
+	// 在锁内一次性读旧值+写新值，避免并发 FormatAndDiagnose 互相覆盖/错误恢复。
+	client.transport.notifMu.Lock()
 	oldHandler := client.transport.notifHandler
-	client.transport.SetNotificationHandler(func(method string, params json.RawMessage) {
+	client.transport.notifHandler = func(method string, params json.RawMessage) {
 		handler(method, params)
 		if oldHandler != nil {
 			oldHandler(method, params)
 		}
-	})
-	defer client.transport.SetNotificationHandler(oldHandler)
+	}
+	client.transport.notifMu.Unlock()
+	defer func() {
+		client.transport.notifMu.Lock()
+		client.transport.notifHandler = oldHandler
+		client.transport.notifMu.Unlock()
+	}()
 
 	// 如果格式化了，发送 didChange 同步最新内容给 LSP 服务器触发诊断
 	if result.Formatted {
@@ -249,7 +257,7 @@ func applyTextEdits(text string, edits []TextEdit) string {
 		var newLines []string
 
 		// 替换范围前的行
-		for i := 0; i < startLine; i++ {
+		for i := range startLine {
 			newLines = append(newLines, lines[i])
 		}
 
@@ -267,6 +275,9 @@ func applyTextEdits(text string, edits []TextEdit) string {
 		editLines := splitLines(edit.NewText)
 		if len(editLines) == 0 {
 			newLines = append(newLines, prefix+suffix)
+		} else if len(editLines) == 1 {
+			// 单行编辑：prefix + NewText + suffix（必须补 suffix，否则丢失行尾内容）
+			newLines = append(newLines, prefix+editLines[0]+suffix)
 		} else {
 			// 第一行：prefix + 编辑文本首行
 			newLines = append(newLines, prefix+editLines[0])
@@ -275,9 +286,7 @@ func applyTextEdits(text string, edits []TextEdit) string {
 				newLines = append(newLines, editLines[i])
 			}
 			// 最后一行：编辑文本末行 + suffix
-			if len(editLines) > 1 {
-				newLines = append(newLines, editLines[len(editLines)-1]+suffix)
-			}
+			newLines = append(newLines, editLines[len(editLines)-1]+suffix)
 		}
 
 		// 替换范围后的行
@@ -313,12 +322,12 @@ func joinLines(lines []string) string {
 	if len(lines) == 0 {
 		return ""
 	}
-	result := ""
+	var result strings.Builder
 	for _, line := range lines[:len(lines)-1] {
-		result += line + "\n"
+		result.WriteString(line + "\n")
 	}
-	result += lines[len(lines)-1]
-	return result
+	result.WriteString(lines[len(lines)-1])
+	return result.String()
 }
 
 // severityName 诊断严重程度中文名

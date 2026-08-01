@@ -39,3 +39,11 @@ func New() *Parser {
 	}
 	return parser
 }
+
+// InString 返回当前是否处于 JSON 字符串字面量内部。
+// 供外层标签状态机判断是否应忽略形如 </tools> 的字符串内容，避免误判结束标签。
+func (p *Parser) InString() bool {
+	return p.mode == jsonModeInString ||
+		p.mode == jsonModeInStringSpecialChar ||
+		p.mode == jsonModeInStringSpecialCharHex
+}

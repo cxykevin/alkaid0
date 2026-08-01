@@ -19,3 +19,5 @@ server/generated
 CLAUDE.md
 AGENTS.md
 __lessmem_*.db
+
+.claude/

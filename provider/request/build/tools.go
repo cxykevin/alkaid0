@@ -29,7 +29,8 @@ func map2Slice[sliceType any, originMapKeyType comparable, originMapValType any]
 }
 
 // Tools 构建工具(scopes, tool traces, tools)
-func Tools(session *structs.Chats) (string, string, *[]*parser.ToolsDefine) {
+// 渲染失败时返回请求级错误而非 panic，避免拖垮整个进程
+func Tools(session *structs.Chats) (string, string, *[]*parser.ToolsDefine, error) {
 	toolScopesRendered, err := prompts.Render(prompts.ToolScopesTemplate, struct {
 		Scopes []scopeInfo
 	}{
@@ -46,7 +47,7 @@ func Tools(session *structs.Chats) (string, string, *[]*parser.ToolsDefine) {
 		}),
 	})
 	if err != nil {
-		panic(err)
+		return "", "", &[]*parser.ToolsDefine{}, err
 	}
 	scopesString := toolScopesRendered
 
@@ -60,7 +61,7 @@ func Tools(session *structs.Chats) (string, string, *[]*parser.ToolsDefine) {
 		Active: globalToolsTracesActive,
 	})
 	if err != nil {
-		panic(err)
+		return "", "", &[]*parser.ToolsDefine{}, err
 	}
 	globalToolTraceStr := globalToolTraceRendered
 
@@ -89,7 +90,8 @@ func Tools(session *structs.Chats) (string, string, *[]*parser.ToolsDefine) {
 			Active: activePrompt,
 		})
 		if err != nil {
-			panic(err)
+			toolobj.ToolsMu.RUnlock()
+			return "", "", &[]*parser.ToolsDefine{}, err
 		}
 		toolDefObj := &parser.ToolsDefine{
 			Name:        k,
@@ -100,7 +102,7 @@ func Tools(session *structs.Chats) (string, string, *[]*parser.ToolsDefine) {
 	}
 
 	toolobj.ToolsMu.RUnlock()
-	return scopesString, globalToolTraceStr, &toolsDef
+	return scopesString, globalToolTraceStr, &toolsDef, nil
 }
 
 func checkToolScope(session *structs.Chats, scope string) bool {
@@ -133,6 +135,12 @@ func ToolsSolver(session *structs.Chats, callback func(string, string, map[strin
 			Name: k,
 			Func: func(ID string, arg map[string]*any, ok bool) error {
 				if !ok {
+					// 流式解析期间工具对象尚未完整到达。仅当真正进入工具调用执行阶段
+					// （StateToolCalling，即已通过用户/规则审批）才执行 OnHook；
+					// 否则会以部分参数在审批之前重复执行 OnHook。
+					if session.State != state.StateToolCalling {
+						return nil
+					}
 					session.CurrentToolID = fmt.Sprintf("call_%d_%d_%s", session.ID, session.CurrentMessageID, ID)
 					err := tools.ExecToolOnHook(session, toolKey, arg, ID)
 					if err != nil {

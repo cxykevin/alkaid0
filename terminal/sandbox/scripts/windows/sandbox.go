@@ -387,7 +387,10 @@ func InitAlkaid0SandboxUser() error {
 		return nil
 	}
 
-	grantCurrentUserAssignLogonRight()
+	if err := grantCurrentUserAssignLogonRight(); err != nil {
+		// LSA 策略授权失败时返回错误，避免后续 CreateProc 因权限不足静默失败
+		return err
+	}
 
 	userName, err := windows.UTF16PtrFromString(UserName)
 	if err != nil {
@@ -502,6 +505,8 @@ func createRunToken() (*windows.Token, error) {
 	if err != nil {
 		return nil, err
 	}
+	// 登录令牌用完即关闭，避免每次沙盒化进程创建泄漏句柄
+	defer token.Close()
 
 	restrctTkn, err := createRestrictedToken(token, wkSIDs)
 	if err != nil {
@@ -757,9 +762,38 @@ func CreateProc(appName string, commandLine string, workDir string, startupInfo 
 }
 
 // SetLimitToWorkdir 设置工作目录权限
+// saveDACL 读取目录的 DACL 快照，供清理时恢复
+func saveDACL(path string) (*windows.ACL, error) {
+	sd, err := windows.GetNamedSecurityInfo(path, windows.SE_FILE_OBJECT, windows.DACL_SECURITY_INFORMATION)
+	if err != nil {
+		return nil, err
+	}
+	dacl, _, err := sd.DACL()
+	if err != nil {
+		return nil, err
+	}
+	return dacl, nil
+}
+
+// restoreDACL 恢复目录原始 DACL（不带 PROTECTED，让继承规则重新生效）
+func restoreDACL(path string, dacl *windows.ACL) error {
+	return windows.SetNamedSecurityInfo(
+		path,
+		windows.SE_FILE_OBJECT,
+		windows.DACL_SECURITY_INFORMATION,
+		nil, nil, dacl, nil,
+	)
+}
+
 func SetLimitToWorkdir(workDir string) (func() error, error) {
 	cleanFunc := func() error {
 		return nil
+	}
+	// 保存原始 DACL，供清理时恢复（ApplyDACL 用 PROTECTED 整体替换会丢失目录原有的继承 ACE）
+	origDACL, err := saveDACL(workDir)
+	if err != nil {
+		// 读取原始 DACL 失败时保留现状（清理仍按原逻辑收紧权限），不阻塞限制设置
+		origDACL = nil
 	}
 	DACL, err := GetDACL()
 	if err != nil {
@@ -771,7 +805,9 @@ func SetLimitToWorkdir(workDir string) (func() error, error) {
 	}
 
 	_, err = os.Stat(path.Join(workDir, ".alkaid0"))
-	if os.IsExist(err) {
+	// os.IsExist 只对"已存在"类错误返回 true，对成功 Stat（err==nil）恒为 false，
+	// 必须用 err==nil 判断目录存在，否则保护规则目录的 DenyDACL 永远不会被应用。
+	if err == nil {
 		DenyDACL, err := GetDenyDACL()
 		if err != nil {
 			return cleanFunc, err
@@ -782,6 +818,10 @@ func SetLimitToWorkdir(workDir string) (func() error, error) {
 		}
 	}
 	cleanFunc = func() error {
+		// 优先恢复原始 DACL，避免目录的继承 ACE（SYSTEM/Users 等）被永久移除
+		if origDACL != nil {
+			return restoreDACL(workDir, origDACL)
+		}
 		DenyDACL, err := GetDenyDACL()
 		if err != nil {
 			return err

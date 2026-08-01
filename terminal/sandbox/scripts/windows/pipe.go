@@ -5,6 +5,7 @@ package windows
 import (
 	"fmt"
 	"os"
+	"sync/atomic"
 	"time"
 
 	"golang.org/x/sys/windows"
@@ -183,6 +184,6 @@ func handleToFile(handle windows.Handle, name string) (*os.File, error) {
 var tickCounter uint32
 
 func getTickCount() uint32 {
-	tickCounter++
-	return tickCounter
+	// 原子自增，避免并发调用生成同名命名管道
+	return atomic.AddUint32(&tickCounter, 1)
 }

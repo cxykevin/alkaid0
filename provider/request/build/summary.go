@@ -209,7 +209,8 @@ func SummaryWithKeepNumber(chatID uint32, agentID string, db *gorm.DB, keepNum i
 	response.Messages = messages
 
 	if modelConfig.ProviderSpecificConfig.EnableReasoningEffort {
-		response.ReasoningEffort = new("low")
+		low := "low"
+		response.ReasoningEffort = &low
 	}
 	if modelConfig.ProviderSpecificConfig.EnableDeepseekThinking {
 		response.Thinking = &reqStruct.ChatCompletionThinkingType{

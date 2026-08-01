@@ -1,6 +1,7 @@
 package actions
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"testing"
@@ -12,6 +13,32 @@ import (
 	"github.com/cxykevin/alkaid0/ui/loop"
 	"github.com/cxykevin/alkaid0/ui/state"
 )
+
+// registerTestSessionByID 按完整 sessionID 注册测试会话。
+// sessionID2Cwd 现在从会话注册表读取真实 cwd，测试中需先注册会话。
+func registerTestSessionByID(t *testing.T, sessionID, cwd string, id uint32) {
+	t.Helper()
+	sessLock.Lock()
+	sessions[sessionID] = &sessionObj{
+		cwd: cwd,
+		id:  id,
+		ctx: context.Background(),
+	}
+	sessLock.Unlock()
+	t.Cleanup(func() {
+		sessLock.Lock()
+		delete(sessions, sessionID)
+		sessLock.Unlock()
+	})
+}
+
+// registerTestSession 按目录+ID 注册测试会话并返回规范 sessionID
+func registerTestSession(t *testing.T, cwd string, id uint32) string {
+	t.Helper()
+	sessID := cwd2SessionID(cwd, id)
+	registerTestSessionByID(t, sessID, cwd, id)
+	return sessID
+}
 
 // TestSessionID2Cwd 测试会话ID解析功能
 func TestSessionID2Cwd(t *testing.T) {
@@ -55,6 +82,10 @@ func TestSessionID2Cwd(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			// sessionID2Cwd 现在从会话注册表读取，成功用例需先注册会话
+			if !tt.wantErr {
+				registerTestSessionByID(t, tt.sessionID, tt.wantCwd, tt.wantID)
+			}
 			cwd, id, err := sessionID2Cwd(tt.sessionID)
 			if (err != nil) != tt.wantErr {
 				t.Errorf("sessionID2Cwd() error = %v, wantErr %v", err, tt.wantErr)
@@ -223,7 +254,7 @@ func TestSessionLoadValidation(t *testing.T) {
 			cwd:         "/tmp",
 			sessionID:   "invalid",
 			wantErr:     true,
-			errContains: "invalid session id",
+			errContains: "session not found",
 		},
 		{
 			name:        "cwd不匹配",
@@ -233,6 +264,9 @@ func TestSessionLoadValidation(t *testing.T) {
 			errContains: "not match",
 		},
 	}
+
+	// 注册会话，使 "cwd不匹配" 用例能进入 cwd 比较逻辑（而非 "session not found"）
+	registerTestSessionByID(t, "sess_123:/home/test", "/home/test", 123)
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -275,6 +309,7 @@ func TestSessionIDFormat(t *testing.T) {
 	cwd := "/home/user/project"
 	id := uint32(42)
 	sessionID := cwd2SessionID(cwd, id)
+	registerTestSession(t, cwd, id)
 
 	// 验证往返转换
 	parsedCwd, parsedID, err := sessionID2Cwd(sessionID)

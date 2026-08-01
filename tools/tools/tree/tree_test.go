@@ -126,7 +126,7 @@ func TestWriteTree_InvalidTreeString(t *testing.T) {
 	// 构建一个真实的tree对象
 	testDir := t.TempDir()
 	treeID := int32(0)
-	tree, _ := BuildTree(testDir, &treeID)
+	tree, _ := BuildTree(testDir, &treeID, 0)
 	tree.Name = "(root)"
 
 	// 将tree存储到缓存中
@@ -172,7 +172,7 @@ func TestWriteTree_SuccessfulEdit(t *testing.T) {
 
 	// 构建一个简单的tree对象
 	treeID := int32(0)
-	tree, _ := BuildTree(testDir, &treeID)
+	tree, _ := BuildTree(testDir, &treeID, 0)
 	tree.Name = "(root)"
 
 	treeStr := BuildString(tree)
@@ -332,7 +332,7 @@ func TestWriteTree_RealFSCreateFile(t *testing.T) {
 
 	// 构建初始树
 	treeID := int32(0)
-	tree, _ := BuildTree(testDir, &treeID)
+	tree, _ := BuildTree(testDir, &treeID, 0)
 	tree.Name = "(root)"
 	treeStr := BuildString(tree)
 
@@ -383,7 +383,7 @@ func TestWriteTree_RealFSCreateDirectory(t *testing.T) {
 
 	// 构建初始树
 	treeID := int32(0)
-	tree, _ := BuildTree(testDir, &treeID)
+	tree, _ := BuildTree(testDir, &treeID, 0)
 	tree.Name = "(root)"
 	treeStr := BuildString(tree)
 
@@ -428,7 +428,7 @@ func TestWriteTree_RealFSMultipleFileOps(t *testing.T) {
 
 	// 构建初始树
 	treeID := int32(0)
-	tree, _ := BuildTree(testDir, &treeID)
+	tree, _ := BuildTree(testDir, &treeID, 0)
 	tree.Name = "(root)"
 	treeStr := BuildString(tree)
 
@@ -493,7 +493,7 @@ func TestWriteTree_RealFSBasicTreeOperation(t *testing.T) {
 
 	// 构建树
 	treeID := int32(0)
-	tree, _ := BuildTree(testDir, &treeID)
+	tree, _ := BuildTree(testDir, &treeID, 0)
 	tree.Name = "(root)"
 	treeStr := BuildString(tree)
 
@@ -551,7 +551,7 @@ func TestWriteTree_RealFSDeepDirectoryStructure(t *testing.T) {
 
 	// 构建树
 	treeID := int32(0)
-	tree, _ := BuildTree(testDir, &treeID)
+	tree, _ := BuildTree(testDir, &treeID, 0)
 	tree.Name = "(root)"
 	treeStr := BuildString(tree)
 

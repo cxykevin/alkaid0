@@ -211,24 +211,24 @@ func RequestBody(chatID uint32, modelID int32, agentCode string, toolsList *[]*p
 	if err != nil {
 		return nil, err
 	}
-	systemContent += globalRendered + "\\n\\n"
+	systemContent += globalRendered + "\n\n"
 
 	// 2. 用户设置 (GlobalPrompt)
 	if config.GlobalConfig.Agent.GlobalPrompt != "" {
-		systemContent += config.GlobalConfig.Agent.GlobalPrompt + "\\n\\n"
+		systemContent += config.GlobalConfig.Agent.GlobalPrompt + "\n\n"
 	}
 
 	// 3. agent提示词
 	if agentCode != "" {
-		systemContent += agentCfg.AgentPrompt + "\\n\\n"
+		systemContent += agentCfg.AgentPrompt + "\n\n"
 	} else {
-		systemContent += prompts.DefaultAgent + "\\n\\n"
+		systemContent += prompts.DefaultAgent + "\n\n"
 	}
 
 	// 4. 工具使用指引
-	systemContent += prompts.Tools + "\\n\\n"
+	systemContent += prompts.Tools + "\n\n"
 	// 重复追加可增强模型对工具的理解
-	systemContent += prompts.Tools + "\\n\\n"
+	systemContent += prompts.Tools + "\n\n"
 
 	// 5. 工具列表
 	toolsRendered, err := prompts.Render(prompts.ToolsWrapTemplate, struct {
@@ -239,7 +239,7 @@ func RequestBody(chatID uint32, modelID int32, agentCode string, toolsList *[]*p
 	if err != nil {
 		return nil, err
 	}
-	systemContent += toolsRendered + "\\n\\n"
+	systemContent += toolsRendered + "\n\n"
 
 	// 6. 自动审批规则说明 — 告知 AI 哪些工具会不经确认直接执行
 	autoApproveRules := getEffectiveAutoApprove(agentCfg)
@@ -271,7 +271,7 @@ func RequestBody(chatID uint32, modelID int32, agentCode string, toolsList *[]*p
 
 	// 8. extra dynamic system prompts
 	if addSystemPrompt != "" {
-		systemContent += addSystemPrompt + "\\n\\n"
+		systemContent += addSystemPrompt + "\n\n"
 	}
 
 	// 放置合并后的 system 消息

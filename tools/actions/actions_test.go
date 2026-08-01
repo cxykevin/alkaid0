@@ -52,7 +52,7 @@ func TestAddTool(t *testing.T) {
 
 	AddTool(tool)
 
-	if addedTool, ok := toolobj.ToolsList["test_tool"]; !ok {
+	if addedTool, ok := toolobj.ToolsList["Test Tool"]; !ok {
 		t.Error("Tool not added")
 	} else if addedTool.Name != "Test Tool" {
 		t.Errorf("Expected 'Test Tool', got %s", addedTool.Name)
@@ -75,14 +75,14 @@ func TestHookTool(t *testing.T) {
 		Scope: "test_scope",
 	}
 
-	HookTool("test_tool", hook)
+	HookTool("Test Tool", hook)
 
-	if len(toolobj.ToolsList["test_tool"].Hooks) != 1 {
-		t.Errorf("Expected 1 hook, got %d", len(toolobj.ToolsList["test_tool"].Hooks))
+	if len(toolobj.ToolsList["Test Tool"].Hooks) != 1 {
+		t.Errorf("Expected 1 hook, got %d", len(toolobj.ToolsList["Test Tool"].Hooks))
 	}
 
-	if toolobj.ToolsList["test_tool"].Hooks[0].Scope != "test_scope" {
-		t.Errorf("Expected scope 'test_scope', got %s", toolobj.ToolsList["test_tool"].Hooks[0].Scope)
+	if toolobj.ToolsList["Test Tool"].Hooks[0].Scope != "test_scope" {
+		t.Errorf("Expected scope 'test_scope', got %s", toolobj.ToolsList["Test Tool"].Hooks[0].Scope)
 	}
 }
 

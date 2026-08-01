@@ -571,7 +571,7 @@ func TestTools(t *testing.T) {
 			// 创建一个临时的Chats对象用于测试
 			testChat := &structs.Chats{ID: 1, LastModelID: 1}
 			tt.setupEnableScopes(testChat)
-			scopeStr, traceStr, toolsDef := Tools(testChat)
+			scopeStr, traceStr, toolsDef, _ := Tools(testChat)
 
 			// 验证结果
 			if scopeStr == "" {

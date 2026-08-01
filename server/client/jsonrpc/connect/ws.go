@@ -2,6 +2,7 @@ package connect
 
 import (
 	"context"
+	"crypto/subtle"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -144,7 +145,8 @@ func StartWs(handler func(string, func(string) error, uint64) (returnString stri
 				break
 			}
 		}
-		if token != config.GlobalConfig.Server.Key {
+		// 恒定时间比较，避免时序侧信道泄露 key 长度/内容
+		if subtle.ConstantTimeCompare([]byte(token), []byte(config.GlobalConfig.Server.Key)) != 1 {
 			loggerWs.Error("invalid token, rejecting connection")
 			http.Error(w, "invalid token", http.StatusUnauthorized)
 			return

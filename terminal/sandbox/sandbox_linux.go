@@ -34,8 +34,8 @@ func (s *Sandbox) createIsolatedCommand(ctx context.Context, name string, args .
 
 // createLinuxIsolatedCommand 创建Linux隔离命令
 func (s *Sandbox) createLinuxIsolatedCommand(ctx context.Context, name string, args ...string) (*exec.Cmd, error) {
-	// 构建可写目录的bind mount命令
-	writableMounts := s.generateWritableMounts()
+	// 构建可写目录的 bind mount 命令（返回外部 export 与内层挂载命令）
+	writableExports, writableCmds := s.generateWritableMounts()
 
 	// 工作目录处理（确保在chroot内存在）
 	chrootWorkDir := s.workDir
@@ -50,10 +50,18 @@ func (s *Sandbox) createLinuxIsolatedCommand(ctx context.Context, name string, a
 	if realUser == "" {
 		realUser = "user"
 	}
+	// 工作目录与可写目录通过环境变量传给内层脚本，
+	// 避免含单引号路径拼进 sh -uc '...' 单引号字符串导致脚本语法破坏/注入
+	exports := writableExports
+	if exports != "" {
+		exports += "\n"
+	}
+	exports += "export ALK_WORKDIR=" + shellQuote(chrootWorkDir)
+
 	script := fmt.Sprintf(mountScript,
 		shellQuote(realUser),
-		writableMounts,
-		chrootWorkDir,
+		exports,
+		writableCmds,
 		shellQuote(name),
 	)
 
@@ -88,32 +96,36 @@ func (s *Sandbox) createLinuxIsolatedCommand(ctx context.Context, name string, a
 	return cmd, nil
 }
 
-// generateWritableMounts 生成可写目录挂载命令
-func (s *Sandbox) generateWritableMounts() string {
+// generateWritableMounts 生成可写目录挂载相关命令。
+// 返回两部分：外部 export 语句（shellQuote 安全）与内层挂载命令（用 "$ALK_WD_n" 引用），
+// 避免含单引号路径被拼进 sh -uc '...' 单引号字符串导致语法破坏/注入。
+func (s *Sandbox) generateWritableMounts() (string, string) {
 	if len(s.writableDirs) == 0 {
-		return ""
+		return "", ""
 	}
 
-	var mounts []string
-	for _, dir := range s.writableDirs {
-		// 确保目录存在，然后rbind并remount rw
-		// 使用 $T 表示chroot后的根
-		mounts = append(mounts, fmt.Sprintf(`
-			mkdir -p %q 2>/dev/null || :
-			mount --rbind %q %q 2>/dev/null || :
-			mount -o remount,rw %q 2>/dev/null || :`,
-			dir, dir, dir, dir,
+	var exports []string
+	var cmds []string
+	for i, dir := range s.writableDirs {
+		varName := fmt.Sprintf("ALK_WD_%d", i)
+		exports = append(exports, fmt.Sprintf("export %s=%s", varName, shellQuote(dir)))
+		// 确保目录存在，然后 rbind 并 remount rw
+		cmds = append(cmds, fmt.Sprintf(`
+			mkdir -p "$%s" 2>/dev/null || :
+			mount --rbind "$%s" "$%s" 2>/dev/null || :
+			mount -o remount,rw "$%s" 2>/dev/null || :`,
+			varName, varName, varName, varName,
 		))
 		// 保护可写目录中的 .alkaid0 子目录（只读），防止沙箱内进程修改聊天记录和配置
-		mounts = append(mounts, fmt.Sprintf(`
-			if [ -d %q/.alkaid0 ]; then
-				mount --bind %q/.alkaid0 %q/.alkaid0 2>/dev/null || :
-				mount -o remount,ro,bind %q/.alkaid0 2>/dev/null || :
+		cmds = append(cmds, fmt.Sprintf(`
+			if [ -d "$%s/.alkaid0" ]; then
+				mount --bind "$%s/.alkaid0" "$%s/.alkaid0" 2>/dev/null || :
+				mount -o remount,ro,bind "$%s/.alkaid0" 2>/dev/null || :
 			fi`,
-			dir, dir, dir, dir,
+			varName, varName, varName, varName,
 		))
 	}
-	return strings.Join(mounts, "\n")
+	return strings.Join(exports, "\n"), strings.Join(cmds, "\n")
 }
 
 // shellQuote 转义shell参数

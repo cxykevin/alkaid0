@@ -42,16 +42,17 @@ func TestAddTool(t *testing.T) {
 	defer u.Unwrap(db.DB()).Close()
 	tool := &toolobj.Tools{
 		Name:            "TestTool",
-		ID:              "tool1",
+		ID:              "TestTool",
 		UserDescription: "A test tool",
 		Hooks:           []toolobj.Hook{},
 	}
 	actions.AddTool(tool)
-	if _, ok := toolobj.ToolsList["tool1"]; !ok {
+	// SetTool 统一以 Name 为键（与 GetTool/AppendToolHook 一致）
+	if _, ok := toolobj.ToolsList["TestTool"]; !ok {
 		t.Errorf("AddTool failed: tool not found in ToolsList")
 	}
-	if toolobj.ToolsList["tool1"].Name != "TestTool" {
-		t.Errorf("AddTool failed: expected 'TestTool', got '%v'", toolobj.ToolsList["tool1"].Name)
+	if toolobj.ToolsList["TestTool"].Name != "TestTool" {
+		t.Errorf("AddTool failed: expected 'TestTool', got '%v'", toolobj.ToolsList["TestTool"].Name)
 	}
 }
 
@@ -61,7 +62,7 @@ func TestHookTool(t *testing.T) {
 	defer u.Unwrap(db.DB()).Close()
 	tool := &toolobj.Tools{
 		Name:            "TestTool",
-		ID:              "tool1",
+		ID:              "TestTool",
 		UserDescription: "A test tool",
 		Hooks:           []toolobj.Hook{},
 	}
@@ -75,13 +76,13 @@ func TestHookTool(t *testing.T) {
 			},
 		},
 	}
-	actions.HookTool("tool1", hook)
+	actions.HookTool("TestTool", hook)
 
-	if len(toolobj.ToolsList["tool1"].Hooks) != 1 {
-		t.Errorf("HookTool failed: expected 1 hook, got %d", len(toolobj.ToolsList["tool1"].Hooks))
+	if len(toolobj.ToolsList["TestTool"].Hooks) != 1 {
+		t.Errorf("HookTool failed: expected 1 hook, got %d", len(toolobj.ToolsList["TestTool"].Hooks))
 	}
-	if toolobj.ToolsList["tool1"].Hooks[0].Scope != "scope1" {
-		t.Errorf("HookTool failed: expected scope 'scope1', got '%v'", toolobj.ToolsList["tool1"].Hooks[0].Scope)
+	if toolobj.ToolsList["TestTool"].Hooks[0].Scope != "scope1" {
+		t.Errorf("HookTool failed: expected scope 'scope1', got '%v'", toolobj.ToolsList["TestTool"].Hooks[0].Scope)
 	}
 }
 
@@ -131,7 +132,7 @@ func TestExecToolGetPrompts(t *testing.T) {
 
 	tool := &toolobj.Tools{
 		Name:            "TestTool",
-		ID:              "tool1",
+		ID:              "TestTool",
 		UserDescription: "A test tool",
 		Hooks: []toolobj.Hook{
 			{
@@ -157,7 +158,7 @@ func TestExecToolGetPrompts(t *testing.T) {
 	testChat := &storageStructs.Chats{ID: 1, DB: db, EnableScopes: make(map[string]bool)}
 	actions.EnableScope(testChat, "scope1")
 
-	unusedHooks, prehooks, _ := ExecOneToolGetPrompts(testChat, "tool1")
+	unusedHooks, prehooks, _ := ExecOneToolGetPrompts(testChat, "TestTool")
 
 	// scope2 should be in unused hooks
 	if len(unusedHooks) != 1 {
@@ -182,7 +183,7 @@ func TestExecToolGetPromptsWithInvalidScope(t *testing.T) {
 
 	tool := &toolobj.Tools{
 		Name:            "TestTool",
-		ID:              "tool1",
+		ID:              "TestTool",
 		UserDescription: "A test tool",
 		Hooks: []toolobj.Hook{
 			{
@@ -201,7 +202,7 @@ func TestExecToolGetPromptsWithInvalidScope(t *testing.T) {
 	testChat := &storageStructs.Chats{ID: 1, DB: db2, EnableScopes: make(map[string]bool)}
 	actions.EnableScope(testChat, "scope1")
 
-	unusedHooks, prehooks, _ := ExecOneToolGetPrompts(testChat, "tool1")
+	unusedHooks, prehooks, _ := ExecOneToolGetPrompts(testChat, "TestTool")
 
 	// No unused hooks since scope1 is enabled and no other scopes exist
 	if len(unusedHooks) != 0 {
@@ -222,7 +223,7 @@ func TestExecToolOnHook(t *testing.T) {
 
 	tool := &toolobj.Tools{
 		Name:            "TestTool",
-		ID:              "tool1",
+		ID:              "TestTool",
 		UserDescription: "A test tool",
 		Hooks: []toolobj.Hook{
 			{
@@ -242,7 +243,7 @@ func TestExecToolOnHook(t *testing.T) {
 
 	v := any("value")
 	args := map[string]*any{"key": &v}
-	err := ExecToolOnHook(testChat, "tool1", args, "")
+	err := ExecToolOnHook(testChat, "TestTool", args, "")
 
 	if err != nil {
 		t.Errorf("ExecToolOnHook failed: expected no error, got %v", err)
@@ -258,7 +259,7 @@ func TestExecToolOnHookWithDisabledScope(t *testing.T) {
 
 	tool := &toolobj.Tools{
 		Name:            "TestTool",
-		ID:              "tool1",
+		ID:              "TestTool",
 		UserDescription: "A test tool",
 		Hooks: []toolobj.Hook{
 			{
@@ -276,7 +277,7 @@ func TestExecToolOnHookWithDisabledScope(t *testing.T) {
 
 	v := any("value")
 	args := map[string]*any{"key": &v}
-	err := ExecToolOnHook(testChat, "tool1", args, "")
+	err := ExecToolOnHook(testChat, "TestTool", args, "")
 
 	if err != nil {
 		t.Errorf("ExecToolOnHook failed when scope disabled: expected no error, got %v", err)
@@ -291,7 +292,7 @@ func TestExecToolPostHook(t *testing.T) {
 
 	tool := &toolobj.Tools{
 		Name:            "TestTool",
-		ID:              "tool1",
+		ID:              "TestTool",
 		UserDescription: "A test tool",
 		Hooks: []toolobj.Hook{
 			{
@@ -312,7 +313,7 @@ func TestExecToolPostHook(t *testing.T) {
 
 	v := any("value")
 	args := map[string]*any{"key": &v}
-	result, err := ExecToolPostHook(testChat, "tool1", args, "1")
+	result, err := ExecToolPostHook(testChat, "TestTool", args, "1")
 
 	if err != nil {
 		t.Errorf("ExecToolPostHook failed: expected no error, got %v", err)
@@ -335,7 +336,7 @@ func TestExecToolPostHookAllPass(t *testing.T) {
 
 	tool := &toolobj.Tools{
 		Name:            "TestTool",
-		ID:              "tool1",
+		ID:              "TestTool",
 		UserDescription: "A test tool",
 		Hooks: []toolobj.Hook{
 			{
@@ -354,7 +355,7 @@ func TestExecToolPostHookAllPass(t *testing.T) {
 
 	v := any("value")
 	args := map[string]*any{"key": &v}
-	res, err := ExecToolPostHook(testChat, "tool1", args, "2")
+	res, err := ExecToolPostHook(testChat, "TestTool", args, "2")
 
 	if err != nil {
 		t.Errorf("ExecToolPostHook failed: expected no error when all hooks pass, got %v", err)
@@ -373,7 +374,7 @@ func TestExecToolPostHookError(t *testing.T) {
 
 	tool := &toolobj.Tools{
 		Name:            "TestTool",
-		ID:              "tool1",
+		ID:              "TestTool",
 		UserDescription: "A test tool",
 		Hooks: []toolobj.Hook{
 			{
@@ -392,7 +393,7 @@ func TestExecToolPostHookError(t *testing.T) {
 
 	v := any("value")
 	args := map[string]*any{"key": &v}
-	_, err := ExecToolPostHook(testChat, "tool1", args, "3")
+	_, err := ExecToolPostHook(testChat, "TestTool", args, "3")
 
 	if err == nil {
 		t.Errorf("ExecToolPostHook failed: expected error from hook")
@@ -417,7 +418,7 @@ func TestMultipleScopes(t *testing.T) {
 
 	tool := &toolobj.Tools{
 		Name:            "TestTool",
-		ID:              "tool1",
+		ID:              "TestTool",
 		UserDescription: "A test tool",
 		Hooks: []toolobj.Hook{
 			{
@@ -448,7 +449,7 @@ func TestMultipleScopes(t *testing.T) {
 	}
 	actions.AddTool(tool)
 
-	unusedHooks, prehooks, _ := ExecOneToolGetPrompts(testChat, "tool1")
+	unusedHooks, prehooks, _ := ExecOneToolGetPrompts(testChat, "TestTool")
 
 	// scope3 should be in unused (not enabled)
 	// Global scope is always enabled, so it's not in unusedHooks
@@ -472,7 +473,7 @@ func TestPreHookPrioritySorting(t *testing.T) {
 
 	tool := &toolobj.Tools{
 		Name:            "TestTool",
-		ID:              "tool1",
+		ID:              "TestTool",
 		UserDescription: "A test tool",
 		Hooks: []toolobj.Hook{
 			{
@@ -506,7 +507,7 @@ func TestPreHookPrioritySorting(t *testing.T) {
 	}
 	actions.AddTool(tool)
 
-	_, prehooks, _ := ExecOneToolGetPrompts(testChat, "tool1")
+	_, prehooks, _ := ExecOneToolGetPrompts(testChat, "TestTool")
 
 	if len(prehooks) != 3 {
 		t.Errorf("TestPreHookPrioritySorting failed: expected 3 prehooks, got %d", len(prehooks))
@@ -536,7 +537,7 @@ func TestOnHookPrioritySorting(t *testing.T) {
 
 	tool := &toolobj.Tools{
 		Name:            "TestTool",
-		ID:              "tool1",
+		ID:              "TestTool",
 		UserDescription: "A test tool",
 		Hooks: []toolobj.Hook{
 			{
@@ -574,7 +575,7 @@ func TestOnHookPrioritySorting(t *testing.T) {
 	actions.AddTool(tool)
 	v := any("value")
 	args := map[string]*any{"key": &v}
-	err := ExecToolOnHook(testChat, "tool1", args, "")
+	err := ExecToolOnHook(testChat, "TestTool", args, "")
 
 	if err != nil {
 		t.Fatalf("ExecToolOnHook returned error: %v", err)
@@ -601,7 +602,7 @@ func TestPostHookPrioritySorting(t *testing.T) {
 
 	tool := &toolobj.Tools{
 		Name:            "TestTool",
-		ID:              "tool1",
+		ID:              "TestTool",
 		UserDescription: "A test tool",
 		Hooks: []toolobj.Hook{
 			{
@@ -639,7 +640,7 @@ func TestPostHookPrioritySorting(t *testing.T) {
 	actions.AddTool(tool)
 	v := any("value")
 	args := map[string]*any{"key": &v}
-	_, err := ExecToolPostHook(testChat, "tool1", args, "4")
+	_, err := ExecToolPostHook(testChat, "TestTool", args, "4")
 
 	if err != nil {
 		t.Fatalf("ExecToolOnHook returned error: %v", err)
@@ -664,7 +665,7 @@ func TestZeroPriority(t *testing.T) {
 
 	tool := &toolobj.Tools{
 		Name:            "TestTool",
-		ID:              "tool1",
+		ID:              "TestTool",
 		UserDescription: "A test tool",
 		Hooks: []toolobj.Hook{
 			{
@@ -689,7 +690,7 @@ func TestZeroPriority(t *testing.T) {
 	}
 	actions.AddTool(tool)
 
-	_, prehooks, _ := ExecOneToolGetPrompts(testChat, "tool1")
+	_, prehooks, _ := ExecOneToolGetPrompts(testChat, "TestTool")
 
 	if len(prehooks) != 2 {
 		t.Errorf("TestZeroPriority failed: expected 2 prehooks, got %d", len(prehooks))
@@ -726,7 +727,7 @@ func TestExecToolGetPromptsParameters(t *testing.T) {
 
 	tool := &toolobj.Tools{
 		Name:            "TestTool",
-		ID:              "tool1",
+		ID:              "TestTool",
 		UserDescription: "A test tool",
 		Parameters:      baseParams,
 		Hooks: []toolobj.Hook{
@@ -743,7 +744,7 @@ func TestExecToolGetPromptsParameters(t *testing.T) {
 	}
 	actions.AddTool(tool)
 
-	unusedHooks, prehooks, paras := ExecOneToolGetPrompts(testChat, "tool1")
+	unusedHooks, prehooks, paras := ExecOneToolGetPrompts(testChat, "TestTool")
 
 	if len(unusedHooks) != 0 {
 		t.Errorf("TestExecToolGetPromptsParameters failed: expected 0 unused hooks, got %d", len(unusedHooks))

@@ -145,10 +145,12 @@ func SessionPrompt(req SessionPromptRequest, call func(string, any, *string) err
 	}
 
 	var ret StopMsg
-	if wait {
+	if wait && err == nil {
 		// 等待结束
 		ret = <-stopChan
 	} else {
+		// 即使 wait=true，若发送消息已失败（如 "send queue full"），
+		// loop 永远不会回调 stopChan，这里绝不能阻塞等待，否则 handler 永久挂死。
 		if err != nil {
 			ret = StopMsg{StopReason: "refusal", ErrorMsg: new(fmt.Sprintf("error: %v", err))}
 		} else {

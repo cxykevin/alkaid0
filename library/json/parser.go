@@ -94,7 +94,8 @@ func (p *Parser) pushValue(val any) error {
 		vptr = new(any)
 		*vptr = val
 	} else {
-		vptr = nil
+		// 统一分配指针并存入 nil 接口，避免 map 中存 nil *any 导致下游 *ptr 解引用 panic
+		vptr = new(any)
 	}
 
 	if p.StructStack.Size() == 0 {
@@ -360,6 +361,9 @@ func (p *Parser) AddToken(token string) error {
 						if code >= 0xD800 && code <= 0xDBFF {
 							// 缓存高代理，等待低代理
 							p.pendingHighSurrogate = code
+						} else if code >= 0xDC00 && code <= 0xDFFF {
+							// 未配对的低代理项：替换为 U+FFFD，避免产生非法 UTF-8
+							p.stringTmp += "�"
 						} else {
 							p.stringTmp += string(rune(code))
 						}
@@ -386,18 +390,29 @@ func (p *Parser) AddToken(token string) error {
 			// 结束数字，尝试解析
 			num, err := strconv.ParseFloat(p.numTmp, 64)
 			if err != nil {
-				p.Stop = true
-				return errors.New("invalid number format")
-			}
-			p.numTmp = ""
-			p.mode = jsonModeDefault
-			// push number value
-			if p.currentValuePtr != nil {
-				*p.currentValuePtr = num
-				p.currentValuePtr = nil
-			} else if err := p.pushValue(num); err != nil {
-				p.Stop = true
-				return err
+				// 数字超出 float64 范围（如 1e999，属合法 JSON）时不应中止整个流式解析，
+				// 以原始字符串作为值保留，宁可后续按文本处理也不丢弃其余 token。
+				raw := p.numTmp
+				p.numTmp = ""
+				p.mode = jsonModeDefault
+				if p.currentValuePtr != nil {
+					*p.currentValuePtr = raw
+					p.currentValuePtr = nil
+				} else if err := p.pushValue(raw); err != nil {
+					p.Stop = true
+					return err
+				}
+			} else {
+				p.numTmp = ""
+				p.mode = jsonModeDefault
+				// push number value
+				if p.currentValuePtr != nil {
+					*p.currentValuePtr = num
+					p.currentValuePtr = nil
+				} else if err := p.pushValue(num); err != nil {
+					p.Stop = true
+					return err
+				}
 			}
 			// 继续处理当前字符（不跳过）
 		case jsonModeInKeyword:

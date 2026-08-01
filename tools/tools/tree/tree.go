@@ -56,7 +56,7 @@ func buildGlobalPrompt(session *structs.Chats) (string, error) {
 		logger.Warn("tree get abs error: %v", err)
 		return "", err
 	}
-	tree, errs := BuildTree(nowpath, &treeID)
+	tree, errs := BuildTree(nowpath, &treeID, 0)
 	for idx, err := range errs {
 		logger.Warn("tree build error (%d/%d): %v", idx+1, len(errs), err)
 	}

@@ -426,8 +426,8 @@ func truncateContent(ext string, content []byte) []byte {
 	case ".jsonl":
 		// jsonl：取第一行格式化，取前10行，最大500字符
 		firstLine := content
-		if idx := bytes.IndexByte(content, '\n'); idx >= 0 {
-			firstLine = content[:idx]
+		if before, _, ok := bytes.Cut(content, []byte{'\n'}); ok {
+			firstLine = before
 		}
 		if cleaned := cleanJSON5(string(firstLine)); cleaned != "" {
 			var buf bytes.Buffer
@@ -648,6 +648,22 @@ func RunIndex(ctx context.Context, cwd string, broadcastFn func(IndexStatus)) er
 
 	gi := loadGitignore(cwd)
 
+	// 嵌套 .gitignore 支持：按目录缓存规则（父级规则 + 本目录 .gitignore 叠加），
+	// 避免仅加载根目录规则导致子目录的忽略规则失效、敏感文件被扫描入库
+	dirRules := map[string][]gitignorePattern{cwd: gi}
+	var getRules func(dir string) []gitignorePattern
+	getRules = func(dir string) []gitignorePattern {
+		if rules, ok := dirRules[dir]; ok {
+			return rules
+		}
+		base := getRules(filepath.Dir(dir))
+		rules := make([]gitignorePattern, 0, len(base)+8)
+		rules = append(rules, base...)
+		rules = append(rules, loadGitignore(dir)...)
+		dirRules[dir] = rules
+		return rules
+	}
+
 	absCwd, err := filepath.Abs(cwd)
 	if err != nil {
 		return fmt.Errorf("abs cwd: %w", err)
@@ -730,8 +746,8 @@ func RunIndex(ctx context.Context, cwd string, broadcastFn func(IndexStatus)) er
 			if skipDirs[name] || (strings.HasPrefix(name, ".") && name != "." && name != "..") {
 				return filepath.SkipDir
 			}
-			// gitignore 目录匹配
-			if gi != nil && matchGitignore(gi, relPath+"/", true) {
+			// gitignore 目录匹配（含该目录的嵌套规则）
+			if rules := getRules(path); rules != nil && matchGitignore(rules, relPath+"/", true) {
 				return filepath.SkipDir
 			}
 			return nil
@@ -753,8 +769,8 @@ func RunIndex(ctx context.Context, cwd string, broadcastFn func(IndexStatus)) er
 			return nil
 		}
 
-		// 3) gitignore 文件匹配
-		if gi != nil && matchGitignore(gi, relPath, false) {
+		// 3) gitignore 文件匹配（含所在目录的嵌套规则）
+		if rules := getRules(filepath.Dir(path)); rules != nil && matchGitignore(rules, relPath, false) {
 			return nil
 		}
 
@@ -897,10 +913,21 @@ func RunIndex(ctx context.Context, cwd string, broadcastFn func(IndexStatus)) er
 			Remaining: qLen,
 			Status:    "embedding",
 		})
-		// 后台轮询队列进度直到完成
+		// 后台轮询队列进度直到完成。
+		// 绑定 RunIndex 的 ctx（可被 /index cancel 取消），并在退出时清理进度状态，
+		// 避免 RunIndex 返回后 goroutine 仍存活、重插已删除的状态（goroutine 泄漏）。
 		go func() {
+			defer func() {
+				currentIndexStatusesMu.Lock()
+				delete(currentIndexStatuses, absCwd)
+				currentIndexStatusesMu.Unlock()
+			}()
 			for {
-				time.Sleep(500 * time.Millisecond)
+				select {
+				case <-ctx.Done():
+					return
+				case <-time.After(500 * time.Millisecond):
+				}
 				ds := DirectoryStatus(cwd)
 				if ds.QueueLen == 0 {
 					broadcastFn(IndexStatus{

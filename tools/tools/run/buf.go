@@ -132,11 +132,26 @@ func (r *AsyncPipeReader) sendError(err error) {
 	}
 }
 
+// drainErr 在 dataChan 关闭后非阻塞检查是否有真实读取错误。
+// readLoop 先写 errChan 再关闭 dataChan，二者可能同时就绪，
+// 消费侧需优先取出错误，避免 select 随机选中 dataChan 关闭而吞掉真实错误。
+func (r *AsyncPipeReader) drainErr() error {
+	select {
+	case err := <-r.errChan:
+		return err
+	default:
+		return nil
+	}
+}
+
 // TryRead 非阻塞尝试读取
 func (r *AsyncPipeReader) TryRead() ([]byte, bool, error) {
 	select {
 	case data, ok := <-r.dataChan:
 		if !ok {
+			if err := r.drainErr(); err != nil {
+				return nil, false, err
+			}
 			return nil, false, io.EOF
 		}
 		return data, true, nil
@@ -165,6 +180,9 @@ func (r *AsyncPipeReader) Read(p []byte) (int, error) {
 	select {
 	case data, ok := <-r.dataChan:
 		if !ok {
+			if err := r.drainErr(); err != nil {
+				return 0, err
+			}
 			return 0, io.EOF
 		}
 		n := copy(p, data)
@@ -188,6 +206,10 @@ func (r *AsyncPipeReader) CopyTo(ctx context.Context, writeFunc func([]byte) err
 		select {
 		case data, ok := <-r.dataChan:
 			if !ok {
+				// 正常关闭前可能已写入错误，优先返回真实错误
+				if err := r.drainErr(); err != nil {
+					return err
+				}
 				return nil // 正常完成
 			}
 

@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"regexp"
 	"strings"
@@ -209,6 +210,55 @@ func readLogFileFrom(filePath string, startLine int) error {
 	return nil
 }
 
+// readLogDelta 从指定字节偏移读取新增日志行并输出，返回新的文件末尾偏移和总行数。
+// 相比从文件头全量扫描，增量读取在日志持续增长时避免 O(n²)。
+func readLogDelta(filePath string, offset int64, startLine int) (int64, int, error) {
+	file, err := os.Open(filePath)
+	if err != nil {
+		return offset, startLine, err
+	}
+	defer file.Close()
+
+	if offset > 0 {
+		if _, err := file.Seek(offset, io.SeekStart); err != nil {
+			return offset, startLine, err
+		}
+	}
+
+	scanner := bufio.NewScanner(file)
+	lineNum := startLine
+	for scanner.Scan() {
+		lineNum++
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" {
+			continue
+		}
+
+		entry := parseLogLine(line)
+		if entry == nil {
+			if !config.NoColor {
+				fmt.Printf("%s[LINE %d]%s 无法解析: %s\n", Yellow, lineNum, Reset, line)
+			} else {
+				fmt.Printf("[LINE %d] 无法解析: %s\n", lineNum, line)
+			}
+			continue
+		}
+
+		if shouldDisplay(entry, config.MinLevel) {
+			displayLogEntry(entry, config)
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		return offset, startLine, err
+	}
+
+	endOffset, err := file.Seek(0, io.SeekEnd)
+	if err != nil {
+		return offset, startLine, err
+	}
+	return endOffset, lineNum, nil
+}
+
 // clearScreen 清空终端屏幕及滚动历史（使用 ANSI 转义码）
 func clearScreen() {
 	fmt.Print("\033[2J\033[H\033[3J")
@@ -330,6 +380,7 @@ type FileWatcher struct {
 	lastSize    int64
 	lastModTime time.Time
 	lastLine    int
+	lastOffset  int64 // 上次已读取的字节偏移，用于增量读取
 	config      Config
 }
 
@@ -351,6 +402,7 @@ func (fw *FileWatcher) initState() {
 	fw.lastSize = info.Size()
 	fw.lastModTime = info.ModTime()
 	fw.lastLine = countLines(fw.filePath)
+	fw.lastOffset = info.Size()
 	// watch 启动文件变化监控循环，每隔 500ms 检查一次
 }
 
@@ -360,14 +412,16 @@ func (fw *FileWatcher) watch() {
 
 		info, err := os.Stat(fw.filePath)
 		if err != nil {
+			// 日志文件短暂删除/轮转/锁定是瞬态错误，continue 继续轮询而不是永久停止监控
 			fmt.Fprintf(os.Stderr, "错误: %v\n", err)
-			return
+			continue
 		}
 
 		// 文件被截断，清屏重新输出全部
 		if info.Size() < fw.lastSize {
 			clearScreen()
 			fw.lastLine = 0
+			fw.lastOffset = 0
 			if err := readLogFile(fw.filePath); err != nil {
 				fmt.Fprintf(os.Stderr, "错误: %v\n", err)
 			}
@@ -376,12 +430,14 @@ func (fw *FileWatcher) watch() {
 			continue
 		}
 
-		// 文件有新内容，增量输出
+		// 文件有新内容，从上次字节偏移增量输出（避免每次全文件扫描 O(n²)）
 		if info.Size() > fw.lastSize || info.ModTime().After(fw.lastModTime) {
-			if err := readLogFileFrom(fw.filePath, fw.lastLine); err != nil {
+			newOffset, newLine, err := readLogDelta(fw.filePath, fw.lastOffset, fw.lastLine)
+			if err != nil {
 				fmt.Fprintf(os.Stderr, "错误: %v\n", err)
 			} else {
-				fw.lastLine = countLines(fw.filePath)
+				fw.lastOffset = newOffset
+				fw.lastLine = newLine
 			}
 			fw.lastSize = info.Size()
 			fw.lastModTime = info.ModTime()

@@ -75,6 +75,9 @@ func main() {
 	fmt.Println("versionTag:", versionTag)
 	fmt.Println("versionID:", versionID)
 
+	// 转义 BUILD_NOTE 中的特殊字符，避免含引号/换行/反斜杠时生成不可编译的字符串字面量
+	note = escapeStringLiteral(note)
+
 	rendered := template
 	rendered = strings.ReplaceAll(rendered, "{commitID}", commitID)
 	rendered = strings.ReplaceAll(rendered, "{buildTime}", fmt.Sprintf("%d", buildTime))
@@ -91,4 +94,14 @@ func main() {
 		log.Fatal(err)
 	}
 	fmt.Println("generated", tgt)
+}
+
+// escapeStringLiteral 将字符串转义为合法的 Go 字符串字面量内容
+func escapeStringLiteral(s string) string {
+	s = strings.ReplaceAll(s, `\`, `\\`)
+	s = strings.ReplaceAll(s, `"`, `\"`)
+	s = strings.ReplaceAll(s, "\n", `\n`)
+	s = strings.ReplaceAll(s, "\r", `\r`)
+	s = strings.ReplaceAll(s, "\t", `\t`)
+	return s
 }

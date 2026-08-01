@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 )
 
 // Parser VT/XTerm 转义序列解析器，将终端输出字节流转换为 Buffer 操作。
@@ -21,6 +22,7 @@ type Parser struct {
 	state        parserState
 	params       []int
 	intermediate []byte
+	pendingUTF8  []byte // 未完成的多字节 UTF-8 序列缓冲
 }
 
 type parserState int
@@ -67,6 +69,7 @@ func (p *Parser) processByte(b byte) {
 func (p *Parser) processNormal(b byte) {
 	switch b {
 	case 0x1B: // ESC - 转义序列起始，切换到 stateEscape 等待命令
+		p.pendingUTF8 = p.pendingUTF8[:0] // 转义序列中断了未完成的 UTF-8 文本
 		p.state = stateEscape
 		p.params = p.params[:0]
 		p.intermediate = p.intermediate[:0]
@@ -80,9 +83,17 @@ func (p *Parser) processNormal(b byte) {
 		p.buffer.tab()
 	case 0x07: // BEL - 响铃，忽略
 	default:
-		// 可打印字符（范围 0x20-0x7E）直接写入缓冲区
 		if b >= 0x20 && b < 0x7F {
+			// 可打印 ASCII 字符直接写入缓冲区
 			p.buffer.WriteRune(rune(b))
+		} else if b >= 0x80 {
+			// UTF-8 多字节字符：累积字节直到完整 rune 再写入，避免中文/emoji 被丢弃
+			p.pendingUTF8 = append(p.pendingUTF8, b)
+			if utf8.FullRune(p.pendingUTF8) {
+				r, _ := utf8.DecodeRune(p.pendingUTF8)
+				p.pendingUTF8 = p.pendingUTF8[:0]
+				p.buffer.WriteRune(r)
+			}
 		}
 	}
 }

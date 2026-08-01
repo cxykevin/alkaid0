@@ -251,47 +251,43 @@ func (p *Parser) solveTool() {
 		// 注意：对于 string 和 object 类型还需检查对应的 Slot 占位符类型（流式解析未完成状态）
 		for key, value := range toolParameters {
 			if value == nil {
-				logger.Warn("parameter '%s' for tool '%s' is null", key, toolName)
-				p.Stop = true
-				return
+				// 单个可选参数为 null 不应中止整个流式响应（LLM 输出 null 很常见）
+				logger.Warn("parameter '%s' for tool '%s' is null, skip", key, toolName)
+				continue
 			}
 			switch p.Tools[toolID].Parameters[key].Type {
 			case ToolTypeString:
 				_, okStr := (*value).(string)
 				_, okTmpStr := (*value).(json.StringSlot)
 				if !okStr && !okTmpStr {
-					logger.Warn("parameter '%s' for tool '%s' expected string, got %T", key, toolName, *value)
-					p.Stop = true
-					return
+					logger.Warn("parameter '%s' for tool '%s' expected string, got %T, skip", key, toolName, *value)
+					continue
 				}
 			case ToolTypeNumber:
 				_, ok := (*value).(float64)
 				if !ok {
-					logger.Warn("parameter '%s' for tool '%s' expected number(float64), got %T", key, toolName, *value)
-					p.Stop = true
-					return
+					logger.Warn("parameter '%s' for tool '%s' expected number(float64), got %T, skip", key, toolName, *value)
+					continue
 				}
 			case ToolTypeBoolean:
 				_, ok := (*value).(bool)
 				if !ok {
-					logger.Warn("parameter '%s' for tool '%s' expected bool, got %T", key, toolName, *value)
-					p.Stop = true
-					return
+					logger.Warn("parameter '%s' for tool '%s' expected bool, got %T, skip", key, toolName, *value)
+					continue
 				}
 			case ToolTypeArray:
 				_, ok := (*value).([]any)
-				if !ok {
-					logger.Warn("parameter '%s' for tool '%s' expected array, got %T", key, toolName, *value)
-					p.Stop = true
-					return
+				_, okArrSlot := (*value).(json.ArraySlot)
+				if !ok && !okArrSlot {
+					logger.Warn("parameter '%s' for tool '%s' expected array, got %T, skip", key, toolName, *value)
+					continue
 				}
 			case ToolTypeObject:
 				_, okMap := (*value).(map[string]*any)
 				_, okMapSlot := (*value).(json.ObjectSlot)
 				if !okMap && !okMapSlot {
-					logger.Warn("parameter '%s' for tool '%s' expected object, got %T", key, toolName, *value)
-					p.Stop = true
-					return
+					logger.Warn("parameter '%s' for tool '%s' expected object, got %T, skip", key, toolName, *value)
+					continue
 				}
 			}
 		}
@@ -431,7 +427,7 @@ func (p *Parser) AddToken(token string, tokenThinking string) (string, string, *
 				if p.KeyMode == KeyModeThink && p.TokenCache == "think" {
 					logger.Debug("exiting think mode")
 					p.KeyMode = KeyModeNormal // 退出 think 模式，回到普通文本
-				} else if p.KeyMode == KeyModeTools && p.TokenCache == "tools" {
+				} else if p.KeyMode == KeyModeTools && p.TokenCache == "tools" && !p.jsonParser.InString() {
 					// 工具调用结束，让 JSON 解析器完成剩余解析并标记已调用工具
 					logger.Debug("exiting tools mode")
 					p.KeyMode = KeyModeNormal // 退出 tools 模式，回到普通文本

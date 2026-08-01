@@ -63,7 +63,8 @@ func StartHelper(args []string) {
 
 	conn, resp, err := websocket.DefaultDialer.Dial(urlStr, nil)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "websocket dial failed: %v\n", err)
+		// 握手错误信息可能包含带认证 key 的完整 URL，脱敏后输出避免密钥泄露
+		fmt.Fprintf(os.Stderr, "websocket dial failed: %v\n", sanitizeDialError(err, cfg.Key))
 		os.Exit(1)
 	}
 	if resp != nil && resp.Body != nil {
@@ -107,9 +108,11 @@ func StartHelper(args []string) {
 			wsDone = nil
 			if err != nil && !errors.Is(err, io.EOF) {
 				firstErr = err
-				conn.Close()
-				return
 			}
+			// 服务端正常关闭（nil 或 io.EOF）视为任务完成，退出等待循环；
+			// 否则终端场景下 stdin 无 EOF 会一直卡住等待
+			conn.Close()
+			return
 		case sig := <-sigCh:
 			fmt.Fprintf(os.Stderr, "signal received: %s\n", sig)
 			conn.WriteMessage(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""))
@@ -189,6 +192,9 @@ func buildHelperConfig(args []string) (structs.RPCConfig, error) {
 		if err != nil {
 			return cfg, fmt.Errorf("invalid %s: %w", envPort, err)
 		}
+		if port < 1 || port > 65535 {
+			return cfg, fmt.Errorf("invalid port %d: must be in range 1-65535", port)
+		}
 		cfg.Port = uint16(port)
 	}
 	if envPath := os.Getenv(envPath); envPath != "" {
@@ -214,6 +220,9 @@ func buildHelperConfig(args []string) (structs.RPCConfig, error) {
 	})
 
 	// 校验必要参数
+	if *portFlag < 1 || *portFlag > 65535 {
+		return cfg, fmt.Errorf("invalid port %d: must be in range 1-65535", *portFlag)
+	}
 	if cfg.Port == 0 {
 		return cfg, fmt.Errorf("port must be set")
 	}
@@ -348,6 +357,15 @@ func buildWebSocketURL(cfg structs.RPCConfig) (string, error) {
 	return urlObj.String(), nil
 }
 
+// sanitizeDialError 从错误消息中移除认证 key，防止密钥通过完整 URL 泄露到日志/终端
+func sanitizeDialError(err error, key string) error {
+	if err == nil || key == "" {
+		return err
+	}
+	msg := strings.ReplaceAll(err.Error(), key, "***")
+	return errors.New(msg)
+}
+
 // copyStdinToWS 将标准输入内容逐块转发到 WebSocket 连接。
 // 使用 64KB 缓冲区读取 stdin，跳过纯换行输入，连接断开或 EOF 时返回。
 func copyStdinToWS(conn *websocket.Conn) error {
@@ -358,8 +376,8 @@ func copyStdinToWS(conn *websocket.Conn) error {
 		if n > 0 {
 			// å»é¤åå¯¼æ¢è¡å­ç¬¦ï¼é¿åä»¥æ¢è¡å¼å¤´çè¯»åè¢«æ´åä¸¢å¼
 			data := buf[:n]
-			data = bytes.TrimLeft(data, "\n\r")
-			if len(data) == 0 {
+			// 仅跳过纯空白块，不剥离载荷内部/前导换行（避免破坏以换行开头的合法消息）
+			if len(bytes.TrimSpace(data)) == 0 {
 				continue
 			}
 			if writeErr := conn.WriteMessage(websocket.TextMessage, data); writeErr != nil {

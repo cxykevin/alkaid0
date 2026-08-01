@@ -85,7 +85,8 @@ func SimpleOpenAIRequest(ctx context.Context, baseURL, apiKey, model string, bod
 
 	// 检查HTTP状态码
 	if resp.StatusCode != http.StatusOK {
-		respBody, _ := io.ReadAll(resp.Body)
+		// 限制错误响应体大小，防止恶意/异常服务端发送无限响应体导致 OOM
+		respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 		var errResp structs.ErrorResponse
 		if err := json.Unmarshal(respBody, &errResp); err != nil {
 			logger.Error("call openai chat error when unmarshal: %v", err)
@@ -101,10 +102,7 @@ func SimpleOpenAIRequest(ctx context.Context, baseURL, apiKey, model string, bod
 	reader := bufio.NewReader(resp.Body)
 	for {
 		line, err := reader.ReadString('\n')
-		if err != nil {
-			if err == io.EOF {
-				break
-			}
+		if err != nil && err != io.EOF {
 			// 如果 context 已被取消（如用户调用了 cancel），返回 context 错误而非读取错误
 			if ctx.Err() != nil {
 				return ctx.Err()
@@ -116,6 +114,9 @@ func SimpleOpenAIRequest(ctx context.Context, baseURL, apiKey, model string, bod
 
 		// 跳过空行和注释行
 		if strings.TrimSpace(line) == "" || strings.HasPrefix(line, ":") {
+			if err == io.EOF {
+				break
+			}
 			continue
 		}
 
@@ -141,6 +142,11 @@ func SimpleOpenAIRequest(ctx context.Context, baseURL, apiKey, model string, bod
 				logger.Error("call openai chat error when callback: %v", err)
 				return fmt.Errorf("callback error: %w", err)
 			}
+		}
+
+		// EOF：即使最后一行无换行结尾也已在上方处理，正常退出循环
+		if err == io.EOF {
+			break
 		}
 	}
 
@@ -180,8 +186,8 @@ func SimpleOpenAIEmbedding(ctx context.Context, baseURL, apiKey, model string, b
 	}
 	defer resp.Body.Close()
 
-	// 读取响应体
-	respBody, err := io.ReadAll(resp.Body)
+	// 读取响应体（限制 8MiB 上限，防止异常服务端无限输出导致内存耗尽）
+	respBody, err := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
 	if err != nil {
 		logger.Error("call openai embedding error when read response body: %v", err)
 		return nil, fmt.Errorf("failed to read response body: %w", err)

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/cxykevin/alkaid0/config"
@@ -88,7 +89,7 @@ type Object struct {
 	ctx            context.Context
 	done           chan struct{}
 	closeOnce      sync.Once
-	stopped        bool // Stop() 已调用标记，防止 cancel 后 AI 继续重试
+	stopped        atomic.Bool // Stop() 已调用标记，防止 cancel 后 AI 继续重试（多协程读写，用原子类型避免 data race）
 }
 
 // queueSize 队列缓冲区大小
@@ -162,7 +163,7 @@ func (p *Object) Start(ctx context.Context) {
 		loopCount := 0
 		for {
 			// Stop() 已调用，跳过此轮 AI 交互
-			if p.stopped {
+			if p.stopped.Load() {
 				call(AIResponse{
 					StopReason: StopReasonUser,
 				})
@@ -281,6 +282,7 @@ func (p *Object) Start(ctx context.Context) {
 			p.isResponding = false
 			p.cancelFunc = nil
 			p.lock.Unlock()
+			responseCancel() // 释放本轮 response context，避免长期会话累积泄漏多级 context
 
 			if err != nil {
 				if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
@@ -386,6 +388,8 @@ func (p *Object) Start(ctx context.Context) {
 				SummaryText: summaryText,
 				SummaryFlag: true,
 			})
+			// 手动摘要成功后重置，避免循环顶部因 needCompress 仍为 true 再自动摘要一次（双重摘要）
+			needCompress = false
 
 			call(AIResponse{
 				StopReason: StopReasonUser,
@@ -417,7 +421,7 @@ func (p *Object) Start(ctx context.Context) {
 			runResponseLoop()
 		default:
 			// 新用户输入，重置 stopped 标志
-			p.stopped = false
+			p.stopped.Store(false)
 			input = strings.TrimSpace(input)
 			logger.Info("run in session=%d with input \"%s\"", session.ID, input)
 
@@ -456,7 +460,7 @@ func (p *Object) Start(ctx context.Context) {
 //
 // 注意：Stop 仅停止当前操作，不终止 Loop 主循环。Loop 存活以接收后续 prompt。
 func (p *Object) Stop() {
-	p.stopped = true
+	p.stopped.Store(true)
 	p.lock.Lock()
 	cancel := p.cancelFunc
 	toolCancel := p.toolCancelFunc

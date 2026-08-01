@@ -13,6 +13,14 @@ func BuildDefault[T any](obj T) T {
 		panic("BuildDefault: obj must be a non-nil pointer to a struct")
 	}
 	elem := v.Elem()
+	// 递归传入的是 any 包装的指针/结构体（BuildDefault(fv.Addr().Interface())），
+	// 此时 T 推断为 any，elem 是 interface；逐层解包接口与指针直到指向实际结构体。
+	for elem.Kind() == reflect.Interface || elem.Kind() == reflect.Pointer {
+		if elem.IsNil() {
+			elem.Set(reflect.New(elem.Type().Elem()))
+		}
+		elem = elem.Elem()
+	}
 	if elem.Kind() != reflect.Struct {
 		panic("BuildDefault: obj must be a pointer to a struct")
 	}
@@ -43,6 +51,13 @@ func BuildDefault[T any](obj T) T {
 					panic(err)
 				}
 				fv.SetInt(deg)
+			case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+				// 从 tag 中解析默认值（如端口号）
+				deg, err := strconv.ParseUint(defaultTag, 10, 64)
+				if err != nil {
+					panic(err)
+				}
+				fv.SetUint(deg)
 			case reflect.String:
 				fv.SetString(defaultTag)
 			case reflect.Float32, reflect.Float64:

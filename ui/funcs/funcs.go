@@ -7,6 +7,7 @@ import (
 
 	"github.com/cxykevin/alkaid0/config"
 	cfgStructs "github.com/cxykevin/alkaid0/config/structs"
+	"github.com/cxykevin/alkaid0/log"
 	"github.com/cxykevin/alkaid0/provider/request"
 	"github.com/cxykevin/alkaid0/provider/request/agents"
 	reqStructs "github.com/cxykevin/alkaid0/provider/request/structs"
@@ -17,6 +18,8 @@ import (
 	"github.com/cxykevin/alkaid0/ui/state"
 	"gorm.io/gorm"
 )
+
+var logger = log.New("funcs")
 
 // GetChats 获取所有聊天
 func GetChats(db *gorm.DB) ([]*structs.Chats, error) {
@@ -40,8 +43,24 @@ func QueryChat(db *gorm.DB, id uint32) (*structs.Chats, error) {
 }
 
 // DeleteChat 删除聊天
+// 在事务中先删除所有子记录：Messages/Terminals 等外键为 OnDelete:RESTRICT，
+// 直接删 Chats 会报外键约束错误，且不删子表会留下孤儿数据（含敏感对话内容）。
 func DeleteChat(db *gorm.DB, chat *structs.Chats) error {
-	return db.Delete(&structs.Chats{}, chat.ID).Error
+	return db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Where("chat_id = ?", chat.ID).Delete(&structs.Messages{}).Error; err != nil {
+			return err
+		}
+		if err := tx.Where("chat_id = ?", chat.ID).Delete(&structs.Traces{}).Error; err != nil {
+			return err
+		}
+		if err := tx.Where("chat_id = ?", chat.ID).Delete(&structs.Terminals{}).Error; err != nil {
+			return err
+		}
+		if err := tx.Where("chat_id = ?", chat.ID).Delete(&structs.ReferFiles{}).Error; err != nil {
+			return err
+		}
+		return tx.Delete(&structs.Chats{}, chat.ID).Error
+	})
 }
 
 // CreateChat 创建聊天
@@ -62,6 +81,10 @@ func InitChat(db *gorm.DB, chat *structs.Chats) (*structs.Chats, error) {
 	chat.TemporyDataOfSession = make(map[string]any)
 	actions.Load(chat)
 	storage.GlobalConfig.LastChatID = chat.ID
+	// 持久化最近聊天 ID（此前从未落库）
+	if err := storage.SaveGlobalConfigs(db); err != nil {
+		logger.Warn("save global configs: %v", err)
+	}
 	err := agents.Load(chat)
 	if err != nil {
 		return nil, err

@@ -23,7 +23,7 @@ var logPath string
 // Logger 日志对象
 var Logger *log.Logger
 
-var loggerInited bool = false
+var loggerInited atomic.Bool
 
 // 异步日志相关
 type logMessage struct {
@@ -45,7 +45,7 @@ var loadMu sync.Mutex
 // Load 加载配置文件。使用互斥锁保证并发安全，首次调用执行实际初始化。
 func Load() {
 	loadMu.Lock()
-	if loggerInited {
+	if loggerInited.Load() {
 		loadMu.Unlock()
 		return
 	}
@@ -76,16 +76,20 @@ func Load() {
 	// 确保目录存在
 	dir := filepath.Dir(expandedPath)
 	if err := os.MkdirAll(dir, 0755); err != nil {
-		// 目录创建失败，使用默认配置
+		// 目录创建失败：回退到 stderr，绝不 panic、绝不留下 nil Logger
+		Logger = log.New(os.Stderr, "", log.LstdFlags)
 		loadMu.Unlock()
 		return
 	}
 
-	// 使用 OpenFile 直接创建/清空并打开日志文件（一次操作，避免 Create + OpenFile 两次系统调用）
-	file, err := os.OpenFile(expandedPath, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0644)
+	// 使用 OpenFile 打开日志文件（追加模式，不清空历史日志；
+	// 避免多进程/多实例共用同一日志路径时相互截断、历史日志丢失）
+	file, err := os.OpenFile(expandedPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
 	if err != nil {
-		// 直接 panic
-		panic(err)
+		// 打开失败时回退到 stderr，绝不 panic
+		Logger = log.New(os.Stderr, "", log.LstdFlags)
+		loadMu.Unlock()
+		return
 	}
 
 	// 创建logger，输出到文件
@@ -104,7 +108,7 @@ func Load() {
 	// 启动日志处理goroutine，传入本地变量避免 worker 直接读 package 变量（跑 -race 需要）
 	go logWorker(ch)
 
-	loggerInited = true
+	loggerInited.Store(true)
 	loadMu.Unlock() // 先释放锁，避免 log.go:New→Load 的环形调用导致死锁
 
 	sysObj := New("log")
@@ -136,7 +140,7 @@ func flushLogs() {
 
 // Shutdown 关闭日志模块
 func Shutdown() {
-	if !loggerInited {
+	if !loggerInited.Load() {
 		return
 	}
 	atomic.StoreUint32(&isShutdown, 1)
@@ -248,7 +252,7 @@ func (l *LogsObj) Debug(msg string, v ...any) {
 func New(moduleName string) *LogsObj {
 	// logLck.Lock()
 	// logLck.Unlock()
-	if !loggerInited {
+	if !loggerInited.Load() {
 		Load()
 	}
 	return &LogsObj{moduleName: moduleName}

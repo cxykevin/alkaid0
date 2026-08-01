@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math"
 	"strings"
+	"unicode"
 
 	"github.com/cxykevin/alkaid0/config"
 	"github.com/cxykevin/alkaid0/provider/request"
@@ -330,12 +331,26 @@ func (cdb *CodebaseDB) searchHybrid(ctx context.Context, query string, limit int
 		return nil, fmt.Errorf("both searches failed: bm25=%v, vec=%v", bm25.err, vec.err)
 	}
 
-	// 处理一方失败的情形
+	// 处理一方失败的情形（回退路径也应用阈值过滤，与正常路径一致）
 	if bm25.err != nil {
-		return cdb.asHybridResult(vec.results)
+		vecFiltered := vec.results[:0]
+		for _, r := range vec.results {
+			if vecL2Threshold > 0 && r.Distance > vecL2Threshold {
+				continue
+			}
+			vecFiltered = append(vecFiltered, r)
+		}
+		return cdb.asHybridResult(vecFiltered)
 	}
 	if vec.err != nil {
-		return cdb.bm25ResultsToHybrid(bm25.results)
+		bm25Filtered := bm25.results[:0]
+		for _, r := range bm25.results {
+			if bm25RetScore > 0 && r.Score > bm25RetScore {
+				continue
+			}
+			bm25Filtered = append(bm25Filtered, r)
+		}
+		return cdb.bm25ResultsToHybrid(bm25Filtered)
 	}
 
 	// 分两组：
@@ -607,7 +622,10 @@ func buildFTSQuery(keywords []string) string {
 // isWordRune 判断 rune 是否属于"词"字符（字母、数字、下划线）
 func isWordRune(r rune) bool {
 	return (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') ||
-		(r >= '0' && r <= '9') || r == '_'
+		(r >= '0' && r <= '9') || r == '_' ||
+		// 支持 CJK 及任意 Unicode 字母，避免中文查询被全部分割导致关键词为空、
+		// BM25/关键词搜索对 CJK 静默无结果
+		unicode.Is(unicode.Han, r) || unicode.IsLetter(r)
 }
 
 // isNumeric 判断字符串是否全由数字组成

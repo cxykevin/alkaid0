@@ -191,6 +191,14 @@ func (m *Manager) getClient(workdir, filePath string) (*Client, error) {
 	m.failCountMu.Unlock()
 
 	m.clientsMu.Lock()
+	// 双重检查：创建期间可能有并发调用者已写入就绪客户端，此时复用它并关闭刚创建的，
+	// 避免同一 key 泄漏两个 LSP 进程/传输。
+	if existing, ok := m.clients[key]; ok && existing.State() == StateReady {
+		m.clientsMu.Unlock()
+		client.Close()
+		logger.Info("reusing existing LSP client %s (concurrent creation)", key)
+		return existing, nil
+	}
 	m.clients[key] = client
 	m.clientsMu.Unlock()
 
@@ -231,7 +239,8 @@ func (m *Manager) reapIdle() {
 		idle := time.Since(c.lastUsed) > m.idleTimeout
 		c.lastUsedMu.Unlock()
 
-		if idle {
+		// 有在途请求时即使空闲超时也不回收，避免中断正在执行的慢请求（如 gopls 冷启动）
+		if idle && !c.transport.HasPending() {
 			idleKeys = append(idleKeys, key)
 		}
 	}

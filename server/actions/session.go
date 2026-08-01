@@ -150,18 +150,16 @@ func cwd2SessionID(cwd string, id uint32) string {
 
 func buildModelList() []AvailableModel {
 	cfg := config.GlobalConfig.Model.Models
-	models := make([]AvailableModel, len(cfg))
-	idx := 0
+	models := make([]AvailableModel, 0, len(cfg))
 	for i, model := range cfg {
 		if model.Hide {
 			continue
 		}
-		models[idx] = AvailableModel{
+		models = append(models, AvailableModel{
 			ModelID: fmt.Sprintf("%d/%s", i, model.ModelID),
 			Name:    model.ModelName,
 			RealID:  i,
-		}
-		idx++
+		})
 	}
 	slices.SortFunc(models, func(a, b AvailableModel) int {
 		return int(a.RealID - b.RealID)
@@ -242,20 +240,21 @@ func buildConfigOptions(currentModelID uint32) []ConfigOption {
 	}
 }
 
-// sessionID2Cwd 解析会话ID，返回工作目录和会话ID
+// sessionID2Cwd 解析会话ID，返回工作目录和会话ID。
+// 以服务器会话注册表为准返回会话的真实工作目录：
+//   - 防止客户端伪造 sessionId 中的 cwd 部分绕过沙箱（任意文件读写/递归删除）；
+//   - 防止畸形 sessionId（如 "abcd:x"）触发 s[0][5:] 越界 panic（远程 DoS）。
 func sessionID2Cwd(sessionID string) (string, uint32, error) {
-	if len(sessionID) < 6 {
-		return "", 0, fmt.Errorf("session id too short")
+	if sessionID == "" {
+		return "", 0, fmt.Errorf("session id is empty")
 	}
-	s := strings.SplitN(sessionID, ":", 2)
-	if len(s) != 2 {
-		return "", 0, fmt.Errorf("invalid session id")
+	sessLock.Lock()
+	defer sessLock.Unlock()
+	obj, ok := sessions[sessionID]
+	if !ok {
+		return "", 0, fmt.Errorf("session not found")
 	}
-	num, err := strconv.ParseUint(s[0][5:], 10, 32)
-	if err != nil {
-		return "", 0, err
-	}
-	return s[1], uint32(num), nil
+	return obj.cwd, obj.id, nil
 }
 
 // registerConnCall 注册连接的call函数和会话绑定

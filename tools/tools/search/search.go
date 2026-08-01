@@ -300,6 +300,8 @@ func matchPattern(p gitignorePattern, path string) bool {
 	return false
 }
 
+// matchDoubleStar 实现 gitignore 的 ** 语义：** 匹配任意数量的路径段（含零个）。
+// 例如 "**/foo" 匹配任意深度（含根目录）的 foo；"a/**/b" 匹配 a 与 b 之间的任意层。
 func matchDoubleStar(pattern, path string) bool {
 	patParts := strings.Split(pattern, "**")
 	if len(patParts) == 1 {
@@ -307,22 +309,38 @@ func matchDoubleStar(pattern, path string) bool {
 		return ok
 	}
 
-	prefix := patParts[0]
-	suffix := patParts[len(patParts)-1]
+	// 路径按 / 分段（忽略前导 /）
+	path = strings.TrimPrefix(path, "/")
+	pathParts := strings.Split(path, "/")
 
-	if prefix != "" && !strings.HasPrefix(path, prefix) {
-		return false
-	}
-	if suffix != "" && !strings.HasSuffix(path, suffix) {
-		return false
-	}
-	if prefix != "" || suffix != "" {
-		middle := path[len(prefix) : len(path)-len(suffix)]
-		if !strings.Contains(middle, "/") {
-			return false
+	// 固定段列表（** 两侧的非空段按 / 拆分）
+	segments := make([]string, 0, len(patParts))
+	for _, p := range patParts {
+		p = strings.Trim(p, "/")
+		if p != "" {
+			segments = append(segments, strings.Split(p, "/")...)
 		}
 	}
-	return true
+	if len(segments) == 0 {
+		return true // 纯 ** 模式
+	}
+
+	// 按顺序在路径段中匹配固定段；** 允许跳过任意数量的路径段
+	var match func(segIdx, pathIdx int) bool
+	match = func(segIdx, pathIdx int) bool {
+		if segIdx == len(segments) {
+			return true
+		}
+		for i := pathIdx; i < len(pathParts); i++ {
+			if ok, _ := filepath.Match(segments[segIdx], pathParts[i]); ok {
+				if match(segIdx+1, i+1) {
+					return true
+				}
+			}
+		}
+		return false
+	}
+	return match(0, 0)
 }
 
 // ---------------------------------------------------------------------------
@@ -401,11 +419,15 @@ func runSearch(session *structs.Chats, mp map[string]*any, cross []*any) (bool, 
 		root = "."
 	}
 	if searchPath, _ := getStringParamDefault(mp, "path", ""); searchPath != "" {
+		// 校验 path 不能逃逸工作区：拒绝绝对路径与 '..' 穿越
 		if filepath.IsAbs(searchPath) {
-			root = searchPath
-		} else {
-			root = filepath.Join(root, searchPath)
+			return errResult("path must be relative to the workspace", cross)
 		}
+		cleanedSearch := filepath.Clean(searchPath)
+		if cleanedSearch == ".." || strings.HasPrefix(cleanedSearch, ".."+string(filepath.Separator)) {
+			return errResult("path escapes the workspace", cross)
+		}
+		root = filepath.Join(root, cleanedSearch)
 	}
 
 	ctx := session.GetContext()

@@ -24,6 +24,7 @@ type Transport struct {
 	nextID    atomic.Int64
 
 	notifHandler NotificationHandler
+	notifMu      sync.Mutex
 
 	closeOnce sync.Once
 	closed    chan struct{}
@@ -106,7 +107,16 @@ func (t *Transport) SendNotification(method string, params any) error {
 
 // SetNotificationHandler 设置服务器推送通知的处理回调
 func (t *Transport) SetNotificationHandler(handler NotificationHandler) {
+	t.notifMu.Lock()
 	t.notifHandler = handler
+	t.notifMu.Unlock()
+}
+
+// HasPending 返回是否存在尚未收到响应的在途请求（供空闲回收判断）
+func (t *Transport) HasPending() bool {
+	t.pendingMu.Lock()
+	defer t.pendingMu.Unlock()
+	return len(t.pending) > 0
 }
 
 // Close 关闭传输层
@@ -220,11 +230,14 @@ func (t *Transport) readMessage() (*jsonrpcResponse, error) {
 	var raw map[string]any
 	if err := json.Unmarshal(body, &raw); err == nil {
 		if _, hasID := raw["id"]; !hasID {
-			// 通知消息 — 分发到处理回调
-			if t.notifHandler != nil {
+			// 通知消息 — 分发到处理回调（加锁读取，避免与 SetNotificationHandler 并发写竞争）
+			t.notifMu.Lock()
+			handler := t.notifHandler
+			t.notifMu.Unlock()
+			if handler != nil {
 				if method, ok := raw["method"].(string); ok {
 					paramsRaw, _ := json.Marshal(raw["params"])
-					t.notifHandler(method, paramsRaw)
+					handler(method, paramsRaw)
 				}
 			}
 			return nil, nil
@@ -239,6 +252,8 @@ func (t *Transport) readMessage() (*jsonrpcResponse, error) {
 // 注意：找到 Content-Length 后必须读取其后的 \r\n 空行分隔符，
 // 否则 io.ReadFull 会将空行作为 body 开头读取导致数据错位
 func (t *Transport) readContentLength() (int, error) {
+	var length int
+	lengthSet := false
 	for {
 		line, err := t.stdout.ReadString('\n')
 		if err != nil {
@@ -247,25 +262,24 @@ func (t *Transport) readContentLength() (int, error) {
 		line = strings.TrimRight(line, "\r\n")
 
 		if line == "" {
-			// 空行可能是 header 之间的空白，跳过
+			// header 结束空行：Content-Length 已解析则返回；否则是 header 间的空白行，继续找
+			if lengthSet {
+				return length, nil
+			}
 			continue
 		}
 
+		// 按规范 Content-Length 可能在任意 header 顺序中出现，
+		// 读到后不立即消费空行，而是继续循环直到真正的 header 结束空行。
 		const prefix = "Content-Length: "
 		if strings.HasPrefix(line, prefix) {
-			var length int
 			if _, err := fmt.Sscanf(line, prefix+"%d", &length); err != nil {
 				return 0, fmt.Errorf("parse content-length: %w", err)
 			}
 			if length <= 0 {
 				return 0, fmt.Errorf("invalid content-length: %d", length)
 			}
-			// Content-Length 头行后必有 \r\n 空行标记 header 结束
-			// 消耗这个空行，确保 readMessage 的 io.ReadFull 读到的是纯 body
-			if _, err := t.stdout.ReadString('\n'); err != nil {
-				return 0, fmt.Errorf("read blank line: %w", err)
-			}
-			return length, nil
+			lengthSet = true
 		}
 	}
 }

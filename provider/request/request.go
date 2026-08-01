@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"sync"
 
 	"github.com/cxykevin/alkaid0/config"
 	cfgStructs "github.com/cxykevin/alkaid0/config/structs"
@@ -762,6 +763,15 @@ func SendRequest(ctx context.Context, session *storageStructs.Chats, callback fu
 		if session.State == state.StateRequesting {
 			session.State = state.StateReciving
 		}
+		// 先累积 token 用量：OpenAI/DeepSeek 在流末尾发送 choices 为空的纯 usage 帧，
+		// 必须在 choices==0 提前返回之前处理，否则用量统计恒为 0、自动压缩永不触发。
+		if body.Usage != nil {
+			promptUsage = max(promptUsage, body.Usage.PromptTokens)
+			completionUsage = max(completionUsage, body.Usage.CompletionTokens)
+			totalUsage = max(totalUsage, body.Usage.TotalTokens)
+			cachedUsage = max(cachedUsage, body.Usage.CachedTokens)
+			cachedUsage = max(cachedUsage, body.Usage.DeepseekCachedToken)
+		}
 		if len(body.Choices) == 0 {
 			return nil
 		}
@@ -773,15 +783,6 @@ func SendRequest(ctx context.Context, session *storageStructs.Chats, callback fu
 		pendingThinkingDelta.WriteString(thinkingDelta)
 		if err != nil {
 			return err
-		}
-
-		// 记录本次请求的 token 用量（取最大值，因为流式响应中可能多次上报不同维度）
-		if body.Usage != nil {
-			promptUsage = max(promptUsage, body.Usage.PromptTokens)
-			completionUsage = max(completionUsage, body.Usage.CompletionTokens)
-			totalUsage = max(totalUsage, body.Usage.TotalTokens)
-			cachedUsage = max(cachedUsage, body.Usage.CachedTokens)
-			cachedUsage = max(cachedUsage, body.Usage.DeepseekCachedToken)
 		}
 
 		// 达到阈值时执行数据库更新（批量刷写，减少 I/O 次数）
@@ -821,6 +822,10 @@ func SendRequest(ctx context.Context, session *storageStructs.Chats, callback fu
 	logger.Debug("SendRequest: generating prompt for chat %d", session.ID)
 	obj, err := build.Build(db, session)
 	if err != nil {
+		// 构建失败时删除占位消息，避免空 assistant 消息残留 DB 污染后续上下文
+		if delErr := db.Delete(&storageStructs.Messages{}, msgID).Error; delErr != nil {
+			logger.Error("delete placeholder message %d: %v", msgID, delErr)
+		}
 		return true, err
 	}
 
@@ -844,9 +849,15 @@ func SendRequest(ctx context.Context, session *storageStructs.Chats, callback fu
 	// 取消时在 goroutine 中异步完成最后一批内容的持久化，然后立即返回
 	// goroutine 中加 recover() + context.Done() 保护，防止 DB 已关闭时 panic
 	if isCancel {
+		// 取消时仍要异步完成最后一批内容的持久化。
+		// 用 WaitGroup 等待写库完成后再返回，保证内容不因进程/DB 提前关闭而丢失；
+		// goroutine 内加 recover 防护 DB 已关闭时可能出现的 panic。
+		var wg sync.WaitGroup
+		wg.Add(1)
 		go func(msgID uint64, finalDelta, finalThinkingDelta, toolCallingJSON string,
 			promptUsage, completionUsage, totalUsage, cachedUsage uint32,
 			lastFlushLen, lastFlushThinkingLen int) {
+			defer wg.Done()
 			defer func() {
 				if r := recover(); r != nil {
 					logger.Error("cancel persist goroutine recovered: %v", r)
@@ -856,21 +867,26 @@ func SendRequest(ctx context.Context, session *storageStructs.Chats, callback fu
 			fd := finalDelta + delta
 			ftd := finalThinkingDelta + thinkingDelta
 			if len(fd) != lastFlushLen || len(ftd) != lastFlushThinkingLen {
-				db.Model(&storageStructs.Messages{}).Where("id = ?", msgID).Updates(storageStructs.Messages{
+				if err := db.Model(&storageStructs.Messages{}).Where("id = ?", msgID).Updates(storageStructs.Messages{
 					Delta:            fd,
 					ThinkingDelta:    ftd,
 					PromptTokens:     promptUsage,
 					CompletionTokens: completionUsage,
 					TotalTokens:      totalUsage,
 					CachedTokens:     cachedUsage,
-				})
+				}).Error; err != nil {
+					logger.Error("cancel persist final content: %v", err)
+				}
 			}
 			if toolCallingJSON != "" {
-				db.Model(&storageStructs.Messages{}).Where("id = ?", msgID).Update("tool_calling_json_string", toolCallingJSON)
+				if err := db.Model(&storageStructs.Messages{}).Where("id = ?", msgID).Update("tool_calling_json_string", toolCallingJSON).Error; err != nil {
+					logger.Error("cancel persist tools origin: %v", err)
+				}
 			}
 		}(msgID, gDelta.String(), gThinkingDelta.String(), solver.GetToolsOrigin(),
 			promptUsage, completionUsage, totalUsage, cachedUsage,
 			lastFlushLen, lastFlushThinkingLen)
+		wg.Wait()
 		return true, requestErr
 	}
 

@@ -35,7 +35,14 @@ func GetScope(name string) (string, bool) {
 // SetTool 线程安全注册工具
 func SetTool(tool *Tools) {
 	ToolsMu.Lock()
-	ToolsList[tool.ID] = tool
+	// 统一以 Name 作为键（与 GetTool/GetToolHooks/AppendToolHook 按 Name 查找一致），
+	// 避免 ID!=Name 的工具被静默不可达。Global 工具（ID==""）保留空键专用槽位，
+	// 供构建工具表时识别并跳过。
+	key := tool.Name
+	if tool.ID == "" {
+		key = ""
+	}
+	ToolsList[key] = tool
 	ToolsMu.Unlock()
 }
 

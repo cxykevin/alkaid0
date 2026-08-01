@@ -75,7 +75,7 @@ func updateInfo(session *structs.Chats, mp map[string]*any, cross []*any, toolID
 			pathVal = &path
 		}
 	}
-	if untracePtr, ok := mp["disable"]; ok && untracePtr != nil {
+	if untracePtr, ok := mp["untrace"]; ok && untracePtr != nil {
 		if untrace, ok := (*untracePtr).(bool); ok {
 			respString += "Untrace: " + u.Ternary(untrace, "true", "false") + "\n"
 			untraceVal = &untrace

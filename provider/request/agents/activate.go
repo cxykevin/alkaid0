@@ -82,9 +82,14 @@ func DeactivateAgent(session *structs.Chats, prompt string) error {
 		}
 	}
 
-	// 计算summary
+	// 计算summary：改用会话可取消的 context，避免异步 goroutine 脱离会话生命周期
+	// 无限存活、在会话销毁后仍写库。
 	session.NowAgent = ""
-	go request.Summary(context.Background(), session.DB, session.ID, oldAgent)
+	sumCtx := session.GetContext()
+	if sumCtx == nil {
+		sumCtx = context.Background()
+	}
+	go request.Summary(sumCtx, session.DB, session.ID, oldAgent)
 
 	session.CurrentActivatePath = ""
 	session.CurrentAgentID = ""

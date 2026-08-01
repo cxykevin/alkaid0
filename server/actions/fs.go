@@ -29,13 +29,15 @@ type fsOpResult[T any] struct {
 	err error
 }
 
-// fsOpWithTimeout 在超时保护下执行返回值的文件系统操作
-func fsOpWithTimeout[T any](timeout time.Duration, op func() (T, error)) (T, error) {
+// fsOpWithTimeout 在超时保护下执行返回值的文件系统操作。
+// op 接收 ctx：长操作（大文件读取、递归删除）应在可中断处检查 ctx.Done()，
+// 使超时后底层操作提前退出，而非继续运行到完成（避免 goroutine/fd 泄漏与"报错但磁盘被改"）。
+func fsOpWithTimeout[T any](timeout time.Duration, op func(ctx context.Context) (T, error)) (T, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 	ch := make(chan fsOpResult[T], 1)
 	go func() {
-		val, err := op()
+		val, err := op(ctx)
 		ch <- fsOpResult[T]{val: val, err: err}
 	}()
 	select {
@@ -48,12 +50,12 @@ func fsOpWithTimeout[T any](timeout time.Duration, op func() (T, error)) (T, err
 }
 
 // fsOpVoidWithTimeout 在超时保护下执行无返回值的文件系统操作
-func fsOpVoidWithTimeout(timeout time.Duration, op func() error) error {
+func fsOpVoidWithTimeout(timeout time.Duration, op func(ctx context.Context) error) error {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 	ch := make(chan error, 1)
 	go func() {
-		ch <- op()
+		ch <- op(ctx)
 	}()
 	select {
 	case err := <-ch:
@@ -61,6 +63,46 @@ func fsOpVoidWithTimeout(timeout time.Duration, op func() error) error {
 	case <-ctx.Done():
 		return fmt.Errorf("filesystem operation timed out")
 	}
+}
+
+// ctxReader 在每次 Read 前检查 context，使阻塞读取可随取消提前返回
+type ctxReader struct {
+	r   io.Reader
+	ctx context.Context
+}
+
+func (cr *ctxReader) Read(p []byte) (int, error) {
+	if err := cr.ctx.Err(); err != nil {
+		return 0, err
+	}
+	return cr.r.Read(p)
+}
+
+// removeAllCtx 递归删除目录，在每层检查 ctx，超时/取消时提前退出。
+// 相比 os.RemoveAll（无法中途取消），可避免"客户端已收到超时但后台仍在删改磁盘"。
+func removeAllCtx(ctx context.Context, path string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	entries, err := os.ReadDir(path)
+	if err != nil {
+		// 不是目录（或不可读）：按文件/空目录删除
+		return os.Remove(path)
+	}
+	for _, e := range entries {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		child := filepath.Join(path, e.Name())
+		if e.IsDir() {
+			if err := removeAllCtx(ctx, child); err != nil {
+				return err
+			}
+		} else if err := os.Remove(child); err != nil {
+			return err
+		}
+	}
+	return os.Remove(path)
 }
 
 // ---- Path validation ----
@@ -145,7 +187,39 @@ func validatePath(cwd, relPath string) (string, error) {
 		return "", fmt.Errorf("access to .alkaid0 directory is not allowed")
 	}
 
+	// 解析符号链接，防止工作区内的 symlink 把读写/删除操作引到工作区外
+	if err := validateNoSymlinkEscape(cwd, fullPath); err != nil {
+		return "", err
+	}
+
 	return fullPath, nil
+}
+
+// validateNoSymlinkEscape 对 fullPath 及其已存在的最长前缀解析符号链接，
+// 确认解析后的真实路径仍在 cwd 内，防止工作区内的 symlink（如 node_modules、
+// venv、用户手动链接的文件）把操作引到 /etc 或用户主目录等工作区外位置。
+func validateNoSymlinkEscape(cwd, fullPath string) error {
+	realCwd, err := filepath.EvalSymlinks(cwd)
+	if err != nil {
+		realCwd = filepath.Clean(cwd)
+	}
+	// 从 fullPath 向上逐级找已存在的前缀做解析检查
+	checkPath := fullPath
+	for {
+		resolved, err := filepath.EvalSymlinks(checkPath)
+		if err == nil {
+			rel, relErr := filepath.Rel(realCwd, resolved)
+			if relErr != nil || strings.HasPrefix(rel, "..") {
+				return fmt.Errorf("path escapes the working directory via symlink")
+			}
+			return nil
+		}
+		parent := filepath.Dir(checkPath)
+		if parent == checkPath {
+			return nil
+		}
+		checkPath = parent
+	}
 }
 
 // ---- Request/Response types ----
@@ -231,7 +305,7 @@ func FsStat(req FsCommonRequest, _ func(string, any, *string) error, _ uint64) (
 		return FsStatResponse{}, err
 	}
 
-	info, err := fsOpWithTimeout(fsIOTimeout, func() (fs.FileInfo, error) {
+	info, err := fsOpWithTimeout(fsIOTimeout, func(ctx context.Context) (fs.FileInfo, error) {
 		return os.Stat(fullPath)
 	})
 	if err != nil {
@@ -249,7 +323,7 @@ func FsStat(req FsCommonRequest, _ func(string, any, *string) error, _ uint64) (
 		size = &s
 	}
 
-	owner, err := fsOpWithTimeout(fsIOTimeout, func() (string, error) {
+	owner, err := fsOpWithTimeout(fsIOTimeout, func(ctx context.Context) (string, error) {
 		return getOwner(info), nil
 	})
 	if err != nil {
@@ -283,7 +357,7 @@ func FsRead(req FsReadRequest, _ func(string, any, *string) error, _ uint64) (Fs
 		return FsReadResponse{}, err
 	}
 
-	info, err := fsOpWithTimeout(fsIOTimeout, func() (fs.FileInfo, error) {
+	info, err := fsOpWithTimeout(fsIOTimeout, func(ctx context.Context) (fs.FileInfo, error) {
 		return os.Stat(fullPath)
 	})
 	if err != nil {
@@ -292,7 +366,7 @@ func FsRead(req FsReadRequest, _ func(string, any, *string) error, _ uint64) (Fs
 
 	// 目录：列出内容
 	if info.IsDir() {
-		entries, err := fsOpWithTimeout(fsIOTimeout, func() ([]os.DirEntry, error) {
+		entries, err := fsOpWithTimeout(fsIOTimeout, func(ctx context.Context) ([]os.DirEntry, error) {
 			return os.ReadDir(fullPath)
 		})
 		if err != nil {
@@ -326,7 +400,7 @@ func FsRead(req FsReadRequest, _ func(string, any, *string) error, _ uint64) (Fs
 
 	// 文件：读取内容
 	var data []byte
-	_, err = fsOpWithTimeout(fsIOTimeout, func() (struct{}, error) {
+	_, err = fsOpWithTimeout(fsIOTimeout, func(ctx context.Context) (struct{}, error) {
 		f, err := os.Open(fullPath)
 		if err != nil {
 			return struct{}{}, err
@@ -359,16 +433,22 @@ func FsRead(req FsReadRequest, _ func(string, any, *string) error, _ uint64) (Fs
 				req.Length = maxRead
 			}
 			data = make([]byte, req.Length)
-			n, err := io.ReadFull(f, data)
+			// ctx-aware 读取：每次 Read 前检查取消，超时提前退出
+			n, err := io.ReadFull(&ctxReader{r: f, ctx: ctx}, data)
 			if err != nil && err != io.ErrUnexpectedEOF && err != io.EOF {
 				return struct{}{}, err
 			}
 			data = data[:n]
 		} else {
-			// 未指定 length 时从 offset 读到文件结尾
-			data, err = io.ReadAll(f)
+			// 未指定 length 时从 offset 读到文件结尾。
+			// 限制最大读取量（对齐 maxFileContentSize），防止超大文件读入内存导致 OOM。
+			limit := int64(maxFileContentSize) + 1
+			data, err = io.ReadAll(&ctxReader{r: io.LimitReader(f, limit), ctx: ctx})
 			if err != nil {
 				return struct{}{}, err
+			}
+			if len(data) > maxFileContentSize {
+				return struct{}{}, fmt.Errorf("file content exceeds %d bytes read limit", maxFileContentSize)
 			}
 		}
 		return struct{}{}, nil
@@ -422,7 +502,7 @@ func FsWrite(req FsWriteRequest, _ func(string, any, *string) error, _ uint64) (
 
 	// 确保父目录存在
 	parentDir := filepath.Dir(fullPath)
-	err = fsOpVoidWithTimeout(fsIOTimeout, func() error {
+	err = fsOpVoidWithTimeout(fsIOTimeout, func(ctx context.Context) error {
 		return os.MkdirAll(parentDir, 0755)
 	})
 	if err != nil {
@@ -431,7 +511,11 @@ func FsWrite(req FsWriteRequest, _ func(string, any, *string) error, _ uint64) (
 
 	// 写入文件
 	var bytesWritten int64
-	_, err = fsOpWithTimeout(fsIOTimeout, func() (struct{}, error) {
+	_, err = fsOpWithTimeout(fsIOTimeout, func(ctx context.Context) (struct{}, error) {
+		// 超时后不再执行写盘，避免"已报超时但磁盘被改"的不一致
+		if err := ctx.Err(); err != nil {
+			return struct{}{}, err
+		}
 		flag := os.O_CREATE | os.O_WRONLY
 		if req.Append {
 			flag |= os.O_APPEND
@@ -475,7 +559,7 @@ func FsMkdir(req FsCommonRequest, _ func(string, any, *string) error, _ uint64) 
 		return u.H{}, err
 	}
 
-	err = fsOpVoidWithTimeout(fsIOTimeout, func() error {
+	err = fsOpVoidWithTimeout(fsIOTimeout, func(ctx context.Context) error {
 		return os.MkdirAll(fullPath, 0755)
 	})
 	if err != nil {
@@ -501,8 +585,9 @@ func FsRm(req FsCommonRequest, _ func(string, any, *string) error, _ uint64) (u.
 		return u.H{}, err
 	}
 
-	err = fsOpVoidWithTimeout(fsIOTimeout, func() error {
-		return os.RemoveAll(fullPath)
+	err = fsOpVoidWithTimeout(fsIOTimeout, func(ctx context.Context) error {
+		// 可中断的递归删除：超时后提前退出，避免后台继续删改磁盘
+		return removeAllCtx(ctx, fullPath)
 	})
 	if err != nil {
 		return u.H{}, err
@@ -536,7 +621,7 @@ func FsChmod(req FsChmodRequest, _ func(string, any, *string) error, _ uint64) (
 	}
 
 	if runtime.GOOS == "windows" {
-		err = fsOpVoidWithTimeout(fsIOTimeout, func() error {
+		err = fsOpVoidWithTimeout(fsIOTimeout, func(ctx context.Context) error {
 			if modeVal&0200 == 0 {
 				// 禁止所有者写 → 设为只读
 				return os.Chmod(fullPath, 0444)
@@ -544,7 +629,7 @@ func FsChmod(req FsChmodRequest, _ func(string, any, *string) error, _ uint64) (
 			return os.Chmod(fullPath, 0666)
 		})
 	} else {
-		err = fsOpVoidWithTimeout(fsIOTimeout, func() error {
+		err = fsOpVoidWithTimeout(fsIOTimeout, func(ctx context.Context) error {
 			return os.Chmod(fullPath, os.FileMode(modeVal))
 		})
 	}
@@ -589,7 +674,7 @@ func FsChown(req FsChownRequest, _ func(string, any, *string) error, _ uint64) (
 		return u.H{}, fmt.Errorf("invalid gid: %v", err)
 	}
 
-	err = fsOpVoidWithTimeout(fsIOTimeout, func() error {
+	err = fsOpVoidWithTimeout(fsIOTimeout, func(ctx context.Context) error {
 		return os.Chown(fullPath, uid, gid)
 	})
 	if err != nil {

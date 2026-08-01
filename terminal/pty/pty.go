@@ -86,29 +86,37 @@ func (p *PTY) File() *os.File {
 // Read 从PTY读取数据
 func (p *PTY) Read(buf []byte) (int, error) {
 	p.mu.Lock()
-	defer p.mu.Unlock()
-
 	if p.closed {
+		p.mu.Unlock()
 		return 0, errors.New("PTY closed")
 	}
 	if p.fd == nil {
+		p.mu.Unlock()
 		return 0, errors.New("PTY not initialized")
 	}
-	return p.fd.Read(buf)
+	fd := p.fd
+	p.mu.Unlock()
+
+	// 锁外执行阻塞读取：否则空闲时阻塞在 fd.Read 会与并发 Close 持锁互相死锁
+	return fd.Read(buf)
 }
 
 // Write 向PTY写入数据
 func (p *PTY) Write(data []byte) (int, error) {
 	p.mu.Lock()
-	defer p.mu.Unlock()
-
 	if p.closed {
+		p.mu.Unlock()
 		return 0, errors.New("PTY closed")
 	}
 	if p.fd == nil {
+		p.mu.Unlock()
 		return 0, errors.New("PTY not initialized")
 	}
-	return p.fd.Write(data)
+	fd := p.fd
+	p.mu.Unlock()
+
+	// 锁外执行写入，避免管道写满时持锁阻塞与 Close 死锁
+	return fd.Write(data)
 }
 
 // Close 关闭PTY

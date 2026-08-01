@@ -278,19 +278,20 @@ func runTask(session *structs.Chats, mp map[string]*any, cross []*any) (bool, []
 	timeoutObj, ok := mp["timeout"]
 	var timeout int32
 	if !ok || timeoutObj == nil {
-		timeout = 0 // 未指定则不设超时，由 session cancel 控制
+		timeout = 60 // 与工具描述一致：默认 60 秒
 	} else {
 		if v, ok := asInt32(timeoutObj); ok {
 			timeout = v
 		} else {
-			timeout = 0
+			timeout = 60
 		}
 	}
 	if timeout >= 300 {
 		return errResult("[System] Parameter Error: timeout must less than 300", cross)
 	}
-	if timeout < 0 {
-		timeout = 0
+	if timeout <= 0 {
+		// 显式传 0/负值视为无效，钳制到默认 60，避免静默变成无超时导致命令无限阻塞
+		timeout = 60
 	}
 
 	logger.Info("run shell \"%s\"(reason: %s)(%ds) sandbox:%v in ID=%d,agentID=%s", command, reason, timeout, sandboxFlag, session.ID, session.CurrentAgentID)

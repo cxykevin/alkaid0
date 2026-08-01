@@ -209,7 +209,7 @@ func TestNew_WithoutInit(t *testing.T) {
 	Shutdown()
 
 	// 重置初始化标志
-	loggerInited = false
+	loggerInited.Store(false)
 
 	// 设置测试日志文件
 	os.Setenv(envLogName, "test_new.log")
@@ -227,7 +227,7 @@ func TestNew_WithoutInit(t *testing.T) {
 	}
 
 	// 验证日志系统已初始化
-	if !loggerInited {
+	if !loggerInited.Load() {
 		t.Error("Logger should be initialized after calling New()")
 	}
 }

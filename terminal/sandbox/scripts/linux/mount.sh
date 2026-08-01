@@ -6,8 +6,10 @@ mount --rbind / "$T" || exit 1
 mount -o remount,ro,bind "$T" || exit 1
 
 # 将真实用户名传给 chroot 内的脚本
-REAL_USER="%s"
+REAL_USER=%s
 export REAL_USER
+# 可写目录与工作目录通过环境变量传入（含单引号路径也不会破坏内层单引号脚本）
+%s
 
 # 阶段2: chroot后内部完成所有挂载（关键：在此ns中，外部看不到）
 # 保存命令的退出码
@@ -42,7 +44,7 @@ chroot "$T" sh -uc '
 	mount --bind "$_alk_grf" /etc/group 2>/dev/null || :
 
 	# 切换到工作目录并执行
-	cd %q || exit 1
+	cd "$ALK_WORKDIR" || exit 1
 	exec %s "$@"
 ' -- "$@" || EXIT_CODE=$?
 

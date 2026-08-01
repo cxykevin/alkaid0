@@ -4,6 +4,7 @@ package chancall
 import (
 	"fmt"
 	"log"
+	"sync"
 )
 
 // Ret 调用结果
@@ -24,14 +25,19 @@ const bufferSize = 4096
 // ActChan 事件通道
 var ActChan = make(chan EventChan, bufferSize)
 
-var consumers = make(map[string]func(any) (any, error))
+var (
+	consumers   = make(map[string]func(any) (any, error))
+	consumersMu sync.RWMutex
+)
 
 // CallFunc 调用函数
 type CallFunc func(obj any) (any, error)
 
 // Register 注册消费者
 func Register(consumer string, fn func(any) (any, error)) CallFunc {
+	consumersMu.Lock()
 	consumers[consumer] = fn
+	consumersMu.Unlock()
 	fnc := (func(obj any) (any, error) {
 		ev := EventChan{
 			Consumer: consumer,
@@ -52,9 +58,14 @@ func start() {
 			defer func() {
 				if r := recover(); r != nil {
 					log.Printf("chancall: panic in consumer %s: %v", ev.Consumer, r)
+					// 必须向调用方回复并关闭通道，否则调用方在 `<-ev.Out` 永久阻塞（死锁）
+					ev.Out <- Ret{Ret: nil, Err: fmt.Errorf("consumer %s panicked: %v", ev.Consumer, r)}
+					close(ev.Out)
 				}
 			}()
+			consumersMu.RLock()
 			consumer, ok := consumers[ev.Consumer]
+			consumersMu.RUnlock()
 			if !ok {
 				ev.Out <- Ret{Ret: nil, Err: fmt.Errorf("consumer %s not found", ev.Consumer)}
 				return

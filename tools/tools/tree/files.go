@@ -5,14 +5,13 @@ import (
 	"errors"
 	"fmt"
 	"maps"
-	"math/rand"
+	"math/rand/v2"
 	"os"
 	"path/filepath"
 	"slices"
 	"sort"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/cxykevin/alkaid0/tools/tools/tree/ios"
 	"regexp"
@@ -109,7 +108,8 @@ func sortNodeCmp(i, j *Node) int {
 }
 
 // BuildTree 构建树
-func BuildTree(dir string, ID *int32) (*Node, []error) {
+// depth 为当前递归深度，达到 MaxDepth 后不再展开子目录，防止深层目录全量递归耗尽内存
+func BuildTree(dir string, ID *int32, depth int) (*Node, []error) {
 	errorsTable := []error{}
 	info, err := os.Stat(dir)
 	if err != nil {
@@ -144,15 +144,19 @@ func BuildTree(dir string, ID *int32) (*Node, []error) {
 		IsDir: true,
 	}
 	node.IDStart = *ID
-	node.ChildrenNum = int32(len(entries))
-	if node.ChildrenNum <= MaxChildrenNum {
+	// 先过滤黑名单再统计数量，避免折叠判定被黑名单条目干扰
+	filteredEntries := entries[:0]
+	for _, entry := range entries {
+		if _, ok := dirBlacklists[entry.Name()]; ok {
+			continue
+		}
+		filteredEntries = append(filteredEntries, entry)
+	}
+	node.ChildrenNum = int32(len(filteredEntries))
+	if node.ChildrenNum <= MaxChildrenNum && depth < MaxDepth {
 		node.Children = []*Node{}
-		for _, entry := range entries {
-			entryName := entry.Name()
-			if _, ok := dirBlacklists[entryName]; ok {
-				continue
-			}
-			subnode, errorsSubTable := BuildTree(filepath.Join(dir, entryName), ID)
+		for _, entry := range filteredEntries {
+			subnode, errorsSubTable := BuildTree(filepath.Join(dir, entry.Name()), ID, depth+1)
 			if len(errorsSubTable) > 0 {
 				errorsTable = append(errorsTable, errorsSubTable...)
 			}
@@ -644,8 +648,6 @@ func checkNodeFileNameErr(node *Node) error {
 	return nil
 }
 
-var rander = rand.New(rand.NewSource(time.Now().UnixNano()))
-
 func generateDiff(origin *Node, node *Node) ([]Diff, error) {
 	diffOrigins := []diffOrigin{}
 	mapOrigin := idMapOrigin{}
@@ -698,7 +700,8 @@ func generateDiff(origin *Node, node *Node) ([]Diff, error) {
 			continue
 		}
 		// 生成随机文件名
-		randNum := rander.Intn(8192)
+		// rand/v2 全局函数并发安全，避免多会话并发生成临时名时的 data race
+		randNum := rand.IntN(8192)
 		tmpFileName := fmt.Sprintf(".alk_%d.%s", randNum, filepath.Base(d.Target))
 		tmpFilePath := filepath.Join(filepath.Dir(d.Target), tmpFileName)
 		tmpFilePathTable[d.Target] = tmpFilePath

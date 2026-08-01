@@ -427,6 +427,19 @@ func getOrCreateDB(directory string) (*CodebaseDB, error) {
 	cdb.startWorker()
 
 	VecDBsLock.Lock()
+	// 双重检查：并发创建期间可能有另一个实例已写入，此时关闭新创建的并复用已有的，
+	// 避免同一目录泄露两个数据库连接和 worker。
+	if existing, ok := VecDBs[directory]; ok {
+		VecDBsLock.Unlock()
+		cdb.stopWorker()
+		cdb.mu.Lock()
+		if cdb.db != nil {
+			_ = cdb.db.Close()
+		}
+		cdb.mu.Unlock()
+		cdb.logger.Info("reusing existing codebase db for %s (concurrent creation)", directory)
+		return existing, nil
+	}
 	VecDBs[directory] = cdb
 	VecDBsLock.Unlock()
 

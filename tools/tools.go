@@ -39,9 +39,15 @@ func ExecOneToolGetPrompts(session *structs.Chats, name string) ([]string, []str
 	// 收集所有未启用的 scope 的提示词，用于告知 AI 哪些工具当前不可用
 	unusedHooks := make([]string, 0)
 	toolobj.ScopesMu.RLock()
-	for name, prompts := range toolobj.Scopes {
+	// 按固定顺序遍历，避免 map 随机迭代导致喂给 LLM 的禁用提示顺序不稳定
+	scopeKeys := make([]string, 0, len(toolobj.Scopes))
+	for name := range toolobj.Scopes {
+		scopeKeys = append(scopeKeys, name)
+	}
+	sort.Strings(scopeKeys)
+	for _, name := range scopeKeys {
 		if !checkScopeEnabled(session, name) {
-			unusedHooks = append(unusedHooks, prompts)
+			unusedHooks = append(unusedHooks, toolobj.Scopes[name])
 		}
 	}
 	toolobj.ScopesMu.RUnlock()
@@ -170,9 +176,11 @@ func ExecToolPostHook(session *structs.Chats, name string, args map[string]*any,
 				return map[string]*any{}, session.GetContext().Err()
 			}
 			idAny := any(toolID)
-			// 将工具调用 ID 注入参数，供 PostHook 的日志或追踪逻辑使用
-			args["_id"] = &idAny
-			pass, passObj, ret, err := hook.PostHook.Func(session, args, passObjs)
+			// 克隆参数 map 再注入工具调用 ID，避免把内部 _id 写入共享参数表
+			// （args 与 parser 存入 ToolsSolved 的 map 是同一引用，直接写入会污染工具参数数据）
+			hookArgs := maps.Clone(args)
+			hookArgs["_id"] = &idAny
+			pass, passObj, ret, err := hook.PostHook.Func(session, hookArgs, passObjs)
 			passObjs = passObj
 			if err != nil {
 				logger.Error("hook post hook error: %v", err)

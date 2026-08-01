@@ -91,12 +91,13 @@ func ClassifyAndTransform(session *structs.Chats, msg string) (string, []Segment
 			} else {
 				output.WriteString(segmentText)
 				output.WriteString(fmt.Sprintf("\n[path:%s]", fullPath))
+				// 仅在写入成功时才记录段信息，避免持久化指向不存在文件的 TempPath
+				segInfos = append(segInfos, SegmentInfo{
+					Label:    "code",
+					Text:     segmentText,
+					TempPath: fullPath,
+				})
 			}
-			segInfos = append(segInfos, SegmentInfo{
-				Label:    "code",
-				Text:     segmentText,
-				TempPath: fullPath,
-			})
 
 		case promptsplitter.Log:
 			randID := generateRandomID()
@@ -108,12 +109,12 @@ func ClassifyAndTransform(session *structs.Chats, msg string) (string, []Segment
 				output.WriteString(segmentText)
 			} else {
 				output.WriteString(fmt.Sprintf("[path:%s]", fullPath))
+				segInfos = append(segInfos, SegmentInfo{
+					Label:    "log",
+					Text:     segmentText,
+					TempPath: fullPath,
+				})
 			}
-			segInfos = append(segInfos, SegmentInfo{
-				Label:    "log",
-				Text:     segmentText,
-				TempPath: fullPath,
-			})
 		}
 	}
 

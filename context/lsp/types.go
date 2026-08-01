@@ -220,7 +220,7 @@ type Diagnostic struct {
 	Range    Range              `json:"range"`
 	Severity DiagnosticSeverity `json:"severity,omitempty"`
 	Source   string             `json:"source,omitempty"`
-	Code     any                `json:"code,omitempty"`     // string | int, LSP 诊断错误码
+	Code     any                `json:"code,omitempty"` // string | int, LSP 诊断错误码
 	Message  string             `json:"message"`
 }
 
