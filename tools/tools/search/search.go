@@ -385,8 +385,7 @@ func updateInfo(session *structs.Chats, mp map[string]*any, cross []*any, toolID
 			"online": mp["online"],
 		},
 	}}
-	session.ToolCallingContext[toolCallID] = respObj
-	session.ToolCallingType[toolCallID] = toolName
+	session.SetToolCalling(toolCallID, respObj, toolName)
 	return true, cross, nil
 }
 

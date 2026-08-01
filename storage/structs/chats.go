@@ -2,6 +2,7 @@ package structs
 
 import (
 	"context"
+	"maps"
 	"sync"
 
 	"github.com/cxykevin/alkaid0/config/structs"
@@ -55,6 +56,14 @@ type Chats struct {
 	ToolState                uint64              `gorm:"-" json:"-"`
 	LatestToolCallingContext map[string]any      `gorm:"-" json:"-"`
 	LatestToolCallingType    map[string]string   `gorm:"-" json:"-"`
+	// ToolCallingStreaming 标记每个工具调用 id 是否为流式增量预览（true）还是最终状态（false）。
+	// OnHook 写入时按 session.State 判定：StateReciving/StateRequesting（AI 正在生成）→ 增量；
+	// StateToolCalling（审批后执行）→ 最终。SetCallback 据此选事件名。
+	ToolCallingStreaming map[string]bool `gorm:"-" json:"-"`
+	// toolCtxMu 保护 ToolCallingContext/ToolCallingType/Latest*/ToolCallingStreaming 的并发访问。
+	// 流式解析阶段 OnHook（loop 主 goroutine 的 solveFunc）写、SetCallback goroutine 读，
+	// 无锁会触发 Go runtime 的 concurrent map read and map write panic。
+	toolCtxMu sync.RWMutex `gorm:"-" json:"-"`
 	// toolKillMu 保护 ToolKillFn 的并发访问
 	toolKillMu sync.Mutex `gorm:"-" json:"-"`
 	// ToolKillFn 由当前正在执行的工具注册，loop.Stop() 调用它来中断工具
@@ -110,4 +119,151 @@ func (c *Chats) KillTool() {
 	if fn != nil {
 		fn()
 	}
+}
+
+// SetToolCalling 线程安全地写入工具调用上下文（工具 OnHook 在流式解析/执行阶段调用）。
+// 自动初始化 map，供流式增量预览与最终调用信息广播读取。
+// 阶段标记按 session.State 判定：StateReciving/StateRequesting（AI 正在生成工具调用）为流式增量，
+// 其余（如 StateToolCalling 审批后执行）为最终状态。
+func (c *Chats) SetToolCalling(id string, resp any, typ string) {
+	if c == nil {
+		return
+	}
+	c.toolCtxMu.Lock()
+	defer c.toolCtxMu.Unlock()
+	if c.ToolCallingContext == nil {
+		c.ToolCallingContext = make(map[string]any)
+	}
+	if c.ToolCallingType == nil {
+		c.ToolCallingType = make(map[string]string)
+	}
+	if c.ToolCallingStreaming == nil {
+		c.ToolCallingStreaming = make(map[string]bool)
+	}
+	streaming := c.State == state.StateReciving || c.State == state.StateRequesting
+	c.ToolCallingContext[id] = resp
+	c.ToolCallingType[id] = typ
+	c.ToolCallingStreaming[id] = streaming
+}
+
+// HasToolCalling 判断当前是否存在待广播的工具调用上下文。
+func (c *Chats) HasToolCalling() bool {
+	if c == nil {
+		return false
+	}
+	c.toolCtxMu.RLock()
+	defer c.toolCtxMu.RUnlock()
+	return len(c.ToolCallingContext) != 0
+}
+
+// SnapshotToolCalling 在锁内拷贝当前工具调用上下文并清空，返回副本。
+// 广播等网络 I/O 应在锁外进行，避免长时间阻塞 OnHook 的写入。
+func (c *Chats) SnapshotToolCalling() (map[string]any, map[string]string, map[string]bool) {
+	c.toolCtxMu.Lock()
+	defer c.toolCtxMu.Unlock()
+	ctx := make(map[string]any, len(c.ToolCallingContext))
+	typ := make(map[string]string, len(c.ToolCallingType))
+	streaming := make(map[string]bool, len(c.ToolCallingStreaming))
+	maps.Copy(ctx, c.ToolCallingContext)
+	maps.Copy(typ, c.ToolCallingType)
+	maps.Copy(streaming, c.ToolCallingStreaming)
+	c.ToolCallingContext = make(map[string]any)
+	c.ToolCallingType = make(map[string]string)
+	c.ToolCallingStreaming = make(map[string]bool)
+	return ctx, typ, streaming
+}
+
+// TakeFinalToolCalling 快照并移除所有最终状态（非流式标记）条目，保留流式条目。
+// 供 SetCallback 在任意回调时立即广播审批后/执行后的最终 tool_call，
+// 不依赖 session.State 判断（审批后空 AIResponse 与新一轮流式存在 State 竞态）。
+func (c *Chats) TakeFinalToolCalling() (map[string]any, map[string]string) {
+	if c == nil {
+		return nil, nil
+	}
+	c.toolCtxMu.Lock()
+	defer c.toolCtxMu.Unlock()
+	ctx := make(map[string]any)
+	typ := make(map[string]string)
+	for id := range c.ToolCallingContext {
+		if !c.ToolCallingStreaming[id] {
+			ctx[id] = c.ToolCallingContext[id]
+			typ[id] = c.ToolCallingType[id]
+			delete(c.ToolCallingContext, id)
+			delete(c.ToolCallingType, id)
+			delete(c.ToolCallingStreaming, id)
+		}
+	}
+	return ctx, typ
+}
+
+// TakeStreamingToolCalling 快照并移除所有流式增量（streaming 标记）条目，保留最终条目。
+// 供 SetCallback 在限流通过时推送增量预览；限流未通过时跳过（不清空，保留供下个 chunk）。
+func (c *Chats) TakeStreamingToolCalling() (map[string]any, map[string]string) {
+	if c == nil {
+		return nil, nil
+	}
+	c.toolCtxMu.Lock()
+	defer c.toolCtxMu.Unlock()
+	ctx := make(map[string]any)
+	typ := make(map[string]string)
+	for id := range c.ToolCallingContext {
+		if c.ToolCallingStreaming[id] {
+			ctx[id] = c.ToolCallingContext[id]
+			typ[id] = c.ToolCallingType[id]
+			delete(c.ToolCallingContext, id)
+			delete(c.ToolCallingType, id)
+			delete(c.ToolCallingStreaming, id)
+		}
+	}
+	return ctx, typ
+}
+
+// ClearToolCalling 清空当前工具调用上下文（进 WaitApprove 前防止限流跳过的残留）。
+func (c *Chats) ClearToolCalling() {
+	if c == nil {
+		return
+	}
+	c.toolCtxMu.Lock()
+	defer c.toolCtxMu.Unlock()
+	c.ToolCallingContext = make(map[string]any)
+	c.ToolCallingType = make(map[string]string)
+	c.ToolCallingStreaming = make(map[string]bool)
+}
+
+// ResetLatest 重置最近一次工具调用快照（审批/拒绝完成、新一轮用户输入前调用）。
+func (c *Chats) ResetLatest() {
+	if c == nil {
+		return
+	}
+	c.toolCtxMu.Lock()
+	defer c.toolCtxMu.Unlock()
+	c.LatestToolCallingContext = make(map[string]any)
+	c.LatestToolCallingType = make(map[string]string)
+}
+
+// SetLatest 用给定的上下文快照覆盖最近一次工具调用快照。
+func (c *Chats) SetLatest(ctx map[string]any, typ map[string]string) {
+	if c == nil {
+		return
+	}
+	c.toolCtxMu.Lock()
+	defer c.toolCtxMu.Unlock()
+	c.LatestToolCallingContext = make(map[string]any)
+	c.LatestToolCallingType = make(map[string]string)
+	maps.Copy(c.LatestToolCallingContext, ctx)
+	maps.Copy(c.LatestToolCallingType, typ)
+}
+
+// SnapshotLatest 返回最近一次工具调用快照的副本（供 WaitApprove 文本拼接、SessionLoad 重放）。
+func (c *Chats) SnapshotLatest() (map[string]any, map[string]string) {
+	if c == nil {
+		return nil, nil
+	}
+	c.toolCtxMu.RLock()
+	defer c.toolCtxMu.RUnlock()
+	ctx := make(map[string]any, len(c.LatestToolCallingContext))
+	typ := make(map[string]string, len(c.LatestToolCallingType))
+	maps.Copy(ctx, c.LatestToolCallingContext)
+	maps.Copy(typ, c.LatestToolCallingType)
+	return ctx, typ
 }

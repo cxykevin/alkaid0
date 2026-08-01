@@ -101,6 +101,16 @@ func (cdb *CodebaseDB) embedAndStore(ctx context.Context, task *EmbedTask) error
 		return cdb.updateMetadata(task.FilePath, task.Symbol, task.FullContent, task.Tags)
 	}
 
+	// 无 embedding 模型（BM25-only 模式）：仅入库内容，不嵌入、不存向量。
+	// 这样即使未配置 embedding 模型，代码库的 BM25 全文检索依然可用。
+	if cdb.modelID == "" {
+		if _, err := cdb.upsertItem(task, hash); err != nil {
+			return err
+		}
+		cdb.logger.Info("stored (bm25 only) %s:%s", task.FilePath, task.Symbol)
+		return nil
+	}
+
 	cdb.logger.Info("embedding %s:%s (%d chars)", task.FilePath, task.Symbol, len(task.EmbedText))
 
 	// 调用嵌入 API
@@ -168,6 +178,39 @@ func (cdb *CodebaseDB) embedAndStore(ctx context.Context, task *EmbedTask) error
 
 	cdb.logger.Info("stored %s:%s id=%d dim=%d", task.FilePath, task.Symbol, itemID, len(embeddings[0]))
 	return nil
+}
+
+// upsertItem 插入或更新 codebase_items 记录（FTS5 触发器自动同步全文索引），返回记录 ID。
+// 供 BM25-only 模式（无 embedding 模型）与完整嵌入流程共用。
+func (cdb *CodebaseDB) upsertItem(task *EmbedTask, hash string) (int64, error) {
+	cdb.mu.Lock()
+	defer cdb.mu.Unlock()
+
+	if err := cdb.ensureDBOpen(); err != nil {
+		return 0, err
+	}
+
+	tagsJSON := tagsToJSON(task.Tags)
+
+	res, err := cdb.db.Exec(`
+		INSERT INTO codebase_items (file_path, symbol, tags, full_content, embed_text, embed_hash)
+		VALUES (?, ?, ?, ?, ?, ?)
+		ON CONFLICT(file_path, symbol) DO UPDATE SET
+			tags=excluded.tags,
+			full_content=excluded.full_content,
+			embed_text=excluded.embed_text,
+			embed_hash=excluded.embed_hash,
+			updated_at=CURRENT_TIMESTAMP
+	`, task.FilePath, task.Symbol, tagsJSON, task.FullContent, task.EmbedText, hash)
+	if err != nil {
+		return 0, fmt.Errorf("upsert items: %w", err)
+	}
+
+	itemID, err := res.LastInsertId()
+	if err != nil {
+		return 0, fmt.Errorf("last insert id: %w", err)
+	}
+	return itemID, nil
 }
 
 // checkExistingHash 检查指定文件+符号是否已存在并返回其 hash

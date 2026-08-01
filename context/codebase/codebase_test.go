@@ -144,6 +144,168 @@ func TestQueuePauseResume(t *testing.T) {
 	}
 }
 
+// TestQueueTotalPushed 验证累计入队数：进度 = totalPushed - Len() 恒非负，
+// 即使有 extras 任务在 RunIndex 返回后追加（修复 Processed 变负的问题）。
+func TestQueueTotalPushed(t *testing.T) {
+	q := NewQueueManager()
+	ctx := context.Background()
+
+	for range 10 {
+		q.Push(&EmbedTask{EmbedText: "x"})
+	}
+	if q.totalPushed != 10 || q.Len() != 10 {
+		t.Fatalf("after push: totalPushed=%d len=%d", q.totalPushed, q.Len())
+	}
+
+	// 模拟 worker 取出 4 个
+	for range 4 {
+		if task := q.WaitPop(ctx); task == nil {
+			t.Fatal("expected task from WaitPop")
+		}
+	}
+	if q.totalPushed != 10 || q.Len() != 6 {
+		t.Fatalf("after pop: totalPushed=%d len=%d", q.totalPushed, q.Len())
+	}
+	if got := q.totalPushed - q.Len(); got != 4 {
+		t.Fatalf("expected progress=4, got %d", got)
+	}
+
+	// 模拟 extras 追加（indexTempfsAndChatHistory）
+	for range 5 {
+		q.Push(&EmbedTask{EmbedText: "extra"})
+	}
+	if q.totalPushed != 15 || q.Len() != 11 {
+		t.Fatalf("after extras: totalPushed=%d len=%d", q.totalPushed, q.Len())
+	}
+	// 进度不受 extras 追加影响，仍为 4，非负
+	if got := q.totalPushed - q.Len(); got != 4 {
+		t.Fatalf("expected progress=4 after extras, got %d", got)
+	}
+
+	// 全部处理完
+	for q.Len() > 0 {
+		q.WaitPop(ctx)
+	}
+	if got := q.totalPushed - q.Len(); got != q.totalPushed {
+		t.Fatalf("expected progress==totalPushed at drain, got %d", got)
+	}
+}
+
+// TestQueueClearResetsTotalPushed 验证 Clear 会重置累计入队计数。
+// 修复 /index clean 后进度 Total 从旧累计值（如 5366）继续的问题。
+func TestQueueClearResetsTotalPushed(t *testing.T) {
+	q := NewQueueManager()
+	for range 5 {
+		q.Push(&EmbedTask{EmbedText: "x"})
+	}
+	if q.totalPushed != 5 {
+		t.Fatalf("expected totalPushed=5, got %d", q.totalPushed)
+	}
+	q.Clear()
+	if q.totalPushed != 0 {
+		t.Fatalf("Clear should reset totalPushed, got %d", q.totalPushed)
+	}
+	if q.Len() != 0 {
+		t.Fatalf("expected empty queue after Clear, got len=%d", q.Len())
+	}
+}
+
+// TestStopDirectoryClearsAll 验证 StopDirectory 停止 worker 并清空队列
+// 与累计计数。修复 /index cancel 后 embedding worker 仍继续处理队列的问题。
+func TestStopDirectoryClearsAll(t *testing.T) {
+	restore := config.GlobalConfigSwap(structs.Config{
+		Model: structs.ModelsConfig{
+			Models: map[int32]structs.ModelConfig{
+				1: {ModelName: "test-llm", ModelID: "test-llm", Type: ""},
+			},
+		},
+	})
+	defer restore()
+	embedModelCfg = nil
+	embedDim = 0
+
+	tmpDir := t.TempDir()
+	if _, err := getOrCreateDB(tmpDir); err != nil {
+		t.Fatalf("getOrCreateDB failed: %v", err)
+	}
+	t.Cleanup(func() { closeDirectory(tmpDir) })
+
+	// 入队若干任务（可能已被 worker 消费一部分，无妨）
+	for i := range 5 {
+		if err := AddToQueue(tmpDir, EmbedTask{
+			EmbedText:   "x",
+			FullContent: "y",
+			FilePath:    fmt.Sprintf("f%d.txt", i),
+			Symbol:      "",
+		}); err != nil {
+			t.Fatalf("AddToQueue failed: %v", err)
+		}
+	}
+
+	if err := StopDirectory(tmpDir); err != nil {
+		t.Fatalf("StopDirectory failed: %v", err)
+	}
+
+	ds := DirectoryStatus(tmpDir)
+	if ds.WorkerActive {
+		t.Fatal("expected worker stopped after StopDirectory")
+	}
+	if ds.QueueLen != 0 {
+		t.Fatalf("expected empty queue after StopDirectory, got %d", ds.QueueLen)
+	}
+	if ds.TotalPushed != 0 {
+		t.Fatalf("expected totalPushed=0 after StopDirectory, got %d", ds.TotalPushed)
+	}
+}
+
+// TestAddToQueueRestartsWorker 验证 StopDirectory/CancelIndex 停止 worker 后，
+// 重新 AddToQueue 会重启 worker 处理任务（否则索引卡住）。
+func TestAddToQueueRestartsWorker(t *testing.T) {
+	restore := config.GlobalConfigSwap(structs.Config{
+		Model: structs.ModelsConfig{
+			Models: map[int32]structs.ModelConfig{
+				1: {ModelName: "test-llm", ModelID: "test-llm", Type: ""},
+			},
+		},
+	})
+	defer restore()
+	embedModelCfg = nil
+	embedDim = 0
+
+	tmpDir := t.TempDir()
+	if _, err := getOrCreateDB(tmpDir); err != nil {
+		t.Fatalf("getOrCreateDB failed: %v", err)
+	}
+	t.Cleanup(func() { closeDirectory(tmpDir) })
+
+	// 停止 worker（模拟 /index cancel）
+	if err := StopDirectory(tmpDir); err != nil {
+		t.Fatalf("StopDirectory failed: %v", err)
+	}
+	if ds := DirectoryStatus(tmpDir); ds.WorkerActive {
+		t.Fatal("expected worker stopped")
+	}
+
+	// 重新入队：worker 应被 AddToQueue 自动重启并消费任务
+	done := make(chan struct{})
+	if err := AddToQueue(tmpDir, EmbedTask{
+		EmbedText:   "x",
+		FullContent: "y",
+		FilePath:    "a.txt",
+		Symbol:      "",
+		Done:        done,
+	}); err != nil {
+		t.Fatalf("AddToQueue failed: %v", err)
+	}
+
+	select {
+	case <-done:
+		// worker 已重启并处理任务
+	case <-time.After(5 * time.Second):
+		t.Fatal("worker not restarted by AddToQueue, task not processed")
+	}
+}
+
 func TestQueueClear(t *testing.T) {
 	q := NewQueueManager()
 	q.Push(&EmbedTask{EmbedText: "a", Symbol: "a"})
@@ -1329,5 +1491,282 @@ func TestPackageLevelSearch(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("expected 'PackageLevel' in search results")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// BM25-only 模式（无 embedding 模型）
+// ---------------------------------------------------------------------------
+
+// TestResolveModelWithEmbeddingIDZero 验证 EmbeddingModelID=0 且 Models[0] 为
+// embedding 类型时，resolveModelFromCfg 能正常命中（ID=0 不应被当作"未配置"）。
+func TestResolveModelWithEmbeddingIDZero(t *testing.T) {
+	restore := config.GlobalConfigSwap(structs.Config{
+		Model: structs.ModelsConfig{
+			Models: map[int32]structs.ModelConfig{
+				0: {
+					ModelName: "zero-id-embedding",
+					ModelID:   "zero-id-embedding",
+					Type:      structs.ModelTypeEmbedding,
+				},
+			},
+		},
+		Context: structs.ContextConfig{
+			EmbeddingModelID: 0,
+		},
+	})
+	defer restore()
+
+	mc, err := resolveModelFromCfg()
+	if err != nil {
+		t.Fatalf("resolveModelFromCfg with EmbeddingModelID=0 should succeed, got: %v", err)
+	}
+	if mc.ModelName != "zero-id-embedding" {
+		t.Fatalf("expected model 'zero-id-embedding', got %q", mc.ModelName)
+	}
+}
+
+// TestBM25OnlyNoEmbeddingModel 验证无 embedding 模型配置时，
+// getOrCreateDB 降级为 BM25-only 模式仍能成功创建（而不是报错）。
+func TestBM25OnlyNoEmbeddingModel(t *testing.T) {
+	restore := config.GlobalConfigSwap(structs.Config{
+		Model: structs.ModelsConfig{
+			Models: map[int32]structs.ModelConfig{
+				1: {ModelName: "test-llm", ModelID: "test-llm", Type: ""},
+			},
+		},
+	})
+	defer restore()
+
+	// 重置包级缓存，模拟从未初始化 embedding
+	embedModelCfg = nil
+	embedDim = 0
+
+	// Initialize 应失败（无 embedding 模型）
+	if err := Initialize(); err == nil {
+		t.Fatal("expected Initialize() to fail without embedding model")
+	}
+
+	tmpDir := t.TempDir()
+	cdb, err := getOrCreateDB(tmpDir)
+	if err != nil {
+		t.Fatalf("getOrCreateDB should succeed in BM25-only mode, got: %v", err)
+	}
+	t.Cleanup(func() { closeDirectory(tmpDir) })
+
+	if cdb.modelID != "" {
+		t.Fatalf("expected empty modelID in BM25-only mode, got %q", cdb.modelID)
+	}
+	if cdb.dimension == 0 {
+		t.Fatal("expected non-zero default dimension in BM25-only mode")
+	}
+}
+
+// TestBM25OnlyWorkerStoresContent 验证无 embedding 模型时，
+// worker 仍将内容写入 codebase_items（FTS 同步），不存向量，且 BM25 可检索。
+func TestBM25OnlyWorkerStoresContent(t *testing.T) {
+	restore := config.GlobalConfigSwap(structs.Config{
+		Model: structs.ModelsConfig{
+			Models: map[int32]structs.ModelConfig{
+				1: {ModelName: "test-llm", ModelID: "test-llm", Type: ""},
+			},
+		},
+	})
+	defer restore()
+
+	embedModelCfg = nil
+	embedDim = 0
+
+	tmpDir := t.TempDir()
+	cdb, err := getOrCreateDB(tmpDir)
+	if err != nil {
+		t.Fatalf("getOrCreateDB failed: %v", err)
+	}
+	t.Cleanup(func() { closeDirectory(tmpDir) })
+
+	done := make(chan struct{})
+	if err := AddToQueue(tmpDir, EmbedTask{
+		EmbedText:   "test function that does something",
+		FullContent: "func Test() { return 1 }",
+		FilePath:    "test.go",
+		Symbol:      "Test",
+		Tags:        []string{"go", "function"},
+		Done:        done,
+	}); err != nil {
+		t.Fatalf("AddToQueue failed: %v", err)
+	}
+
+	select {
+	case <-done:
+	case <-time.After(30 * time.Second):
+		t.Fatal("timeout waiting for bm25-only task completion")
+	}
+
+	// 内容已入库（BM25 数据）
+	var fullContent string
+	err = cdb.db.QueryRow(
+		"SELECT full_content FROM codebase_items WHERE file_path=? AND symbol=?",
+		"test.go", "Test",
+	).Scan(&fullContent)
+	if err != nil {
+		t.Fatalf("query full_content failed: %v", err)
+	}
+	if fullContent != "func Test() { return 1 }" {
+		t.Fatalf("expected full_content, got %q", fullContent)
+	}
+
+	// 不存向量（BM25-only）
+	var vecID int64
+	err = cdb.db.QueryRow(
+		"SELECT id FROM codebase_vec WHERE id=(SELECT id FROM codebase_items WHERE file_path=? AND symbol=?)",
+		"test.go", "Test",
+	).Scan(&vecID)
+	if err != sql.ErrNoRows {
+		t.Fatalf("expected no vector in BM25-only mode, got err=%v id=%d", err, vecID)
+	}
+
+	// BM25 检索命中
+	results, err := cdb.BM25Search(context.Background(), "test function", 10)
+	if err != nil {
+		t.Fatalf("BM25Search failed: %v", err)
+	}
+	if len(results) == 0 {
+		t.Fatal("expected BM25 results in BM25-only mode")
+	}
+	if results[0].FilePath != "test.go" {
+		t.Fatalf("expected file 'test.go', got %q", results[0].FilePath)
+	}
+}
+
+// TestRunIndexIncrementalSkipsUnchanged 验证增量索引：文件未变时，
+// 文件级 hash 比对通过即跳过整个文件（不重新入队、不产生新任务）。
+func TestRunIndexIncrementalSkipsUnchanged(t *testing.T) {
+	restore := config.GlobalConfigSwap(structs.Config{
+		Model: structs.ModelsConfig{
+			Models: map[int32]structs.ModelConfig{
+				1: {ModelName: "test-llm", ModelID: "test-llm", Type: ""},
+			},
+		},
+	})
+	defer restore()
+	embedModelCfg = nil
+	embedDim = 0
+
+	tmpDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(tmpDir, "readme.txt"),
+		[]byte("hello world incremental"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { closeDirectory(tmpDir) })
+
+	countItems := func() int {
+		cdb := VecDBs[tmpDir]
+		if cdb == nil {
+			return -1
+		}
+		var cnt int
+		_ = cdb.db.QueryRow("SELECT COUNT(*) FROM codebase_items").Scan(&cnt)
+		return cnt
+	}
+
+	ctx := context.Background()
+
+	// 第一次全量索引
+	if err := RunIndex(ctx, tmpDir, nil); err != nil {
+		t.Fatalf("first RunIndex failed: %v", err)
+	}
+	deadline := time.Now().Add(10 * time.Second)
+	for countItems() < 1 {
+		if time.Now().After(deadline) {
+			t.Fatal("timeout waiting first index items")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	// 等队列清空、写入稳定
+	deadline = time.Now().Add(10 * time.Second)
+	for DirectoryStatus(tmpDir).QueueLen > 0 {
+		if time.Now().After(deadline) {
+			t.Fatal("timeout waiting queue drain")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	cnt1 := countItems()
+	if cnt1 < 1 {
+		t.Fatalf("expected items after first index, got %d", cnt1)
+	}
+
+	// 第二次增量索引（文件未变）：应跳过整个文件，不产生新任务
+	if err := RunIndex(ctx, tmpDir, nil); err != nil {
+		t.Fatalf("second RunIndex failed: %v", err)
+	}
+	// 等待并确认队列无新任务、items 数不变
+	deadline = time.Now().Add(5 * time.Second)
+	for {
+		ds := DirectoryStatus(tmpDir)
+		if ds.QueueLen == 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("timeout: incremental index should not enqueue, queue len=%d", ds.QueueLen)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	cnt2 := countItems()
+	if cnt2 != cnt1 {
+		t.Fatalf("incremental index should not change items: %d -> %d", cnt1, cnt2)
+	}
+}
+
+// TestRunIndexBM25Only 验证 RunIndex 在无 embedding 模型时仍能建立 BM25 索引。
+func TestRunIndexBM25Only(t *testing.T) {
+	restore := config.GlobalConfigSwap(structs.Config{
+		Model: structs.ModelsConfig{
+			Models: map[int32]structs.ModelConfig{
+				1: {ModelName: "test-llm", ModelID: "test-llm", Type: ""},
+			},
+		},
+	})
+	defer restore()
+
+	embedModelCfg = nil
+	embedDim = 0
+
+	tmpDir := t.TempDir()
+	// 写入一个会被索引的 .txt 文件（在 noLSPExtensions 白名单内）
+	if err := os.WriteFile(filepath.Join(tmpDir, "readme.txt"),
+		[]byte("hello world test file content"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { closeDirectory(tmpDir) })
+
+	if err := RunIndex(context.Background(), tmpDir, nil); err != nil {
+		t.Fatalf("RunIndex should succeed in BM25-only mode, got: %v", err)
+	}
+
+	cdb := VecDBs[tmpDir]
+	if cdb == nil {
+		t.Fatal("CodebaseDB not found after RunIndex")
+	}
+
+	// 等待 items 实际写入（worker 取走任务后 QueueLen 立即归零，但写入仍在进行，
+	// 因此轮询 items 计数而非队列长度）。
+	deadline := time.Now().Add(10 * time.Second)
+	var cnt int
+	for {
+		if err := cdb.db.QueryRow("SELECT COUNT(*) FROM codebase_items").Scan(&cnt); err == nil && cnt > 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("timeout waiting for items to be written (cnt=%d)", cnt)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	results, err := cdb.BM25Search(context.Background(), "hello world", 10)
+	if err != nil {
+		t.Fatalf("BM25Search failed: %v", err)
+	}
+	if len(results) == 0 {
+		t.Fatal("expected BM25 results after RunIndex (BM25-only)")
 	}
 }

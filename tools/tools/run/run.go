@@ -194,8 +194,7 @@ func updateInfo(session *structs.Chats, mp map[string]*any, cross []*any, toolID
 			"sandbox": sandboxVal,
 		},
 	}}
-	session.ToolCallingContext[toolCallID] = respObj
-	session.ToolCallingType[toolCallID] = "run"
+	session.SetToolCalling(toolCallID, respObj, "run")
 
 	return true, cross, nil
 }

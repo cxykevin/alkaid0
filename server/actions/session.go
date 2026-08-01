@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"maps"
 	"os"
 	"path"
 	"slices"
@@ -91,6 +90,11 @@ type StopMsg struct {
 }
 
 // sessionObj 会话对象，包含会话的核心信息和生命周期管理
+// toolStreamInterval 工具调用增量流式广播的限流间隔。
+// 每 0.1s 最多向前端推送一次完整快照，避免每 token 一次广播导致前端渲染抖动。
+// 内网/127 回环部署，100ms 粒度足够实时且开销极小。
+const toolStreamInterval = 100 * time.Millisecond
+
 type sessionObj struct {
 	cwd          string
 	id           uint32
@@ -106,6 +110,8 @@ type sessionObj struct {
 	// 为 true 时，断连后若 loop 正在活跃处理则保持运行，空闲时才释放
 	// 通过 /background on 启用，重启 loop 后自动重置为 false
 	background bool
+	// lastToolStreamTime 工具调用增量流式广播的上次推送时间（限流用）
+	lastToolStreamTime time.Time
 }
 
 // dbObj 数据库对象，包含引用计数用于生命周期管理
@@ -427,15 +433,15 @@ func loadSession(cwd string, id *uint32, knowID bool) (*structs.Chats, error) {
 			logger.Warn("codebase init: %v (continuing without codebase)", err)
 		}
 
-		// 如果配置了 embedding 模型，后台启动 codebase 索引
-		if codebase.IsEmbeddingConfigured() {
-			go func() {
-				if err := codebase.RunIndex(context.Background(), cwd, nil); err != nil {
-					logger.Debug("auto index: %v", err)
-				}
-				indexTempfsAndChatHistory(cwd)
-			}()
-		}
+		// 后台启动 codebase 索引。
+		// 无 embedding 模型时 RunIndex 自动降级为 BM25-only（仅建立全文索引，不嵌向量），
+		// 因此这里不再以 IsEmbeddingConfigured 守卫。
+		go func() {
+			if err := codebase.RunIndex(context.Background(), cwd, nil); err != nil {
+				logger.Debug("auto index: %v", err)
+			}
+			indexTempfsAndChatHistory(cwd)
+		}()
 
 		if !knowID {
 			idv, err := funcs.CreateChat(db)
@@ -526,24 +532,17 @@ func loadSession(cwd string, id *uint32, knowID bool) (*structs.Chats, error) {
 				}
 			}
 
-			toolStatus := "pending"
-			if sess.ToolState == 1 {
-				toolStatus = "completed"
-				sess.LatestToolCallingContext = make(map[string]any)
-				sess.LatestToolCallingType = make(map[string]string)
-			} else if sess.ToolState == 2 {
-				toolStatus = "cancelled"
-				sess.LatestToolCallingContext = make(map[string]any)
-				sess.LatestToolCallingType = make(map[string]string)
-			}
-
-			if sess.LatestToolCallingContext == nil {
-				sess.LatestToolCallingContext = make(map[string]any)
-				sess.LatestToolCallingType = make(map[string]string)
-			}
-
-			if len(sess.ToolCallingContext) != 0 {
-				for id, val := range sess.ToolCallingContext {
+			// 最终工具调用状态（标准 tool_call）：streaming=false 标记的条目（审批后 ExecuteToolCalls
+			// 阶段 OnHook 写入，session.State=StateToolCalling）。任意回调到达时立即广播——不能依赖
+			// session.State 判断（审批后空 AIResponse 与新一轮流式存在 State 竞态），按标记最可靠。
+			if finalCtx, finalTyp := sess.TakeFinalToolCalling(); len(finalCtx) != 0 {
+				toolStatus := "pending"
+				if sess.ToolState == 1 {
+					toolStatus = "completed"
+				} else if sess.ToolState == 2 {
+					toolStatus = "cancelled"
+				}
+				for id, val := range finalCtx {
 					stx := strings.SplitN(id, "_", 4)
 					s := ""
 					if len(stx) == 4 {
@@ -554,9 +553,9 @@ func loadSession(cwd string, id *uint32, knowID bool) (*structs.Chats, error) {
 						Update: SessionUpdateUpdate{
 							SessionUpdate: "tool_call",
 							ToolCallID:    id,
-							Kind:          ToolNameToTypeMap[sess.ToolCallingType[id]],
+							Kind:          ToolNameToTypeMap[finalTyp[id]],
 							Status:        toolStatus,
-							Title:         fmt.Sprintf("[Call %s]%s", sess.ToolCallingType[id], s),
+							Title:         fmt.Sprintf("[Call %s]%s", finalTyp[id], s),
 							Content:       val,
 						},
 					}, 0)
@@ -564,10 +563,39 @@ func loadSession(cwd string, id *uint32, knowID bool) (*structs.Chats, error) {
 						logger.Warn("failed to broadcast session update: %v", err)
 					}
 				}
-				maps.Copy(sess.LatestToolCallingContext, sess.ToolCallingContext)
-				maps.Copy(sess.LatestToolCallingType, sess.ToolCallingType)
-				sess.ToolCallingContext = make(map[string]any)
-				sess.ToolCallingType = make(map[string]string)
+				sess.SetLatest(finalCtx, finalTyp)
+			}
+
+			// 流式增量工具调用预览（私有协议事件，0.1s 限流）：streaming=true 标记的条目
+			// （AI 正在生成工具调用，session.State=StateReciving 时 OnHook 写入）。限流推送完整快照，
+			// 前端按 toolCallId upsert 实时"打字"渲染；限流未通过时跳过广播但不清空，保留供下个 chunk。
+			if sess.HasToolCalling() {
+				now := time.Now()
+				if obj.lastToolStreamTime.IsZero() || now.Sub(obj.lastToolStreamTime) >= toolStreamInterval {
+					obj.lastToolStreamTime = now
+					ctx, typ := sess.TakeStreamingToolCalling()
+					for id, val := range ctx {
+						stx := strings.SplitN(id, "_", 4)
+						s := ""
+						if len(stx) == 4 {
+							s = stx[3]
+						}
+						err = broadcastSessionUpdate(sessID, SessionUpdate{
+							SessionID: sessID,
+							Update: SessionUpdateUpdate{
+								SessionUpdate: "alk.cxykevin.top/tool_call_streaming",
+								ToolCallID:    id,
+								Kind:          ToolNameToTypeMap[typ[id]],
+								Status:        "streaming",
+								Title:         fmt.Sprintf("[Call %s]%s", typ[id], s),
+								Content:       val,
+							},
+						}, 0)
+						if err != nil {
+							logger.Warn("failed to broadcast session update: %v", err)
+						}
+					}
+				}
 			}
 
 			// 处理错误
@@ -618,16 +646,17 @@ func loadSession(cwd string, id *uint32, knowID bool) (*structs.Chats, error) {
 				// }, 0)
 
 				// 应使用 request permission API，但 ACP 协议设计有问题
-				if sess.LatestToolCallingContext != nil && sess.LatestToolCallingType != nil {
+				latestCtx, latestTyp := sess.SnapshotLatest()
+				if len(latestCtx) != 0 {
 					var waitApproveSessionString strings.Builder
 					waitApproveSessionString.WriteString("---\n### ***[System]*** Waiting Approve Tools:\n```text")
-					for id := range sess.LatestToolCallingContext {
+					for id := range latestCtx {
 						stx := strings.SplitN(id, "_", 4)
 						s := ""
 						if len(stx) == 4 {
 							s = stx[3]
 						}
-						fmt.Fprintf(&waitApproveSessionString, "\n%s", fmt.Sprintf("[Call %s]%s", sess.LatestToolCallingType[id], s))
+						fmt.Fprintf(&waitApproveSessionString, "\n%s", fmt.Sprintf("[Call %s]%s", latestTyp[id], s))
 					}
 					waitApproveSessionString.WriteString("\n```\n> Using `/approve` command to approve or type anything else to reject.\n")
 					err = broadcastSessionUpdate(sessID, SessionUpdate{
@@ -1102,8 +1131,9 @@ func SessionLoad(req SessionLoadRequest, call func(string, any, *string) error, 
 				}
 			}
 		}
-		if sess.LatestToolCallingContext != nil && sess.LatestToolCallingType != nil {
-			for id, val := range sess.LatestToolCallingContext {
+		latestCtx, latestTyp := sess.SnapshotLatest()
+		if len(latestCtx) != 0 {
+			for id, val := range latestCtx {
 				stx := strings.SplitN(id, "_", 4)
 				s := ""
 				if len(stx) == 4 {
@@ -1114,9 +1144,9 @@ func SessionLoad(req SessionLoadRequest, call func(string, any, *string) error, 
 					Update: SessionUpdateUpdate{
 						SessionUpdate: "tool_call",
 						ToolCallID:    id,
-						Kind:          ToolNameToTypeMap[sess.LatestToolCallingType[id]],
+						Kind:          ToolNameToTypeMap[latestTyp[id]],
 						Status:        "pending",
-						Title:         fmt.Sprintf("[Call %s]%s", sess.LatestToolCallingType[id], s),
+						Title:         fmt.Sprintf("[Call %s]%s", latestTyp[id], s),
 						Content:       val,
 					},
 				}, 0)

@@ -42,6 +42,7 @@ type CodebaseDB struct {
 type DirStatus struct {
 	Directory    string `json:"directory"`
 	QueueLen     int    `json:"queue_len"`
+	TotalPushed  int    `json:"total_pushed"` // 累计入队任务数（用于进度计算）
 	WorkerActive bool   `json:"worker_active"`
 	Paused       bool   `json:"paused"`
 }
@@ -89,6 +90,10 @@ func AddToQueue(directory string, task EmbedTask) error {
 	if err != nil {
 		return err
 	}
+
+	// 确保 worker 在运行：/index cancel 或 StopDirectory 会停止 worker，
+	// 重新入队前需重启，否则任务无人消费、索引卡住（getOrCreateDB 只在创建时启动 worker）。
+	cdb.startWorker()
 
 	cdb.mu.RLock()
 	q := cdb.queue
@@ -169,6 +174,7 @@ func DirectoryStatus(directory string) *DirStatus {
 	}
 	if cdb.queue != nil {
 		status.QueueLen = cdb.queue.Len()
+		status.TotalPushed = cdb.queue.totalPushed
 	}
 	return status
 }
@@ -177,6 +183,12 @@ func DirectoryStatus(directory string) *DirStatus {
 
 // CleanDirectory 清空指定目录的 codebase 数据（删表重建，保留库文件）
 func CleanDirectory(directory string) error {
+	// 先取消正在进行的索引（RunIndex ctx + embedding worker + 队列）。
+	// 否则残留的 RunIndex 会继续入队并重建刚清空的数据，clean 等于没清干净。
+	if err := CancelIndex(directory); err != nil {
+		return fmt.Errorf("cancel index: %w", err)
+	}
+
 	cdb, err := getOrCreateDB(directory)
 	if err != nil {
 		return fmt.Errorf("get db: %w", err)
@@ -392,18 +404,33 @@ func getOrCreateDB(directory string) (*CodebaseDB, error) {
 	VecDBsLock.Unlock()
 
 	if embedModelCfg == nil {
-		if err := Initialize(); err != nil {
-			return nil, fmt.Errorf("codebase auto-init: %w", err)
-		}
+		// 无 embedding 模型时降级为 BM25-only 模式：Initialize() 失败不再中止。
+		// 后续索引只做内容入库（codebase_items + FTS，供 BM25 检索），跳过向量嵌入。
+		_ = Initialize()
+	}
+
+	var (
+		modelName, modelID, providerURL, providerKey string
+		dim                                          int
+	)
+	if embedModelCfg != nil {
+		modelName = embedModelCfg.ModelName
+		modelID = embedModelCfg.ModelID
+		providerURL = embedModelCfg.ProviderURL
+		providerKey = embedModelCfg.ProviderKey
+		dim = embedDim
+	}
+	if dim <= 0 {
+		dim = DefaultDim
 	}
 
 	cdb := &CodebaseDB{
 		directory:   directory,
-		modelName:   embedModelCfg.ModelName,
-		modelID:     embedModelCfg.ModelID,
-		dimension:   embedDim,
-		providerURL: embedModelCfg.ProviderURL,
-		providerKey: embedModelCfg.ProviderKey,
+		modelName:   modelName,
+		modelID:     modelID,
+		dimension:   dim,
+		providerURL: providerURL,
+		providerKey: providerKey,
 		queue:       NewQueueManager(),
 		logger:      log.New(fmt.Sprintf("codebase:%s", filepath.Base(directory))),
 	}
@@ -495,6 +522,14 @@ func (cdb *CodebaseDB) openDB() error {
 	if _, err := db.Exec("PRAGMA journal_mode=WAL"); err != nil {
 		db.Close()
 		return fmt.Errorf("pragma wal: %w", err)
+	}
+
+	// WAL 模式下用 NORMAL 同步级别：避免每条写入都 fsync 磁盘（FULL 下单条
+	// INSERT 可达 75ms，批量索引进度被拖慢百倍）。NORMAL 在崩溃时最多丢失
+	// 最近提交的事务，库文件不会损坏，索引数据可由 /index 重建，安全可接受。
+	if _, err := db.Exec("PRAGMA synchronous=NORMAL"); err != nil {
+		db.Close()
+		return fmt.Errorf("pragma synchronous: %w", err)
 	}
 
 	cdb.db = db

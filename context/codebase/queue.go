@@ -89,6 +89,9 @@ type QueueManager struct {
 	notify chan struct{}
 	paused bool
 	closed bool
+	// totalPushed 累计入队任务数（含后来追加的 extras 任务）。
+	// 用于进度计算：Processed = totalPushed - Len()，不受新任务追加影响。
+	totalPushed int
 }
 
 // NewQueueManager 创建新的队列管理器
@@ -106,6 +109,7 @@ func (qm *QueueManager) Push(task *EmbedTask) {
 		return
 	}
 
+	qm.totalPushed++
 	if task.Priority {
 		qm.queue.PushFront(task)
 	} else {
@@ -170,11 +174,12 @@ func (qm *QueueManager) Resume() {
 	}
 }
 
-// Clear 清空队列
+// Clear 清空队列并重置累计入队计数
 func (qm *QueueManager) Clear() {
 	qm.mu.Lock()
 	defer qm.mu.Unlock()
 	qm.queue.Init()
+	qm.totalPushed = 0
 }
 
 // Close 关闭队列，所有阻塞的 WaitPop 返回 nil

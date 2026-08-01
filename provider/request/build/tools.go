@@ -135,12 +135,11 @@ func ToolsSolver(session *structs.Chats, callback func(string, string, map[strin
 			Name: k,
 			Func: func(ID string, arg map[string]*any, ok bool) error {
 				if !ok {
-					// 流式解析期间工具对象尚未完整到达。仅当真正进入工具调用执行阶段
-					// （StateToolCalling，即已通过用户/规则审批）才执行 OnHook；
-					// 否则会以部分参数在审批之前重复执行 OnHook。
-					if session.State != state.StateToolCalling {
-						return nil
-					}
+					// 流式解析期间工具对象尚未完整到达（toolFinishTag=false）。
+					// 恢复增量流式：流式阶段（StateReciving）也执行 OnHook，把当前部分参数
+					// 写入 ToolCallingContext，由 server 层限流广播实时预览到前端。
+					// 所有内置工具 OnHook 均为纯展示（构造 calling_info，无命令/文件/子代理副作用），
+					// 以部分参数重复执行幂等无害；若未来 OnHook 引入真实副作用需重新评估。
 					session.CurrentToolID = fmt.Sprintf("call_%d_%d_%s", session.ID, session.CurrentMessageID, ID)
 					err := tools.ExecToolOnHook(session, toolKey, arg, ID)
 					if err != nil {

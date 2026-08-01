@@ -59,14 +59,14 @@ func IsEmbeddingConfigured() bool {
 func resolveModelFromCfg() (*structs.ModelConfig, error) {
 	cfg := config.GlobalConfigSafe()
 
-	// 先按 EmbeddingModelID 找
-	if cfg.Context.EmbeddingModelID != 0 {
-		if mc, ok := cfg.Model.Models[cfg.Context.EmbeddingModelID]; ok {
-			if mc.Type == structs.ModelTypeEmbedding {
-				return &mc, nil
-			}
-			logger.Warn("EmbeddingModelID %d type=%s, not embedding, searching...", cfg.Context.EmbeddingModelID, mc.Type)
+	// 先按 EmbeddingModelID 找。
+	// 注意 EmbeddingModelID 可为 0（Models 的 key 可能为 0），
+	// 因此不能以 `!= 0` 作为"是否配置"的判断，否则 ID=0 的 embedding 模型会被跳过。
+	if mc, ok := cfg.Model.Models[cfg.Context.EmbeddingModelID]; ok {
+		if mc.Type == structs.ModelTypeEmbedding {
+			return &mc, nil
 		}
+		logger.Warn("EmbeddingModelID %d type=%s, not embedding, searching...", cfg.Context.EmbeddingModelID, mc.Type)
 	}
 
 	// 遍历所有模型，找 Type=embedding 的

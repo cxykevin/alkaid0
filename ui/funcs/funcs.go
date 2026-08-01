@@ -263,9 +263,12 @@ func GetModelInfo(modelID int32) (cfgStructs.ModelConfig, error) {
 }
 
 // SelectModel 选择模型
+// 仅更新 last_model_id 单列。Save(session) 会让 GORM 反射遍历整个 Chats 对象
+// （含 contextHolder、State 等），若与 loop goroutine 并发修改会话字段会触发数据竞争。
 func SelectModel(session *structs.Chats, modelID int32) error {
 	session.LastModelID = uint32(modelID)
-	return session.DB.Save(&session).Error
+	return session.DB.Model(&structs.Chats{}).Where("id = ?", session.ID).
+		Update("last_model_id", session.LastModelID).Error
 }
 
 // SummarySession 汇总会话

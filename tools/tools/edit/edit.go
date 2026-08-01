@@ -111,8 +111,7 @@ func updateInfo(session *structs.Chats, mp map[string]*any, cross []*any, toolID
 			"text":   textVal,
 		},
 	}}
-	session.ToolCallingContext[toolCallID] = respObj
-	session.ToolCallingType[toolCallID] = "edit"
+	session.SetToolCalling(toolCallID, respObj, "edit")
 	return true, cross, nil
 }
 

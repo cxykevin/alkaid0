@@ -124,9 +124,13 @@ func (p *Object) Start(ctx context.Context) {
 		close(p.done)
 	})
 
+	// 初始化 ctx/ctxCancel 需加锁：Cancel() 可能在另一 goroutine（如 closeSession）
+	// 于 Start 尚未完成初始化时调用，裸读写会触发 data race。
 	var cancel context.CancelFunc
+	p.lock.Lock()
 	p.ctx, cancel = context.WithCancel(ctx)
 	p.ctxCancel = cancel
+	p.lock.Unlock()
 	defer cancel()
 	p.session.SetContext(p.ctx)
 
@@ -414,8 +418,7 @@ func (p *Object) Start(ctx context.Context) {
 			})
 			session.ToolState = 0
 
-			session.LatestToolCallingContext = make(map[string]any)
-			session.LatestToolCallingType = make(map[string]string)
+			session.ResetLatest()
 
 			// 显示 AI 响应
 			runResponseLoop()
@@ -442,8 +445,7 @@ func (p *Object) Start(ctx context.Context) {
 				}
 			}
 
-			session.LatestToolCallingContext = make(map[string]any)
-			session.LatestToolCallingType = make(map[string]string)
+			session.ResetLatest()
 
 			// 显示 AI 响应
 			runResponseLoop()
@@ -483,8 +485,12 @@ func (p *Object) Cancel() {
 	p.closeOnce.Do(func() {
 		close(p.done)
 	})
-	if p.ctxCancel != nil {
-		p.ctxCancel()
+	// ctxCancel 由 Start() 在 loop goroutine 中初始化，此处跨 goroutine 读取需加锁
+	p.lock.Lock()
+	cancel := p.ctxCancel
+	p.lock.Unlock()
+	if cancel != nil {
+		cancel()
 	}
 }
 

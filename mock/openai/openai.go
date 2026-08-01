@@ -339,7 +339,26 @@ func handleStreamingChatCompletion(w http.ResponseWriter, _ *http.Request, req C
 		responseText = responseText + "<think> This is a CoT string. </think> "
 	}
 
-	if strings.Contains(req.Model, "echo") && len(req.Messages) > 0 {
+	if strings.Contains(req.Model, "toolcall") {
+		// 增量工具调用流式响应：`strings.Fields` 按空格把 JSON 拆成多个 chunk，
+		// 参数逐 token 增量到达，用于验证工具调用增量流式广播。
+		// 若请求已含工具返回（<tools_return>，即上一轮工具已执行），改回普通文本，
+		// 避免 auto-approve 场景下工具调用无限循环。
+		toolReturned := false
+		for _, m := range req.Messages {
+			// 工具结果以 user 角色消息回传（build 的 ToolResponseWrapTemplate 含 <tools_return> 标签）；
+			// 仅检查 user 消息，避免 system 提示词里的 <tools_return> 字样误判
+			if m.Role == "user" && strings.Contains(m.Content, "<tools_return>") {
+				toolReturned = true
+				break
+			}
+		}
+		if toolReturned {
+			responseText += fmt.Sprintf("This is a mock response from model %s. Tool executed.", req.Model)
+		} else {
+			responseText += `<tools> [ {"name": "edit", "id": "tid", "parameters": {"path": "a.txt", "target": "x", "text": "hello"}} ] </tools>`
+		}
+	} else if strings.Contains(req.Model, "echo") && len(req.Messages) > 0 {
 		if strings.Contains(req.Messages[len(req.Messages)-1].Content, "<|show_full_messages|>") {
 			for _, v := range req.Messages {
 				responseText += fmt.Sprintf("---- role: %s ----\n%s\n\n", v.Role, v.Content)

@@ -78,6 +78,22 @@ alkaid0 支持 **同一会话被多个客户端链接**。对于多客户端的�
 
 客户端可据此刷新会话列表展示。
 
+### 2.6. `alk.cxykevin.top/tool_call_streaming`
+
+AI 流式生成工具调用（`<tools>` JSON 数组）期间的**增量预览事件**（非 ACP 标准，仅 alkaid0 私有扩展）。
+
+- `toolCallId` ***string***: 工具调用 ID（`call_<sessionID>_<messageID>_<toolID>`）。
+- `kind` ***string***: 工具类型（`edit`/`read`/`execute`/`other`）。
+- `status` ***string***: 恒为 `streaming`（表示解析中）。
+- `title` ***string***: 形如 `[Call edit]<toolID>`。
+- `content` ***array***: 与标准 `tool_call` 同构，`alk.cxykevin.top/calling_info` 块的 `args` 为**当前已解析的部分参数**（含未完成的 `StringSlot`/`ObjectSlot` 占位），可实时"打字"渲染。
+
+触发时机与语义：
+
+- AI 每输出 token 增量解析工具调用 JSON，服务端 **0.1s 限流**推送一次完整快照（内网/127 回环部署，粒度足够实时）。
+- 客户端按 `toolCallId` **upsert**（覆盖渲染），参数随解析逐步完整。
+- **最终以标准 `tool_call` 事件为准**（审批后 `completed`/`pending`/`cancelled`），`streaming` 仅为解析中的实时预览，不保证最终参数一致。
+
 ## 3. 方法扩展
 
 ### 3.1. `session/set_model` `session/setModel` `unstable_setSessionModel`

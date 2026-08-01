@@ -124,10 +124,14 @@ var commandMaps = map[string]*cmdObj{
 				status := codebase.GetIndexStatus(obj.cwd)
 				r := "No index in progress."
 				if status != nil {
-					r = fmt.Sprintf("Indexing: **%s** | %d/%d processed | %d remaining | current: %s",
-						status.Status, status.Processed, status.Total, status.Remaining, status.CurrentFile)
-					if status.Error != "" {
-						r += fmt.Sprintf("\nError: %s", status.Error)
+					switch status.Status {
+					case "completed":
+						r = fmt.Sprintf("Index: **completed** | %d items indexed.", status.Processed)
+					case "error":
+						r = fmt.Sprintf("Index: **error** | %s", status.Error)
+					default:
+						r = fmt.Sprintf("Indexing: **%s** | %d/%d processed | %d remaining | current: %s",
+							status.Status, status.Processed, status.Total, status.Remaining, status.CurrentFile)
 					}
 				}
 				_ = broadcastSessionUpdate(sessionID, SessionUpdate{

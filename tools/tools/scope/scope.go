@@ -75,8 +75,7 @@ func updateInfo(session *structs.Chats, mp map[string]*any, cross []*any, toolID
 			"disable": disable,
 		},
 	}}
-	session.ToolCallingContext[toolCallID] = respObj
-	session.ToolCallingType[toolCallID] = "scope"
+	session.SetToolCalling(toolCallID, respObj, "scope")
 	return true, cross, nil
 }
 

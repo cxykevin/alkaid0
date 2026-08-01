@@ -96,8 +96,7 @@ func updateInfo(session *structs.Chats, mp map[string]*any, cross []*any, toolID
 			"untrace": untraceVal,
 		},
 	}}
-	session.ToolCallingContext[toolCallID] = respObj
-	session.ToolCallingType[toolCallID] = "trace"
+	session.SetToolCalling(toolCallID, respObj, "trace")
 	return true, cross, nil
 }
 

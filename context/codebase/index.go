@@ -42,7 +42,9 @@ var indexCancelsMu sync.Mutex
 var currentIndexStatuses = make(map[string]IndexStatus)
 var currentIndexStatusesMu sync.Mutex
 
-// GetIndexStatus 返回指定目录当前索引进度，nil 表示未在索引
+// GetIndexStatus 返回指定目录的索引状态。
+// 索引进行中返回实时进度；索引完成后保留最终状态（completed/error）。
+// nil 表示该目录从未索引过。
 func GetIndexStatus(directory string) *IndexStatus {
 	absPath, err := filepath.Abs(directory)
 	if err != nil {
@@ -57,19 +59,24 @@ func GetIndexStatus(directory string) *IndexStatus {
 	return &status
 }
 
-// CancelIndex 取消指定目录正在进行的索引
+// CancelIndex 取消指定目录正在进行的索引。
+// 除取消 RunIndex 的 ctx（停止扫描与进度轮询）外，还停止 embedding worker
+// 并清空队列——否则 worker 在 context.Background() 上独立运行，
+// 会继续消费队列调用嵌入 API，导致 cancel 后 embedding 仍在跑。
 func CancelIndex(directory string) error {
 	absPath, err := filepath.Abs(directory)
 	if err != nil {
 		return err
 	}
 	indexCancelsMu.Lock()
-	defer indexCancelsMu.Unlock()
 	if cancel, ok := indexCancels[absPath]; ok {
 		cancel()
 		delete(indexCancels, absPath)
 	}
-	return nil
+	indexCancelsMu.Unlock()
+
+	// 停止 worker + 清空队列（含未消费任务），终止后续 embedding 处理
+	return StopDirectory(directory)
 }
 
 // ---------------------------------------------------------------------------
@@ -690,9 +697,8 @@ func RunIndex(ctx context.Context, cwd string, broadcastFn func(IndexStatus)) er
 		indexingLocksMu.Lock()
 		delete(indexingLocks, absCwd)
 		indexingLocksMu.Unlock()
-		currentIndexStatusesMu.Lock()
-		delete(currentIndexStatuses, absCwd)
-		currentIndexStatusesMu.Unlock()
+		// 不删除 currentIndexStatuses：保留最终状态（completed/error/进度），
+		// 供 /index status 查询最近一次索引结果。下次索引启动时会覆盖。
 	}()
 
 	// 包装 broadcastFn，同时保存最新状态供 /index status 查询
@@ -841,20 +847,26 @@ func RunIndex(ctx context.Context, cwd string, broadcastFn func(IndexStatus)) er
 			Status:      "indexing",
 		})
 
+		// 文件级 hash 比对：文件内容未变则跳过整个文件（不跑 LSP、不入队）。
+		// 自动索引多为增量场景（大部分文件未变），提前比对可省去这些文件的
+		// LSP 提取与 gopls CPU 占用。文件内容不变则符号级内容也不变，
+		// 符号级 hash 比对可安全跳过。
+		content := string(f.content)
+		if same, _ := CheckContentHash(cwd, f.relPath, "", content); same {
+			continue
+		}
+
 		// 尝试 LSP 提取符号
 		symbols, lspErr := lsp.GetSymbols(cwd, f.path)
 		if lspErr != nil || len(symbols) == 0 {
-			// LSP 不可用或文件无符号：索引整个文件（hash 未变则跳过）
-			embedText := string(f.content)
-			if same, _ := CheckContentHash(cwd, f.relPath, "", embedText); !same {
-				_ = AddToQueue(cwd, EmbedTask{
-					EmbedText:   embedText,
-					FullContent: string(f.content),
-					FilePath:    f.relPath,
-					Symbol:      "",
-					Tags:        []string{"file"},
-				})
-			}
+			// LSP 不可用或文件无符号：索引整个文件（文件级 hash 已在上方比对）
+			_ = AddToQueue(cwd, EmbedTask{
+				EmbedText:   content,
+				FullContent: content,
+				FilePath:    f.relPath,
+				Symbol:      "",
+				Tags:        []string{"file"},
+			})
 			continue
 		}
 
@@ -884,17 +896,15 @@ func RunIndex(ctx context.Context, cwd string, broadcastFn func(IndexStatus)) er
 			}
 		}
 
-		// 同时索引整个文件（全局语义搜索兜底，hash 未变则跳过）
-		embedTextAll := string(f.content)
-		if same, _ := CheckContentHash(cwd, f.relPath, "", embedTextAll); !same {
-			_ = AddToQueue(cwd, EmbedTask{
-				EmbedText:   embedTextAll,
-				FullContent: string(f.content),
-				FilePath:    f.relPath,
-				Symbol:      "",
-				Tags:        []string{"file"},
-			})
-		}
+		// 同时索引整个文件（全局语义搜索兜底）。
+		// 文件已确认变化（上方文件级比对通过），整文件记录需更新，直接入队。
+		_ = AddToQueue(cwd, EmbedTask{
+			EmbedText:   content,
+			FullContent: content,
+			FilePath:    f.relPath,
+			Symbol:      "",
+			Tags:        []string{"file"},
+		})
 	}
 
 	// 删除已被移除的文件对应的索引条目
@@ -914,32 +924,40 @@ func RunIndex(ctx context.Context, cwd string, broadcastFn func(IndexStatus)) er
 			Status:    "embedding",
 		})
 		// 后台轮询队列进度直到完成。
-		// 绑定 RunIndex 的 ctx（可被 /index cancel 取消），并在退出时清理进度状态，
-		// 避免 RunIndex 返回后 goroutine 仍存活、重插已删除的状态（goroutine 泄漏）。
+		// 绑定 RunIndex 的 ctx（可被 /index cancel 取消）。
+		// 结束时不删除 currentIndexStatuses，保留完成的进度状态供 /index status 查询。
 		go func() {
-			defer func() {
-				currentIndexStatusesMu.Lock()
-				delete(currentIndexStatuses, absCwd)
-				currentIndexStatusesMu.Unlock()
-			}()
 			for {
 				select {
 				case <-ctx.Done():
+					// 索引被 /index cancel 取消：广播明确状态，避免 status 停留在
+					// 最后一次 embedding 进度（看起来像卡住）。
+					broadcastFn(IndexStatus{
+						Status: "error",
+						Error:  "cancelled",
+					})
 					return
 				case <-time.After(500 * time.Millisecond):
 				}
 				ds := DirectoryStatus(cwd)
+				// 用累计入队数（totalPushed）而非固定的 initQueueLen 计算进度。
+				// RunIndex 返回后 indexTempfsAndChatHistory 会继续追加任务，
+				// 固定基准会让 Processed=initQueueLen-QueueLen 变负、Remaining 超总数。
+				total := ds.TotalPushed
+				if total <= 0 {
+					total = initQueueLen // 兜底
+				}
 				if ds.QueueLen == 0 {
 					broadcastFn(IndexStatus{
-						Total:     initQueueLen,
-						Processed: initQueueLen,
+						Total:     total,
+						Processed: total,
 						Status:    "completed",
 					})
 					return
 				}
 				broadcastFn(IndexStatus{
-					Total:     initQueueLen,
-					Processed: initQueueLen - ds.QueueLen,
+					Total:     total,
+					Processed: total - ds.QueueLen,
 					Remaining: ds.QueueLen,
 					Status:    "embedding",
 				})

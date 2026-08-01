@@ -135,8 +135,7 @@ func updateAgentInfo(session *structs.Chats, mp map[string]*any, cross []*any, t
 			"delete": deleteVal,
 		},
 	}}
-	session.ToolCallingContext[toolCallID] = respObj
-	session.ToolCallingType[toolCallID] = "agent"
+	session.SetToolCalling(toolCallID, respObj, "agent")
 
 	return true, cross, nil
 }
@@ -175,8 +174,7 @@ func updateInfo(session *structs.Chats, mp map[string]*any, cross []*any, toolID
 			"prompt": promptVal,
 		},
 	}}
-	session.ToolCallingContext[toolCallID] = respObj
-	session.ToolCallingType[toolCallID] = currToolName
+	session.SetToolCalling(toolCallID, respObj, currToolName)
 	// editAgent 处理子代理的创建或更新操作
 	return true, cross, nil
 }

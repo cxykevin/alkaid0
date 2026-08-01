@@ -935,6 +935,9 @@ func SendRequest(ctx context.Context, session *storageStructs.Chats, callback fu
 
 	// 有工具调用时转入审批等待状态，暂停回复处理直到用户或自动规则做出决定
 	if len(tools) > 0 {
+		// 清空流式增量阶段可能被限流跳过的最后残留（最后一次 OnHook 写但未广播）。
+		// 审批展示走 DB 的 tool_calling_json_string，审批通过后 ExecuteToolCalls 会重新写入。
+		session.ClearToolCalling()
 		session.State = state.StateWaitApprove
 		if saveErr := db.Save(session).Error; saveErr != nil {
 			return true, saveErr
