@@ -225,10 +225,15 @@ func RequestBody(chatID uint32, modelID int32, agentCode string, toolsList *[]*p
 		systemContent += prompts.DefaultAgent + "\n\n"
 	}
 
-	// 4. 工具使用指引
+	// 4. 工具使用指引（永远拼接两次；第二次由增强开关决定：基础版或增强段）
 	systemContent += prompts.Tools + "\n\n"
-	// 重复追加可增强模型对工具的理解
-	systemContent += prompts.Tools + "\n\n"
+	// 4b. 反幻觉增强段（ProviderSpecificConfig.ToolPromptEnhance 控制；
+	// auto 下 GPT/Claude 系模型 id 命中免增强名单时回退为基础版）
+	if enhance := ToolPromptEnhanceBlock(modelConfig); enhance != "" {
+		systemContent += enhance + "\n\n"
+	} else {
+		systemContent += prompts.Tools + "\n\n"
+	}
 
 	// 5. 工具列表
 	toolsRendered, err := prompts.Render(prompts.ToolsWrapTemplate, struct {

@@ -41,6 +41,11 @@ var Summary string
 //go:embed prompts/summary_wrap.md
 var SummaryWrap string
 
+// ToolEnhance 工具调用增强提示词
+//
+//go:embed prompts/tool_enhance.md
+var ToolEnhance string
+
 // ToolPrehook 工具预调用提示词生成器
 //
 //go:embed prompts/tool_prehook.md
@@ -66,7 +71,7 @@ var Tools string
 //go:embed prompts/tools_wrap.md
 var ToolsWrap string
 
-// UserReject <user reject last tools calling>
+// UserReject <| user reject last tools calling |>
 //
 //go:embed prompts/user_reject.md
 var UserReject string
@@ -97,6 +102,9 @@ var SummaryTemplate *template.Template
 // SummaryWrap 对于不支持思考的模型的思考占位符模板
 var SummaryWrapTemplate *template.Template
 
+// ToolEnhance 工具调用增强提示词模板
+var ToolEnhanceTemplate *template.Template
+
 // ToolPrehook 工具预调用提示词生成器模板
 var ToolPrehookTemplate *template.Template
 
@@ -112,7 +120,7 @@ var ToolsTemplate *template.Template
 // ToolsWrap 工具占位符模板
 var ToolsWrapTemplate *template.Template
 
-// UserReject <user reject last tools calling>模板
+// UserReject <| user reject last tools calling |>模板
 var UserRejectTemplate *template.Template
 
 // UserWrap 用户提示词模板
@@ -126,6 +134,7 @@ func initTemplates() {
 	SubagentWrapTemplate = Load("SubagentWrap", SubagentWrap)
 	SummaryTemplate = Load("Summary", Summary)
 	SummaryWrapTemplate = Load("SummaryWrap", SummaryWrap)
+	ToolEnhanceTemplate = Load("ToolEnhance", ToolEnhance)
 	ToolPrehookTemplate = Load("ToolPrehook", ToolPrehook)
 	ToolResponseWrapTemplate = Load("ToolResponseWrap", ToolResponseWrap)
 	ToolScopesTemplate = Load("ToolScopes", ToolScopes)

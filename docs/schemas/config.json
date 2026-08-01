@@ -161,6 +161,12 @@
                                         "description": "嵌入模型向量维度（嵌入模型必填）",
                                         "minimum": 0,
                                         "default": 0
+                                    },
+                                    "ToolPromptEnhance": {
+                                        "type": "string",
+                                        "description": "工具调用反幻觉增强提示词开关：auto(默认,启用；模型id命中 gpt/sol/luna/terra/claude/fable/sonnet/haiku/opus 时自动免增强) / on(强制启用) / off(强制关闭)",
+                                        "enum": ["auto", "on", "off"],
+                                        "default": "auto"
                                     }
                                 }
                             }

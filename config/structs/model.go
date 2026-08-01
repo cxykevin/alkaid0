@@ -12,13 +12,14 @@ const (
 
 // ProviderSpecificConfig 特定模型提供方配置结构
 type ProviderSpecificConfig struct {
-	EnableDeepseekThinking bool `default:"false"`
-	EnableReasoningEffort  bool `default:"true"`
-	EnableTopP             bool `default:"false"`
-	EnableTemperature      bool `default:"false"`
-	EnableTopK             bool `default:"false"`
-	EnableUsage            bool `default:"true"`
-	Dimension              int  `default:"0"` // Embedding 模型维度, 嵌入模型必填
+	EnableDeepseekThinking bool   `default:"false"`
+	EnableReasoningEffort  bool   `default:"true"`
+	EnableTopP             bool   `default:"false"`
+	EnableTemperature      bool   `default:"false"`
+	EnableTopK             bool   `default:"false"`
+	EnableUsage            bool   `default:"true"`
+	Dimension              int    `default:"0"`    // Embedding 模型维度, 嵌入模型必填
+	ToolPromptEnhance      string `default:"auto"` // 工具提示词增强: auto(默认,启用) / on(强制启用) / off(强制关闭)
 }
 
 // ModelConfig 单个模型配置结构
