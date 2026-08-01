@@ -41,6 +41,11 @@ var Summary string
 //go:embed prompts/summary_wrap.md
 var SummaryWrap string
 
+// Title 标题生成提示词
+//
+//go:embed prompts/title.md
+var Title string
+
 // ToolEnhance 工具调用增强提示词
 //
 //go:embed prompts/tool_enhance.md
@@ -102,6 +107,9 @@ var SummaryTemplate *template.Template
 // SummaryWrap 对于不支持思考的模型的思考占位符模板
 var SummaryWrapTemplate *template.Template
 
+// Title 标题生成提示词模板
+var TitleTemplate *template.Template
+
 // ToolEnhance 工具调用增强提示词模板
 var ToolEnhanceTemplate *template.Template
 
@@ -134,6 +142,7 @@ func initTemplates() {
 	SubagentWrapTemplate = Load("SubagentWrap", SubagentWrap)
 	SummaryTemplate = Load("Summary", Summary)
 	SummaryWrapTemplate = Load("SummaryWrap", SummaryWrap)
+	TitleTemplate = Load("Title", Title)
 	ToolEnhanceTemplate = Load("ToolEnhance", ToolEnhance)
 	ToolPrehookTemplate = Load("ToolPrehook", ToolPrehook)
 	ToolResponseWrapTemplate = Load("ToolResponseWrap", ToolResponseWrap)

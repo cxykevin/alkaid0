@@ -33,7 +33,8 @@ type Chats struct {
 	Root            string
 	TraceID         uint64
 	State           state.State
-	Title           string
+	Title           string // 用户设置的标题（/title 命令写入）
+	AITitle         string // AI 生成的标题（自动生成/compress 重生成写入）
 	ReasoningEffort string
 	// === 会话过程参数 ===
 	contextHolder            *contextHolder      `gorm:"-" json:"-"`

@@ -102,7 +102,9 @@ func SessionPrompt(req SessionPromptRequest, call func(string, any, *string) err
 	var wait = true
 	err = nil
 
-	if len(userMessage.String()) >= 1 && userMessage.String()[0:1] == "/" {
+	// isCommand 标记本 turn 是否为斜杠命令轮（命令轮不算正常请求，不触发 AI 标题生成）
+	isCommand := strings.HasPrefix(userMessage.String(), "/")
+	if isCommand {
 		cmds := strings.SplitN(userMessage.String(), " ", 2)
 		cmdArgs := ""
 		if len(cmds) == 0 {
@@ -168,6 +170,13 @@ func SessionPrompt(req SessionPromptRequest, call func(string, any, *string) err
 			},
 		},
 	}, 0)
+
+	// 自动标题：首次正常请求完整响应后异步生成 AI 标题（命令轮不触发；
+	// 用户已设置手动标题或已有 AI 标题时不重复生成）
+	if !isCommand && ret.StopReason == "end_turn" && ret.ErrorMsg == nil &&
+		sessObj.session.Title == "" && sessObj.session.AITitle == "" {
+		generateTitle(sessObj.session, req.SessionID, false)
+	}
 
 	// 返回停止原因
 	return SessionPromptResponse{

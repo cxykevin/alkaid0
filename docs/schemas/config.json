@@ -264,6 +264,10 @@
                     "type": "integer",
                     "description": "用于对话摘要的模型ID"
                 },
+                "TitleModel": {
+                    "type": "integer",
+                    "description": "用于生成会话标题的模型ID，未设置或为 0 时回退到 Model.DefaultModelID"
+                },
                 "MaxCallCount": {
                     "type": "integer",
                     "description": "单次会话最大调用次数",

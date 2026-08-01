@@ -66,6 +66,18 @@ alkaid0 支持 **同一会话被多个客户端链接**。对于多客户端的�
 
 > 摘要若出现异常则直接停止 loop 并在 loop 级别报错。
 
+### 2.5. `alk.cxykevin.top/session_title`
+
+- `title` ***string***: 会话最终展示标题（用户设置的标题优先，其次 AI 生成的标题）。
+
+触发时机：
+
+- 首次正常请求（非 `/` 斜杠命令）完整响应后，服务端异步生成 AI 标题并写入 `Chats.AITitle`。
+- `/title` 命令设置或还原用户标题（`Chats.Title`）时。
+- 自动/手动 compress 完成后重生成 AI 标题（用户已设置手动标题时跳过）。
+
+客户端可据此刷新会话列表展示。
+
 ## 3. 方法扩展
 
 ### 3.1. `session/set_model` `session/setModel` `unstable_setSessionModel`

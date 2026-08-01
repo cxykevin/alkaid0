@@ -519,6 +519,11 @@ func loadSession(cwd string, id *uint32, knowID bool) (*structs.Chats, error) {
 				if err != nil {
 					logger.Warn("failed to broadcast session update: %v", err)
 				}
+				// compress 完成后重生成 AI 标题（用户已设置手动标题则跳过）。
+				// 自动 compress（doAutoSummary）与 /compress 命令都汇聚于此分支。
+				if resp.SummaryText != "" && sess.Title == "" {
+					generateTitle(sess, sessID, true)
+				}
 			}
 
 			toolStatus := "pending"
@@ -1492,14 +1497,18 @@ func SessionList(req SessionListRequest, call func(string, any, *string) error, 
 
 	sess := make([]SessionInfo, len(chats))
 	for idx, chat := range chats {
+		// 展示回退链：用户设置的标题 → AI 生成的标题 → Untitled(N)
 		tit := chat.Title
+		if tit == "" {
+			tit = chat.AITitle
+		}
 		if tit == "" {
 			tit = fmt.Sprintf("Untitled(%d)", chat.ID)
 		}
 		sess[idx] = SessionInfo{
 			SessionID: cwd2SessionID(req.Cwd, chat.ID),
 			Cwd:       req.Cwd,
-			Title:     chat.Title,
+			Title:     tit,
 		}
 	}
 

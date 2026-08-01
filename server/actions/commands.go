@@ -185,6 +185,13 @@ var commandMaps = map[string]*cmdObj{
 			return false, nil
 		},
 	},
+	"/title": {
+		Description: "Set the conversation title, or reset it (no args) to fall back to the AI-generated title",
+		Hint:        "[title text]",
+		Function: func(obj *sessionObj, arg string) (bool, error) {
+			return false, titleCommand(obj, strings.TrimSpace(arg))
+		},
+	},
 	"/version": {
 		Description: "Show Alkaid0 version information",
 		Hint:        "(no args)",

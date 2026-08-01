@@ -19,6 +19,7 @@ type AgentsConfig struct {
 	IgnoreBuiltinAgents     bool   `default:"false"`
 	GlobalPrompt            string `default:""`
 	SummaryModel            int32
+	TitleModel              int32  // 标题生成模型编号（0 表示回退 DefaultModelID，与 SummaryModel 一致）
 	MaxCallCount            int32  `default:"50"`
 	DefaultAutoApprove      string `default:"" json:"AutoApprove"` // 全局默认自动批准表达式
 	DefaultAutoReject       string `default:"" json:"AutoReject"`  // 全局默认自动拒绝表达式
