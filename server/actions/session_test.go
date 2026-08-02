@@ -3,13 +3,16 @@ package actions
 import (
 	"context"
 	"fmt"
+	"path"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/cxykevin/alkaid0/config"
 	cfgStructs "github.com/cxykevin/alkaid0/config/structs"
+	"github.com/cxykevin/alkaid0/storage"
 	"github.com/cxykevin/alkaid0/storage/structs"
+	"github.com/cxykevin/alkaid0/ui/funcs"
 	"github.com/cxykevin/alkaid0/ui/loop"
 	"github.com/cxykevin/alkaid0/ui/state"
 )
@@ -325,6 +328,117 @@ func TestSessionIDFormat(t *testing.T) {
 	if parsedID != id {
 		t.Errorf("id mismatch: got %d, want %d", parsedID, id)
 	}
+}
+
+// TestParseSessionID 测试纯字符串会话ID解析（session/load 冷还原专用）
+func TestParseSessionID(t *testing.T) {
+	tests := []struct {
+		name      string
+		sessionID string
+		wantCwd   string
+		wantID    uint32
+		wantErr   bool
+	}{
+		{name: "有效的会话ID", sessionID: "sess_123:/tmp/test", wantCwd: "/tmp/test", wantID: 123},
+		{name: "空字符串", sessionID: "", wantErr: true},
+		{name: "缺冒号", sessionID: "sess_123tmp", wantErr: true},
+		{name: "缺sess_前缀", sessionID: "123:/tmp/test", wantErr: true},
+		{name: "前缀后无数字", sessionID: "sess_:/tmp/test", wantErr: true},
+		{name: "id非数字", sessionID: "sess_abc:/tmp/test", wantErr: true},
+		{name: "id超出uint32", sessionID: "sess_4294967296:/tmp/test", wantErr: true},
+		{name: "cwd为空", sessionID: "sess_123:", wantErr: true},
+		{name: "cwd包含冒号", sessionID: "sess_123:/tmp:test", wantCwd: "/tmp:test", wantID: 123},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cwd, id, err := parseSessionID(tt.sessionID)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("parseSessionID() error = %v, wantErr %v", err, tt.wantErr)
+				return
+			}
+			if !tt.wantErr {
+				if cwd != tt.wantCwd {
+					t.Errorf("parseSessionID() cwd = %v, want %v", cwd, tt.wantCwd)
+				}
+				if id != tt.wantID {
+					t.Errorf("parseSessionID() id = %v, want %v", id, tt.wantID)
+				}
+			}
+		})
+	}
+}
+
+// TestSessionLoadColdRestore 冷还原：内存注册表为空（模拟服务器重启）时，
+// session/load 应能从磁盘数据库恢复已存在的会话；不存在的会话应报错且不注册。
+func TestSessionLoadColdRestore(t *testing.T) {
+	// 备份并清空全局注册表，模拟服务器冷启动
+	oldSessions := sessions
+	oldDbs := dbs
+	oldBinded := bindedSessionOnConn
+	oldConnCall := connCallMap
+	oldSessionConn := sessionConnMap
+	sessions = map[string]*sessionObj{}
+	dbs = map[string]*dbObj{}
+	bindedSessionOnConn = map[uint64][]string{}
+	connCallMap = map[uint64]func(string, any, *string) error{}
+	sessionConnMap = map[string][]uint64{}
+	defer func() {
+		sessLock.Lock()
+		sessions = oldSessions
+		dbs = oldDbs
+		sessLock.Unlock()
+		bindedSessionOnConn = oldBinded
+		connCallMap = oldConnCall
+		sessionConnMap = oldSessionConn
+	}()
+
+	// buildModelList / buildConfigOptions 依赖 config.GlobalConfig
+	if config.GlobalConfig == nil {
+		config.GlobalConfigSwap(cfgStructs.Config{})
+	}
+
+	tmpDir := t.TempDir()
+	db, err := storage.InitStorage(path.Join(tmpDir, ".alkaid0"), "")
+	if err != nil {
+		t.Fatalf("InitStorage failed: %v", err)
+	}
+	id, err := funcs.CreateChat(db)
+	if err != nil {
+		t.Fatalf("CreateChat failed: %v", err)
+	}
+	sessionID := cwd2SessionID(tmpDir, id)
+
+	// 安全的 call 接收函数（SessionLoad 会用它做历史回放与广播）
+	call := func(string, any, *string) error { return nil }
+
+	t.Run("存在的会话可冷还原", func(t *testing.T) {
+		_, err := SessionLoad(SessionLoadRequest{Cwd: tmpDir, SessionID: sessionID}, call, 1)
+		if err != nil {
+			t.Fatalf("cold restore SessionLoad failed: %v", err)
+		}
+		sessLock.Lock()
+		_, ok := sessions[sessionID]
+		sessLock.Unlock()
+		if !ok {
+			t.Error("session should be registered after cold restore")
+		}
+		closeSession(sessionID)
+	})
+
+	t.Run("不存在的会话ID报错且不注册", func(t *testing.T) {
+		missingSessionID := cwd2SessionID(tmpDir, id+1000)
+		_, err := SessionLoad(SessionLoadRequest{Cwd: tmpDir, SessionID: missingSessionID}, call, 1)
+		if err == nil {
+			t.Fatal("SessionLoad with nonexistent session should fail")
+		}
+		sessLock.Lock()
+		_, ok := sessions[missingSessionID]
+		sessLock.Unlock()
+		if ok {
+			t.Error("nonexistent session should not be registered")
+		}
+	})
 }
 
 // TestSessionSetConfigOptionValidation 测试SessionSetConfigOption的参数验证

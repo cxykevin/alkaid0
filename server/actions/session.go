@@ -263,6 +263,34 @@ func sessionID2Cwd(sessionID string) (string, uint32, error) {
 	return obj.cwd, obj.id, nil
 }
 
+// parseSessionID 从会话ID字符串中安全解析出工作目录和会话ID（纯字符串解析，不查内存注册表）。
+// 仅供 session/load 冷还原使用：服务器重启后内存注册表为空，需从客户端提供的 sessionId 恢复
+// cwd+id，再交由 loadSession 打开对应数据库并 QueryChat 验证会话真实存在，验证通过后才注册进
+// 内存注册表。与 sessionID2Cwd 的区别：后者以内存注册表为准（防止伪造 cwd 绕过沙箱），
+// parseSessionID 本身不授权任何操作，其解析结果必须经过数据库校验后方可使用。
+func parseSessionID(sessionID string) (string, uint32, error) {
+	if sessionID == "" {
+		return "", 0, fmt.Errorf("session id is empty")
+	}
+	s := strings.SplitN(sessionID, ":", 2)
+	if len(s) != 2 || !strings.HasPrefix(s[0], "sess_") {
+		return "", 0, fmt.Errorf("invalid session id")
+	}
+	idStr := strings.TrimPrefix(s[0], "sess_")
+	if idStr == "" {
+		return "", 0, fmt.Errorf("invalid session id")
+	}
+	num, err := strconv.ParseUint(idStr, 10, 32)
+	if err != nil {
+		return "", 0, fmt.Errorf("invalid session id")
+	}
+	cwd := s[1]
+	if cwd == "" {
+		return "", 0, fmt.Errorf("invalid session id")
+	}
+	return cwd, uint32(num), nil
+}
+
 // registerConnCall 注册连接的call函数和会话绑定
 // 新连接绑定到会话时，会自动取消任何待处理的延迟释放定时器
 func registerConnCall(connID uint64, sessionID string, callFunc func(string, any, *string) error) {
@@ -1012,7 +1040,14 @@ func SessionLoad(req SessionLoadRequest, call func(string, any, *string) error, 
 	req.Cwd = path.Clean(req.Cwd)
 	cwd, sid, err := sessionID2Cwd(req.SessionID)
 	if err != nil {
-		return SessionLoadResponse{}, err
+		// 冷还原：服务器重启后内存注册表为空（sessionID2Cwd 报 session not found），
+		// 回退到从 sessionId 字符串解析 cwd+id，由 loadSession 打开对应数据库并
+		// QueryChat 验证会话真实存在，验证通过后注册进内存。解析失败则返回原始错误。
+		var perr error
+		cwd, sid, perr = parseSessionID(req.SessionID)
+		if perr != nil {
+			return SessionLoadResponse{}, err
+		}
 	}
 	if cwd != req.Cwd {
 		return SessionLoadResponse{}, fmt.Errorf("cwd not match")
