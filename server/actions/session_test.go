@@ -10,6 +10,7 @@ import (
 
 	"github.com/cxykevin/alkaid0/config"
 	cfgStructs "github.com/cxykevin/alkaid0/config/structs"
+	"github.com/cxykevin/alkaid0/context/codebase"
 	"github.com/cxykevin/alkaid0/storage"
 	"github.com/cxykevin/alkaid0/storage/structs"
 	"github.com/cxykevin/alkaid0/ui/funcs"
@@ -405,6 +406,12 @@ func TestSessionLoadColdRestore(t *testing.T) {
 	}
 
 	tmpDir := t.TempDir()
+	// loadSession 的异步索引 goroutine（codebase.RunIndex）会打开 codebase.sqlite 且
+	// 数据库连接常驻。Windows 上 TempDir 自动清理时无法删除被占用文件，导致测试
+	// 误报 FAIL。注册清理在目录删除前关闭该目录的 codebase 数据库。
+	t.Cleanup(func() {
+		_ = codebase.CloseDirectory(tmpDir)
+	})
 	db, err := storage.InitStorage(path.Join(tmpDir, ".alkaid0"), "")
 	if err != nil {
 		t.Fatalf("InitStorage failed: %v", err)

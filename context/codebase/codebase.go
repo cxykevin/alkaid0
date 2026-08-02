@@ -474,6 +474,14 @@ func getOrCreateDB(directory string) (*CodebaseDB, error) {
 	return cdb, nil
 }
 
+// CloseDirectory 关闭指定目录的 CodebaseDB（停止 worker 并关闭数据库连接）。
+// 导出供 server/actions 测试等外部调用：loadSession 的异步索引 goroutine 会打开
+// codebase.sqlite 且连接常驻，Windows 上 TempDir 清理时无法删除被占用文件，
+// 需在删除前显式关闭。
+func CloseDirectory(directory string) error {
+	return closeDirectory(directory)
+}
+
 // closeDirectory 关闭指定目录的 CodebaseDB
 func closeDirectory(directory string) error {
 	VecDBsLock.Lock()
