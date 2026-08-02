@@ -466,18 +466,6 @@ func loadSession(cwd string, id *uint32, knowID bool) (*structs.Chats, error) {
 			logger.Warn("codebase init: %v (continuing without codebase)", err)
 		}
 
-		// 后台启动 codebase 索引。
-		// 无 embedding 模型时 RunIndex 自动降级为 BM25-only（仅建立全文索引，不嵌向量），
-		// 因此这里不再以 IsEmbeddingConfigured 守卫。
-		// indexDone 在 goroutine 完成后关闭，供测试等待异步索引结束（见 TestSessionLoadColdRestore）。
-		go func() {
-			defer close(obj.indexDone)
-			if err := codebase.RunIndex(context.Background(), cwd, nil); err != nil {
-				logger.Debug("auto index: %v", err)
-			}
-			indexTempfsAndChatHistory(cwd)
-		}()
-
 		if !knowID {
 			idv, err := funcs.CreateChat(db)
 			*id = idv
@@ -504,6 +492,22 @@ func loadSession(cwd string, id *uint32, knowID bool) (*structs.Chats, error) {
 			return nil, err
 		}
 		sess.Root = cwd
+
+		// 后台启动 codebase 索引。
+		// 必须在 QueryChat/InitChat 验证会话真实存在并成功之后再启动：
+		// 若过早启动，会话无效（QueryChat/InitChat 失败）时 goroutine 仍会 loadDB
+		// 打开 db.sqlite，且无人负责关闭，导致连接泄漏——Windows 上 TempDir 清理
+		// 无法删除被占用文件（TestSessionLoadColdRestore 子测试2 曾触发）。
+		// 无 embedding 模型时 RunIndex 自动降级为 BM25-only（仅建立全文索引，不嵌向量），
+		// 因此这里不再以 IsEmbeddingConfigured 守卫。
+		// indexDone 在 goroutine 完成后关闭，供测试等待异步索引结束（见 TestSessionLoadColdRestore）。
+		go func() {
+			defer close(obj.indexDone)
+			if err := codebase.RunIndex(context.Background(), cwd, nil); err != nil {
+				logger.Debug("auto index: %v", err)
+			}
+			indexTempfsAndChatHistory(cwd)
+		}()
 
 		obj.loop = loop.New(sess)
 		obj.waitStopChan = make(chan *chan StopMsg, 20)
