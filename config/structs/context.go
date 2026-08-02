@@ -23,4 +23,5 @@ type ContextConfig struct {
 	SearchSummaryModel int32            `default:"0"` // 搜索摘要模型
 	OnlineSearch       secconfig.Config // 在线搜索配置
 	Codebase           CodebaseConfig   // 代码库搜索引擎调参
+	Phrase             PhraseConfig     // 短语系统：/s <short> 展开为长内容发送
 }

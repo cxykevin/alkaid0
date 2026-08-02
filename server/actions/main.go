@@ -38,6 +38,8 @@ func InitFuncs(srv *jsonrpc.Server) {
 		jsonrpc.Set(srv, "alk.cxykevin.top/session/list_models", SessionListModels)
 
 		jsonrpc.Set(srv, "alk.cxykevin.top/list_subagent", SubAgentList)
+
+		jsonrpc.Set(srv, "alk.cxykevin.top/phrases/list", PhraseList)
 	}
 
 	{ // 文件系统

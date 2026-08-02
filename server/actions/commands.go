@@ -14,6 +14,7 @@ import (
 	"github.com/cxykevin/alkaid0/context/lsp"
 	"github.com/cxykevin/alkaid0/product"
 	"github.com/cxykevin/alkaid0/provider/mask"
+	"github.com/cxykevin/alkaid0/provider/phrase"
 	"github.com/cxykevin/alkaid0/storage/structs"
 	u "github.com/cxykevin/alkaid0/utils"
 )
@@ -242,6 +243,48 @@ var commandMaps = map[string]*cmdObj{
 		Hint:        "[title text]",
 		Function: func(obj *sessionObj, arg string) (bool, error) {
 			return false, titleCommand(obj, strings.TrimSpace(arg))
+		},
+	},
+	"/s": {
+		Description: "Send a configured phrase — /s <short> expands the phrase to its full text and sends it to the model; /s with no args lists all configured phrases",
+		Hint:        "[short]",
+		Function: func(obj *sessionObj, arg string) (bool, error) {
+			sessionID := cwd2SessionID(obj.cwd, obj.id)
+			arg = strings.TrimSpace(arg)
+			if arg == "" {
+				// 无参数：列出所有短语
+				_ = broadcastSessionUpdate(sessionID, SessionUpdate{
+					SessionID: sessionID,
+					Update: SessionUpdateUpdate{
+						SessionUpdate: "agent_message_chunk",
+						Content: u.H{
+							"type": "text",
+							"text": phrase.ListText(),
+						},
+					},
+				}, 0)
+				return false, nil
+			}
+			p, ok := phrase.Lookup(arg)
+			if !ok {
+				return false, fmt.Errorf("unknown phrase %q — use /s to list configured phrases", arg)
+			}
+			// 广播展开后的长内容，让用户确认实际发送的文本
+			_ = broadcastSessionUpdate(sessionID, SessionUpdate{
+				SessionID: sessionID,
+				Update: SessionUpdateUpdate{
+					SessionUpdate: "agent_message_chunk",
+					Content: u.H{
+						"type": "text",
+						"text": fmt.Sprintf("**phrase `%s` expanded** — 已作为用户消息发送。\n\n%s", p.Short, p.Text),
+					},
+				},
+			}, 0)
+			// 实际发送长内容给 AI，并等待响应
+			if err := obj.loop.Chat(p.Text, nil); err != nil {
+				return false, err
+			}
+			return true, nil
 		},
 	},
 	"/version": {

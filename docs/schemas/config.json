@@ -445,6 +445,43 @@
                             "default": 0.0
                         }
                     }
+                },
+                "Phrase": {
+                    "type": "object",
+                    "description": "短语系统：/s <short> 展开为长内容发送",
+                    "default": {
+                        "Enable": false
+                    },
+                    "properties": {
+                        "Enable": {
+                            "type": "boolean",
+                            "description": "总开关，默认关闭",
+                            "default": false
+                        },
+                        "Phrases": {
+                            "type": "array",
+                            "description": "短语表，每个短语 {Short, Text, Desc}",
+                            "default": [],
+                            "items": {
+                                "type": "object",
+                                "required": ["Short", "Text"],
+                                "properties": {
+                                    "Short": {
+                                        "type": "string",
+                                        "description": "短键，/s <short> 输入的唯一标识"
+                                    },
+                                    "Text": {
+                                        "type": "string",
+                                        "description": "短语展开后的完整内容，实际发送给 AI"
+                                    },
+                                    "Desc": {
+                                        "type": "string",
+                                        "description": "可选描述，用于 /s 列表展示与 AI 上下文解释"
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
             }
         },
