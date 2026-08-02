@@ -112,6 +112,10 @@ type sessionObj struct {
 	background bool
 	// lastToolStreamTime 工具调用增量流式广播的上次推送时间（限流用）
 	lastToolStreamTime time.Time
+	// indexDone 异步索引 goroutine（loadSession 启动）的完成信号。
+	// goroutine 完成后 close 该 channel；测试等它完成后再清理 TempDir，
+	// 避免异步索引在目录清理期间重新打开 codebase.sqlite 导致 Windows 删除失败。
+	indexDone chan struct{}
 }
 
 // dbObj 数据库对象，包含引用计数用于生命周期管理
@@ -445,10 +449,11 @@ func loadSession(cwd string, id *uint32, knowID bool) (*structs.Chats, error) {
 	defer sessLock.Unlock()
 	if _, ok := sessions[sessID]; !ok {
 		obj := &sessionObj{
-			cwd:      cwd,
-			id:       0,
-			ctx:      context.Background(),
-			referCnt: 1,
+			cwd:       cwd,
+			id:        0,
+			ctx:       context.Background(),
+			referCnt:  1,
+			indexDone: make(chan struct{}),
 		}
 
 		db, err := loadDB(cwd)
@@ -464,7 +469,9 @@ func loadSession(cwd string, id *uint32, knowID bool) (*structs.Chats, error) {
 		// 后台启动 codebase 索引。
 		// 无 embedding 模型时 RunIndex 自动降级为 BM25-only（仅建立全文索引，不嵌向量），
 		// 因此这里不再以 IsEmbeddingConfigured 守卫。
+		// indexDone 在 goroutine 完成后关闭，供测试等待异步索引结束（见 TestSessionLoadColdRestore）。
 		go func() {
+			defer close(obj.indexDone)
 			if err := codebase.RunIndex(context.Background(), cwd, nil); err != nil {
 				logger.Debug("auto index: %v", err)
 			}

@@ -407,9 +407,11 @@ func TestSessionLoadColdRestore(t *testing.T) {
 	}
 
 	tmpDir := t.TempDir()
-	// loadSession 的异步索引 goroutine（codebase.RunIndex）会打开 codebase.sqlite 且
-	// 数据库连接常驻。Windows 上 TempDir 自动清理时无法删除被占用文件，导致测试
-	// 误报 FAIL。注册清理在目录删除前关闭该目录的 codebase 数据库。
+	// loadSession 的异步索引 goroutine 会打开 codebase.sqlite 且数据库连接常驻，
+	// Windows 上 TempDir 自动清理时无法删除被占用文件，导致测试误报 FAIL。
+	// 注册清理在目录删除前关闭该目录的 codebase 数据库。
+	// 注意：异步 goroutine 未完成时 CloseDirectory 后可能被其后续步骤重开，
+	// 因此需先在"存在的会话可冷还原"子测试中等待 obj.indexDone。
 	t.Cleanup(func() {
 		_ = codebase.CloseDirectory(tmpDir)
 	})
@@ -435,10 +437,20 @@ func TestSessionLoadColdRestore(t *testing.T) {
 			t.Fatalf("cold restore SessionLoad failed: %v", err)
 		}
 		sessLock.Lock()
-		_, ok := sessions[sessionID]
+		obj, ok := sessions[sessionID]
 		sessLock.Unlock()
 		if !ok {
 			t.Error("session should be registered after cold restore")
+		}
+		// 等待 loadSession 的异步索引 goroutine（RunIndex + indexTempfsAndChatHistory）
+		// 完成，避免其在主测试 t.Cleanup 关闭 codebase 后重开 codebase.sqlite，
+		// 导致 Windows 上 TempDir 清理无法删除被占用文件。
+		if ok && obj.indexDone != nil {
+			select {
+			case <-obj.indexDone:
+			case <-time.After(10 * time.Second):
+				t.Error("timeout waiting for async index goroutine")
+			}
 		}
 		closeSession(sessionID)
 	})
