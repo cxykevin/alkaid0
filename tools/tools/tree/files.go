@@ -218,11 +218,11 @@ func buildStringRecursive(node *Node, prefix string, builder *strings.Builder, n
 		return
 	}
 
-	// 如果是文件，显示ID
+	// 如果是文件，显示ID（用反引号包裹 —— 模型更习惯 markdown/code 的反引号格式）
 	if !node.IsDir && node.ID > 0 {
-		builder.WriteString(" '")
+		builder.WriteString(" `")
 		builder.WriteString(strconv.Itoa(int(node.ID)))
-		builder.WriteString("'")
+		builder.WriteString("`")
 	}
 
 	// 处理子节点
@@ -302,8 +302,13 @@ func BuildNodeFromString(str string) (*Node, error) {
 		}
 		name := nameTemp
 		id := int32(0)
-		if strings.Contains(nameTemp, "'") {
-			nameTemps := strings.Split(nameTemp, "'")
+		// 解析 `- name `ID``。标准格式用反引号（BuildString 输出，模型更易遵循），
+		// 同时容忍单引号 'ID' —— 兼容历史数据与模型可能的格式偏差。
+		for _, quote := range []string{"`", "'"} {
+			if !strings.Contains(nameTemp, quote) {
+				continue
+			}
+			nameTemps := strings.Split(nameTemp, quote)
 			if (len(nameTemps)) != 3 || nameTemps[2] != "" {
 				return nil, errors.New("invalid name")
 			}
@@ -313,6 +318,7 @@ func BuildNodeFromString(str string) (*Node, error) {
 				return nil, err
 			}
 			id = int32(idTmp)
+			break
 		}
 		if strings.Contains(name, "/") ||
 			strings.Contains(name, "\\") ||
@@ -630,6 +636,43 @@ func generateIDMap(mapOrigin *idMapOrigin, node *Node) {
 	(*mapOrigin)[node.ID] = node.Path
 }
 
+// cloneRelNode 深拷贝树并把绝对路径转换为相对路径（相对 base 根）。
+// origin 树由 BuildTree 以绝对路径构建，而 diff 目标的 Path 是相对路径；
+// 统一为相对路径后，generateDiff 才能正确比较/使用 copy 源与目标。
+func cloneRelNode(node *Node, base string) *Node {
+	if node == nil {
+		return nil
+	}
+	// base 可能是相对路径或空字符串；先归一化为绝对路径。
+	// 否则 filepath.Rel(相对base, 绝对path) 会返回错误，
+	// 节点 Path 会保留绝对路径，mapOrigin 里 copy 源变成绝对路径，
+	// solveDiffTask 的 filepath.Join(根, 绝对路径) 再次拼接导致 stat 路径错误。
+	absBase := base
+	if !filepath.IsAbs(absBase) {
+		if abs, err := filepath.Abs(base); err == nil {
+			absBase = abs
+		}
+	}
+	var walk func(n *Node) *Node
+	walk = func(n *Node) *Node {
+		if n == nil {
+			return nil
+		}
+		clone := *n
+		clone.Children = nil
+		if filepath.IsAbs(n.Path) {
+			if rel, err := filepath.Rel(absBase, n.Path); err == nil {
+				clone.Path = rel
+			}
+		}
+		for _, c := range n.Children {
+			clone.Children = append(clone.Children, walk(c))
+		}
+		return &clone
+	}
+	return walk(node)
+}
+
 func checkNodeFileNameErr(node *Node) error {
 	if !node.IsDir {
 		return nil
@@ -697,6 +740,12 @@ func generateDiff(origin *Node, node *Node) ([]Diff, error) {
 		originPath, ok := mapOrigin[d.ID]
 		if !ok {
 			obj = append(obj, Diff{Target: d.Target, Type: DiffStatusCreateFile})
+			continue
+		}
+		// 源与目标为同一路径：节点在本次编辑中未变化，跳过。
+		// 否则每个未修改的 keep 文件都会被当成复制（Copy+Move），
+		// 且 copy 源为绝对路径时 solveDiffTask 的 filepath.Join 会拼错路径，导致 @tree 编辑整体失败。
+		if originPath == d.Target {
 			continue
 		}
 		// 生成随机文件名
@@ -824,8 +873,13 @@ func SolveCall(path string, node *Node, dist string) ([]Diff, error) {
 		IsDir: true,
 	}
 
-	solveNodesTreeDiff(diffNode, node, distNode)
-	diff, err := generateDiff(node, diffNode)
+	// origin 树路径统一转为相对路径（相对 path 根），
+	// 保证 diff 计算（solveNodesTreeDiff 的删除源、generateDiff 的 copy 源）
+	// 与 diff 目标使用同一套相对路径，
+	// 避免绝对路径在 solveDiffTask 中被 filepath.Join 拼接出错。
+	relOrigin := cloneRelNode(node, path)
+	solveNodesTreeDiff(diffNode, relOrigin, distNode)
+	diff, err := generateDiff(relOrigin, diffNode)
 	if err != nil {
 		return nil, fmt.Errorf("error in calculate diff (%v)", err)
 	}

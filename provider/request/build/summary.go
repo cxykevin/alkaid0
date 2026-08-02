@@ -65,18 +65,18 @@ func SummaryWithKeepNumber(chatID uint32, agentID string, db *gorm.DB, keepNum i
 			break
 		}
 		for idx, v := range obj {
-			// 如果总消息数大于 keepNum，则跳过最近的 keepNum 条
-			// 否则全部包含，以确保总结有内容
-			if totalMsgCount > int64(keepNum) && offsetPage == 0 && idx < keepNum {
-				continue
-			}
-			if lastMsgID == 0 {
+			// 最近 keepNum 条保持完整（不设置 lastMsgID、不触发 exitFlag），
+			// 但仍作为上下文输入给总结模型——否则模型看不到最近的进展，
+			// 在 summary 提示词强制 100-300 词的约束下会对缺失内容产生幻觉（瞎编）。
+			isRecent := totalMsgCount > int64(keepNum) && offsetPage == 0 && idx < keepNum
+			if !isRecent && lastMsgID == 0 {
 				lastMsgID = v.ID
 			}
 			msg := reqStruct.Message{
 				Role:    msgRole[v.Type],
 				Content: "",
 			}
+			skipMsg := false
 			if v.Summary != "" {
 				rendered, err := prompts.Render(prompts.SummaryWrapTemplate, struct {
 					Summary string
@@ -85,7 +85,9 @@ func SummaryWithKeepNumber(chatID uint32, agentID string, db *gorm.DB, keepNum i
 					return 0, nil, err
 				}
 				msg.Content = rendered
-				exitFlag = true
+				if !isRecent {
+					exitFlag = true
+				}
 			} else {
 				if v.Type == structs.MessagesRoleUser {
 					rendered, err := prompts.Render(prompts.UserWrapTemplate, struct {
@@ -136,6 +138,9 @@ func SummaryWithKeepNumber(chatID uint32, agentID string, db *gorm.DB, keepNum i
 							}
 							msg.Content = subAgentRendered
 						}
+					} else {
+						// 属于其他会话/子代理的通信消息，不参与本次总结上下文，避免空 user 消息误导模型
+						skipMsg = true
 					}
 				} else if v.ThinkingDelta != "" {
 					thinkingWrap := ""
@@ -162,6 +167,9 @@ func SummaryWithKeepNumber(chatID uint32, agentID string, db *gorm.DB, keepNum i
 				} else {
 					msg.Content = v.Delta
 				}
+			}
+			if skipMsg {
+				continue
 			}
 			responseDeltaList.PushFront(msg)
 			if exitFlag {

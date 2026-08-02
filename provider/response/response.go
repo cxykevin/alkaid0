@@ -107,6 +107,12 @@ func (p *Solver) GetTools() []parser.AIToolsResponse {
 	return p.parser.ToolsSolved
 }
 
+// DetectNativeToolCall 检测模型是否绕过了 <tools> 标签、直接输出原生 tool calling 格式。
+// 命中时上层应"打回"本次响应（拒绝并重试），而不是让纯文本 JSON 静默流失。
+func (p *Solver) DetectNativeToolCall() bool {
+	return p.parser.DetectNativeToolCall()
+}
+
 // GetToolsOrigin 获取工具调用的原始 JSON 字符串，用于调试和日志记录
 func (p *Solver) GetToolsOrigin() string {
 	return p.parser.ToolOriginString.String()

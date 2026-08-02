@@ -37,5 +37,5 @@ Edit or create file or virtual objects. To trigger LSP diagnostics on a file wit
 - Replace substring: `{"path":"main.go","target":"old_func ()","text":"new_func ()"}`
 - Append to file: `{"path":"log.txt","target":"","text":"new entry"}`
 - Trigger diagnostics (no change): `{"path":"main.go","target":"","text":""}`
-- Tree copy entry: `{"path":"@tree","target":"hello","text":"hello\n  - bar_copy '1'"}`
+- Tree copy entry: ``{"path":"@tree","target":"hello","text":"hello\n  - bar_copy `1`"}``
 - Tree delete entry: `{"path":"@tree","target":"@ln:4","text":""}`

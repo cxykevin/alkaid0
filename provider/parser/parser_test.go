@@ -1352,3 +1352,55 @@ func TestSolveToolBasicStringParameter(t *testing.T) {
 // 		t.Errorf("期望 nil FullCallingObject 不停止，实际停止")
 // 	}
 // }
+
+// TestDetectNativeToolCall 验证原生 tool calling 格式检测。
+// 模型偶发绕过 <tools> 标签直接输出原生 JSON 时，DetectNativeToolCall
+// 应返回 true（触发"打回"重试），而正常文本与 <tools> 标签内的调用不触发。
+func TestDetectNativeToolCall(t *testing.T) {
+	cases := []struct {
+		name string
+		toks []string // 流式分块喂入，模拟 token 切分
+		want bool
+	}{
+		{"空输出不触发", []string{""}, false},
+		{"普通文本不触发", []string{"好的，我来删除 a.txt。"}, false},
+		{"思考内容不触发", []string{"<think>我来调用工具</think>"}, false},
+		{"<tools>标签不触发", []string{"<tools>[{\"name\":\"calculator\",\"id\":\"x\",\"parameters\":{\"expression\":\"2+2\"}}]</tools>"}, false},
+		{"tool_calls 原生格式触发", []string{"{", "\"tool_calls\":[", "{\"id\":\"call_1\",\"function\":{\"name\":\"calculator\",\"arguments\":\"{\\\"expression\\\":\\\"2+2\\\"}\"}}]}"}, true},
+		{"functionCall 原生格式触发", []string{"{\"functionCall\":{\"name\":\"calculator\",\"args\":{\"expression\":\"2+2\"}}}"}, true},
+		{"function_call 原生格式触发", []string{"{\"function_call\":{\"name\":\"calculator\",\"arguments\":\"{}\"}}"}, true},
+		{"已知工具名裸调用触发", []string{"{\"name\":\"calculator\",\"id\":\"c1\",\"arguments\":\"{\\\"expression\\\":\\\"2+2\\\"}\"}"}, true},
+		{"已知工具名 parameters 触发", []string{"{\"name\":\"calculator\",\"parameters\":{\"expression\":\"2+2\"}}"}, true},
+		{"未知工具名裸调用不触发", []string{"{\"name\":\"nonexistent\",\"arguments\":\"{}\"}"}, false},
+		{"工具 JSON 包裹在工具调用叙述中触发", []string{"我来计算 2+2：", "{\"name\":\"calculator\",\"arguments\":\"{}\"}"}, true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			p := parser.NewParser(nil, testTools)
+			for _, tok := range c.toks {
+				if _, _, _, err := p.AddToken(tok, ""); err != nil {
+					t.Fatalf("AddToken(%q) 失败: %v", tok, err)
+				}
+			}
+			if got := p.DetectNativeToolCall(); got != c.want {
+				t.Errorf("DetectNativeToolCall 期望 %v，实际 %v（累积文本: %q）", c.want, got, p.PlainOutput.String())
+			}
+		})
+	}
+}
+
+// TestDetectNativeToolCallToolsTagEmptyPlain 验证 <tools> 标签内的 JSON 不进 PlainOutput，
+// 因此 <tools> 合法调用不会触发打回检测。
+func TestDetectNativeToolCallToolsTagEmptyPlain(t *testing.T) {
+	p := parser.NewParser(nil, testTools)
+	tok := "<tools>[{\"name\":\"calculator\",\"id\":\"x\",\"parameters\":{\"expression\":\"2+2\"}}]</tools>"
+	if _, _, _, err := p.AddToken(tok, ""); err != nil {
+		t.Fatalf("AddToken 失败: %v", err)
+	}
+	if p.PlainOutput.String() != "" {
+		t.Errorf("PlainOutput 应为空，实际 %q", p.PlainOutput.String())
+	}
+	if p.DetectNativeToolCall() {
+		t.Error("合法 <tools> 调用不应触发原生格式检测")
+	}
+}

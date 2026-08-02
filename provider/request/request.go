@@ -25,7 +25,47 @@ import (
 	"github.com/cxykevin/alkaid0/ui/state"
 	"github.com/expr-lang/expr"
 	"github.com/expr-lang/expr/vm"
+	"gorm.io/gorm"
 )
+
+// errNativeToolCallFormat 标记模型绕过 <tools> 标签、直接输出原生 tool calling 格式。
+// 该错误由 solveFunc 在流式检测到原生格式时返回，SimpleOpenAIRequest 会包装为
+// "callback error: ..." 传回，SendRequest 据此判定"打回"（拒绝本次响应并重试）。
+var errNativeToolCallFormat = errors.New("native tool calling format detected, reject response")
+
+// 打回注入的格式纠正消息模板。消息以 user 角色插入，模型下一轮请求时
+// 会通过 UserWrapTemplate 渲染为 <user_prompt> 看到，从而改用 <tools> 标签。
+const nativeFormatCorrectionMsg = `[System: Tool call format rejected]
+
+你上一条回复使用了原生 function-calling 格式（例如 {"tool_calls":[...]} 或 {"name":"...","arguments":"..."}），但本系统不解析该格式，工具不会执行，任务因此失败。
+
+所有工具调用必须使用 <tools> 标签包裹的 JSON 数组，并且必须放在回复的最后：
+<tools>
+[{"name":"工具名","id":"唯一id","parameters":{...}}]
+</tools>
+
+要求：
+1. "name" 必须匹配系统提供的工具名；
+2. "id" 是任意唯一字符串；
+3. "parameters" 必须是真实的 JSON 对象（键值对），绝不能是字符串或转义文本；
+4. <tools> 后不能再有任何文字。
+
+请重新输出你的工具调用。`
+
+// injectNativeFormatCorrection 打回时向对话历史注入一条格式纠正消息，
+// 使模型在下一轮请求中收到明确反馈并改用 <tools> 标签。
+// AgentID 跟随当前会话（子代理场景下子代理按 agent_id 过滤消息，
+// 若不设置则子代理读不到纠正反馈，会再次输出原生格式造成重复打回）。
+func injectNativeFormatCorrection(db *gorm.DB, session *storageStructs.Chats) error {
+	agent := session.CurrentAgentID
+	return db.Create(&storageStructs.Messages{
+		ChatID:  session.ID,
+		Delta:   nativeFormatCorrectionMsg,
+		Type:    storageStructs.MessagesRoleUser,
+		AgentID: &agent,
+		Refers:  storageStructs.MessagesReferList{},
+	}).Error
+}
 
 // UserAddMsg 处理用户发送的消息，更新数据库并处理子代理和审批状态
 // 当 session 处于 WaitApprove 状态时，用户消息会被同时作为拒绝原因（写入
@@ -785,6 +825,13 @@ func SendRequest(ctx context.Context, session *storageStructs.Chats, callback fu
 		if err != nil {
 			return err
 		}
+		// 打回检测：模型绕过 <tools> 标签直接输出原生 tool calling 格式时，
+		// 立即中止本次流式响应。该响应不会被采用，SendRequest 会删除占位消息、
+		// 注入格式纠正消息并重试。检测放在 AddToken 之后、flush 之前，
+		// 保证检测到原生格式时占位消息尚未被写入数据库。
+		if solver.DetectNativeToolCall() {
+			return errNativeToolCallFormat
+		}
 
 		// 达到阈值时执行数据库更新（批量刷写，减少 I/O 次数）
 		shouldFlush := pendingDelta.Len()+pendingThinkingDelta.Len() >= tokenFlushThreshold
@@ -848,6 +895,23 @@ func SendRequest(ctx context.Context, session *storageStructs.Chats, callback fu
 
 	// 向 LLM 发送请求，solveFunc 会在每个流式 chunk 到达时被调用
 	requestErr := SimpleOpenAIRequest(ctx, modelCfg.ProviderURL, modelCfg.ProviderKey, modelCfg.ModelID, *obj, eng, solveFunc)
+
+	// 打回：模型输出了原生 tool calling 格式（而非 <tools> 标签），本次响应不被采用。
+	// 删除占位消息并注入格式纠正消息，返回 (false, nil) 让 loop 重新发起请求，
+	// 模型将在下一轮看到纠正反馈并改用 <tools> 标签。
+	if errors.Is(requestErr, errNativeToolCallFormat) {
+		logger.Warn("native tool calling format detected, rejecting response in chat %d", session.ID)
+		session.ClearToolCalling()
+		if delErr := db.Delete(&storageStructs.Messages{}, msgID).Error; delErr != nil {
+			logger.Error("delete placeholder message %d: %v", msgID, delErr)
+		}
+		if injErr := injectNativeFormatCorrection(db, session); injErr != nil {
+			logger.Error("inject native format correction: %v", injErr)
+			return true, injErr
+		}
+		return false, nil
+	}
+
 	isCancel := requestErr != nil && errors.Is(requestErr, context.Canceled)
 
 	// 取消时在 goroutine 中异步完成最后一批内容的持久化，然后立即返回

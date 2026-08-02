@@ -2,6 +2,9 @@ package request
 
 import (
 	"context"
+	"errors"
+	"fmt"
+	"strings"
 	"sync"
 	"testing"
 
@@ -862,4 +865,43 @@ func TestEvaluateApprovalRules_ErrorPropagation(t *testing.T) {
 		t.Error("Expected error for malformed reject expression, got nil")
 	}
 	t.Logf("Got expected error: %v", err)
+}
+
+// TestInjectNativeFormatCorrection 验证打回时注入的格式纠正消息：
+// 应写入一条 user 类型消息，且内容包含 <tools> 正确格式示例。
+func TestInjectNativeFormatCorrection(t *testing.T) {
+	db := setupTestDB(t)
+	defer u.Unwrap(db.DB()).Close()
+
+	session := &storageStructs.Chats{ID: 7, DB: db}
+	if err := injectNativeFormatCorrection(db, session); err != nil {
+		t.Fatalf("injectNativeFormatCorrection: %v", err)
+	}
+
+	var msgs []storageStructs.Messages
+	if err := db.Where("chat_id = ?", 7).Find(&msgs).Error; err != nil {
+		t.Fatalf("query messages: %v", err)
+	}
+	if len(msgs) != 1 {
+		t.Fatalf("应恰好插入 1 条纠正消息，实际 %d", len(msgs))
+	}
+	if msgs[0].Type != storageStructs.MessagesRoleUser {
+		t.Errorf("纠正消息应为 user 类型，实际类型 %d", msgs[0].Type)
+	}
+	if !strings.Contains(msgs[0].Delta, "<tools>") {
+		t.Errorf("纠正消息应包含 <tools> 正确格式示例，实际内容: %q", msgs[0].Delta)
+	}
+}
+
+// TestErrNativeToolCallFormatPropagation 验证 sentinel error 经
+// SimpleOpenAIRequest 的 "callback error: %w" 包装后仍可被 errors.Is 识别，
+// 保证 SendRequest 的打回判定在错误传播链路上可靠。
+func TestErrNativeToolCallFormatPropagation(t *testing.T) {
+	wrapped := fmt.Errorf("callback error: %w", errNativeToolCallFormat)
+	if !errors.Is(wrapped, errNativeToolCallFormat) {
+		t.Error("包装错误应能通过 errors.Is 识别 errNativeToolCallFormat")
+	}
+	if errors.Is(context.Canceled, errNativeToolCallFormat) {
+		t.Error("errNativeToolCallFormat 不应与 context.Canceled 混淆")
+	}
 }

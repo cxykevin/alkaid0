@@ -383,11 +383,17 @@ func TestSessionLoadColdRestore(t *testing.T) {
 	bindedSessionOnConn = map[uint64][]string{}
 	connCallMap = map[uint64]func(string, any, *string) error{}
 	sessionConnMap = map[string][]uint64{}
+	// 恢复全局注册表时锁必须与生产代码一致：sessions 用 sessLock，
+	// dbs 用 dbLock（loadDB/closeDB 均持 dbLock）。此前 dbs 恢复误用 sessLock，
+	// 与 loadSession 启动的异步索引 goroutine 里 closeDB 的 dbLock 读冲突，
+	// 触发偶发 data race（TestSessionReleaseTimerFires 下偶现）。
 	defer func() {
 		sessLock.Lock()
 		sessions = oldSessions
-		dbs = oldDbs
 		sessLock.Unlock()
+		dbLock.Lock()
+		dbs = oldDbs
+		dbLock.Unlock()
 		bindedSessionOnConn = oldBinded
 		connCallMap = oldConnCall
 		sessionConnMap = oldSessionConn

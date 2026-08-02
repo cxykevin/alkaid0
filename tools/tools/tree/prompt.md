@@ -26,6 +26,6 @@ Indent: `4 spaces`
 
 
 #### Quick Examples:
-- Copy entry: `{"path":"@tree","target":"hello","text":"hello
-    - bar_copy '1'"}`
+- Copy entry: ``{"path":"@tree","target":"hello","text":"hello
+    - bar_copy `1`"}``
 - Delete entry: `{"path":"@tree","target":"@ln:4","text":""}`

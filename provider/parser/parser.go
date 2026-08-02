@@ -86,6 +86,10 @@ type Parser struct {
 	CalledTools      bool // 标记当前请求是否触发了工具调用
 	ToolsSolved      []AIToolsResponse
 	ToolOriginString strings.Builder
+	// PlainOutput 累积过滤掉特殊标签后的普通响应文本（增量）。
+	// 用于流式中检测模型是否绕过了 <tools> 标签、直接输出原生 tool calling 格式
+	// （如 {"tool_calls":...} / {"functionCall":...} / {"name":"...","arguments":"..."}）。
+	PlainOutput strings.Builder
 }
 
 type toolSolveTmp struct {
@@ -462,7 +466,46 @@ func (p *Parser) AddToken(token string, tokenThinking string) (string, string, *
 			}
 		}
 	}
+	// 累积普通文本增量，供原生 tool calling 格式检测使用
+	p.PlainOutput.WriteString(response.String())
 	return response.String(), responseThinking.String(), nil, nil
+}
+
+// DetectNativeToolCall 检测模型是否绕过了 <tools> 标签、直接输出原生 tool calling 格式。
+// 纯文本 JSON 无法被解析器识别为工具调用（工具不会执行），因此需要打回重试。
+// 识别签名（保守匹配，降低对正文中"提及格式"的误判）：
+//   - OpenAI/DeepSeek 原生: {"tool_calls":[...]}
+//   - Gemini/Responses 原生: {"functionCall":{...}} / {"function_call":{...}}
+//   - 裸调用: {"name":"<已知工具>", ..., "arguments":...}
+//
+// 仅在累计普通文本中匹配；模型使用 <tools> 标签时工具 JSON 走 ToolOriginString，
+// 不会进入 PlainOutput，因此不会误判。
+func (p *Parser) DetectNativeToolCall() bool {
+	text := p.PlainOutput.String()
+	if text == "" {
+		return false
+	}
+	// 强签名：原生 wrapper 键
+	for _, key := range []string{"\"tool_calls\"", "\"functionCall\"", "\"function_call\""} {
+		if strings.Contains(text, key) {
+			return true
+		}
+	}
+	// 弱签名：已知工具名的裸调用（name 匹配已注册工具 + 存在 arguments/parameters 键）
+	if len(p.Tools) > 0 {
+		for _, tool := range p.Tools {
+			if tool.Name == "" {
+				continue
+			}
+			if !strings.Contains(text, "\"name\":\""+tool.Name+"\"") {
+				continue
+			}
+			if strings.Contains(text, "\"arguments\"") || strings.Contains(text, "\"parameters\"") {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // DoneToken 传入结束 token

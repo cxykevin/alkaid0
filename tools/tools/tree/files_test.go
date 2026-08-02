@@ -52,7 +52,7 @@ func TestBuildNodeFromString_RoundTrip(t *testing.T) {
 // TestBuildNodeFromString_InvalidIndent 验证错误缩进被拒绝
 func TestBuildNodeFromString_InvalidIndent(t *testing.T) {
 	// 使用 3 个空格，不是 4 的倍数
-	s := "root\n   - a '1'"
+	s := "root\n   - a `1`"
 	if _, err := BuildNodeFromString(s); err == nil {
 		t.Fatalf("expected indent error, got nil")
 	}
@@ -60,7 +60,7 @@ func TestBuildNodeFromString_InvalidIndent(t *testing.T) {
 
 // TestBuildNodeFromString_InvalidChars 验证非法字符被拒绝
 func TestBuildNodeFromString_InvalidChars(t *testing.T) {
-	s := "root\n    - bad/name '1'"
+	s := "root\n    - bad/name `1`"
 	if _, err := BuildNodeFromString(s); err == nil {
 		t.Fatalf("expected invalid name error, got nil")
 	}
@@ -158,7 +158,7 @@ func TestBuildString_Format(t *testing.T) {
 	f := &Node{Name: "file.txt", Path: filepath.Join("root", "file.txt"), IsDir: false, ID: 42}
 	root.Children = append(root.Children, f)
 	s := BuildString(root)
-	if !stringsContains(s, "- file.txt") || !stringsContains(s, "'42'") {
+	if !stringsContains(s, "- file.txt") || !stringsContains(s, "`42`") {
 		t.Fatalf("unexpected buildstring output: %s", s)
 	}
 }
@@ -354,10 +354,10 @@ func TestBuildString(t *testing.T) {
 	expectedParts := []string{
 		"root",
 		"file1.txt",
-		"'1'",
+		"`1`",
 		"subdir",
 		"file2.txt",
-		"'2'",
+		"`2`",
 	}
 
 	for _, part := range expectedParts {

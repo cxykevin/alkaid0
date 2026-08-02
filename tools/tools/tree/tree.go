@@ -165,7 +165,23 @@ func writeTree(session *structs.Chats, mp map[string]*any, cross []*any) (bool, 
 		}, nil
 	}
 
-	_, err = SolveCall(filepath.Join(session.Root, session.CurrentActivatePath), rets.TreeObj, str)
+	// 与 buildGlobalPrompt 保持一致：Root/CurrentActivatePath 为空时兜底为 "."
+	// 并归一化为绝对路径，保证 SolveCall 的 base 与 TreeObj 的绝对路径同源。
+	// 否则 cloneRelNode 里 filepath.Rel(相对base, 绝对path) 会失败，
+	// mapOrigin 保留绝对路径，solveDiffTask 的 filepath.Join 再次拼接导致 stat 路径错误。
+	workRoot := session.Root
+	if workRoot == "" {
+		workRoot = "."
+	}
+	activatePath := session.CurrentActivatePath
+	if activatePath == "" {
+		activatePath = "."
+	}
+	workPath := filepath.Join(workRoot, activatePath)
+	if absPath, absErr := filepath.Abs(workPath); absErr == nil {
+		workPath = absPath
+	}
+	_, err = SolveCall(workPath, rets.TreeObj, str)
 	// fmt.Printf("\nTree diff: %v\n", diff)
 	if err != nil {
 		logger.Warn("act diff error: %v", err)
