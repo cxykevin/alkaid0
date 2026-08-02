@@ -17,15 +17,19 @@ func validateBindPath(path string) error {
 	if path == "" {
 		return errors.New("path must not be empty")
 	}
-	if filepath.IsAbs(path) || strings.HasPrefix(path, "~") {
+	// 绝对路径判断必须跨平台：filepath.IsAbs 在 Windows 上不认 "/"、"\" 前缀
+	//（只认盘符与 UNC），导致 "/foo" 漏检。这里显式把两种根前缀视为绝对路径。
+	if filepath.IsAbs(path) ||
+		strings.HasPrefix(path, "/") ||
+		strings.HasPrefix(path, `\`) ||
+		strings.HasPrefix(path, "~") {
 		return errors.New("path must be a correct and relative path")
 	}
 	cleaned := filepath.Clean(path)
 	if cleaned == ".." || strings.HasPrefix(cleaned, ".."+string(filepath.Separator)) {
 		return errors.New("path cannot contains '..'")
 	}
-	if strings.HasPrefix(path, "\\") ||
-		strings.Contains(path, ":") ||
+	if strings.Contains(path, ":") ||
 		strings.Contains(path, "*") ||
 		strings.Contains(path, "?") ||
 		strings.Contains(path, "\"") ||
