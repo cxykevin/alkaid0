@@ -16,6 +16,7 @@ import (
 	"github.com/cxykevin/alkaid0/ui/funcs"
 	"github.com/cxykevin/alkaid0/ui/loop"
 	"github.com/cxykevin/alkaid0/ui/state"
+	u "github.com/cxykevin/alkaid0/utils"
 )
 
 // registerTestSessionByID 按完整 sessionID 注册测试会话。
@@ -416,6 +417,9 @@ func TestSessionLoadColdRestore(t *testing.T) {
 	if err != nil {
 		t.Fatalf("InitStorage failed: %v", err)
 	}
+	// InitStorage 打开的 db.sqlite 连接须在 TempDir 清理前关闭，
+	// 否则 Windows 上无法删除被占用文件（与 codebase.sqlite 同类问题）。
+	defer u.Unwrap(db.DB()).Close()
 	id, err := funcs.CreateChat(db)
 	if err != nil {
 		t.Fatalf("CreateChat failed: %v", err)
