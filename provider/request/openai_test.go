@@ -37,7 +37,7 @@ func TestSimpleOpenAIRequest(t *testing.T) {
 	}
 
 	var responses []structs.ChatCompletionResponse
-	err := SimpleOpenAIRequest(context.Background(), baseURL, apiKey, model, body, func(resp structs.ChatCompletionResponse) error {
+	err := SimpleOpenAIRequest(context.Background(), baseURL, apiKey, model, body, nil, func(resp structs.ChatCompletionResponse) error {
 		responses = append(responses, resp)
 		return nil
 	})
@@ -98,7 +98,7 @@ func TestEmptyMessages(t *testing.T) {
 		Temperature: &[]float32{0.7}[0],
 	}
 	var responses []structs.ChatCompletionResponse
-	err := SimpleOpenAIRequest(context.Background(), baseURL, apiKey, model, body, func(resp structs.ChatCompletionResponse) error {
+	err := SimpleOpenAIRequest(context.Background(), baseURL, apiKey, model, body, nil, func(resp structs.ChatCompletionResponse) error {
 		responses = append(responses, resp)
 		return nil
 	})
@@ -117,7 +117,7 @@ func TestInvalidBaseURL(t *testing.T) {
 		Messages:    []structs.Message{{Role: structs.RoleUser, Content: "test"}},
 		Temperature: &[]float32{0.7}[0],
 	}
-	err := SimpleOpenAIRequest(context.Background(), baseURL, apiKey, model, body, func(resp structs.ChatCompletionResponse) error {
+	err := SimpleOpenAIRequest(context.Background(), baseURL, apiKey, model, body, nil, func(resp structs.ChatCompletionResponse) error {
 		return nil
 	})
 	if err == nil {
@@ -134,7 +134,7 @@ func TestCallbackError(t *testing.T) {
 		Messages:    []structs.Message{{Role: structs.RoleUser, Content: "test"}},
 		Temperature: &[]float32{0.7}[0],
 	}
-	err := SimpleOpenAIRequest(context.Background(), baseURL, apiKey, model, body, func(resp structs.ChatCompletionResponse) error {
+	err := SimpleOpenAIRequest(context.Background(), baseURL, apiKey, model, body, nil, func(resp structs.ChatCompletionResponse) error {
 		return fmt.Errorf("callback error")
 	})
 	if err == nil || !strings.Contains(err.Error(), "callback error") {
@@ -196,7 +196,7 @@ func TestConcurrentRequests(t *testing.T) {
 			}
 
 			var responses []structs.ChatCompletionResponse
-			err := SimpleOpenAIRequest(context.Background(), baseURL, apiKey, model, body, func(resp structs.ChatCompletionResponse) error {
+			err := SimpleOpenAIRequest(context.Background(), baseURL, apiKey, model, body, nil, func(resp structs.ChatCompletionResponse) error {
 				responses = append(responses, resp)
 				return nil
 			})

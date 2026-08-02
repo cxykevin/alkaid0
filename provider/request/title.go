@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/cxykevin/alkaid0/config"
+	"github.com/cxykevin/alkaid0/provider/mask"
 	"github.com/cxykevin/alkaid0/provider/request/build"
 	"github.com/cxykevin/alkaid0/provider/request/structs"
 	"gorm.io/gorm"
@@ -54,7 +55,7 @@ func titleRequest(ctx context.Context, db *gorm.DB, chatID uint32, full bool) (s
 
 	// 获取模型信息
 	resp := strings.Builder{}
-	err = SimpleOpenAIRequest(ctxn, modelConfig.ProviderURL, modelConfig.ProviderKey, modelConfig.ModelID, *obj, func(ret structs.ChatCompletionResponse) error {
+	err = SimpleOpenAIRequest(ctxn, modelConfig.ProviderURL, modelConfig.ProviderKey, modelConfig.ModelID, *obj, mask.NewEngine(db), func(ret structs.ChatCompletionResponse) error {
 		if len(ret.Choices) == 0 {
 			return nil
 		}

@@ -13,6 +13,7 @@ import (
 
 	"github.com/cxykevin/alkaid0/log"
 	"github.com/cxykevin/alkaid0/product"
+	"github.com/cxykevin/alkaid0/provider/mask"
 	"github.com/cxykevin/alkaid0/provider/request/structs"
 )
 
@@ -31,8 +32,9 @@ func init() {
 	logger = log.New("request")
 }
 
-// SimpleOpenAIRequest 发送 OpenAI ChatCompletion 请求（强制stream=true）
-func SimpleOpenAIRequest(ctx context.Context, baseURL, apiKey, model string, body structs.ChatCompletionRequest, callback func(structs.ChatCompletionResponse) error) error {
+// SimpleOpenAIRequest 发送 OpenAI ChatCompletion 请求（强制stream=true）。
+// masker 非 nil 时，出站前对消息做敏感数据脱敏，并在流式响应中还原为原文。
+func SimpleOpenAIRequest(ctx context.Context, baseURL, apiKey, model string, body structs.ChatCompletionRequest, masker *mask.Engine, callback func(structs.ChatCompletionResponse) error) error {
 	// 设置模型和流式参数
 	if body.Model == "" {
 		body.Model = model
@@ -40,6 +42,11 @@ func SimpleOpenAIRequest(ctx context.Context, baseURL, apiKey, model string, bod
 	body.Stream = true
 
 	logger.Info("call openai chat: %s", baseURL+ChatCompletionsEndpoint)
+
+	// 出站脱敏：在序列化前替换敏感数据
+	if masker != nil {
+		body.Messages = masker.MaskMessages(body.Messages)
+	}
 
 	// 序列化请求体
 	payload, err := json.Marshal(body)
@@ -137,6 +144,16 @@ func SimpleOpenAIRequest(ctx context.Context, baseURL, apiKey, model string, bod
 				return fmt.Errorf("failed to unmarshal response: %w", err)
 			}
 
+			// 流式还原：把脱敏假值还原为原文后再交给回调（正文与思考各用独立匹配器）
+			if masker != nil && len(chatResp.Choices) > 0 {
+				ch := &chatResp.Choices[0]
+				ch.Delta.Content = masker.RestoreContent(ch.Delta.Content)
+				if rc := ch.Delta.ReasoningContent; rc != nil {
+					r := masker.RestoreReasoning(*rc)
+					ch.Delta.ReasoningContent = &r
+				}
+			}
+
 			// 调用回调函数处理响应
 			if err := callback(chatResp); err != nil {
 				logger.Error("call openai chat error when callback: %v", err)
@@ -147,6 +164,22 @@ func SimpleOpenAIRequest(ctx context.Context, baseURL, apiKey, model string, bod
 		// EOF：即使最后一行无换行结尾也已在上方处理，正常退出循环
 		if err == io.EOF {
 			break
+		}
+	}
+
+	// 正常结束时刷出还原器的残留缓冲（未匹配的有界缓冲也是响应文本的一部分）
+	if masker != nil {
+		if c, r := masker.FinishRestore(); c != "" || r != "" {
+			var rp *string
+			if r != "" {
+				rp = &r
+			}
+			if err := callback(structs.ChatCompletionResponse{
+				Choices: []structs.Choice{{Delta: structs.Message{Content: c, ReasoningContent: rp}}},
+			}); err != nil {
+				logger.Error("call openai chat error when callback finish: %v", err)
+				return fmt.Errorf("callback error: %w", err)
+			}
 		}
 	}
 

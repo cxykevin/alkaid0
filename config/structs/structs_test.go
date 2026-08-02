@@ -34,3 +34,14 @@ func TestModelsConfig(t *testing.T) {
 		t.Error("ProviderURL should not be empty after BuildDefault")
 	}
 }
+
+func TestDataMaskDefaults(t *testing.T) {
+	c := BuildDefault(Config{})
+	if !c.DataMask.Enable {
+		t.Error("DataMask.Enable should default to true")
+	}
+	if !c.DataMask.MaskAPIKey || !c.DataMask.MaskPhone || !c.DataMask.MaskIP ||
+		!c.DataMask.MaskSession || !c.DataMask.MaskJWT {
+		t.Error("DataMask category toggles should default to true")
+	}
+}

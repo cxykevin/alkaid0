@@ -452,6 +452,58 @@
             "type": "boolean",
             "description": "为 true 时忽略 SIGTERM/SIGINT/SIGQUIT 信号，进程不会因这些信号退出",
             "default": false
+        },
+        "dataMask": {
+            "type": "object",
+            "description": "安全 key 上下文：请求出站前将敏感数据替换为同格式假值，流式响应中还原",
+            "default": {
+                "enable": true,
+                "mask_api_key": true,
+                "mask_phone": true,
+                "mask_ip": true,
+                "mask_session_cookie": true,
+                "mask_jwt": true
+            },
+            "properties": {
+                "enable": {
+                    "type": "boolean",
+                    "description": "总开关，默认开启",
+                    "default": true
+                },
+                "mask_api_key": {
+                    "type": "boolean",
+                    "description": "是否脱敏 apikey",
+                    "default": true
+                },
+                "mask_phone": {
+                    "type": "boolean",
+                    "description": "是否脱敏手机号",
+                    "default": true
+                },
+                "mask_ip": {
+                    "type": "boolean",
+                    "description": "是否脱敏公网 IP",
+                    "default": true
+                },
+                "mask_ip_whitelist": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    },
+                    "description": "公网 IP 白名单（单个 IP 或 CIDR），命中的不脱敏。内置默认覆盖知名公共 DNS/NTP（1.1.1.1、8.8.8.8、114.114.114.114、101.6.6.6 等），此处用于追加。",
+                    "default": []
+                },
+                "mask_session_cookie": {
+                    "type": "boolean",
+                    "description": "是否脱敏 session/cookie",
+                    "default": true
+                },
+                "mask_jwt": {
+                    "type": "boolean",
+                    "description": "是否脱敏 JWT",
+                    "default": true
+                }
+            }
         }
     }
 }

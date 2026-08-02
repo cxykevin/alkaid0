@@ -14,6 +14,7 @@ import (
 	cfgStructs "github.com/cxykevin/alkaid0/config/structs"
 	libjson "github.com/cxykevin/alkaid0/library/json"
 	"github.com/cxykevin/alkaid0/prompts"
+	"github.com/cxykevin/alkaid0/provider/mask"
 	"github.com/cxykevin/alkaid0/provider/request/agents/actions"
 	"github.com/cxykevin/alkaid0/provider/request/build"
 	"github.com/cxykevin/alkaid0/provider/request/classifier"
@@ -842,8 +843,11 @@ func SendRequest(ctx context.Context, session *storageStructs.Chats, callback fu
 
 	session.State = state.StateRequesting
 
+	// 创建安全 key 上下文引擎：请求出站脱敏 + 响应流式还原（未启用时返回 nil，零行为变化）
+	eng := mask.NewEngine(session.DB)
+
 	// 向 LLM 发送请求，solveFunc 会在每个流式 chunk 到达时被调用
-	requestErr := SimpleOpenAIRequest(ctx, modelCfg.ProviderURL, modelCfg.ProviderKey, modelCfg.ModelID, *obj, solveFunc)
+	requestErr := SimpleOpenAIRequest(ctx, modelCfg.ProviderURL, modelCfg.ProviderKey, modelCfg.ModelID, *obj, eng, solveFunc)
 	isCancel := requestErr != nil && errors.Is(requestErr, context.Canceled)
 
 	// 取消时在 goroutine 中异步完成最后一批内容的持久化，然后立即返回
