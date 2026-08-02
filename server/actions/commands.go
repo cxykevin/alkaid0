@@ -13,6 +13,7 @@ import (
 	"github.com/cxykevin/alkaid0/context/codebase"
 	"github.com/cxykevin/alkaid0/context/lsp"
 	"github.com/cxykevin/alkaid0/product"
+	"github.com/cxykevin/alkaid0/provider/mask"
 	"github.com/cxykevin/alkaid0/storage/structs"
 	u "github.com/cxykevin/alkaid0/utils"
 )
@@ -186,6 +187,53 @@ var commandMaps = map[string]*cmdObj{
 				broadcastFn(codebase.IndexStatus{Status: "completed"})
 				indexTempfsAndChatHistory(obj.cwd)
 			}()
+			return false, nil
+		},
+	},
+	"/mask": {
+		Description: "Manage custom mask values — add <value> masks a value outbound and restores it in the response, del <value> stops masking it",
+		Hint:        "add <value> | del <value>",
+		Function: func(obj *sessionObj, arg string) (bool, error) {
+			sessionID := cwd2SessionID(obj.cwd, obj.id)
+			parts := strings.SplitN(strings.TrimSpace(arg), " ", 2)
+			if len(parts) != 2 {
+				return false, fmt.Errorf("Usage: /mask add <value> | /mask del <value>")
+			}
+			op, val := strings.TrimSpace(parts[0]), strings.TrimSpace(parts[1])
+			if val == "" {
+				return false, fmt.Errorf("Usage: /mask add <value> | /mask del <value>")
+			}
+			var (
+				msg string
+				err error
+			)
+			switch op {
+			case "add":
+				err = mask.AddCustom(obj.session.DB, val)
+				if err == nil {
+					msg = fmt.Sprintf("**mask added**: `%s` 会在请求出站前脱敏，并在 AI 响应中还原为原文。", val)
+				}
+			case "del":
+				err = mask.DelCustom(obj.session.DB, val)
+				if err == nil {
+					msg = fmt.Sprintf("**mask removed**: `%s` 不再脱敏。", val)
+				}
+			default:
+				return false, fmt.Errorf("unknown operation %q, usage: add | del", op)
+			}
+			if err != nil {
+				return false, err
+			}
+			_ = broadcastSessionUpdate(sessionID, SessionUpdate{
+				SessionID: sessionID,
+				Update: SessionUpdateUpdate{
+					SessionUpdate: "agent_message_chunk",
+					Content: u.H{
+						"type": "text",
+						"text": msg,
+					},
+				},
+			}, 0)
 			return false, nil
 		},
 	},

@@ -407,6 +407,86 @@ func TestEngineDeterministic(t *testing.T) {
 	}
 }
 
+func TestAddDelCustom(t *testing.T) {
+	enableMask(t)
+	db := newTestDB(t)
+	if err := AddCustom(db, "my-secret-token"); err != nil {
+		t.Fatal(err)
+	}
+	// 幂等：重复 add 不报错、不产生重复行
+	if err := AddCustom(db, "my-secret-token"); err != nil {
+		t.Fatalf("re-add should be idempotent: %v", err)
+	}
+	var rows []storageStructs.CustomMask
+	if err := db.Find(&rows).Error; err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("expected 1 custom row, got %d", len(rows))
+	}
+	// add 空值报错
+	if err := AddCustom(db, "   "); err == nil {
+		t.Fatal("empty value should error")
+	}
+
+	// 先产生映射，再 del：行与映射都应被清理
+	eng := NewEngine(db)
+	eng.MaskMessages([]structs.Message{{Role: structs.RoleUser, Content: "value my-secret-token here"}})
+	var km []storageStructs.KeyMapping
+	if err := db.Where("key_type = ?", TypeCustom).Find(&km).Error; err != nil {
+		t.Fatal(err)
+	}
+	if len(km) != 1 {
+		t.Fatalf("expected 1 custom mapping, got %d", len(km))
+	}
+	if err := DelCustom(db, "my-secret-token"); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Find(&rows).Error; err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 0 {
+		t.Fatalf("custom row should be deleted")
+	}
+	if err := db.Where("key_type = ?", TypeCustom).Find(&km).Error; err != nil {
+		t.Fatal(err)
+	}
+	if len(km) != 0 {
+		t.Fatalf("custom mapping should be deleted")
+	}
+}
+
+func TestEngineCustomMaskRoundtrip(t *testing.T) {
+	enableMask(t)
+	db := newTestDB(t)
+	if err := AddCustom(db, "alice@corp.local"); err != nil {
+		t.Fatal(err)
+	}
+	eng := NewEngine(db)
+	if eng == nil {
+		t.Fatal("engine is nil")
+	}
+	content := "contact alice@corp.local for help"
+	masked := eng.MaskMessages([]structs.Message{{Role: structs.RoleUser, Content: content}})[0].Content
+	if strings.Contains(masked, "alice@corp.local") {
+		t.Fatalf("custom value not masked: %s", masked)
+	}
+	if len(masked) != len(content) {
+		t.Fatalf("custom mask changed length: %d != %d", len(masked), len(content))
+	}
+
+	// 流式还原（小 chunk 切分）
+	var restored strings.Builder
+	for _, chunk := range splitChunks(masked, 5) {
+		restored.WriteString(eng.RestoreContent(chunk))
+	}
+	c, _ := eng.FinishRestore()
+	restored.WriteString(c)
+	if !strings.Contains(restored.String(), "alice@corp.local") {
+		t.Fatalf("custom value not restored: %s", restored.String())
+	}
+}
+
 func TestEngineMaskedStoredInDB(t *testing.T) {
 	enableMask(t)
 	db := newTestDB(t)

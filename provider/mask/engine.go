@@ -30,6 +30,7 @@ type Engine struct {
 	maskToOrig   map[string]string     // 假值 → 原值（还原方向）
 	contentRep   *ahocorasick.Replacer // 正文流还原器
 	reasoningRep *ahocorasick.Replacer // 思考流还原器（独立状态，避免跨流误拼接）
+	custom       []string              // /mask add 的自定义脱敏值（精确匹配）
 }
 
 // NewEngine 创建引擎。功能未启用 / db 为 nil / 映射表不存在时返回 nil（调用方零行为变化）。
@@ -52,7 +53,22 @@ func NewEngine(db *gorm.DB) *Engine {
 		maskToOrig: make(map[string]string),
 	}
 	e.loadMappings()
+	e.loadCustom()
 	return e
+}
+
+// loadCustom 加载用户通过 /mask add 加入的自定义脱敏值。
+func (e *Engine) loadCustom() {
+	var rows []storageStructs.CustomMask
+	if err := e.db.Find(&rows).Error; err != nil {
+		logger.Warn("data mask: load custom masks: %v", err)
+		return
+	}
+	for _, r := range rows {
+		if r.Value != "" {
+			e.custom = append(e.custom, r.Value)
+		}
+	}
 }
 
 // loadMappings 全量加载映射并重建两个还原器。
@@ -111,6 +127,10 @@ func (e *Engine) MaskMessages(messages []structs.Message) []structs.Message {
 func (e *Engine) maskText(text string) (string, bool) {
 	e.mu.RLock()
 	spans := detectSensitive(text, &e.cfg, e.maskToOrig)
+	if len(e.custom) > 0 {
+		spans = append(spans, detectCustom(text, e.custom)...)
+		spans = resolveSpans(spans, e.maskToOrig)
+	}
 	e.mu.RUnlock()
 	if len(spans) == 0 {
 		return text, false

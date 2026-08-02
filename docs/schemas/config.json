@@ -459,9 +459,9 @@
             "default": {
                 "enable": true,
                 "mask_api_key": true,
-                "mask_phone": true,
-                "mask_ip": true,
-                "mask_session_cookie": true,
+                "mask_phone": false,
+                "mask_ip": false,
+                "mask_session_cookie": false,
                 "mask_jwt": true
             },
             "properties": {
@@ -478,12 +478,12 @@
                 "mask_phone": {
                     "type": "boolean",
                     "description": "是否脱敏手机号",
-                    "default": true
+                    "default": false
                 },
                 "mask_ip": {
                     "type": "boolean",
                     "description": "是否脱敏公网 IP",
-                    "default": true
+                    "default": false
                 },
                 "mask_ip_whitelist": {
                     "type": "array",
@@ -496,7 +496,7 @@
                 "mask_session_cookie": {
                     "type": "boolean",
                     "description": "是否脱敏 session/cookie",
-                    "default": true
+                    "default": false
                 },
                 "mask_jwt": {
                     "type": "boolean",

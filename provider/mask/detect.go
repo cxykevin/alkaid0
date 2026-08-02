@@ -21,6 +21,8 @@ const (
 	TypeSession = "session"
 	TypeCookie  = "cookie"
 	TypeJWT     = "jwt"
+	// TypeCustom 用户通过 /mask add 手动指定的自定义脱敏值。
+	TypeCustom = "custom"
 )
 
 // minBareKeyLen 无前缀裸 token 的最小长度。
@@ -310,6 +312,27 @@ func detectJWT(text string) []Span {
 		s := text[loc[0]:loc[1]]
 		if isJWT(s) {
 			spans = append(spans, Span{Start: loc[0], End: loc[1], Type: TypeJWT, Original: s})
+		}
+	}
+	return spans
+}
+
+// detectCustom 精确匹配用户自定义脱敏值（/mask add 加入），生成 TypeCustom span。
+// 自定义值可能重叠（如一个值包含另一个），交由 resolveSpans 消解。
+func detectCustom(text string, customs []string) []Span {
+	var spans []Span
+	for _, v := range customs {
+		if v == "" {
+			continue
+		}
+		for i := 0; i < len(text); {
+			idx := strings.Index(text[i:], v)
+			if idx < 0 {
+				break
+			}
+			start := i + idx
+			spans = append(spans, Span{Start: start, End: start + len(v), Type: TypeCustom, Original: v})
+			i = start + 1
 		}
 	}
 	return spans

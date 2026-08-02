@@ -12,4 +12,5 @@ var Tables = []any{
 	&ReferFiles{},
 	&ClassifySegment{},
 	&KeyMapping{},
+	&CustomMask{},
 }
