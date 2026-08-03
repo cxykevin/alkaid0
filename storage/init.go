@@ -34,7 +34,9 @@ func InitDB(dbPath string) (*gorm.DB, error) {
 		if os.Getenv("ALKAID0_TEST_LESS_MEMORY_MODE") != "" {
 			// 降级为临时文件模式，每个连接使用独立的临时数据库文件
 			// 临时 DB 放入系统临时目录，避免测试反复运行在项目数据目录累积 __lessmem_*.db 文件
-			dbPath = filepath.Join(os.TempDir(), fmt.Sprintf("alkaid0_lessmem_%d.db", atomic.AddInt32(&lessMemModeDBID, 1)))
+			// 文件名加入进程号：go test 并行运行多个测试包时各进程的 lessMemModeDBID 均从 0
+			// 开始，不加进程号会在 Windows 上产生跨进程同名文件冲突（SQLite 表已存在等偶发错误）
+			dbPath = filepath.Join(os.TempDir(), fmt.Sprintf("alkaid0_lessmem_%d_%d.db", os.Getpid(), atomic.AddInt32(&lessMemModeDBID, 1)))
 		} else {
 			dir := filepath.Dir(dbPath)
 			if dir != "." {
