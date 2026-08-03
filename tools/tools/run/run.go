@@ -54,7 +54,7 @@ var paras = map[string]parser.ToolParameters{
 	"type": {
 		Type:        parser.ToolTypeString,
 		Required:    true,
-		Description: "A Enum decided which type of task want to do. Must Be First Parameter. Enum: [\"shell\"]",
+		Description: "A Enum decided which type of task want to do. Must Be First Parameter. Enum: [\"shell\", \"sleep\"]",
 	},
 	"reason": {
 		Type:        parser.ToolTypeString,
@@ -64,17 +64,17 @@ var paras = map[string]parser.ToolParameters{
 	"command": {
 		Type:        parser.ToolTypeString,
 		Required:    true,
-		Description: `Command or program will be run. Must Be Third Parameter`,
+		Description: `Command or program will be run or seconds will be sleep. Must Be Third Parameter`,
 	},
 	"timeout": {
 		Type:        parser.ToolTypeNumber,
 		Required:    false,
-		Description: "Timeout of the command. Default is 60(seconds). If it will not be run in background(default), it must less than 300(seconds)",
+		Description: "Timeout of the command. Default is 60(seconds). If it will not be run in background(default), it must less than 300(seconds). Only avaible in \"shell\" type",
 	},
 	"sandbox": {
 		Type:        parser.ToolTypeBoolean,
 		Required:    false,
-		Description: "Whether run in sandbox. Some type don't support this parameter. Default is true",
+		Description: "Whether run in sandbox. Some type don't support this parameter. Default is true. Only avaible in \"shell\" type",
 	},
 	// "background": {
 	// 	Type:        parser.ToolTypeBoolen,
@@ -169,6 +169,10 @@ func updateInfo(session *structs.Chats, mp map[string]*any, cross []*any, toolID
 		if command, ok := (*commandPtr).(string); ok {
 			respString += "Command: " + command + "\n"
 			commandVal = &command
+		} else if secs, ok := asInt32(commandPtr); ok {
+			commandStr := strconv.Itoa(int(secs))
+			respString += "Command: " + commandStr + "s\n"
+			commandVal = &commandStr
 		}
 	}
 	if sandboxPtr, ok := mp["sandbox"]; ok && sandboxPtr != nil {
@@ -207,6 +211,76 @@ func errResult(msg string, cross []*any) (bool, []*any, map[string]*any, error) 
 	return false, cross, map[string]*any{"success": &s, "error": &e}, nil
 }
 
+// maxSleepSeconds sleep 类型允许的最大等待秒数，防止 AI 让会话无限等待
+const maxSleepSeconds = 3600
+
+// sleepTask 处理 run 工具的 "sleep" 类型：让 agent 等待指定秒数，不执行实际命令。
+func sleepTask(session *structs.Chats, mp map[string]*any, cross []*any) (bool, []*any, map[string]*any, error) {
+	reasonObj, ok := mp["reason"]
+	if !ok || reasonObj == nil {
+		return errResult("[System] Parameter Error: reason is required", cross)
+	}
+	reason, ok := asString(reasonObj)
+	if !ok {
+		return errResult("[System] Parameter Error: reason must be string", cross)
+	}
+	if reason == "" {
+		return errResult("[System] Parameter Error: reason is empty", cross)
+	}
+
+	cmdObj, ok := mp["command"]
+	if !ok || cmdObj == nil {
+		return errResult("[System] Parameter Error: command is required for type 'sleep'", cross)
+	}
+	seconds, ok := asInt32(cmdObj)
+	if !ok {
+		return errResult("[System] Parameter Error: command must be int(seconds) for type 'sleep'", cross)
+	}
+	if seconds < 0 {
+		return errResult("[System] Parameter Error: command must be >= 0 for type 'sleep'", cross)
+	}
+	if seconds > maxSleepSeconds {
+		return errResult(fmt.Sprintf("[System] Parameter Error: command must <= %d seconds for type 'sleep'", maxSleepSeconds), cross)
+	}
+
+	logger.Info("sleep %d seconds (reason: %s) in ID=%d,agentID=%s", seconds, reason, session.ID, session.CurrentAgentID)
+
+	// 监听 context 取消与 loop.Stop() 中断，使 sleep 可被终止
+	ctx := session.GetContext()
+	sleepCtx, sleepCancel := context.WithCancel(ctx)
+	defer sleepCancel()
+	session.SetToolKillFn(sleepCancel)
+	defer session.SetToolKillFn(nil)
+
+	if seconds > 0 {
+		timer := time.NewTimer(time.Duration(seconds) * time.Second)
+		defer timer.Stop()
+		select {
+		case <-sleepCtx.Done():
+			logger.Info("sleep interrupted by context cancel")
+			boolx := false
+			success := any(boolx)
+			errStr := any("[System] sleep interrupted")
+			return false, cross, map[string]*any{
+				"success": &success,
+				"error":   &errStr,
+			}, nil
+		case <-timer.C:
+		}
+	}
+
+	boolx := true
+	success := any(boolx)
+	reasonAny := any(reason)
+	secondsAny := any(seconds)
+	res := map[string]*any{
+		"success": &success,
+		"reason":  &reasonAny,
+		"seconds": &secondsAny,
+	}
+	return false, cross, res, nil
+}
+
 func runTask(session *structs.Chats, mp map[string]*any, cross []*any) (bool, []*any, map[string]*any, error) {
 	runTypeObj, ok := mp["type"]
 	if !ok || runTypeObj == nil {
@@ -216,8 +290,12 @@ func runTask(session *structs.Chats, mp map[string]*any, cross []*any) (bool, []
 	if !ok {
 		return errResult("[System] Parameter Error: type must be string", cross)
 	}
-	if runType != "shell" {
-		return errResult(fmt.Sprintf("[System] Parameter Error: type '%s' not supported, only 'shell' is allowed", runType), cross)
+	if runType != "shell" && runType != "sleep" {
+		return errResult(fmt.Sprintf("[System] Parameter Error: type '%s' not supported, only 'shell' and 'sleep' are allowed", runType), cross)
+	}
+
+	if runType == "sleep" {
+		return sleepTask(session, mp, cross)
 	}
 
 	reasonObj, ok := mp["reason"]

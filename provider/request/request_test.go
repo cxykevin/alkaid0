@@ -720,6 +720,26 @@ func TestEvaluateApprovalRules_BuiltinRules(t *testing.T) {
 	if result.Decision != DecisionManual {
 		t.Errorf("Expected DecisionManual for fetch POST, got %v", result.Decision)
 	}
+
+	// 内置 approve 规则应批准 run sleep 类型
+	sleepType := any("sleep")
+	result, _ = EvaluateApprovalRules(session, []ToolCall{{
+		Name: "run", ID: "8",
+		Parameters: map[string]*any{"type": &sleepType},
+	}})
+	if result.Decision != DecisionApproved {
+		t.Errorf("Expected DecisionApproved for run sleep (builtin rule), got %v", result.Decision)
+	}
+
+	// 内置 approve 规则不应批准 run shell 类型
+	shellType := any("shell")
+	result, _ = EvaluateApprovalRules(session, []ToolCall{{
+		Name: "run", ID: "9",
+		Parameters: map[string]*any{"type": &shellType},
+	}})
+	if result.Decision != DecisionManual {
+		t.Errorf("Expected DecisionManual for run shell, got %v", result.Decision)
+	}
 }
 
 // TestEvaluateApprovalRules_BuiltinReject 测试内置拒绝规则（敏感文件路径）

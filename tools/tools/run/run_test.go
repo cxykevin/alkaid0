@@ -582,3 +582,287 @@ func TestRunCmdTimeout(t *testing.T) {
 		t.Fatal("runCmd 在沙箱超时后 3 秒仍未返回，疑似 hang")
 	}
 }
+
+func sleepTestSession() *storageStructs.Chats {
+	return &storageStructs.Chats{
+		TemporyDataOfRequest: make(map[string]any),
+	}
+}
+
+func TestSleepTaskSuccess(t *testing.T) {
+	session := sleepTestSession()
+	mp := map[string]*any{
+		"type":    func() *any { s := any("sleep"); return &s }(),
+		"reason":  func() *any { s := any("test reason"); return &s }(),
+		"command": func() *any { i := any(0); return &i }(),
+	}
+
+	pass, _, result, err := sleepTask(session, mp, []*any{})
+	if err != nil {
+		t.Fatalf("Unexpected error: %v", err)
+	}
+	if pass {
+		t.Error("Expected pass to be false")
+	}
+
+	if successPtr, ok := result["success"]; !ok || successPtr == nil {
+		t.Fatal("Expected success in result")
+	} else if success, ok := (*successPtr).(bool); !ok || !success {
+		t.Error("Expected success to be true")
+	}
+
+	if secsPtr, ok := result["seconds"]; !ok || secsPtr == nil {
+		t.Fatal("Expected seconds in result")
+	} else if secs, ok := (*secsPtr).(int32); !ok || secs != 0 {
+		t.Errorf("Expected seconds=0, got %v", secsPtr)
+	}
+}
+
+func TestSleepTaskMissingReason(t *testing.T) {
+	session := sleepTestSession()
+	mp := map[string]*any{
+		"type":    func() *any { s := any("sleep"); return &s }(),
+		"command": func() *any { i := any(0); return &i }(),
+	}
+
+	pass, _, result, err := sleepTask(session, mp, []*any{})
+	if err != nil {
+		t.Fatalf("Unexpected error: %v", err)
+	}
+	if pass {
+		t.Error("Expected pass to be false")
+	}
+
+	if successPtr, ok := result["success"]; !ok || successPtr == nil {
+		t.Fatal("Expected success in result")
+	} else if success, ok := (*successPtr).(bool); !ok || success {
+		t.Error("Expected success to be false")
+	}
+}
+
+func TestSleepTaskInvalidCommand(t *testing.T) {
+	session := sleepTestSession()
+	mp := map[string]*any{
+		"type":    func() *any { s := any("sleep"); return &s }(),
+		"reason":  func() *any { s := any("test reason"); return &s }(),
+		"command": func() *any { s := any("abc"); return &s }(),
+	}
+
+	pass, _, result, err := sleepTask(session, mp, []*any{})
+	if err != nil {
+		t.Fatalf("Unexpected error: %v", err)
+	}
+	if pass {
+		t.Error("Expected pass to be false")
+	}
+
+	if successPtr, ok := result["success"]; !ok || successPtr == nil {
+		t.Fatal("Expected success in result")
+	} else if success, ok := (*successPtr).(bool); !ok || success {
+		t.Error("Expected success to be false")
+	}
+}
+
+func TestSleepTaskNegativeCommand(t *testing.T) {
+	session := sleepTestSession()
+	mp := map[string]*any{
+		"type":    func() *any { s := any("sleep"); return &s }(),
+		"reason":  func() *any { s := any("test reason"); return &s }(),
+		"command": func() *any { i := any(-1); return &i }(),
+	}
+
+	pass, _, result, err := sleepTask(session, mp, []*any{})
+	if err != nil {
+		t.Fatalf("Unexpected error: %v", err)
+	}
+	if pass {
+		t.Error("Expected pass to be false")
+	}
+
+	if successPtr, ok := result["success"]; !ok || successPtr == nil {
+		t.Fatal("Expected success in result")
+	} else if success, ok := (*successPtr).(bool); !ok || success {
+		t.Error("Expected success to be false")
+	}
+}
+
+func TestSleepTaskTooLarge(t *testing.T) {
+	session := sleepTestSession()
+	mp := map[string]*any{
+		"type":    func() *any { s := any("sleep"); return &s }(),
+		"reason":  func() *any { s := any("test reason"); return &s }(),
+		"command": func() *any { i := any(maxSleepSeconds + 1); return &i }(),
+	}
+
+	pass, _, result, err := sleepTask(session, mp, []*any{})
+	if err != nil {
+		t.Fatalf("Unexpected error: %v", err)
+	}
+	if pass {
+		t.Error("Expected pass to be false")
+	}
+
+	if successPtr, ok := result["success"]; !ok || successPtr == nil {
+		t.Fatal("Expected success in result")
+	} else if success, ok := (*successPtr).(bool); !ok || success {
+		t.Error("Expected success to be false")
+	}
+}
+
+func TestSleepTaskInterrupt(t *testing.T) {
+	session := sleepTestSession()
+	ctx, cancel := context.WithCancel(context.Background())
+	session.SetContext(ctx)
+	mp := map[string]*any{
+		"type":    func() *any { s := any("sleep"); return &s }(),
+		"reason":  func() *any { s := any("test reason"); return &s }(),
+		"command": func() *any { i := any(60); return &i }(),
+	}
+
+	go func() {
+		time.Sleep(100 * time.Millisecond)
+		cancel()
+	}()
+
+	start := time.Now()
+	pass, _, result, err := sleepTask(session, mp, []*any{})
+	elapsed := time.Since(start)
+
+	if err != nil {
+		t.Fatalf("Unexpected error: %v", err)
+	}
+	if pass {
+		t.Error("Expected pass to be false when interrupted")
+	}
+	if elapsed > 3*time.Second {
+		t.Errorf("sleepTask did not return promptly after cancel, elapsed=%v", elapsed)
+	}
+
+	if successPtr, ok := result["success"]; !ok || successPtr == nil {
+		t.Fatal("Expected success in result")
+	} else if success, ok := (*successPtr).(bool); !ok || success {
+		t.Error("Expected success to be false when interrupted")
+	}
+}
+
+func TestRunTaskSleepDispatch(t *testing.T) {
+	session := sleepTestSession()
+	mp := map[string]*any{
+		"type":    func() *any { s := any("sleep"); return &s }(),
+		"reason":  func() *any { s := any("wait"); return &s }(),
+		"command": func() *any { i := any(0); return &i }(),
+	}
+
+	pass, _, result, err := runTask(session, mp, []*any{})
+	if err != nil {
+		t.Fatalf("Unexpected error: %v", err)
+	}
+	if pass {
+		t.Error("Expected pass to be false")
+	}
+
+	if successPtr, ok := result["success"]; !ok || successPtr == nil {
+		t.Fatal("Expected success in result")
+	} else if success, ok := (*successPtr).(bool); !ok || !success {
+		t.Error("Expected success to be true")
+	}
+}
+
+func TestUpdateInfoIntCommand(t *testing.T) {
+	session := &storageStructs.Chats{
+		TemporyDataOfRequest: make(map[string]any),
+		ToolCallingContext:   make(map[string]any),
+		ToolCallingType:      make(map[string]string),
+		CurrentMessageID:     125,
+	}
+
+	mp := map[string]*any{
+		"type":    func() *any { s := any("sleep"); return &s }(),
+		"reason":  func() *any { s := any("wait"); return &s }(),
+		"command": func() *any { i := any(30); return &i }(),
+	}
+
+	pass, cross, err := updateInfo(session, mp, []*any{}, "test_tool")
+	if err != nil {
+		t.Fatalf("Unexpected error: %v", err)
+	}
+	if !pass {
+		t.Error("Expected pass to be true")
+	}
+	if cross == nil {
+		t.Error("Expected cross to not be nil")
+	}
+
+	toolCallID := fmt.Sprintf("call_%d_%d_%s", session.ID, session.CurrentMessageID, "test_tool")
+	if _, ok := session.ToolCallingContext[toolCallID]; !ok {
+		t.Error("Expected tool calling context to be set")
+	}
+}
+
+func TestSleepTaskStringCommand(t *testing.T) {
+	session := sleepTestSession()
+	mp := map[string]*any{
+		"type":    func() *any { s := any("sleep"); return &s }(),
+		"reason":  func() *any { s := any("test reason"); return &s }(),
+		"command": func() *any { s := any("1"); return &s }(),
+	}
+
+	start := time.Now()
+	pass, _, result, err := sleepTask(session, mp, []*any{})
+	elapsed := time.Since(start)
+
+	if err != nil {
+		t.Fatalf("Unexpected error: %v", err)
+	}
+	if pass {
+		t.Error("Expected pass to be false")
+	}
+
+	if successPtr, ok := result["success"]; !ok || successPtr == nil {
+		t.Fatal("Expected success in result")
+	} else if success, ok := (*successPtr).(bool); !ok || !success {
+		t.Error("Expected success to be true")
+	}
+
+	if secsPtr, ok := result["seconds"]; !ok || secsPtr == nil {
+		t.Fatal("Expected seconds in result")
+	} else if secs, ok := (*secsPtr).(int32); !ok || secs != 1 {
+		t.Errorf("Expected seconds=1, got %v", secsPtr)
+	}
+
+	// 验证 string "1" 被正确转为 1 秒并实际等待
+	if elapsed < 900*time.Millisecond {
+		t.Errorf("Expected sleep ~1s, got %v", elapsed)
+	}
+}
+
+func TestUpdateInfoStringCommand(t *testing.T) {
+	session := &storageStructs.Chats{
+		TemporyDataOfRequest: make(map[string]any),
+		ToolCallingContext:   make(map[string]any),
+		ToolCallingType:      make(map[string]string),
+		CurrentMessageID:     126,
+	}
+
+	mp := map[string]*any{
+		"type":    func() *any { s := any("sleep"); return &s }(),
+		"reason":  func() *any { s := any("wait"); return &s }(),
+		"command": func() *any { s := any("30"); return &s }(),
+	}
+
+	pass, cross, err := updateInfo(session, mp, []*any{}, "test_tool")
+	if err != nil {
+		t.Fatalf("Unexpected error: %v", err)
+	}
+	if !pass {
+		t.Error("Expected pass to be true")
+	}
+	if cross == nil {
+		t.Error("Expected cross to not be nil")
+	}
+
+	toolCallID := fmt.Sprintf("call_%d_%d_%s", session.ID, session.CurrentMessageID, "test_tool")
+	if _, ok := session.ToolCallingContext[toolCallID]; !ok {
+		t.Error("Expected tool calling context to be set")
+	}
+}
