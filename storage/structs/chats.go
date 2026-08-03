@@ -37,6 +37,7 @@ type Chats struct {
 	Title           string // 用户设置的标题（/title 命令写入）
 	AITitle         string // AI 生成的标题（自动生成/compress 重生成写入）
 	ReasoningEffort string
+	Task            string // 任务计划（markdown 列表，@task 虚拟对象编辑，持久化到 chats 表）
 	// === 会话过程参数 ===
 	contextHolder            *contextHolder      `gorm:"-" json:"-"`
 	Stop                     bool                `gorm:"-" json:"-"`
@@ -68,6 +69,19 @@ type Chats struct {
 	toolKillMu sync.Mutex `gorm:"-" json:"-"`
 	// ToolKillFn 由当前正在执行的工具注册，loop.Stop() 调用它来中断工具
 	ToolKillFn func() `gorm:"-" json:"-"`
+	// planPushMu 保护 PlanPushFn 的并发访问
+	planPushMu sync.RWMutex `gorm:"-" json:"-"`
+	// PlanPushFn 注册 ACP plan 推送回调（server 层在 loadSession 时注册）。
+	// task 工具每次修改 @task 后调用 PushPlan，向会话所有客户端广播完整 plan 列表。
+	PlanPushFn func(entries []PlanEntry) `gorm:"-" json:"-"`
+}
+
+// PlanEntry ACP plan 更新条目（session/update 通知中 update.sessionUpdate="plan"）。
+// ACP 规范：每次推送完整列表，客户端整体替换当前 plan。
+type PlanEntry struct {
+	Content  string `json:"content"`  // 人类可读描述，此处只展示 taskName（嵌套带缩进）
+	Priority string `json:"priority"` // high | medium | low，此处固定 "medium"
+	Status   string `json:"status"`   // pending | in_progress | completed
 }
 
 // SetContext 线程安全地设置会话上下文
@@ -118,6 +132,31 @@ func (c *Chats) KillTool() {
 	c.toolKillMu.Unlock()
 	if fn != nil {
 		fn()
+	}
+}
+
+// SetPlanPushFn 注册 ACP plan 推送回调（server 层在 loadSession 时调用一次）。
+// task 工具修改 @task 后通过 PushPlan 调用。
+func (c *Chats) SetPlanPushFn(fn func(entries []PlanEntry)) {
+	if c == nil {
+		return
+	}
+	c.planPushMu.Lock()
+	defer c.planPushMu.Unlock()
+	c.PlanPushFn = fn
+}
+
+// PushPlan 调用已注册的 ACP plan 推送回调。
+// 未注册时静默忽略；锁内只取函数指针，广播（网络 I/O）在锁外执行，避免阻塞 task PostHook。
+func (c *Chats) PushPlan(entries []PlanEntry) {
+	if c == nil {
+		return
+	}
+	c.planPushMu.RLock()
+	fn := c.PlanPushFn
+	c.planPushMu.RUnlock()
+	if fn != nil {
+		fn(entries)
 	}
 }
 

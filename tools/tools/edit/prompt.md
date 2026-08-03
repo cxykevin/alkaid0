@@ -29,6 +29,10 @@ Edit or create file or virtual objects. To trigger LSP diagnostics on a file wit
   - Move/Rename: change the name text or move the line while keeping the backticked ID.
   - Indent with exactly **4 spaces** per level. New file entries must be followed by an actual file edit.
   - **DO NOT** expand collapsed directories (`... (N files)`).
+- **Editing `@task` (virtual task plan)**: Use `path: "@task"` to edit the task plan list:
+  - Each line: `- [X] taskName: taskDetails` (only `-` bullet, no `*`/`+`/numbers).
+  - Status: `[ ]` (waiting), `[-]` (doing), `[X]` (done).
+  - Nesting: exactly **2 spaces** per level. `taskName`/`taskDetails` are separated by the first `:`.
 
 #### Quick Examples:
 
@@ -39,3 +43,5 @@ Edit or create file or virtual objects. To trigger LSP diagnostics on a file wit
 - Trigger diagnostics (no change): `{"path":"main.go","target":"","text":""}`
 - Tree copy entry: ``{"path":"@tree","target":"hello","text":"hello\n  - bar_copy `1`"}``
 - Tree delete entry: `{"path":"@tree","target":"@ln:4","text":""}`
+- Task append: `{"path":"@task","target":"","text":"- [ ] 1.3 完成C模块: 完成C模块程序"}`
+- Task toggle: `{"path":"@task","target":"- [ ] 1.3 完成C模块: 完成C模块程序","text":"- [X] 1.3 完成C模块: 完成C模块程序"}`

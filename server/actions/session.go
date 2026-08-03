@@ -19,6 +19,7 @@ import (
 	reqStructs "github.com/cxykevin/alkaid0/provider/request/structs"
 	"github.com/cxykevin/alkaid0/storage"
 	"github.com/cxykevin/alkaid0/storage/structs"
+	task "github.com/cxykevin/alkaid0/tools/tools/task"
 	"github.com/cxykevin/alkaid0/ui/funcs"
 	"github.com/cxykevin/alkaid0/ui/loop"
 	"github.com/cxykevin/alkaid0/ui/state"
@@ -492,6 +493,20 @@ func loadSession(cwd string, id *uint32, knowID bool) (*structs.Chats, error) {
 			return nil, err
 		}
 		sess.Root = cwd
+
+		// 注册 ACP plan 推送回调：task 工具修改 @task 后触发，向会话所有客户端广播完整 plan。
+		sess.SetPlanPushFn(func(entries []structs.PlanEntry) {
+			err := broadcastSessionUpdate(sessID, SessionUpdate{
+				SessionID: sessID,
+				Update: SessionUpdateUpdate{
+					SessionUpdate: "plan",
+					Entries:       entries,
+				},
+			}, 0)
+			if err != nil {
+				logger.Warn("failed to broadcast plan update: %v", err)
+			}
+		})
 
 		// 后台启动 codebase 索引。
 		// 必须在 QueryChat/InitChat 验证会话真实存在并成功之后再启动：
@@ -1023,15 +1038,16 @@ func SessionNew(req SessionNewRequest, call func(string, any, *string) error, co
 
 // SessionUpdateUpdate 更新会话的参数
 type SessionUpdateUpdate struct {
-	SessionUpdate    string  `json:"sessionUpdate"`
-	Content          any     `json:"content,omitempty"`
-	ToolCallID       string  `json:"toolCallId,omitempty"`
-	Title            string  `json:"title,omitempty"`
-	Kind             string  `json:"kind,omitempty"`
-	Status           string  `json:"status,omitempty"`
-	ExpandErrorMsg   string  `json:"alk.cxykevin.top/error_msg,omitempty"`
-	CompabiltyIgnore string  `json:"alk.cxykevin.top/ignore,omitempty"`
-	AgentStatus      *string `json:"alk.cxykevin.top/agent_status,omitempty"`
+	SessionUpdate    string              `json:"sessionUpdate"`
+	Content          any                 `json:"content,omitempty"`
+	Entries          []structs.PlanEntry `json:"entries,omitempty"` // ACP plan 条目（客户端整体替换）
+	ToolCallID       string              `json:"toolCallId,omitempty"`
+	Title            string              `json:"title,omitempty"`
+	Kind             string              `json:"kind,omitempty"`
+	Status           string              `json:"status,omitempty"`
+	ExpandErrorMsg   string              `json:"alk.cxykevin.top/error_msg,omitempty"`
+	CompabiltyIgnore string              `json:"alk.cxykevin.top/ignore,omitempty"`
+	AgentStatus      *string             `json:"alk.cxykevin.top/agent_status,omitempty"`
 }
 
 // SessionUpdate 更新会话的请求
@@ -1072,6 +1088,24 @@ func SessionLoad(req SessionLoadRequest, call func(string, any, *string) error, 
 	bindedSessionOnConnMu.Unlock()
 	// 注册连接的call函数用于后续广播
 	registerConnCall(connID, req.SessionID, call)
+	// 冷/热加载时把当前任务计划推给新连接（客户端整体替换）。
+	if sess.Task != "" {
+		entries, perr := task.BuildPlanEntries(sess.Task)
+		if perr != nil {
+			logger.Warn("session load: parse task failed: %v", perr)
+		} else if len(entries) > 0 {
+			err = broadcastSessionUpdate(req.SessionID, SessionUpdate{
+				SessionID: req.SessionID,
+				Update: SessionUpdateUpdate{
+					SessionUpdate: "plan",
+					Entries:       entries,
+				},
+			}, 0)
+			if err != nil {
+				logger.Warn("failed to broadcast plan on session load: %v", err)
+			}
+		}
+	}
 	msgs, err := funcs.GetHistory(sess)
 	previousToolJSON := ""
 	prevMsgID := uint64(0)
