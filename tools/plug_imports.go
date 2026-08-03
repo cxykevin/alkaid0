@@ -4,6 +4,7 @@ package tools
 import (
 	_ "github.com/cxykevin/alkaid0/tools/tools/agent"
 	_ "github.com/cxykevin/alkaid0/tools/tools/edit"
+	_ "github.com/cxykevin/alkaid0/tools/tools/fetch"
 	_ "github.com/cxykevin/alkaid0/tools/tools/run"
 	_ "github.com/cxykevin/alkaid0/tools/tools/scope"
 	_ "github.com/cxykevin/alkaid0/tools/tools/search"

@@ -4,5 +4,7 @@
     ToolCall.Name == "deactivate_agent" ||
     ToolCall.Name == "agent" ||
     ToolCall.Name == "trace" ||
-    ToolCall.Name == "search"
+    ToolCall.Name == "search" ||
+    (ToolCall.Name == "fetch" && param(ToolCall, "method") == "GET") ||
+    (ToolCall.Name == "edit" && param(ToolCall, "path") == "@task")
 )

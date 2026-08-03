@@ -680,6 +680,46 @@ func TestEvaluateApprovalRules_BuiltinRules(t *testing.T) {
 	if result.Decision != DecisionApproved {
 		t.Errorf("Expected DecisionApproved for trace (builtin rule), got %v", result.Decision)
 	}
+
+	// 内置 approve 规则应批准 edit @task（虚拟任务对象）
+	taskPath := any("@task")
+	result, _ = EvaluateApprovalRules(session, []ToolCall{{
+		Name: "edit", ID: "4",
+		Parameters: map[string]*any{"path": &taskPath},
+	}})
+	if result.Decision != DecisionApproved {
+		t.Errorf("Expected DecisionApproved for edit @task (builtin rule), got %v", result.Decision)
+	}
+
+	// 内置 approve 规则不应批准普通文件编辑
+	normalPath := any("main.go")
+	result, _ = EvaluateApprovalRules(session, []ToolCall{{
+		Name: "edit", ID: "5",
+		Parameters: map[string]*any{"path": &normalPath},
+	}})
+	if result.Decision != DecisionManual {
+		t.Errorf("Expected DecisionManual for normal file edit, got %v", result.Decision)
+	}
+
+	// 内置 approve 规则应批准 fetch GET（只自动批准 GET）
+	getMethod := any("GET")
+	result, _ = EvaluateApprovalRules(session, []ToolCall{{
+		Name: "fetch", ID: "6",
+		Parameters: map[string]*any{"method": &getMethod},
+	}})
+	if result.Decision != DecisionApproved {
+		t.Errorf("Expected DecisionApproved for fetch GET (builtin rule), got %v", result.Decision)
+	}
+
+	// 内置 approve 规则不应批准 fetch POST
+	postMethod := any("POST")
+	result, _ = EvaluateApprovalRules(session, []ToolCall{{
+		Name: "fetch", ID: "7",
+		Parameters: map[string]*any{"method": &postMethod},
+	}})
+	if result.Decision != DecisionManual {
+		t.Errorf("Expected DecisionManual for fetch POST, got %v", result.Decision)
+	}
 }
 
 // TestEvaluateApprovalRules_BuiltinReject 测试内置拒绝规则（敏感文件路径）

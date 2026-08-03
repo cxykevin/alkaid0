@@ -304,6 +304,11 @@
                     "description": "默认使用的 Shell",
                     "default": ""
                 },
+                "FetchProxy": {
+                    "type": "string",
+                    "description": "fetch 工具的全局 HTTP 代理地址（支持 http/https/socks5），空为直连；hidden 伪装模式下同样生效",
+                    "default": ""
+                },
                 "TerminalEnvs": {
                     "type": "object",
                     "description": "终端启动时注入的环境变量",

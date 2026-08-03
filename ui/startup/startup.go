@@ -27,6 +27,7 @@ import (
 	"github.com/cxykevin/alkaid0/server"
 	"github.com/cxykevin/alkaid0/server/client/jsonrpc/connect"
 	"github.com/cxykevin/alkaid0/tools/index"
+	"github.com/cxykevin/alkaid0/tools/tools/fetch"
 	"github.com/cxykevin/alkaid0/tools/tools/search"
 	"github.com/cxykevin/alkaid0/tools/tools/trace"
 )
@@ -173,6 +174,46 @@ func Startup() {
 
 		// 拼接搜索问题 + 原始结果，让 AI 根据问题总结相关内容
 		userContent := fmt.Sprintf("Search query: %s\n\nSearch results:\n%s", query, rawResult)
+
+		messages := []reqstructs.Message{
+			{Role: reqstructs.RoleSystem, Content: systemPrompt},
+			{Role: reqstructs.RoleUser, Content: userContent},
+		}
+
+		req := reqstructs.ChatCompletionRequest{
+			Messages: messages,
+		}
+
+		var sb strings.Builder
+		err = request.SimpleOpenAIRequest(ctx, modelConfig.ProviderURL, modelConfig.ProviderKey,
+			modelConfig.ModelID, req, nil,
+			func(resp reqstructs.ChatCompletionResponse) error {
+				if len(resp.Choices) > 0 {
+					sb.WriteString(resp.Choices[0].Delta.Content)
+				}
+				return nil
+			})
+		if err != nil {
+			return "", fmt.Errorf("summarize request: %w", err)
+		}
+
+		result := strings.TrimSpace(sb.String())
+		if result == "" {
+			return "", fmt.Errorf("summarize returned empty result")
+		}
+		return result, nil
+	})
+
+	// fetch 工具抓取内容总结注入（模型直接共用 SearchSummaryModel）
+	fetch.SetSummarizeFn(func(ctx context.Context, rawContent, summaryPrompt string, modelID int32) (string, error) {
+		modelConfig, err := build.GetModelConfig(modelID)
+		if err != nil {
+			return "", fmt.Errorf("get model config: %w", err)
+		}
+
+		systemPrompt := "你是网页内容总结助手。把抓取到的内容总结成 markdown：保留关键事实、代码块与链接，输出语言与总结提示词一致。"
+
+		userContent := fmt.Sprintf("Summary instructions: %s\n\nRaw content:\n%s", summaryPrompt, rawContent)
 
 		messages := []reqstructs.Message{
 			{Role: reqstructs.RoleSystem, Content: systemPrompt},
