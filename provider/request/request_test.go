@@ -691,6 +691,18 @@ func TestEvaluateApprovalRules_BuiltinRules(t *testing.T) {
 		t.Errorf("Expected DecisionApproved for edit @task (builtin rule), got %v", result.Decision)
 	}
 
+	// 内置 approve 规则应批准 edit @memory / @memory/global（虚拟 memory 对象）
+	for i, memPath := range []string{"@memory", "@memory/global"} {
+		mp := any(memPath)
+		result, _ = EvaluateApprovalRules(session, []ToolCall{{
+			Name: "edit", ID: fmt.Sprintf("mem_%d", i),
+			Parameters: map[string]*any{"path": &mp},
+		}})
+		if result.Decision != DecisionApproved {
+			t.Errorf("Expected DecisionApproved for edit %s (builtin rule), got %v", memPath, result.Decision)
+		}
+	}
+
 	// 内置 approve 规则不应批准普通文件编辑
 	normalPath := any("main.go")
 	result, _ = EvaluateApprovalRules(session, []ToolCall{{
@@ -766,6 +778,27 @@ func TestEvaluateApprovalRules_BuiltinReject(t *testing.T) {
 	}})
 	if result.Decision != DecisionRejected {
 		t.Errorf("Expected DecisionRejected for edit .env, got %v", result.Decision)
+	}
+
+	// 收紧后：直接编辑 .alkaid0/ 下文件（含 MEMORY.md）应被内置拒绝规则匹配
+	alkaid0Path := "/project/.alkaid0/MEMORY.md"
+	alkVal := any(alkaid0Path)
+	result, _ = EvaluateApprovalRules(session, []ToolCall{{
+		Name: "edit", ID: "2",
+		Parameters: map[string]*any{"path": &alkVal},
+	}})
+	if result.Decision != DecisionRejected {
+		t.Errorf("Expected DecisionRejected for edit .alkaid0/MEMORY.md, got %v", result.Decision)
+	}
+
+	// 通过 @memory 虚拟对象编辑不应被拒绝
+	memPath := any("@memory")
+	result, _ = EvaluateApprovalRules(session, []ToolCall{{
+		Name: "edit", ID: "3",
+		Parameters: map[string]*any{"path": &memPath},
+	}})
+	if result.Decision == DecisionRejected {
+		t.Errorf("Expected edit @memory NOT rejected, got %v", result.Decision)
 	}
 }
 

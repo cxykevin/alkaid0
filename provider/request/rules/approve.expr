@@ -6,6 +6,6 @@
     ToolCall.Name == "trace" ||
     ToolCall.Name == "search" ||
     (ToolCall.Name == "fetch" && param(ToolCall, "method") == "GET") ||
-    (ToolCall.Name == "edit" && param(ToolCall, "path") == "@task") ||
+    (ToolCall.Name == "edit" && (param(ToolCall, "path") == "@task" || param(ToolCall, "path") == "@memory" || param(ToolCall, "path") == "@memory/global")) ||
     (ToolCall.Name == "run" && param(ToolCall, "type") == "sleep")
 )
