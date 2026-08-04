@@ -13,6 +13,7 @@ import (
 	"github.com/cxykevin/alkaid0/context/codebase"
 	"github.com/cxykevin/alkaid0/context/lsp"
 	"github.com/cxykevin/alkaid0/product"
+	"github.com/cxykevin/alkaid0/prompts"
 	"github.com/cxykevin/alkaid0/provider/mask"
 	"github.com/cxykevin/alkaid0/provider/phrase"
 	"github.com/cxykevin/alkaid0/storage/structs"
@@ -189,6 +190,20 @@ var commandMaps = map[string]*cmdObj{
 				indexTempfsAndChatHistory(obj.cwd)
 			}()
 			return false, nil
+		},
+	},
+	"/init": {
+		Description: "Analyze the codebase and generate an AGENTS.md guidance file",
+		Hint:        "(no args)",
+		Function: func(obj *sessionObj, _ string) (bool, error) {
+			promptText, err := prompts.Render(prompts.InitTemplate, struct{}{})
+			if err != nil {
+				return false, err
+			}
+			if err := obj.loop.Chat(promptText, nil); err != nil {
+				return false, err
+			}
+			return true, nil
 		},
 	},
 	"/mask": {
