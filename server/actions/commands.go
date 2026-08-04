@@ -64,6 +64,13 @@ var commandMaps = map[string]*cmdObj{
 			return false, fmt.Errorf("Unknown reasoning effort")
 		},
 	},
+	"/feedback": {
+		Description: "Submit feedback to the feedback server",
+		Hint:        "<feedback content>",
+		Function: func(obj *sessionObj, arg string) (bool, error) {
+			return feedbackCommand(obj, arg)
+		},
+	},
 	"/reload": {
 		Description: "Reload config file from disk",
 		Hint:        "(no args)",

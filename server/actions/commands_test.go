@@ -40,3 +40,20 @@ func TestInitPromptRendered(t *testing.T) {
 		}
 	}
 }
+
+// TestFeedbackCommandRegistered 验证 /feedback 命令已注册且字段完整。
+func TestFeedbackCommandRegistered(t *testing.T) {
+	cmd, ok := commandMaps["/feedback"]
+	if !ok {
+		t.Fatal("/feedback command not registered")
+	}
+	if cmd.Description == "" {
+		t.Error("/feedback command has empty Description")
+	}
+	if cmd.Hint == "" {
+		t.Error("/feedback command has empty Hint")
+	}
+	if cmd.Function == nil {
+		t.Error("/feedback command has nil Function")
+	}
+}

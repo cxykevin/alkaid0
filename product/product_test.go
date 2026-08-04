@@ -123,3 +123,17 @@ func TestUserAgentNoEmptyComponents(t *testing.T) {
 		t.Errorf("UserAgent should not contain consecutive slashes, got %s", UserAgent)
 	}
 }
+
+// TestFeedbackConstants 验证反馈配置常量有效（不硬编码具体值，后端/产品可更换）。
+func TestFeedbackConstants(t *testing.T) {
+	if strings.TrimSpace(FeedbackProductID) == "" {
+		t.Error("FeedbackProductID should not be empty")
+	}
+	if !strings.HasPrefix(FeedbackServer, "http://") && !strings.HasPrefix(FeedbackServer, "https://") {
+		t.Errorf("FeedbackServer should be an http(s) URL, got %q", FeedbackServer)
+	}
+	// 常量保留原始配置值（可能含尾部斜杠），SDK 使用前需 TrimRight 去除。
+	if trimmed := strings.TrimRight(FeedbackServer, "/"); strings.HasSuffix(trimmed, "/") {
+		t.Errorf("TrimRight(FeedbackServer) should not end with slash, got %q", trimmed)
+	}
+}

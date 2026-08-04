@@ -13,4 +13,6 @@ type Config struct {
 	Context       ContextConfig
 	// DataMask 敏感数据出站脱敏配置
 	DataMask DataMaskConfig
+	// Feedback 反馈上报配置
+	Feedback FeedbackConfig
 }

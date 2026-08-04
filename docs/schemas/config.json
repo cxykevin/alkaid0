@@ -545,6 +545,23 @@
                     "description": "是否脱敏 JWT",
                     "default": true
                 }
+            },
+            "Feedback": {
+                "type": "object",
+                "description": "反馈上报配置",
+                "properties": {
+                    "URL": {
+                        "type": "string",
+                        "description": "反馈服务端地址，为空时使用内置 product.FeedbackServer",
+                        "format": "uri",
+                        "default": ""
+                    },
+                    "DisableAutoTelemetry": {
+                        "type": "boolean",
+                        "description": "是否禁用自动 Telemetry 上报（每月一次）",
+                        "default": false
+                    }
+                }
             }
         }
     }

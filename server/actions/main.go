@@ -51,6 +51,9 @@ func InitFuncs(srv *jsonrpc.Server) {
 		jsonrpc.Set(srv, "alk.cxykevin.top/fs/chmod", FsChmod)
 		jsonrpc.Set(srv, "alk.cxykevin.top/fs/chown", FsChown)
 	}
+
+	// 自动 Telemetry：每月一次，异步执行、失败静默，不阻塞启动。
+	go runAutoTelemetry()
 }
 
 // Close 关闭连接

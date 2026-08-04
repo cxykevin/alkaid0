@@ -1,6 +1,7 @@
 package log
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -274,3 +275,71 @@ func TestSolvePanic_NoPanic(t *testing.T) {
 // 	defer SolvePanic()
 // 	panic("test panic")
 // }
+
+// TestTail 验证日志尾部读取：取最后 maxBytes、是原内容后缀、且超长时返回全部。
+func TestTail(t *testing.T) {
+	tmp := t.TempDir()
+	p := filepath.Join(tmp, "log.log")
+	var b strings.Builder
+	for i := 0; i < 200; i++ {
+		b.WriteString(fmt.Sprintf("line %d: %s\n", i, strings.Repeat("x", 40)))
+	}
+	content := b.String()
+	if err := os.WriteFile(p, []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	old := logPath
+	logPath = p
+	defer func() { logPath = old }()
+
+	// 小于整个文件 → 取尾部，且是原内容的后缀、不超 maxBytes
+	got := Tail(512)
+	if got == "" {
+		t.Fatal("Tail returned empty")
+	}
+	if len(got) > 512 {
+		t.Errorf("Tail length %d exceeds maxBytes 512", len(got))
+	}
+	if !strings.HasSuffix(content, got) {
+		t.Error("Tail should be a suffix of the log file content")
+	}
+
+	// 大于整个文件 → 返回全部内容
+	if full := Tail(1 << 20); full != content {
+		t.Error("Tail with large maxBytes should return the entire file")
+	}
+}
+
+// TestTailUninitialized 日志未初始化（logPath 为空）或 maxBytes<=0 时返回空。
+func TestTailUninitialized(t *testing.T) {
+	old := logPath
+	logPath = ""
+	defer func() { logPath = old }()
+
+	if got := Tail(100); got != "" {
+		t.Errorf("Tail should return empty when log not initialized, got %q", got)
+	}
+	if got := Tail(0); got != "" {
+		t.Errorf("Tail with maxBytes<=0 should return empty, got %q", got)
+	}
+}
+
+// TestDebugLevelEnabled 验证 debug 级别判断（0=debug，其余非 debug）。
+func TestDebugLevelEnabled(t *testing.T) {
+	old := globalLogLevel
+	defer func() { globalLogLevel = old }()
+
+	globalLogLevel = 0 // debug
+	if !DebugLevelEnabled() {
+		t.Error("DebugLevelEnabled should be true at debug level")
+	}
+	globalLogLevel = 1 // info
+	if DebugLevelEnabled() {
+		t.Error("DebugLevelEnabled should be false at info level")
+	}
+	globalLogLevel = 2 // warn
+	if DebugLevelEnabled() {
+		t.Error("DebugLevelEnabled should be false at warn level")
+	}
+}

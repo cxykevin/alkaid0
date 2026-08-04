@@ -199,6 +199,9 @@ C:\ProgramData\alkaid0\config.json
         "Port": 7433,
         "DisableStdioServer": false,
         "SessionTimeout": 60
+    },
+    "Feedback": {
+        "DisableAutoTelemetry": false
     }
 }
 ```
@@ -277,11 +280,53 @@ C:\ProgramData\alkaid0\config.json
 
 ## Agent 命令
 
-- `/effort (low|medium|high|xhigh|max|[unset])`: 控制推理程度
-- `/compress`:  压缩上下文
-- `/background (on|[off])`: 后台运行
-- `/reload`: 重载配置
-- `/approve` 批准工具调用
+- `/approve`: 批准工具调用（无参数）
+- `/background (on|off)`: 切换后台运行模式，断连后保持会话存活
+- `/compress`: 压缩上下文历史
+- `/effort (low|medium|high|max|xhigh|unset)`: 设置推理程度
+- `/feedback <反馈内容>`: 提交反馈到反馈服务端
+- `/help`: 显示命令帮助（无参数）
+- `/index [clean|status|cancel|lsp-reset]`: 构建代码库索引（提取 LSP 符号 → 提交 embedding 任务）；子命令：`clean` 清库、`status` 显示进度、`cancel` 停止、`lsp-reset` 重置 LSP 失败计数
+- `/init`: 分析代码库并生成 AGENTS.md 指导文件（无参数）
+- `/mask add <值>|del <值>`: 管理自定义脱敏值，`add` 出站脱敏并在响应中还原，`del` 停止脱敏
+- `/reload`: 从磁盘重载配置（无参数）
+- `/s [short]`: 发送已配置短语，`/s <short>` 展开并发送，`/s`（无参数）列出所有短语
+- `/title [标题]`: 设置会话标题，无参数时回退到 AI 生成标题
+- `/version`: 显示版本信息（无参数）
+
+## 反馈与遥测（Feedback & Telemetry）
+
+### 手动反馈
+
+在会话中输入 `/feedback <反馈内容>` 即可将反馈提交到反馈服务端（feederback），并附带最近 60KB 日志与系统信息。反馈完成后会返回反馈 ID。
+
+### 自动遥测（AutoTelemetry）
+
+程序会每 30 天自动上报一次使用信息。
+
+**采集内容：**
+
+- 版本号、构建 commit、Go 版本
+- 操作系统与架构
+- 配置中使用的模型 ID
+
+**不采集：**
+
+- 对话内容、工作区代码
+- 日志文件内容
+- 配置中的密钥
+
+**如何关闭：**
+
+在 `config.json` 中设置：
+
+```json
+{
+    "Feedback": {
+        "DisableAutoTelemetry": true
+    }
+}
+```
 
 ## ACP 协议扩展
 
@@ -320,6 +365,7 @@ C:\ProgramData\alkaid0\config.json
 - `param(call, key)` 参数值
 
 ### 5. 示例
+
 #### 示例 A：仅允许 Read 自动批准（已经内置）
 ```
 AutoApprove: "ToolCall.Name == 'trace'"

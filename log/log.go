@@ -2,6 +2,7 @@
 package log
 
 import (
+	"bytes"
 	"fmt"
 	"log"
 	"os"
@@ -9,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"unicode/utf8"
 
 	"github.com/cxykevin/alkaid0/internal/configutil"
 )
@@ -116,6 +118,58 @@ func Load() {
 
 	// logLck.Unlock()
 
+}
+
+// Tail 返回日志文件末尾最多 maxBytes 字节的内容。
+// 日志未初始化、文件不存在或读取失败时返回空字符串，不 panic。
+// 从完整行边界开始截取（避免从行中间/UTF-8 中间字节切开），
+// 供 /feedback 等场景随反馈附带最近日志。
+func Tail(maxBytes int) string {
+	if maxBytes <= 0 || logPath == "" {
+		return ""
+	}
+	expanded := configutil.ExpandPath(logPath)
+	f, err := os.Open(expanded)
+	if err != nil {
+		return ""
+	}
+	defer f.Close()
+
+	fi, err := f.Stat()
+	if err != nil || fi.Size() <= 0 {
+		return ""
+	}
+	size := fi.Size()
+	offset := size - int64(maxBytes)
+	if offset < 0 {
+		offset = 0
+	}
+	buf := make([]byte, size-offset)
+	if _, err := f.ReadAt(buf, offset); err != nil {
+		return ""
+	}
+	if offset > 0 {
+		// 跳到下一个完整行，避免从行中间/UTF-8 中间字节开始。
+		if i := bytes.IndexByte(buf, '\n'); i >= 0 {
+			buf = buf[i+1:]
+		} else {
+			// 无换行：剥离开头不完整的 UTF-8 序列。
+			for len(buf) > 0 {
+				r, size := utf8.DecodeRune(buf)
+				if r != utf8.RuneError || size > 1 {
+					break
+				}
+				buf = buf[1:]
+			}
+		}
+	}
+	return string(buf)
+}
+
+// DebugLevelEnabled 日志是否处于 debug 级别（ALKAID0_LOG_LEVEL=debug）。
+// 供 debug 模式下禁用反馈等旁路功能。
+func DebugLevelEnabled() bool {
+	return globalLogLevel <= 0
 }
 
 // logWorker 异步日志处理 worker goroutine。
