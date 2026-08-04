@@ -22,35 +22,31 @@ jobs:
           go-version: "1.26.5"
           check-latest: true
 
-      - name: 安装交叉编译工具链和 UPX
+      - name: 安装 UPX
         run: |
           sudo apt-get update
-          sudo apt-get install -y upx-ucl gcc-mingw-w64-x86-64 gcc-aarch64-linux-gnu
+          sudo apt-get install -y upx-ucl
 
       - name: 执行代码生成
         run: |
           go generate ./...
           go generate product/gen.go
 
-      - name: 构建 Linux amd64 (本机 CGO)
+      - name: 构建 Linux amd64 (纯 Go)
         run: |
-          CGO_ENABLED=1 GOOS=linux GOARCH=amd64 \
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
             go build -trimpath -ldflags="-s -w" \
             -o alkaid0-linux-amd64 .
 
       - name: 构建 Windows amd64 (交叉编译)
-        env:
-          CC: x86_64-w64-mingw32-gcc
         run: |
-          CGO_ENABLED=1 GOOS=windows GOARCH=amd64 \
+          CGO_ENABLED=0 GOOS=windows GOARCH=amd64 \
             go build -trimpath -ldflags="-s -w" \
             -o alkaid0-windows-amd64.exe .
 
       - name: 构建 Linux arm64 (交叉编译)
-        env:
-          CC: aarch64-linux-gnu-gcc
         run: |
-          CGO_ENABLED=1 GOOS=linux GOARCH=arm64 \
+          CGO_ENABLED=0 GOOS=linux GOARCH=arm64 \
             go build -trimpath -ldflags="-s -w" \
             -o alkaid0-linux-arm64 .
 
@@ -88,13 +84,13 @@ jobs:
 
       - name: 构建 Darwin amd64
         run: |
-          CGO_ENABLED=1 GOOS=darwin GOARCH=amd64 \
+          CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 \
             go build -trimpath -ldflags="-s -w" \
             -o alkaid0-darwin-amd64 .
 
       - name: 构建 Darwin arm64
         run: |
-          CGO_ENABLED=1 GOOS=darwin GOARCH=arm64 \
+          CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 \
             go build -trimpath -ldflags="-s -w" \
             -o alkaid0-darwin-arm64 .
 
@@ -123,6 +119,8 @@ jobs:
           check-latest: true
 
       - name: 静态分析
+        env:
+          CGO_ENABLED: "0"
         run: |
           go vet ./...
 
@@ -140,6 +138,7 @@ jobs:
           ALKAID0_CONFIG_PATH: "alklog.log"
           # ALKAID0_TEST_SANDBOX: "true"
           ALKAID0_TEST_LESS_MEMORY_MODE: "true"
+          CGO_ENABLED: "0"
         run: |
           go test -v ./...
 
