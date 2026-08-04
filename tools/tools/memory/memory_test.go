@@ -242,6 +242,9 @@ func TestWriteMemory_MkdirAll(t *testing.T) {
 
 // TestBuildMemoryPrompt_Empty 无任何 memory 文件 → 返回非空引导语
 func TestBuildMemoryPrompt_Empty(t *testing.T) {
+	// 隔离全局 memory：不依赖默认配置目录（CI 上 ALKAID0_CONFIG_PATH 指向 cwd，
+	// 大小写不敏感文件系统会把模板 memory.md 误读为全局 MEMORY.md）
+	setGlobalMemoryDir(t)
 	session := &structs.Chats{Root: t.TempDir()}
 	out, err := buildMemoryPrompt(session)
 	if err != nil {
@@ -257,6 +260,8 @@ func TestBuildMemoryPrompt_Empty(t *testing.T) {
 
 // TestBuildMemoryPrompt_ProjectOnly 仅项目 memory → 输出含内容且不含 Global 段
 func TestBuildMemoryPrompt_ProjectOnly(t *testing.T) {
+	// 隔离全局 memory，避免 CI 环境耦合（同 TestBuildMemoryPrompt_Empty 注释）
+	setGlobalMemoryDir(t)
 	root := t.TempDir()
 	memPath := filepath.Join(root, ".alkaid0", "MEMORY.md")
 	if err := os.MkdirAll(filepath.Dir(memPath), 0755); err != nil {
