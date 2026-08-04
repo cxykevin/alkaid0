@@ -71,6 +71,12 @@ func injectNativeFormatCorrection(db *gorm.DB, session *storageStructs.Chats) er
 // 当 session 处于 WaitApprove 状态时，用户消息会被同时作为拒绝原因（写入
 // Communicate 消息）和正常用户消息（写入 MessagesRoleUser）处理，确保输入不丢失。
 func UserAddMsg(session *storageStructs.Chats, msg string, refers *storageStructs.MessagesReferList) error {
+	_, err := UserAddMsgWithID(session, msg, refers)
+	return err
+}
+
+// UserAddMsgWithID 同 UserAddMsg，但返回持久化的用户消息 DB ID（用于 ACP v2 messageId）。
+func UserAddMsgWithID(session *storageStructs.Chats, msg string, refers *storageStructs.MessagesReferList) (uint64, error) {
 	logger.Info("UserAddMsg: chatID=%d, msgLen=%d", session.ID, len(msg))
 	db := session.DB
 	chatID := session.ID
@@ -86,7 +92,7 @@ func UserAddMsg(session *storageStructs.Chats, msg string, refers *storageStruct
 		logger.Info("UserAddMsg: state=WaitApprove, rejecting pending tools and processing user input")
 		reason, err := prompts.Render(prompts.UserRejectTemplate, msg)
 		if err != nil {
-			return err
+			return 0, err
 		}
 		if err := db.Create(&storageStructs.Messages{
 			ChatID: chatID,
@@ -94,11 +100,11 @@ func UserAddMsg(session *storageStructs.Chats, msg string, refers *storageStruct
 			Refers: refer,
 			Type:   storageStructs.MessagesRoleCommunicate,
 		}).Error; err != nil {
-			return err
+			return 0, err
 		}
 		session.State = state.StateIdle
 		if err := db.Save(session).Error; err != nil {
-			return err
+			return 0, err
 		}
 		// NOTE: 不 return — 继续执行后续逻辑，将用户输入作为正常消息插入
 	}
@@ -107,7 +113,7 @@ func UserAddMsg(session *storageStructs.Chats, msg string, refers *storageStruct
 	if session.CurrentAgentID != "" {
 		err := actions.DeactivateAgent(session, "<| user stopped subagent |>")
 		if err != nil {
-			return err
+			return 0, err
 		}
 	}
 
@@ -133,7 +139,7 @@ func UserAddMsg(session *storageStructs.Chats, msg string, refers *storageStruct
 		Type:   storageStructs.MessagesRoleUser,
 	}
 	if err := db.Create(&msgRecord).Error; err != nil {
-		return err
+		return 0, err
 	}
 
 	// 存储分类标签
@@ -149,7 +155,7 @@ func UserAddMsg(session *storageStructs.Chats, msg string, refers *storageStruct
 		}
 	}
 
-	return nil
+	return msgRecord.ID, nil
 }
 
 // SubAgentReject 处理子代理被拒绝时的状态回退

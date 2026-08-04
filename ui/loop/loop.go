@@ -73,6 +73,8 @@ type msgObj struct {
 	Msg     string
 	Refers  []any
 	Command msgAction
+	// MsgID 已由 ACP 层持久化的用户消息 DB ID（ChatWithID 设置，非 0 时跳过重复插入）
+	MsgID uint64
 }
 
 // Object 循环对象
@@ -435,7 +437,8 @@ func (p *Object) Start(ctx context.Context) {
 			// 处理特殊命令
 			if input == "!" {
 				input = ""
-			} else {
+			} else if callObj.MsgID == 0 {
+				// v2：ACP 层（SessionPrompt）已用 ChatWithID 持久化用户消息，MsgID 非 0 时跳过重复插入
 				err := funcs.UserAddMsg(session, input, nil)
 				if err != nil {
 					call(AIResponse{
@@ -581,6 +584,22 @@ func (p *Object) Chat(msg string, refers []any) error {
 	obj := msgObj{
 		Msg:    msg,
 		Refers: refers,
+	}
+	select {
+	case p.sendQueue <- obj:
+		return nil
+	default:
+		return fmt.Errorf("send msg error: send queue full")
+	}
+}
+
+// ChatWithID 同 Chat，但携带已由 ACP 层持久化的用户消息 DB ID。
+// 循环处理该消息时跳过重复插入（避免 DB/回放中出现两条相同的用户消息）。
+func (p *Object) ChatWithID(msg string, msgID uint64, refers []any) error {
+	obj := msgObj{
+		Msg:    msg,
+		Refers: refers,
+		MsgID:  msgID,
 	}
 	select {
 	case p.sendQueue <- obj:

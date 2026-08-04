@@ -16,7 +16,6 @@ import (
 	"github.com/cxykevin/alkaid0/prompts"
 	"github.com/cxykevin/alkaid0/provider/mask"
 	"github.com/cxykevin/alkaid0/provider/phrase"
-	"github.com/cxykevin/alkaid0/storage/structs"
 	u "github.com/cxykevin/alkaid0/utils"
 )
 
@@ -29,17 +28,6 @@ type cmdObj struct {
 
 // commandMaps 存储所有聊天命令及其对应处理函数
 var commandMaps = map[string]*cmdObj{
-	"/approve": {
-		Description: "Approve a request",
-		Hint:        "(no args)",
-		Function: func(obj *sessionObj, _ string) (bool, error) {
-			err := obj.loop.Approve()
-			if err != nil {
-				return false, err
-			}
-			return true, nil
-		},
-	},
 	"/compress": {
 		Description: "Compress the history",
 		Hint:        "(no args)",
@@ -49,19 +37,6 @@ var commandMaps = map[string]*cmdObj{
 				return false, err
 			}
 			return true, nil
-		},
-	},
-	"/effort": {
-		Description: "Set the reasoning effort (low | medium | high | max | xhigh | unset)",
-		Hint:        "reasoning effort",
-		Function: func(obj *sessionObj, arg string) (bool, error) {
-			effortArg := strings.TrimSpace(strings.ToLower(arg))
-			if effortArg == "low" || effortArg == "medium" || effortArg == "high" || effortArg == "max" || effortArg == "xhigh" || effortArg == "unset" {
-				obj.session.ReasoningEffort = effortArg
-				err := obj.session.DB.Model(&structs.Chats{}).Where("id = ?", obj.session.ID).Update("reasoning_effort", effortArg).Error
-				return false, err
-			}
-			return false, fmt.Errorf("Unknown reasoning effort")
 		},
 	},
 	"/feedback": {
@@ -107,15 +82,7 @@ var commandMaps = map[string]*cmdObj{
 				if err := codebase.CleanDirectory(obj.cwd); err != nil {
 					return false, fmt.Errorf("clean codebase: %w", err)
 				}
-				broadcastSessionUpdate(sessionID, SessionUpdate{
-					SessionID: sessionID,
-					Update: SessionUpdateUpdate{
-						SessionUpdate: "alk.cxykevin.top/session_stop",
-						Content: map[string]string{
-							"stopReason": "end_turn",
-						},
-					},
-				}, 0)
+				broadcastStateUpdate(sessionID, "idle", "end_turn", "")
 				return false, nil
 			case "lsp-reset":
 				lsp.ResetLSPFailures()

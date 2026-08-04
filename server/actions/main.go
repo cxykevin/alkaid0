@@ -7,8 +7,12 @@ import (
 
 var logger = log.New("actions")
 
+// rpcSrv jsonrpc 服务器实例（供 request_permission 等出站请求的响应关联使用）
+var rpcSrv *jsonrpc.Server
+
 // InitFuncs 初始化函数
 func InitFuncs(srv *jsonrpc.Server) {
+	rpcSrv = srv
 	logger.Info("init functions")
 
 	{ // 系统
@@ -23,19 +27,16 @@ func InitFuncs(srv *jsonrpc.Server) {
 
 	{ // 会话
 		jsonrpc.Set(srv, "session/new", SessionNew)
-		jsonrpc.Set(srv, "session/load", SessionLoad)
+		jsonrpc.Set(srv, "session/resume", SessionResume)
+		jsonrpc.Set(srv, "session/close", SessionClose)
 		jsonrpc.Set(srv, "session/list", SessionList)
 		jsonrpc.Set(srv, "session/delete", SessionDelete)
 		jsonrpc.Set(srv, "session/set_config_option", SessionSetConfigOption)
-		jsonrpc.Set(srv, "session/set_model", SessionSetModel)
-		jsonrpc.Set(srv, "session/setModel", SessionSetModel)
-		jsonrpc.Set(srv, "unstable_setSessionModel", SessionSetModel)
 		jsonrpc.Set(srv, "session/prompt", SessionPrompt)
 		jsonrpc.Set(srv, "session/cancel", SessionCancel)
 
 		jsonrpc.Set(srv, "alk.cxykevin.top/session/get_background", SessionGetBackground)
 		jsonrpc.Set(srv, "alk.cxykevin.top/session/get_effort", SessionGetEffort)
-		jsonrpc.Set(srv, "alk.cxykevin.top/session/list_models", SessionListModels)
 
 		jsonrpc.Set(srv, "alk.cxykevin.top/list_subagent", SubAgentList)
 

@@ -1,7 +1,6 @@
 package actions
 
 import (
-	"context"
 	"slices"
 	"strings"
 	"sync"
@@ -143,38 +142,6 @@ func TestBroadcastSessionUpdate(t *testing.T) {
 	sessionConnLock.Unlock()
 }
 
-// TestActivePromptLifecycle 测试进行中 prompt 的生命周期
-func TestActivePromptLifecycle(t *testing.T) {
-	sessionID := "sess_888:/tmp/test"
-
-	// 创建新的 prompt context
-	ctx1, cancel1 := context.WithCancel(context.Background())
-	activePromptsLock.Lock()
-	activePrompts[sessionID] = &promptCtx{
-		cancel:   cancel1,
-		isActive: true,
-	}
-	activePromptsLock.Unlock()
-
-	// 验证 context 创建成功
-	activePromptsLock.Lock()
-	if _, ok := activePrompts[sessionID]; !ok {
-		t.Fatal("activePrompts should contain sessionID")
-	}
-	activePromptsLock.Unlock()
-
-	// 测试取消
-	cancel1()
-	if err := ctx1.Err(); err != context.Canceled {
-		t.Errorf("context should be canceled, got %v", err)
-	}
-
-	// 清理
-	activePromptsLock.Lock()
-	delete(activePrompts, sessionID)
-	activePromptsLock.Unlock()
-}
-
 // TestConnCallRegistration 测试连接注册/注销机制
 func TestConnCallRegistration(t *testing.T) {
 	sessionID := "sess_777:/tmp/test"
@@ -254,37 +221,6 @@ func TestSessionCancelValidation(t *testing.T) {
 			}
 		})
 	}
-}
-
-// TestDuplicatePrompt 测试重复的 prompt 请求被拒绝
-func TestDuplicatePrompt(t *testing.T) {
-	sessionID := "sess_555:/tmp/test"
-
-	// 创建一个进行中的 prompt
-	_, cancel := context.WithCancel(context.Background())
-	activePromptsLock.Lock()
-	activePrompts[sessionID] = &promptCtx{
-		cancel:   cancel,
-		isActive: true,
-	}
-	activePromptsLock.Unlock()
-
-	// 清理后释放
-	defer func() {
-		activePromptsLock.Lock()
-		delete(activePrompts, sessionID)
-		activePromptsLock.Unlock()
-	}()
-
-	// 尝试发送第二个 prompt 应该被拒绝
-	// （这个测试实际上依赖会话存在，暂时跳过）
-
-	// 验证进行中的 prompt 被标记
-	activePromptsLock.Lock()
-	if _, ok := activePrompts[sessionID]; !ok {
-		t.Fatal("activePrompts should contain sessionID")
-	}
-	activePromptsLock.Unlock()
 }
 
 // TestContentBlockExtraction 测试 prompt 内容提取
@@ -399,34 +335,4 @@ func TestConcurrentBroadcast(t *testing.T) {
 			t.Logf("conn %d received %d updates, want %d", cid, count, updateCount)
 		}
 	}
-}
-
-// TestPromptContextCancellation 测试 prompt context 的取消
-func TestPromptContextCancellation(t *testing.T) {
-	sessionID := "sess_333:/tmp/test"
-
-	// 创建 context
-	_, cancel := context.WithCancel(context.Background())
-	activePromptsLock.Lock()
-	activePrompts[sessionID] = &promptCtx{
-		cancel:   cancel,
-		isActive: true,
-	}
-	activePromptsLock.Unlock()
-
-	// 取消 context
-	cancel()
-
-	// 验证 context 被取消（通过 activePrompts 中的 promptCtx）
-	activePromptsLock.Lock()
-	pctx := activePrompts[sessionID]
-	activePromptsLock.Unlock()
-	if pctx == nil {
-		t.Fatal("promptCtx should exist")
-	}
-
-	// 清理
-	activePromptsLock.Lock()
-	delete(activePrompts, sessionID)
-	activePromptsLock.Unlock()
 }

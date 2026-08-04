@@ -280,10 +280,8 @@ C:\ProgramData\alkaid0\config.json
 
 ## Agent 命令
 
-- `/approve`: 批准工具调用（无参数）
 - `/background (on|off)`: 切换后台运行模式，断连后保持会话存活
 - `/compress`: 压缩上下文历史
-- `/effort (low|medium|high|max|xhigh|unset)`: 设置推理程度
 - `/feedback <反馈内容>`: 提交反馈到反馈服务端
 - `/help`: 显示命令帮助（无参数）
 - `/index [clean|status|cancel|lsp-reset]`: 构建代码库索引（提取 LSP 符号 → 提交 embedding 任务）；子命令：`clean` 清库、`status` 显示进度、`cancel` 停止、`lsp-reset` 重置 LSP 失败计数
@@ -330,7 +328,7 @@ C:\ProgramData\alkaid0\config.json
 
 ## ACP 协议扩展
 
-见 `docs` 目录
+alkaid0 实现 [ACP v2](https://agentclientprotocol.com/protocol/v2/migration.md) 协议（`protocolVersion: 2`），并对 ACP 做私有扩展。详见 [docs/acp/extension.md](docs/acp/extension.md) 与 [docs/acp/fs.md](docs/acp/fs.md)。
 
 ---
 

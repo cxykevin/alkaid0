@@ -120,9 +120,9 @@ func TestPromptIntegration_SingleClient(t *testing.T) {
 		calls2 <- ReceivedCall{Name: name, Data: data}
 		return nil
 	}
-	_, err = SessionLoad(SessionLoadRequest{Cwd: tmpDir, SessionID: sessionID}, callFunc2, 2)
+	_, err = SessionResume(SessionResumeRequest{Cwd: tmpDir, SessionID: sessionID}, callFunc2, 2)
 	if err != nil {
-		t.Fatalf("SessionLoad failed: %v", err)
+		t.Fatalf("SessionResume failed: %v", err)
 	}
 	fmt.Printf("[TEST] calls2 buffered after SessionLoad: %d\n", len(calls2))
 
@@ -135,14 +135,14 @@ func TestPromptIntegration_SingleClient(t *testing.T) {
 	}
 	fmt.Printf("[TEST] calls2 buffered after SessionPrompt: %d\n", len(calls2))
 
-	// 等待第二个客户端收到 user_message_chunk（立即广播）或 session_stop
+	// 等待第二个客户端收到 user_message（整消息 upsert，v2）
 	matchUser := func(rc ReceivedCall) bool {
 		if rc.Name != "session/update" {
 			return false
 		}
 		if su, ok := rc.Data.(SessionUpdate); ok {
 			if upd, ok2 := su.Update.(SessionUpdateUpdate); ok2 {
-				return upd.SessionUpdate == "user_message_chunk" || upd.SessionUpdate == "alk.cxykevin.top/session_stop"
+				return upd.SessionUpdate == "user_message" && upd.MessageID != ""
 			}
 		}
 		return false
@@ -150,7 +150,7 @@ func TestPromptIntegration_SingleClient(t *testing.T) {
 
 	_, ok := waitForUpdate(calls2, matchUser, 5*time.Second)
 	if !ok {
-		t.Fatal("did not receive user_message_chunk on second client")
+		t.Fatal("did not receive user_message on second client")
 	}
 
 	// 关闭会话
@@ -212,9 +212,9 @@ func TestPromptIntegration_MultiClient(t *testing.T) {
 
 	// 其余客户端 attach
 	for i := 1; i <= 2; i++ {
-		_, err := SessionLoad(SessionLoadRequest{Cwd: tmpDir, SessionID: sessionID}, callFor(i), uint64(102+i))
+		_, err := SessionResume(SessionResumeRequest{Cwd: tmpDir, SessionID: sessionID}, callFor(i), uint64(102+i))
 		if err != nil {
-			t.Fatalf("SessionLoad failed for client %d: %v", i, err)
+			t.Fatalf("SessionResume failed for client %d: %v", i, err)
 		}
 	}
 
@@ -224,14 +224,14 @@ func TestPromptIntegration_MultiClient(t *testing.T) {
 		t.Fatalf("SessionPrompt failed: %v", err)
 	}
 
-	// 等待其它两个客户端均能收到 user_message_chunk（立即广播）或 session_stop
+	// 等待其它两个客户端均能收到 user_message（整消息 upsert，v2）
 	matchUser := func(rc ReceivedCall) bool {
 		if rc.Name != "session/update" {
 			return false
 		}
 		if su, ok := rc.Data.(SessionUpdate); ok {
 			if upd, ok2 := su.Update.(SessionUpdateUpdate); ok2 {
-				return upd.SessionUpdate == "user_message_chunk" || upd.SessionUpdate == "alk.cxykevin.top/session_stop"
+				return upd.SessionUpdate == "user_message" && upd.MessageID != ""
 			}
 		}
 		return false
@@ -240,7 +240,7 @@ func TestPromptIntegration_MultiClient(t *testing.T) {
 	for i := 1; i <= 2; i++ {
 		_, ok := waitForUpdate(chs[i], matchUser, 5*time.Second)
 		if !ok {
-			t.Fatalf("client %d did not receive user_message_chunk", i)
+			t.Fatalf("client %d did not receive user_message", i)
 		}
 	}
 

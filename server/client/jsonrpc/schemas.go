@@ -35,3 +35,14 @@ type Response struct {
 	Result  any    `json:"result,omitempty"`
 	Error   *Error `json:"error,omitempty"`
 }
+
+// InboundMessage 入站消息结构，兼收请求与响应。
+// 响应（有 id、无 method，携带 result/error）用于路由回等待中的出站请求（如 request_permission）。
+type InboundMessage struct {
+	Version string `json:"jsonrpc"`
+	ID      any    `json:"id,omitempty"`
+	Method  string `json:"method"`
+	Params  u.H    `json:"params"`
+	Result  any    `json:"result"`
+	Error   *Error `json:"error"`
+}

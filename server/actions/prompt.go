@@ -3,7 +3,11 @@ package actions
 import (
 	"fmt"
 	"strings"
+	"sync/atomic"
 
+	"github.com/cxykevin/alkaid0/provider/request"
+	"github.com/cxykevin/alkaid0/ui/funcs"
+	"github.com/cxykevin/alkaid0/ui/state"
 	u "github.com/cxykevin/alkaid0/utils"
 )
 
@@ -13,11 +17,8 @@ type SessionPromptRequest struct {
 	Prompt    []u.H  `json:"prompt,omitempty"`
 }
 
-// SessionPromptResponse prompt turn 的响应，包含stopReason
-type SessionPromptResponse struct {
-	StopReason string  `json:"stopReason"`
-	ErrorMsg   *string `json:"alk.cxykevin.top/error_msg,omitempty"`
-}
+// SessionPromptResponse prompt turn 的响应（ACP v2：纯确认，立即返回 {}）
+type SessionPromptResponse struct{}
 
 // ContentBlock 内容块
 type ContentBlock struct {
@@ -25,28 +26,27 @@ type ContentBlock struct {
 	Text string `json:"text,omitempty"`
 }
 
-// SessionPrompt 处理 prompt turn 请求
+// cmdMsgSeq 命令用户消息的合成 messageId 序号
+var cmdMsgSeq atomic.Uint64
+
+// cmdMsgID 生成命令用户消息的 messageId（命令不入库，使用合成 ID cmd_<chatID>_<seq>）
+func cmdMsgID(obj *sessionObj) string {
+	return fmt.Sprintf("cmd_%d_%d", obj.id, cmdMsgSeq.Add(1))
+}
+
+// SessionPrompt 处理 prompt turn 请求（ACP v2：立即 ack {}，状态经 state_update 广播）
 func SessionPrompt(req SessionPromptRequest, call func(string, any, *string) error, connID uint64) (SessionPromptResponse, error) {
 	if req.SessionID == "" {
 		return SessionPromptResponse{}, fmt.Errorf("sessionId is empty")
 	}
 
-	// 解析会话ID
-	cwd, sid, err := sessionID2Cwd(req.SessionID)
-	if err != nil {
-		return SessionPromptResponse{}, fmt.Errorf("invalid sessionId: %v", err)
-	}
-	_ = cwd
-	_ = sid
-
 	// 获取会话对象
 	sessLock.Lock()
 	sessObj, ok := sessions[req.SessionID]
+	sessLock.Unlock()
 	if !ok {
-		sessLock.Unlock()
 		return SessionPromptResponse{}, fmt.Errorf("session not found")
 	}
-	sessLock.Unlock()
 
 	// 从 prompt 中提取文本内容
 	var userMessage strings.Builder
@@ -62,127 +62,71 @@ func SessionPrompt(req SessionPromptRequest, call func(string, any, *string) err
 		return SessionPromptResponse{}, fmt.Errorf("no text content in prompt")
 	}
 
-	// 步骤2：广播用户消息给所有其他连接的 client
-	err = broadcastSessionUpdate(req.SessionID, SessionUpdate{
-		SessionID: req.SessionID,
-		Update: SessionUpdateUpdate{
-			SessionUpdate: "user_message_chunk",
-			Content: u.H{
-				"type": "text",
-				"text": userMessage.String(),
-			},
-		},
-	}, connID)
+	text := userMessage.String()
+	// isCommand 标记本 turn 是否为斜杠命令轮（命令轮不算正常请求，不触发 AI 标题生成）
+	isCommand := strings.HasPrefix(text, "/")
 
-	broadcastSessionUpdate(req.SessionID, SessionUpdate{ // 空内容触发 Client 状态更新
-		SessionID: req.SessionID,
-		Update: SessionUpdateUpdate{
-			SessionUpdate: "alk.cxykevin.top/session_start",
-			Content:       u.H{},
-		},
-	}, 0)
-
-	if err != nil {
-		broadcastSessionUpdate(req.SessionID, SessionUpdate{ // 空内容触发 Client 状态更新
+	if isCommand {
+		// 命令轮：广播 user_message（合成 messageId）+ running，分发命令，立即返回
+		broadcastSessionUpdate(req.SessionID, SessionUpdate{
 			SessionID: req.SessionID,
 			Update: SessionUpdateUpdate{
-				SessionUpdate: "alk.cxykevin.top/session_stop",
-				Content: u.H{
-					"stopReason":                 "refusal",
-					"alk.cxykevin.top/error_msg": fmt.Sprintf("failed to broadcast user message: %v", err),
-				},
+				SessionUpdate: "user_message",
+				MessageID:     cmdMsgID(sessObj),
+				Content:       []u.H{{"type": "text", "text": text}},
 			},
 		}, 0)
-		return SessionPromptResponse{}, fmt.Errorf("failed to broadcast user message: %v", err)
-	}
+		broadcastStateUpdate(req.SessionID, "running", "", "")
 
-	stopChan := make(chan StopMsg, 1)
-	sessObj.waitStopChan <- &stopChan
-
-	var wait = true
-	err = nil
-
-	// isCommand 标记本 turn 是否为斜杠命令轮（命令轮不算正常请求，不触发 AI 标题生成）
-	isCommand := strings.HasPrefix(userMessage.String(), "/")
-	if isCommand {
-		cmds := strings.SplitN(userMessage.String(), " ", 2)
+		cmds := strings.SplitN(text, " ", 2)
 		cmdArgs := ""
-		if len(cmds) == 0 {
-			broadcastSessionUpdate(req.SessionID, SessionUpdate{ // 空内容触发 Client 状态更新
-				SessionID: req.SessionID,
-				Update: SessionUpdateUpdate{
-					SessionUpdate: "alk.cxykevin.top/session_stop",
-					Content: u.H{
-						"stopReason":                 "refusal",
-						"alk.cxykevin.top/error_msg": "invalid command",
-					},
-				},
-			}, 0)
-			return SessionPromptResponse{}, fmt.Errorf("invalid command")
-		}
 		if len(cmds) == 2 {
 			cmdArgs = cmds[1]
 		}
 		obj, ok := commandMaps[cmds[0]]
 		if !ok {
-			broadcastSessionUpdate(req.SessionID, SessionUpdate{ // 空内容触发 Client 状态更新
-				SessionID: req.SessionID,
-				Update: SessionUpdateUpdate{
-					SessionUpdate: "alk.cxykevin.top/session_stop",
-					Content: u.H{
-						"stopReason":                 "refusal",
-						"alk.cxykevin.top/error_msg": "invalid command",
-					},
-				},
-			}, 0)
+			broadcastStateUpdate(req.SessionID, "idle", "refusal", "invalid command")
 			return SessionPromptResponse{}, fmt.Errorf("invalid command")
 		}
-		if obj != nil {
-			wait, err = obj.Function(sessObj, cmdArgs)
-		} else {
-			err = fmt.Errorf("invalid command")
+		wait, err := obj.Function(sessObj, cmdArgs)
+		if wait && err == nil {
+			return SessionPromptResponse{}, nil // 异步命令：callback 负责发 idle
 		}
-	} else {
-		err = sessObj.loop.Chat(userMessage.String(), nil)
-	}
-
-	var ret StopMsg
-	if wait && err == nil {
-		// 等待结束
-		ret = <-stopChan
-	} else {
-		// 即使 wait=true，若发送消息已失败（如 "send queue full"），
-		// loop 永远不会回调 stopChan，这里绝不能阻塞等待，否则 handler 永久挂死。
+		// wait=true 但 err != nil（如 sendQueue 满）时消息未入队，loop 不会回调 idle，需手动广播
+		errMsg := ""
+		reason := "end_turn"
 		if err != nil {
-			ret = StopMsg{StopReason: "refusal", ErrorMsg: new(fmt.Sprintf("error: %v", err))}
-		} else {
-			ret = StopMsg{StopReason: "end_turn"}
+			reason = "refusal"
+			errMsg = err.Error()
 		}
+		broadcastStateUpdate(req.SessionID, "idle", reason, errMsg)
+		return SessionPromptResponse{}, err
 	}
 
-	broadcastSessionUpdate(req.SessionID, SessionUpdate{ // 空内容触发 Client 状态更新
+	// 正常 prompt：持久化用户消息获取 DB ID（作为 messageId 基础，与回放一致）
+	userMsgID, err := funcs.UserAddMsgWithID(sessObj.session, text, nil)
+	if err != nil {
+		broadcastStateUpdate(req.SessionID, "idle", "refusal", err.Error())
+		return SessionPromptResponse{}, fmt.Errorf("failed to add user message: %v", err)
+	}
+
+	// 广播 user_message（发送方也要收到——ACP v2 以 agent 的 user_message 为 messageId 真相来源）+ running
+	broadcastSessionUpdate(req.SessionID, SessionUpdate{
 		SessionID: req.SessionID,
 		Update: SessionUpdateUpdate{
-			SessionUpdate: "alk.cxykevin.top/session_stop",
-			Content: u.H{
-				"stopReason":                 ret.StopReason,
-				"alk.cxykevin.top/error_msg": ret.ErrorMsg,
-			},
+			SessionUpdate: "user_message",
+			MessageID:     msgID(userMsgID),
+			Content:       []u.H{{"type": "text", "text": text}},
 		},
 	}, 0)
+	broadcastStateUpdate(req.SessionID, "running", "", "")
 
-	// 自动标题：首次正常请求完整响应后异步生成 AI 标题（命令轮不触发；
-	// 用户已设置手动标题或已有 AI 标题时不重复生成）
-	if !isCommand && ret.StopReason == "end_turn" && ret.ErrorMsg == nil &&
-		sessObj.session.Title == "" && sessObj.session.AITitle == "" {
-		generateTitle(sessObj.session, req.SessionID, false)
+	err = sessObj.loop.ChatWithID(text, userMsgID, nil)
+	if err != nil {
+		broadcastStateUpdate(req.SessionID, "idle", "refusal", err.Error())
+		return SessionPromptResponse{}, err
 	}
-
-	// 返回停止原因
-	return SessionPromptResponse{
-		StopReason: ret.StopReason,
-		ErrorMsg:   ret.ErrorMsg,
-	}, err
+	return SessionPromptResponse{}, nil // 立即 ack
 }
 
 // // mapStopReason 将loop.StopReason映射到ACP协议中的stopReason字符串
@@ -206,20 +150,11 @@ type SessionCancelRequest struct {
 	SessionID string `json:"sessionId"`
 }
 
-// SessionCancel 处理 session/cancel 请求
-// 取消正在进行的 prompt turn
+// SessionCancel 处理 session/cancel 请求（ACP v2：取消后经 idle state_update(stopReason=cancelled) 确认）
 func SessionCancel(req SessionCancelRequest, call func(string, any, *string) error, connID uint64) (any, error) {
 	if req.SessionID == "" {
 		return nil, fmt.Errorf("sessionId is empty")
 	}
-
-	// activePromptsLock.Lock()
-	// promptCtx, exists := activePrompts[req.SessionID]
-	// activePromptsLock.Unlock()
-
-	// if !exists {
-	// 	return nil, fmt.Errorf("no prompt in progress for this session")
-	// }
 
 	sessLock.Lock()
 	sess, ok := sessions[req.SessionID]
@@ -228,32 +163,14 @@ func SessionCancel(req SessionCancelRequest, call func(string, any, *string) err
 		return nil, fmt.Errorf("session not found")
 	}
 
-	sess.loop.Stop()
+	sess.loop.Stop() // 触发 StopReasonUser 回调 → callback 广播 idle+cancelled
 
-	// 停止后直接发送停止信号，停止整个会话交互。
-	// 若不发送，则工具 kill 的错误结果会传递给 AI，导致 AI 继续重试而非停止。
-	for {
-		select {
-		case i := <-sess.waitStopChan:
-			*i <- StopMsg{StopReason: "user_interrupted"}
-		default:
-			goto cancelDone
-		}
+	// WaitApprove 时 loop 停在 sendQueue 上，Stop() 不产生回调，需手动拒绝并唤醒权限 goroutine。
+	// 权限 goroutine 发现 State != WaitApprove 后直接退出，不做任何事。
+	if sess.session.State == state.StateWaitApprove {
+		_ = request.RejectToolCallsNoDeactivate(sess.session, "cancelled by user", nil)
+		signalPermission(sess, false)
 	}
-cancelDone:
-
-	// // 触发取消
-	// if promptCtx.cancel != nil {
-	// 	promptCtx.cancel()
-	// }
-
-	// 广播取消更新给所有连接的 client
-	_ = broadcastSessionUpdate(req.SessionID, SessionUpdate{
-		SessionID: req.SessionID,
-		Update: SessionUpdateUpdate{
-			SessionUpdate: "prompt_cancelled",
-		},
-	}, 0) // 不排除任何连接
 
 	return nil, nil
 }

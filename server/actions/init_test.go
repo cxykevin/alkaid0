@@ -6,68 +6,78 @@ import (
 	u "github.com/cxykevin/alkaid0/utils"
 )
 
-// TestInitializeResponse 测试Initialize方法的响应格式
-func TestInitializeResponse(t *testing.T) {
-	req := InitializeRequest{
-		ProtocolVersion:    1,
-		ClientCapabilities: u.H{},
-	}
-
-	resp, err := Initialize(req, nil, 1)
-	if err != nil {
-		t.Logf("Initialize返回错误（可能是预期的）: %v", err)
-		return
-	}
-
-	// 验证响应
-	if resp.ProtocolVersion == 0 {
-		t.Error("协议版本应该被设置")
+func v2InitReq() InitializeRequest {
+	return InitializeRequest{
+		ProtocolVersion: 2,
+		Capabilities:    u.H{},
+		Info:            u.H{"name": "test-client", "title": "Test", "version": "1"},
 	}
 }
 
-// TestInitFuncs 测试方法注册接口
-func TestInitFuncs(t *testing.T) {
-	t.Log("InitFuncs测试：验证方法注册接口存在")
-	// InitFuncs会调用jsonrpc.Set，我们无法直接测试
-	// 但函数是公开的，可以通过导入来测试其存在性
+// TestInitializeResponse 测试Initialize方法的响应格式（ACP v2）
+func TestInitializeResponse(t *testing.T) {
+	req := v2InitReq()
+
+	resp, err := Initialize(req, nil, 1)
+	if err != nil {
+		t.Fatalf("Initialize返回错误: %v", err)
+	}
+
+	if resp.ProtocolVersion != 2 {
+		t.Errorf("协议版本应为 2，got %d", resp.ProtocolVersion)
+	}
+	if resp.Info == nil || resp.Info["name"] != "alkaid0" {
+		t.Errorf("info.name 应为 alkaid0，got %v", resp.Info)
+	}
+	if resp.Capabilities == nil {
+		t.Fatal("capabilities 不应为 nil")
+	}
+	session, ok := resp.Capabilities["session"].(u.H)
+	if !ok {
+		t.Fatal("capabilities.session 应为对象")
+	}
+	if _, ok := session["prompt"]; !ok {
+		t.Error("capabilities.session.prompt 应存在")
+	}
+	if len(resp.AuthMethods) != 0 {
+		t.Error("authMethods 应为空（不广告 auth 表面）")
+	}
+}
+
+// TestInitializeVersionMismatch 协议版本不匹配应报错
+func TestInitializeVersionMismatch(t *testing.T) {
+	req := v2InitReq()
+	req.ProtocolVersion = 1
+	if _, err := Initialize(req, nil, 1); err == nil {
+		t.Error("protocolVersion=1 应被拒绝")
+	}
 }
 
 // TestProtocolVersion 测试协议版本号
 func TestProtocolVersion(t *testing.T) {
-	req := InitializeRequest{
-		ProtocolVersion:    1,
-		ClientCapabilities: u.H{},
-	}
-
-	resp, err := Initialize(req, nil, 1)
+	resp, err := Initialize(v2InitReq(), nil, 1)
 	if err != nil {
-		t.Logf("Initialize返回错误: %v", err)
-		return
+		t.Fatalf("Initialize返回错误: %v", err)
 	}
-
-	if resp.ProtocolVersion == 0 {
-		t.Error("协议版本应该被正确设置")
-	} else {
-		t.Logf("协议版本: %d", resp.ProtocolVersion)
+	if resp.ProtocolVersion != protoVersion {
+		t.Errorf("协议版本应为 %d", protoVersion)
 	}
 }
 
-// TestServerCapabilities 测试服务器能力声明
+// TestServerCapabilities 测试服务器能力声明（ACP v2：标记为 {} 对象而非布尔）
 func TestServerCapabilities(t *testing.T) {
-	req := InitializeRequest{
-		ProtocolVersion:    1,
-		ClientCapabilities: u.H{},
-	}
-
-	resp, err := Initialize(req, nil, 1)
+	resp, err := Initialize(v2InitReq(), nil, 1)
 	if err != nil {
-		t.Logf("Initialize返回错误: %v", err)
-		return
+		t.Fatalf("Initialize返回错误: %v", err)
 	}
-
-	// 检查是否包含capability信息
-	if resp.AgentCapabilities != nil {
-		t.Logf("服务器能力已声明: %v", len(resp.AgentCapabilities) > 0)
+	if len(resp.Capabilities) == 0 {
+		t.Error("capabilities 不应为空")
+	}
+	// v2 能力标记必须是对象（非布尔）
+	session := resp.Capabilities["session"].(u.H)
+	prompt := session["prompt"].(u.H)
+	if _, ok := prompt["image"].(u.H); !ok {
+		t.Error("session.prompt.image 应为 {} 对象")
 	}
 }
 
@@ -79,12 +89,18 @@ func TestInitializeValidation(t *testing.T) {
 		wantErr bool
 	}{
 		{
-			name: "有效的初始化请求",
-			request: InitializeRequest{
-				ProtocolVersion:    1,
-				ClientCapabilities: u.H{},
-			},
+			name:    "有效的初始化请求",
+			request: v2InitReq(),
 			wantErr: false,
+		},
+		{
+			name: "协议版本不匹配",
+			request: InitializeRequest{
+				ProtocolVersion: 1,
+				Capabilities:    u.H{},
+				Info:            u.H{"name": "test"},
+			},
+			wantErr: true,
 		},
 	}
 
@@ -92,9 +108,7 @@ func TestInitializeValidation(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			_, err := Initialize(tt.request, nil, 1)
 			if (err != nil) != tt.wantErr {
-				if err != nil {
-					t.Logf("Initialize返回: %v", err)
-				}
+				t.Errorf("Initialize() error = %v, wantErr %v", err, tt.wantErr)
 			}
 		})
 	}

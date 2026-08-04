@@ -16,11 +16,12 @@ func updateCfgsToConns() {
 	type sessModel struct {
 		sid     string
 		modelID uint32
+		effort  string
 	}
 	updates := make([]sessModel, 0, len(sessionIDs))
 	for _, sid := range sessionIDs {
 		if sess, ok := sessions[sid]; ok {
-			updates = append(updates, sessModel{sid: sid, modelID: sess.session.LastModelID})
+			updates = append(updates, sessModel{sid: sid, modelID: sess.session.LastModelID, effort: sess.session.ReasoningEffort})
 		}
 	}
 	sessLock.Unlock()
@@ -30,7 +31,7 @@ func updateCfgsToConns() {
 			SessionID: u.sid,
 			Update: SessionUpdateUpdate{
 				SessionUpdate: "config_option_update",
-				Content:       buildConfigOptions(uint32(u.modelID)),
+				ConfigOptions: buildConfigOptions(uint32(u.modelID), u.effort),
 			},
 		}, 0)
 	}

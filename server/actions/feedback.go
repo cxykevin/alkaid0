@@ -87,7 +87,7 @@ func feedbackCommand(obj *sessionObj, arg string) (bool, error) {
 
 	sessionID := cwd2SessionID(obj.cwd, obj.id)
 
-	// 同步广播"正在提交"，保证先于 prompt.go 的 session_stop 到达客户端。
+	// 同步广播"正在提交"，保证先于 prompt.go 的 idle state_update 到达客户端。
 	_ = broadcastSessionUpdate(sessionID, SessionUpdate{
 		SessionID: sessionID,
 		Update: SessionUpdateUpdate{

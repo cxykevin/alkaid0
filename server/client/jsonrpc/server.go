@@ -3,6 +3,8 @@ package jsonrpc
 import (
 	"encoding/json"
 	"fmt"
+	"sync"
+	"sync/atomic"
 
 	"github.com/cxykevin/alkaid0/config"
 	"github.com/cxykevin/alkaid0/log"
@@ -16,6 +18,11 @@ var logger = log.New("server")
 // Server jsonrpc 服务器
 type Server struct {
 	Methods map[string]func(u.H, func(string, any, *string) error, uint64) (any, error)
+	// pending 出站请求的响应回调注册表（服务端→客户端请求，如 request_permission）。
+	// 键为出站请求 ID（NextReqSeq 生成，跨连接全局唯一），响应（有 id、无 method）路由回对应回调。
+	pendingMu sync.Mutex
+	pending   map[string]func(u.H)
+	reqSeq    atomic.Uint64
 }
 
 // // ConnIdx 连接 ID 索引
@@ -43,7 +50,7 @@ type IgnoreReply struct{}
 func (s *Server) handle(arg string, call func(string) error, connID uint64) (returnString string, exit bool) {
 	// var req Request
 	var retByte []byte
-	solveSingleRequest := func(req Request) (returns *Response, exit bool) {
+	solveSingleRequest := func(req InboundMessage) (returns *Response, exit bool) {
 		logger.Info("handle %s in ConnID %d", req.Method, connID)
 		// 检查是否为通知请求
 		isNotif := isNotification(req.ID)
@@ -61,6 +68,24 @@ func (s *Server) handle(arg string, call func(string) error, connID uint64) (ret
 					Message: "invalid version",
 				},
 			}, false
+		}
+		// JSON-RPC 响应（有 id、无 method，携带 result/error）→ 路由回等待中的出站请求。
+		// 响应不回包；找不到匹配的 pending 时静默忽略（非本服务发起的响应）。
+		if req.Method == "" && req.ID != nil {
+			idStr := fmt.Sprint(req.ID)
+			s.pendingMu.Lock()
+			fn, ok := s.pending[idStr]
+			delete(s.pending, idStr)
+			s.pendingMu.Unlock()
+			if ok {
+				respData := u.H{"result": req.Result}
+				if req.Error != nil {
+					// 类型化 nil（*Error)(nil) 与接口 nil 不相等，须省略键，避免回调把成功误判为错误
+					respData["error"] = req.Error
+				}
+				fn(respData)
+			}
+			return nil, false
 		}
 		if req.Method == "exit" {
 			return nil, true
@@ -142,7 +167,7 @@ func (s *Server) handle(arg string, call func(string) error, connID uint64) (ret
 			Result:  obj,
 		}, false
 	}
-	var reqBatch []Request
+	var reqBatch []InboundMessage
 	err := json.Unmarshal([]byte(arg), &reqBatch)
 	if err == nil && len(reqBatch) > 0 {
 		// 过滤掉通知请求，只返回非通知请求的响应
@@ -162,7 +187,7 @@ func (s *Server) handle(arg string, call func(string) error, connID uint64) (ret
 		}
 		return "", false
 	}
-	var req Request
+	var req InboundMessage
 	err = json.Unmarshal([]byte(arg), &req)
 	if err != nil {
 		// 解析失败时，检查是否为通知
@@ -223,5 +248,25 @@ func Set[T any, T2 any](s *Server, method string, function func(T, func(string, 
 func New() *Server {
 	return &Server{
 		Methods: make(map[string]func(u.H, func(string, any, *string) error, uint64) (any, error)),
+		pending: make(map[string]func(u.H)),
 	}
+}
+
+// NextReqSeq 返回下一个出站请求序号（用于生成服务端→客户端请求的唯一 ID）。
+func (s *Server) NextReqSeq() uint64 {
+	return s.reqSeq.Add(1)
+}
+
+// AddPending 注册出站请求的响应回调。回调收到 u.H{"result": ..., "error": ...}。
+func (s *Server) AddPending(id string, fn func(u.H)) {
+	s.pendingMu.Lock()
+	s.pending[id] = fn
+	s.pendingMu.Unlock()
+}
+
+// RemovePending 移除出站请求的响应回调。
+func (s *Server) RemovePending(id string) {
+	s.pendingMu.Lock()
+	delete(s.pending, id)
+	s.pendingMu.Unlock()
 }

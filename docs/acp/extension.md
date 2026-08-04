@@ -1,4 +1,4 @@
-# Alkaid0 对 ACP (Agent Client Protocol) 协议的扩展
+# Alkaid0 对 ACP (Agent Client Protocol) v2 协议的扩展
 
 ## 0. 规范
 
@@ -8,7 +8,7 @@
 
 ---
 
-alkaid0 的 **所有扩展字段均以 `alk.cxykevin.top/` 开头**，并使用 **下划线命名法**，如 `alk.cxykevin.top/session_start` 等。
+alkaid0 的 **所有扩展字段均以 `alk.cxykevin.top/` 开头**，并使用 **下划线命名法**，如 `alk.cxykevin.top/summary` 等。
 
 ## 0. 协议扩展
 
@@ -28,45 +28,55 @@ Websocket 的每个请求体与 stdio 下的每个请求体均相同。
 
 ### 1.1. 初始化
 
+alkaid0 支持 [ACP v2 初始化](https://agentclientprotocol.com/protocol/v2/initialization)：`initialize` 返回 `protocolVersion: 2`、`capabilities`、`info` 与空 `authMethods`（空数组 = 客户端不得调用 `auth/login`/`auth/logout`，alkaid0 也不注册这两个方法）。
+
 alkaid0 对于客户端并 **不强制** 要求客户端初始化，这与 [ACP 规范](https://agentclientprotocol.com/protocol/initialization) 不同。
+
+服务端能力声明（ACP v2，标记均为 `{}` 对象而非布尔）：
+
+```json
+{
+  "session": {
+    "prompt": { "image": {}, "embeddedContext": {} },
+    "delete": {}
+  }
+}
+```
+
+`session/list`、`session/resume`、`session/close` 是 `session` 基线能力，无需标记。
 
 ### 1.2. 多客户端支持
 
 alkaid0 支持 **同一会话被多个客户端链接**。对于多客户端的情形，客户端会收到来自其它客户端的操作广播(所有消息的方式与 ACP 协议相同)。
 
-客户端在其它客户端发起提示后，会收到 `session/update` 且 `sessionUpdate` 字段为 `alk.cxykevin.top/session_start` 的更新。发起提示词的客户端自身 **也会接收到广播**。
+客户端在其它客户端发起提示后，会收到 `session/update` 且 `sessionUpdate` 字段为 `user_message`（携带 `messageId`）的更新，随后收到 `state_update` 且 `state` 为 `running` 的更新。发起提示词的客户端自身 **也会接收到广播**。
 
-在多客户端链接的情况下，只有 **发起提示 (prompt 请求) 的客户端** 会收到 [ACP 原生的 `end_turn` 响应](https://agentclientprotocol.com/protocol/prompt-turn)。其它客户端会收到 `session/update` 且 `sessionUpdate` 字段为 `alk.cxykevin.top/session_stop` 的更新。发起提示词的客户端自身 **也会接收到广播**。
+在 [ACP v2 prompt 生命周期](https://agentclientprotocol.com/protocol/v2/prompt-turn) 中，`session/prompt` 的响应为立即的 `{}` 确认（纯 ack）。所有客户端（包括发起者）通过 `state_update` 的 `state: "running"` / `state: "idle"`（携带 `stopReason`）感知一轮前台工作的开始与结束。
 
 ## 2. `session/update` 扩展
 
-> 下列标题均指 `session/update` 的 `sessionUpdate` 字段，内容则均为 `context` 字段中值。
+> 下列标题均指 `session/update` 的 `sessionUpdate` 字段。
 
-### 2.1. `alk.cxykevin.top/session_start`
+### 2.1. 标准事件（ACP v2）
 
-`context` 字段始终为 `{}` (空对象)。
+alkaid0 现在遵循 ACP v2 标准事件，且字段置于 update 对象**顶层**（非 `content` 包装）：
 
-### 2.2. `alk.cxykevin.top/session_stop`
+- **消息**：`user_message` / `agent_message` / `agent_thought`（整消息 upsert，携带 `messageId` 与完整 `content` 数组）；`user_message_chunk` / `agent_message_chunk` / `agent_thought_chunk`（流式 chunk，携带 `messageId` 与单个 content 块）。
+- **`state_update`**：`state` 为 `running` / `idle` / `requires_action`；`idle` 时携带 `stopReason`（`end_turn` / `max_tokens` / `max_turn_requests` / `refusal` / `cancelled`）。`session/prompt` 返回 `{}` 后按此驱动轮次状态。
+- **`tool_call_update`**：首次出现某 `toolCallId` 创建调用，后续按 omit/`null`/value patch。`status` 取值 `pending` / `streaming` / `completed` / `cancelled`（`streaming` 为 alkaid0 的流式增量预览，0.1s 限流推送完整快照）。
+- **`plan_update`**：`plan` 字段形如 `{ "type": "items", "planId": "plan_<chatID>", "entries": [...] }`。
+- **`usage_update`**：`used` / `size`（`used` = 累计 token，`size` = 当前模型 `TokenLimit`）。
+- **`config_option_update`**：`configOptions` 字段（顶层）。
+- **`available_commands_update`**：`availableCommands` 字段，命令 `input` 形如 `{ "type": "text", "hint": "..." }`。
 
-- `stopReason` ***string***: 停止原因。同 [ACP 文档中 `session/prompt`](https://agentclientprotocol.com/protocol/prompt-turn#stop-reasons)。
-
-- `alk.cxykevin.top/error_msg` ***string?***: 错误信息。当该字段存在并且值不为 `null` 或 `""` 时则意味着出现错误。*ACP 暂时并未提供一个合理的错误处理方案。因此该字段暂时实现了简单的错误处理。*
-
-### 2.3. `alk.cxykevin.top/usage`
-
-- `prompt_tokens` ***number(uint32)***: 提示词消耗的 token 数量。
-- `completion_tokens` ***number(uint32)***: 补全消耗的 token 数量。
-- `total_tokens` ***number(uint32)***: 总消耗的 token 数量。
-- `cached_tokens` ***number(uint32)***: 缓存的 token 数量。
-
-### 2.4. `alk.cxykevin.top/summary`
+### 2.2. `alk.cxykevin.top/summary`
 
 - `type` ***string***: 内容类型。固定为 `text`。
 - `text` ***string***: 摘要文本。为空意味着摘要启动生成还未结束。
 
 > 摘要若出现异常则直接停止 loop 并在 loop 级别报错。
 
-### 2.5. `alk.cxykevin.top/session_title`
+### 2.3. `alk.cxykevin.top/session_title`
 
 - `title` ***string***: 会话最终展示标题（用户设置的标题优先，其次 AI 生成的标题）。
 
@@ -78,32 +88,69 @@ alkaid0 支持 **同一会话被多个客户端链接**。对于多客户端的�
 
 客户端可据此刷新会话列表展示。
 
-### 2.6. `alk.cxykevin.top/tool_call_streaming`
+### 2.4. `alk.cxykevin.top/agent_status`
 
-AI 流式生成工具调用（`<tools>` JSON 数组）期间的**增量预览事件**（非 ACP 标准，仅 alkaid0 私有扩展）。
+- `alk.cxykevin.top/agent_status` ***string?*** 当前所在的 SubAgent。其为 `""` 则为处于主 Agent。
 
-- `toolCallId` ***string***: 工具调用 ID（`call_<sessionID>_<messageID>_<toolID>`）。
-- `kind` ***string***: 工具类型（`edit`/`read`/`execute`/`other`）。
-- `status` ***string***: 恒为 `streaming`（表示解析中）。
-- `title` ***string***: 形如 `[Call edit]<toolID>`。
-- `content` ***array***: 与标准 `tool_call` 同构，`alk.cxykevin.top/calling_info` 块的 `args` 为**当前已解析的部分参数**（含未完成的 `StringSlot`/`ObjectSlot` 占位），可实时"打字"渲染。
+当 `sessionUpdate` 为 `agent_thought_chunk`/`agent_message_chunk`/`agent_thought`/`agent_message` 时，`alk.cxykevin.top/agent_status` 存在。
 
-触发时机与语义：
+### 2.5. `alk.cxykevin.top/error_msg`
 
-- AI 每输出 token 增量解析工具调用 JSON，服务端 **0.1s 限流**推送一次完整快照（内网/127 回环部署，粒度足够实时）。
-- 客户端按 `toolCallId` **upsert**（覆盖渲染），参数随解析逐步完整。
-- **最终以标准 `tool_call` 事件为准**（审批后 `completed`/`pending`/`cancelled`），`streaming` 仅为解析中的实时预览，不保证最终参数一致。
+- 挂在 `state_update` 等 update 对象顶层的错误信息扩展（v2 无轮次内错误通道）。`state_update idle` 时若存在非空 `alk.cxykevin.top/error_msg` 表示本轮出错（`stopReason` 为 `refusal`）。
 
 ## 3. 方法扩展
 
-### 3.1. `session/set_model` `session/setModel` `unstable_setSessionModel`
+### 3.1. `session/resume` 与 `replayFrom`
 
-出于对部分客户端的兼容需要。已经被 [ACP 的会话配置](https://agentclientprotocol.com/protocol/session-config-options) 替代。其语法同 [`session/set_mode`](https://agentclientprotocol.com/protocol/session-modes#setting-the-current-mode)。
+`session/load` 已在 v2 移除，alkaid0 使用 `session/resume`。`replayFrom` 参数：
 
-- `sessionId` ***string***: 会话 ID。
-- `modelID` ***string***: 模型 ID。
+- 省略或 `null`：仅重连，不重放历史。
+- `{ "type": "start" }`：重放整个对话历史（以 `user_message` / `agent_message` / `agent_thought` 整消息 upsert 形式，携带与直播一致的 `messageId`，客户端据此 upsert 而非重复）。
 
-### 3.2. `alk.cxykevin.top/config/reload`
+### 3.2. `session/request_permission`（服务端 → 客户端）
+
+工具待审批（自动审批规则未命中）时，alkaid0 按 [ACP v2 权限](https://agentclientprotocol.com/protocol/v2/tool-calls#requesting-permission) 发起 `session/request_permission` 请求：
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "perm_1",
+  "method": "session/request_permission",
+  "params": {
+    "sessionId": "sess_1:/path",
+    "title": "Approve tool call: edit",
+    "subject": {
+      "type": "tool_call",
+      "toolCall": {
+        "toolCallId": "call_1_2_tid",
+        "title": "[Call edit]tid",
+        "kind": "edit",
+        "status": "pending",
+        "content": [
+          { "type": "alk.cxykevin.top/calling_info", "name": "edit", "args": { ... } }
+        ]
+      }
+    },
+    "options": [
+      { "optionId": "allow_once", "name": "Allow once", "kind": "allow_once" },
+      { "optionId": "reject_once", "name": "Reject once", "kind": "reject_once" }
+    ]
+  }
+}
+```
+
+客户端回包（响应本请求的 id）：
+
+```json
+{ "jsonrpc": "2.0", "id": "perm_1", "result": { "outcome": "selected", "optionId": "allow_once" } }
+```
+
+语义：
+
+- `outcome: "selected"` 且 `optionId: "allow_once"` → 批准，工具执行后继续。
+- `optionId: "reject_once"` 或 `outcome: "cancelled"` → 拒绝（等价 cancel）：待审工具广播 `tool_call_update(status=cancelled)`，随后 `state_update idle(stopReason=cancelled)`，本轮结束，不执行工具。
+
+### 3.3. `alk.cxykevin.top/config/reload`
 
 重载配置文件。无参数无返回值。异步执行。
 
@@ -129,13 +176,7 @@ AI 流式生成工具调用（`<tools>` JSON 数组）期间的**增量预览事
   }
   ```
 
-  - `config` ***object***: 完整的全局配置对象。结构见 [`config/structs/structs.go`](https://github.com/cxykevin/alkaid0/blob/main/config/structs/structs.go)，包含以下顶层字段：
-    - `$schema` ***string***: JSON Schema 链接。
-    - `Version` ***int32***: 配置版本号。
-    - `Model` ***object***: 模型配置（`ProviderURL`、`ProviderKey`、`DefaultModelID`、模型映射表等）。
-    - `Agent` ***object***: Agent 配置（Agents 映射表、全局提示词、摘要模型、自动审批规则等）。
-    - `ThemeID` ***int32***: 主题 ID。
-    - `Server` ***object***: RPC 服务配置（`Host`、`Port`、`Key`、`Path` 等）。
+  - `config` ***object***: 完整的全局配置对象。结构见 [`config/structs/structs.go`](https://github.com/cxykevin/alkaid0/blob/main/config/structs/structs.go)。
 
 > **注意**：返回值为全局配置的直接指针引用，响应内容随后台配置变化实时更新。
 
@@ -151,7 +192,7 @@ AI 流式生成工具调用（`<tools>` JSON 数组）期间的**增量预览事
   }
   ```
 
-  - `config` ***object***: 需要更新的配置片段。接受完整的或部分的配置 JSON。未指定的字段保持现有值不变。支持**深层嵌套字段的部分更新**（如 `Model.defaultModelID`）。
+  - `config` ***object***: 需要更新的配置片段。接受完整的或部分的配置 JSON。支持**深层嵌套字段的部分更新**（如 `Model.defaultModelID`）。
 
 - **响应**：成功时为 `null`。失败时返回错误信息。
 
@@ -163,69 +204,11 @@ AI 流式生成工具调用（`<tools>` JSON 数组）期间的**增量预览事
   | `config` 不是合法 JSON | `"invalid JSON config"` |
   | JSON 字段与配置结构不匹配 | `"failed to apply config: ..."` |
 
-- **示例**：
+### 3.5. `alk.cxykevin.top/session/get_background` / `alk.cxykevin.top/session/get_effort`
 
-  更新服务端口，不修改其它字段：
+- `sessionId` ***string***: 会话 ID。
 
-  ```json
-  // 请求
-  {"jsonrpc":"2.0","id":1,"method":"alk.cxykevin.top/config/set","params":{"config":{"Server":{"port":7434}}}}
-  // 响应
-  {"jsonrpc":"2.0","id":1,"result":null}
-  ```
-
-  更新深层嵌套字段（模型默认 ID）：
-
-  ```json
-  // 请求
-  {"jsonrpc":"2.0","id":2,"method":"alk.cxykevin.top/config/set","params":{"config":{"Model":{"defaultModelID":42}}}}
-  // 响应
-  {"jsonrpc":"2.0","id":2,"result":null}
-  ```
-
-  > `config/set` 与 [`config/reload`](#32-alkcxykevintopconfigreload) 不同：`config/reload` 从磁盘文件重新加载配置，`config/set` 直接将内存中的配置写入磁盘并触发重载钩子。
-
-### 3.5. `alk.cxykevin.top/session/list_models`
-
-列出当前会话可用的所有模型以及当前选中的模型。
-
-- **请求参数**：
-
-  ```json
-  {
-    "sessionId": "sess_1:/home/user/project"
-  }
-  ```
-
-  - `sessionId` ***string***: 会话 ID。
-
-- **响应**：
-
-  ```json
-  {
-    "currentModelId": "1/test-model-b",
-    "availableModels": [
-      {
-        "modelId": "0/test-model-a",
-        "name": "Test Model A",
-        "alk.cxykevin.top/model_real_id": 0
-      },
-      {
-        "modelId": "1/test-model-b",
-        "name": "Test Model B",
-        "alk.cxykevin.top/model_real_id": 1
-      }
-    ]
-  }
-  ```
-
-  - `currentModelId` ***string***: 当前会话选中的模型 ID。格式为 `<index>/<modelID>`。
-  - `availableModels` ***object[]***: 所有已配置的模型列表，按 `<index>` 升序排列。
-    - `modelId` ***string***: 模型唯一标识。格式为 `<index>/<modelID>`。
-    - `name` ***string***: 模型显示名称。
-    - `alk.cxykevin.top/model_real_id` ***number(int32)***: 模型在配置文件中的实际索引 ID。
-
-> 此方法与 `session/new` 和 `session/load` 响应中的 `models` 字段结构相同，可用于客户端在会话生命周期中刷新模型列表。
+查询会话后台运行模式（`background` 布尔）与当前推理强度（`effort`，`unset`/`low`/`medium`/`high`/`max`/`xhigh`）。推理强度也可经 `session/set_config_option`（`configId: "thought_level"`）修改。
 
 ### 3.6. `alk.cxykevin.top/list_subagent`
 
@@ -252,30 +235,25 @@ AI 流式生成工具调用（`<tools>` JSON 数组）期间的**增量预览事
 
 ## 4. 字段扩展
 
-### 4.1. [`session/load` 的请求](https://agentclientprotocol.com/protocol/prompt-turn#4-check-for-completion)
+### 4.1. [Tool Calls 的 Content 字段](https://agentclientprotocol.com/protocol/v2/tool-calls#content)
 
-- `alk.cxkevin.top/skip_history` ***bool?***: 跳过加载历史聊天记录。用于某些自行记录聊天历史的客户端或插件。
+`tool_call_update` 的 `content` 为 `ToolCallContent[]` 数组。alkaid0 每个元素为：
 
-### 4.1. [`session/prompt` 的响应](https://agentclientprotocol.com/protocol/prompt-turn#4-check-for-completion)
-
-- `alk.cxykevin.top/error_msg` ***string?***: 错误信息。当该字段存在并且值不为 `null` 或 `""` 时则意味着出现错误。*ACP 暂时并未提供一个合理的错误处理方案。因此该字段暂时实现了简单的错误处理。*
-- `alk.cxykevin.top/ignore` ***string?***: 由于 ACP 对于权限申请的设计问题，并且许多 Agent Client 无法正确动态渲染工具内容，因此当该字段存在并且值不为 `null` 或 `""` 时意味着 Alkaid0 专用客户端应忽略该响应块。
-
-> Alkaid0 目前的批准方案采用的是 `/approve` 命令。
-
-### 4.2. [Tool Calls 的 Content 字段](https://agentclientprotocol.com/protocol/tool-calls#content)
-
+- `type="content"` 的标准内容块（`content` 内为 `{ "type": "text", "text": ... }`）。
 - `type="alk.cxykevin.top/calling_info"` ***object*** 对工具原始调用参数的对象格式的表示。该字段对于 alkaid0 工具调用 **必然存在**。
-  
+
   - `name` ***string***: 工具原始名称。
   - `messageID` ***number(uint64)***: 工具原始调用消息 ID。
+  - `args` ***object***: 工具调用参数。
 
-### 4.3. [`session/update` 中的 SubAgent 状态扩展](https://agentclientprotocol.com/protocol/prompt-turn#3-agent-reports-output)
+> 注：ACP v2 约定实现自定义 type 以 `_` 开头，`alk.cxykevin.top/calling_info` 不含 `_`。因该字段为 alkaid0 自有客户端消费，维持现状（已知合规性问题）。
 
+### 4.2. 配置选项（`configId` 与 `thought_level`）
 
-- `alk.cxykevin.top/agent_status` ***string?*** 当前所在的 SubAgent。其为 `""` 则为处于主 Agent。
+`session/new` / `session/resume` 响应与 `config_option_update` 中的 `configOptions` 遵循 ACP v2：`configId`（非 `id`）、`name`、`description`、`category`、`type`、`currentValue`、`options`。当前提供：
 
-当 `sessionUpdate` 为 `agent_thought_chunk` 和 `agent_message_chunk` 时，`alk.cxykevin.top/agent_status` 存在。
+- `model`（category `model`）：模型选择。
+- `thought_level`（category `thought_level`）：推理强度，可选值 `unset`/`low`/`medium`/`high`/`max`/`xhigh`，经 `session/set_config_option`（`configId: "thought_level"`，`type: "id"`）修改。
 
 ## 5. ID 生成逻辑
 
@@ -306,3 +284,8 @@ modelId 遵从以下格式：
 - `modelConfigID` ***number(int32)***: 配置文件中指定的用于实际请求 model ID (value 中 `modelID` 字段)。
 
 > 服务端只使用 `realModelID` 进行操作。`modelConfigID` 会被忽略但其必须不为空。如 `1/a` 是合法的（哪怕其实际的模型 ID 为 `echo-flash`）。
+
+### 5.3 `messageId`
+
+- DB 消息（用户/Agent/Thought）：`msg_<dbID>`，`dbID` 为 `Messages` 表自增 ID。直播与 `session/resume` 回放使用同一推导，客户端据此 upsert。
+- 斜杠命令用户消息（不入库）：`cmd_<chatID>_<seq>`，`seq` 为服务端递增序号。

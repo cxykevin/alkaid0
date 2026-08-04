@@ -3,9 +3,61 @@ package jsonrpc
 import (
 	"encoding/json"
 	"testing"
+	"time"
 
 	u "github.com/cxykevin/alkaid0/utils"
 )
+
+// TestServerResponseRouting 测试出站请求的响应路由：
+// AddPending 注册回调 → 入站响应（有 id、无 method）→ 路由到回调并触发。
+func TestServerResponseRouting(t *testing.T) {
+	srv := New()
+
+	id := "perm_1"
+	var got u.H
+	done := make(chan struct{}, 1)
+	srv.AddPending(id, func(resp u.H) {
+		got = resp
+		done <- struct{}{}
+	})
+
+	// 入站响应（客户端对 request_permission 的回包）
+	inbound := `{"jsonrpc":"2.0","id":"perm_1","result":{"outcome":"selected","optionId":"allow_once"}}`
+	outputs := []string{}
+	_, _ = srv.handle(inbound, func(s string) error {
+		outputs = append(outputs, s)
+		return nil
+	}, 1)
+
+	// 响应不回包
+	if len(outputs) != 0 {
+		t.Errorf("响应不应回包，但得到: %v", outputs)
+	}
+
+	select {
+	case <-done:
+		result, _ := got["result"].(map[string]any)
+		if result == nil {
+			t.Fatalf("result 应为 map，got %#v", got["result"])
+		}
+		if result["outcome"] != "selected" || result["optionId"] != "allow_once" {
+			t.Errorf("result 内容不正确: %#v", result)
+		}
+		if err, ok := got["error"]; ok && err != nil {
+			t.Errorf("error 应为 nil，got %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("pending 回调未触发")
+	}
+
+	// 回调触发后 pending 应被清理
+	srv.pendingMu.Lock()
+	_, stillPending := srv.pending[id]
+	srv.pendingMu.Unlock()
+	if stillPending {
+		t.Error("pending 回调应在触发后移除")
+	}
+}
 
 // TestServerMethodRegistration 测试方法注册
 func TestServerMethodRegistration(t *testing.T) {

@@ -16,7 +16,7 @@ import (
 // TestToolCallStreaming 验证工具调用增量流式广播：
 // mock toolcall-chat 逐 word 流式返回 <tools> JSON（参数逐 token 增量到达）→ solver 增量解析 →
 // OnHook 把部分参数写入 ToolCallingContext → SetCallback 限流广播
-// alk.cxykevin.top/tool_call_streaming（status=streaming）；审批自动通过后广播标准 tool_call。
+// tool_call_update（status=streaming）；审批自动通过后广播最终 tool_call_update。
 func TestToolCallStreaming(t *testing.T) {
 	if os.Getenv("ALKAID0_DEBUG_MOCKSERVER") != "true" {
 		t.Skip("ALKAID0_DEBUG_MOCKSERVER not set, skipping test")
@@ -81,7 +81,7 @@ func TestToolCallStreaming(t *testing.T) {
 				continue
 			}
 			collected = append(collected, upd.SessionUpdate)
-			if upd.SessionUpdate == "alk.cxykevin.top/tool_call_streaming" &&
+			if upd.SessionUpdate == "tool_call_update" &&
 				upd.Status == "streaming" && upd.ToolCallID != "" {
 				gotStreaming = true
 				streamUpd = upd
@@ -109,10 +109,10 @@ func TestToolCallStreaming(t *testing.T) {
 			return false
 		}
 		// Status 可能是 completed/pending（approve 后 ToolState 有竞态），只断言事件与调用 ID
-		return upd.SessionUpdate == "tool_call" && upd.ToolCallID != ""
+		return upd.SessionUpdate == "tool_call_update" && upd.ToolCallID != ""
 	}
 	if _, ok := waitForUpdate(calls2, matchFinal, 20*time.Second); !ok {
-		t.Fatal("did not receive final tool_call event")
+		t.Fatal("did not receive final tool_call_update event")
 	}
 
 	closeSession(sessionID)

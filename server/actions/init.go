@@ -8,38 +8,31 @@ import (
 	u "github.com/cxykevin/alkaid0/utils"
 )
 
-const protoVersion = 1
+const protoVersion = 2
 
-// InitializeRequest 初始化请求
+// InitializeRequest 初始化请求（ACP v2：客户端与服务端共享 capabilities + info）
 type InitializeRequest struct {
-	ProtocolVersion    int `json:"protocolVersion"`
-	ClientCapabilities u.H `json:"clientCapabilities"`
-	ClientInfo         struct {
-		Name    string `json:"name"`
-		Title   string `json:"title"`
-		Version string `json:"version"`
-	} `json:"clientInfo"`
+	ProtocolVersion int `json:"protocolVersion"`
+	Capabilities    u.H `json:"capabilities"`
+	Info            u.H `json:"info"`
 }
 
-// InitializeResponse 初始化响应
+// InitializeResponse 初始化响应（ACP v2：客户端与服务端共享 capabilities + info）
 type InitializeResponse struct {
-	ProtocolVersion   int   `json:"protocolVersion"`
-	AgentCapabilities u.H   `json:"agentCapabilities"`
-	AgentInfo         u.H   `json:"agentInfo"`
-	AuthMethods       []u.H `json:"authMethods"`
+	ProtocolVersion int   `json:"protocolVersion"`
+	Capabilities    u.H   `json:"capabilities"`
+	Info            u.H   `json:"info"`
+	AuthMethods     []u.H `json:"authMethods"`
 }
 
-// AgentCapabilities 服务端能力常量
+// AgentCapabilities 服务端能力常量（ACP v2：能力标记为 {} 对象而非布尔。
+// list/resume/close/prompt/cancel/update 为 session 基线无需标记；delete 为可选扩展）
 var AgentCapabilities = u.H{
-	"loadSession": true,
-	"promptCapabilities": u.H{
-		"image":           false,
-		"audio":           false,
-		"embeddedContext": false,
-	},
-	"mcp":  false,
-	"list": u.H{},
-	"sessionCapabilities": u.H{
+	"session": u.H{
+		"prompt": u.H{
+			"image":           u.H{},
+			"embeddedContext": u.H{},
+		},
 		"delete": u.H{},
 	},
 }
@@ -62,12 +55,12 @@ func Initialize(req InitializeRequest, call func(string, any, *string) error, co
 		return InitializeResponse{}, fmt.Errorf("protocol version not match")
 	}
 	clientConnCapsMu.Lock()
-	clientConnCaps[connID] = req.ClientCapabilities
+	clientConnCaps[connID] = req.Capabilities
 	clientConnCapsMu.Unlock()
 	return InitializeResponse{
-		ProtocolVersion:   protoVersion,
-		AgentCapabilities: AgentCapabilities,
-		AgentInfo:         AgentInfo,
-		AuthMethods:       []u.H{},
+		ProtocolVersion: protoVersion,
+		Capabilities:    AgentCapabilities,
+		Info:            AgentInfo,
+		AuthMethods:     []u.H{},
 	}, nil
 }

@@ -16,7 +16,7 @@ import (
 	"github.com/cxykevin/alkaid0/config"
 	cfgStructs "github.com/cxykevin/alkaid0/config/structs"
 	"github.com/cxykevin/alkaid0/context/codebase"
-	reqStructs "github.com/cxykevin/alkaid0/provider/request/structs"
+	"github.com/cxykevin/alkaid0/provider/request"
 	"github.com/cxykevin/alkaid0/storage"
 	"github.com/cxykevin/alkaid0/storage/structs"
 	task "github.com/cxykevin/alkaid0/tools/tools/task"
@@ -37,12 +37,11 @@ type ConfigOptionValue struct {
 	Value       string `json:"value"`
 	Name        string `json:"name"`
 	Description string `json:"description,omitempty"`
-	RealID      int32  `json:"alk.cxykevin.top/model_real_id"`
 }
 
-// ConfigOption 配置选项
+// ConfigOption 配置选项（ACP v2：configId 命名）
 type ConfigOption struct {
-	ID           string              `json:"id"`
+	ConfigID     string              `json:"configId"`
 	Name         string              `json:"name"`
 	Description  string              `json:"description,omitempty"`
 	Category     string              `json:"category,omitempty"`
@@ -51,43 +50,27 @@ type ConfigOption struct {
 	Options      []ConfigOptionValue `json:"options"`
 }
 
-// SessionNewResponse 创建新会话的响应
+// SessionNewResponse 创建新会话的响应（ACP v2：无 models，模型经 configOptions 暴露）
 type SessionNewResponse struct {
 	SessionID     string         `json:"sessionId"`
-	Models        ModelConfig    `json:"models"`
 	ConfigOptions []ConfigOption `json:"configOptions"`
 }
 
-// SessionLoadRequest 加载会话的请求
-type SessionLoadRequest struct {
-	Cwd         string `json:"cwd"`
-	SessionID   string `json:"sessionId"`
-	SkipHistory bool   `json:"alk.cxkevin.top/skip_history"`
+// ReplayFrom session/resume 的历史回放参数（ACP v2）
+type ReplayFrom struct {
+	Type string `json:"type"` // "start"
 }
 
-// AvailableModel 可用的模型
-type AvailableModel struct {
-	ModelID string `json:"modelId"`
-	Name    string `json:"name"`
-	RealID  int32  `json:"alk.cxykevin.top/model_real_id"`
+// SessionResumeRequest 恢复会话的请求（ACP v2）
+type SessionResumeRequest struct {
+	SessionID  string      `json:"sessionId"`
+	Cwd        string      `json:"cwd"`
+	ReplayFrom *ReplayFrom `json:"replayFrom,omitempty"`
 }
 
-// ModelConfig 模型配置
-type ModelConfig struct {
-	CurrentModelID  string           `json:"currentModelId"`
-	AvailableModels []AvailableModel `json:"availableModels"`
-}
-
-// SessionLoadResponse 加载会话的响应
-type SessionLoadResponse struct {
-	Models        ModelConfig    `json:"models"`
+// SessionResumeResponse 恢复会话的响应（ACP v2：无 models）
+type SessionResumeResponse struct {
 	ConfigOptions []ConfigOption `json:"configOptions"`
-}
-
-// StopMsg 停止会话的消息
-type StopMsg struct {
-	StopReason string
-	ErrorMsg   *string
 }
 
 // sessionObj 会话对象，包含会话的核心信息和生命周期管理
@@ -97,13 +80,19 @@ type StopMsg struct {
 const toolStreamInterval = 100 * time.Millisecond
 
 type sessionObj struct {
-	cwd          string
-	id           uint32
-	session      *structs.Chats
-	loop         *loop.Object
-	ctx          context.Context
-	referCnt     int
-	waitStopChan chan (*chan StopMsg)
+	cwd      string
+	id       uint32
+	session  *structs.Chats
+	loop     *loop.Object
+	ctx      context.Context
+	referCnt int
+	// permMu 保护 permChan 的并发读写
+	permMu sync.Mutex
+	// permChan 等待中的 request_permission 响应通道（nil 表示无等待）
+	permChan chan bool
+	// permDone 会话释放信号；释放时 close，解除权限 goroutine 的无限等待
+	permDone     chan struct{}
+	permDoneOnce sync.Once
 	// releaseTimer 连接断开后延迟释放的定时器
 	// 当连接断开时启动，超时后若仍无连接则释放会话资源
 	releaseTimer *time.Timer
@@ -142,40 +131,11 @@ var connCallLock = &sync.Mutex{}
 var sessionConnMap = map[string][]uint64{}
 var sessionConnLock = &sync.Mutex{}
 
-// 进行中的prompt请求的上下文管理，用于支持cancellation
-// 结构：session ID -> {cancel context func, isActive flag}
-type promptCtx struct {
-	cancel   context.CancelFunc
-	isActive bool
-}
-
-var activePrompts = map[string]*promptCtx{}
-var activePromptsLock = &sync.Mutex{}
-
 var agentCallList = map[string]map[string]func(){}
 
 // cwd2SessionID 将工作目录和会话ID转换为规范化的会话ID格式
 func cwd2SessionID(cwd string, id uint32) string {
 	return fmt.Sprintf("sess_%d:%s", id, cwd)
-}
-
-func buildModelList() []AvailableModel {
-	cfg := config.GlobalConfig.Model.Models
-	models := make([]AvailableModel, 0, len(cfg))
-	for i, model := range cfg {
-		if model.Hide {
-			continue
-		}
-		models = append(models, AvailableModel{
-			ModelID: fmt.Sprintf("%d/%s", i, model.ModelID),
-			Name:    model.ModelName,
-			RealID:  i,
-		})
-	}
-	slices.SortFunc(models, func(a, b AvailableModel) int {
-		return int(a.RealID - b.RealID)
-	})
-	return models
 }
 
 func getMinValueByKey[K cmp.Ordered, T any](m map[K]T) (K, *T, bool) {
@@ -213,8 +173,8 @@ func getDefaultModel() string {
 	return fmt.Sprintf("%d/%s", id, obj.ModelID)
 }
 
-// buildConfigOptions 生成配置选项列表
-func buildConfigOptions(currentModelID uint32) []ConfigOption {
+// buildConfigOptions 生成配置选项列表（ACP v2：model 经 configOptions 暴露，含 thought_level 选项）
+func buildConfigOptions(currentModelID uint32, reasoningEffort string) []ConfigOption {
 	cfg := config.GlobalConfig.Model.Models
 	options := make([]ConfigOptionValue, 0, len(cfg))
 
@@ -226,12 +186,14 @@ func buildConfigOptions(currentModelID uint32) []ConfigOption {
 			Value:       fmt.Sprintf("%d/%s", i, model.ModelID),
 			Name:        model.ModelName,
 			Description: "",
-			RealID:      i,
 		})
 	}
 
 	slices.SortFunc(options, func(a, b ConfigOptionValue) int {
-		return int(a.RealID - b.RealID)
+		// 值形如 "<index>/<modelID>"，按 index 排序
+		ia, _ := strconv.ParseInt(strings.SplitN(a.Value, "/", 2)[0], 10, 32)
+		ib, _ := strconv.ParseInt(strings.SplitN(b.Value, "/", 2)[0], 10, 32)
+		return int(ia - ib)
 	})
 
 	// 确保当前模型值格式正确
@@ -239,14 +201,35 @@ func buildConfigOptions(currentModelID uint32) []ConfigOption {
 		ModelID: fmt.Sprintf("UnknownModel(%d)", currentModelID),
 	}).ModelID)
 
+	// 推理强度（thought_level）选项
+	effort := reasoningEffort
+	if effort == "" {
+		effort = "unset"
+	}
+
 	return []ConfigOption{
 		{
-			ID:           "model",
+			ConfigID:     "model",
 			Name:         "Model",
 			Category:     "model",
 			Type:         "select",
 			CurrentValue: currentValue,
 			Options:      options,
+		},
+		{
+			ConfigID:     "thought_level",
+			Name:         "Thought Level",
+			Category:     "thought_level",
+			Type:         "select",
+			CurrentValue: effort,
+			Options: []ConfigOptionValue{
+				{Value: "unset", Name: "Unset"},
+				{Value: "low", Name: "Low"},
+				{Value: "medium", Name: "Medium"},
+				{Value: "high", Name: "High"},
+				{Value: "max", Name: "Max"},
+				{Value: "xhigh", Name: "XHigh"},
+			},
 		},
 	}
 }
@@ -269,7 +252,7 @@ func sessionID2Cwd(sessionID string) (string, uint32, error) {
 }
 
 // parseSessionID 从会话ID字符串中安全解析出工作目录和会话ID（纯字符串解析，不查内存注册表）。
-// 仅供 session/load 冷还原使用：服务器重启后内存注册表为空，需从客户端提供的 sessionId 恢复
+// 仅供 session/resume 冷还原使用：服务器重启后内存注册表为空，需从客户端提供的 sessionId 恢复
 // cwd+id，再交由 loadSession 打开对应数据库并 QueryChat 验证会话真实存在，验证通过后才注册进
 // 内存注册表。与 sessionID2Cwd 的区别：后者以内存注册表为准（防止伪造 cwd 绕过沙箱），
 // parseSessionID 本身不授权任何操作，其解析结果必须经过数据库校验后方可使用。
@@ -365,6 +348,152 @@ func broadcastSessionUpdate(sessionID string, update any, excludeConnID uint64) 
 		}
 	}
 	return lastErr
+}
+
+// broadcastStateUpdate 广播 ACP v2 state_update（state/stopReason 置于 update 顶层）
+func broadcastStateUpdate(sessionID, state, stopReason, errMsg string) {
+	if err := broadcastSessionUpdate(sessionID, SessionUpdate{
+		SessionID: sessionID,
+		Update: SessionUpdateUpdate{
+			SessionUpdate:  "state_update",
+			State:          state,
+			StopReason:     stopReason,
+			ExpandErrorMsg: errMsg,
+		},
+	}, 0); err != nil {
+		logger.Warn("failed to broadcast state_update: %v", err)
+	}
+}
+
+// broadcastToolCallCancelled 拒绝时把待审批工具标记为 cancelled
+func broadcastToolCallCancelled(sessionID string, pending *[]funcs.ToolCall) {
+	if pending == nil {
+		return
+	}
+	obj, ok := sessions[sessionID]
+	if !ok {
+		return
+	}
+	for _, tool := range *pending {
+		toolCallID := fmt.Sprintf("call_%d_%d_%s", obj.session.ID, obj.session.CurrentMessageID, tool.ID)
+		_ = broadcastSessionUpdate(sessionID, SessionUpdate{
+			SessionID: sessionID,
+			Update: SessionUpdateUpdate{
+				SessionUpdate: "tool_call_update",
+				ToolCallID:    toolCallID,
+				Title:         fmt.Sprintf("[Call %s]%s", tool.Name, tool.ID),
+				Kind:          u.Default(ToolNameToTypeMap, tool.Name, "other"),
+				Status:        "cancelled",
+				Content:       []u.H{{"type": "alk.cxykevin.top/calling_info", "name": tool.Name, "args": tool.Parameters}},
+			},
+		}, 0)
+	}
+}
+
+// connCallFuncsFor 快照会话所有连接的 call 函数（用于向客户端发起请求）
+func connCallFuncsFor(obj *sessionObj) []func(string, any, *string) error {
+	sessionID := cwd2SessionID(obj.cwd, obj.id)
+	sessionConnLock.Lock()
+	connIDs := make([]uint64, len(sessionConnMap[sessionID]))
+	copy(connIDs, sessionConnMap[sessionID])
+	sessionConnLock.Unlock()
+
+	connCallLock.Lock()
+	callFuncs := make([]func(string, any, *string) error, 0, len(connIDs))
+	for _, cid := range connIDs {
+		if fn, ok := connCallMap[cid]; ok {
+			callFuncs = append(callFuncs, fn)
+		}
+	}
+	connCallLock.Unlock()
+	return callFuncs
+}
+
+// signalPermission 非阻塞唤醒等待中的权限 goroutine（session/cancel 时使用）
+func signalPermission(obj *sessionObj, approved bool) {
+	if obj == nil {
+		return
+	}
+	obj.permMu.Lock()
+	ch := obj.permChan
+	obj.permMu.Unlock()
+	if ch != nil {
+		select {
+		case ch <- approved:
+		default:
+		}
+	}
+}
+
+// requestPermission 发送 session/request_permission 并等待首个响应。
+// 无超时：仅在回包到达或会话释放（permDone 关闭）时解除。
+func requestPermission(obj *sessionObj, pending *[]funcs.ToolCall) (bool, error) {
+	if obj == nil || obj.session == nil || pending == nil || len(*pending) == 0 {
+		return false, fmt.Errorf("invalid permission request")
+	}
+	tool := (*pending)[0]
+	toolCallID := fmt.Sprintf("call_%d_%d_%s", obj.session.ID, obj.session.CurrentMessageID, tool.ID)
+	params := RequestPermissionParams{
+		SessionID: cwd2SessionID(obj.cwd, obj.id),
+		Title:     fmt.Sprintf("Approve tool call: %s", tool.Name),
+		Subject: &PermissionSubject{
+			Type: "tool_call",
+			ToolCall: &ToolCallInfo{
+				ToolCallID: toolCallID,
+				Title:      fmt.Sprintf("[Call %s]%s", tool.Name, tool.ID),
+				Kind:       u.Default(ToolNameToTypeMap, tool.Name, "other"),
+				Status:     "pending",
+				Content:    []u.H{{"type": "alk.cxykevin.top/calling_info", "name": tool.Name, "args": tool.Parameters}},
+			},
+		},
+		Options: []PermissionOption{
+			{OptionID: "allow_once", Name: "Allow once", Kind: "allow_once"},
+			{OptionID: "reject_once", Name: "Reject once", Kind: "reject_once"},
+		},
+	}
+
+	id := fmt.Sprintf("perm_%d", rpcSrv.NextReqSeq())
+	ch := make(chan bool, 1)
+	rpcSrv.AddPending(id, func(resp u.H) {
+		if err, ok := resp["error"]; ok && err != nil {
+			ch <- false
+			return
+		}
+		// 回包形状：{outcome: selected|cancelled, optionId}。结果可能为 map，序列化再解析。
+		raw, merr := json.Marshal(resp["result"])
+		if merr != nil {
+			ch <- false
+			return
+		}
+		var result RequestPermissionResult
+		if json.Unmarshal(raw, &result) != nil {
+			ch <- false
+			return
+		}
+		ch <- (result.Outcome == "selected" && result.OptionID == "allow_once")
+	})
+	defer rpcSrv.RemovePending(id)
+
+	obj.permMu.Lock()
+	obj.permChan = ch
+	obj.permMu.Unlock()
+	defer func() {
+		obj.permMu.Lock()
+		obj.permChan = nil
+		obj.permMu.Unlock()
+	}()
+
+	// 向会话所有连接发起请求（首个响应生效）
+	for _, fn := range connCallFuncsFor(obj) {
+		_ = fn("session/request_permission", params, &id)
+	}
+
+	select {
+	case approved := <-ch:
+		return approved, nil
+	case <-obj.permDone:
+		return false, fmt.Errorf("session released")
+	}
 }
 
 // // broadcastCallRequest 向所有连接到该会话的客户端广播更新
@@ -499,8 +628,12 @@ func loadSession(cwd string, id *uint32, knowID bool) (*structs.Chats, error) {
 			err := broadcastSessionUpdate(sessID, SessionUpdate{
 				SessionID: sessID,
 				Update: SessionUpdateUpdate{
-					SessionUpdate: "plan",
-					Entries:       entries,
+					SessionUpdate: "plan_update",
+					Plan: &PlanItems{
+						Type:    "items",
+						PlanID:  fmt.Sprintf("plan_%d", sess.ID),
+						Entries: entries,
+					},
 				},
 			}, 0)
 			if err != nil {
@@ -525,16 +658,17 @@ func loadSession(cwd string, id *uint32, knowID bool) (*structs.Chats, error) {
 		}()
 
 		obj.loop = loop.New(sess)
-		obj.waitStopChan = make(chan *chan StopMsg, 20)
+		obj.permDone = make(chan struct{})
 		// 设置回调接收流式响应
 		obj.loop.SetCallback(func(resp loop.AIResponse) {
 			logger.Debug("callback respose ID=%d", resp.MsgID)
-			// 处理thinking内容
+			// 处理thinking内容（ACP v2：messageId 必填）
 			if resp.ThinkingContext != "" {
 				err = broadcastSessionUpdate(sessID, SessionUpdate{
 					SessionID: sessID,
 					Update: SessionUpdateUpdate{
 						SessionUpdate: "agent_thought_chunk",
+						MessageID:     msgID(resp.MsgID),
 						Content: u.H{
 							"type": "text",
 							"text": resp.ThinkingContext,
@@ -547,12 +681,13 @@ func loadSession(cwd string, id *uint32, knowID bool) (*structs.Chats, error) {
 				}
 			}
 
-			// 处理内容delta
+			// 处理内容delta（ACP v2：messageId 必填）
 			if resp.Content != "" {
 				err = broadcastSessionUpdate(sessID, SessionUpdate{
 					SessionID: sessID,
 					Update: SessionUpdateUpdate{
 						SessionUpdate: "agent_message_chunk",
+						MessageID:     msgID(resp.MsgID),
 						Content: u.H{
 							"type": "text",
 							"text": resp.Content,
@@ -586,9 +721,10 @@ func loadSession(cwd string, id *uint32, knowID bool) (*structs.Chats, error) {
 				}
 			}
 
-			// 最终工具调用状态（标准 tool_call）：streaming=false 标记的条目（审批后 ExecuteToolCalls
-			// 阶段 OnHook 写入，session.State=StateToolCalling）。任意回调到达时立即广播——不能依赖
-			// session.State 判断（审批后空 AIResponse 与新一轮流式存在 State 竞态），按标记最可靠。
+			// 最终工具调用状态（ACP v2 tool_call_update）：streaming=false 标记的条目
+			// （审批后 ExecuteToolCalls 阶段 OnHook 写入，session.State=StateToolCalling）。
+			// 任意回调到达时立即广播——不能依赖 session.State 判断（审批后空 AIResponse 与
+			// 新一轮流式存在 State 竞态），按标记最可靠。
 			if finalCtx, finalTyp := sess.TakeFinalToolCalling(); len(finalCtx) != 0 {
 				toolStatus := "pending"
 				if sess.ToolState == 1 {
@@ -605,7 +741,7 @@ func loadSession(cwd string, id *uint32, knowID bool) (*structs.Chats, error) {
 					err = broadcastSessionUpdate(sessID, SessionUpdate{
 						SessionID: sessID,
 						Update: SessionUpdateUpdate{
-							SessionUpdate: "tool_call",
+							SessionUpdate: "tool_call_update",
 							ToolCallID:    id,
 							Kind:          ToolNameToTypeMap[finalTyp[id]],
 							Status:        toolStatus,
@@ -620,9 +756,10 @@ func loadSession(cwd string, id *uint32, knowID bool) (*structs.Chats, error) {
 				sess.SetLatest(finalCtx, finalTyp)
 			}
 
-			// 流式增量工具调用预览（私有协议事件，0.1s 限流）：streaming=true 标记的条目
-			// （AI 正在生成工具调用，session.State=StateReciving 时 OnHook 写入）。限流推送完整快照，
-			// 前端按 toolCallId upsert 实时"打字"渲染；限流未通过时跳过广播但不清空，保留供下个 chunk。
+			// 流式增量工具调用预览（ACP v2 tool_call_update status=streaming，0.1s 限流）：
+			// streaming=true 标记的条目（AI 正在生成工具调用，session.State=StateReciving 时
+			// OnHook 写入）。限流推送完整快照，客户端按 toolCallId patch（覆盖）渲染；
+			// 限流未通过时跳过广播但不清空，保留供下个 chunk。
 			if sess.HasToolCalling() {
 				now := time.Now()
 				if obj.lastToolStreamTime.IsZero() || now.Sub(obj.lastToolStreamTime) >= toolStreamInterval {
@@ -637,7 +774,7 @@ func loadSession(cwd string, id *uint32, knowID bool) (*structs.Chats, error) {
 						err = broadcastSessionUpdate(sessID, SessionUpdate{
 							SessionID: sessID,
 							Update: SessionUpdateUpdate{
-								SessionUpdate: "alk.cxykevin.top/tool_call_streaming",
+								SessionUpdate: "tool_call_update",
 								ToolCallID:    id,
 								Kind:          ToolNameToTypeMap[typ[id]],
 								Status:        "streaming",
@@ -652,88 +789,67 @@ func loadSession(cwd string, id *uint32, knowID bool) (*structs.Chats, error) {
 				}
 			}
 
-			// 处理错误
-			if resp.Error != nil {
-				logger.Warn("callback respose error in Session=%d, ID=%d error=%s", sess.ID, resp.MsgID, resp.Error.Error())
-				for {
-					select {
-					case i := <-obj.waitStopChan:
-						*i <- StopMsg{StopReason: ReasonMap[resp.StopReason], ErrorMsg: new(resp.Error.Error())}
-					default:
-						return
-					}
-				}
-			}
-
+			// usage → ACP v2 usage_update（used/size）
 			if resp.Usage != nil {
 				if resp.Usage.TotalTokens != 0 || resp.Usage.PromptTokens != 0 || resp.Usage.CompletionTokens != 0 || resp.Usage.CachedTokens != 0 {
 					err = broadcastSessionUpdate(sessID, SessionUpdate{
 						SessionID: sessID,
 						Update: SessionUpdateUpdate{
-							SessionUpdate: "alk.cxykevin.top/usage",
-							Content:       *resp.Usage,
+							SessionUpdate: "usage_update",
+							Used:          uint64(resp.Usage.TotalTokens),
+							Size:          currentTokenLimit(sess),
 						},
 					}, 0)
 				}
 			}
 
+			// 停止分支：广播 idle state_update（stopReason）并结束本轮。
+			// 错误也并入 idle（stopReason=refusal + 私有 error_msg）。
 			if resp.StopReason != loop.StopReasonNone && resp.StopReason != loop.StopReasonPendingTool {
-				for {
-					select {
-					case i := <-obj.waitStopChan:
-						*i <- StopMsg{StopReason: ReasonMap[resp.StopReason]}
-					default:
-						return
-					}
+				var errMsg string
+				if resp.Error != nil {
+					errMsg = resp.Error.Error()
+					logger.Warn("callback respose error in Session=%d, ID=%d error=%s", sess.ID, resp.MsgID, errMsg)
 				}
-			} else if resp.StopReason == loop.StopReasonPendingTool {
+				broadcastStateUpdate(sessID, "idle", ReasonMap[resp.StopReason], errMsg)
+				// 自动标题：首次正常请求 end_turn 且无错误（原 SessionPrompt 触发逻辑迁到此处）
+				if resp.StopReason == loop.StopReasonModel && resp.Error == nil &&
+					sess.Title == "" && sess.AITitle == "" {
+					generateTitle(sess, sessID, false)
+				}
+				return
+			}
+
+			// 待审批分支：requires_action + 发起 session/request_permission
+			if resp.StopReason == loop.StopReasonPendingTool {
 				logger.Info("request pending tool call to Session=%d, ID=%d", sess.ID, resp.MsgID)
-				// _ = broadcastSessionUpdate(sessID, SessionUpdate{
-				// 	SessionID: sessID,
-				// 	Update: SessionUpdateUpdate{
-				// 		SessionUpdate: "tool_call",
-				// 		ToolCallID:    fmt.Sprintf("call_%d_%d_%s", sess.ID, resp.MsgID, tool.ID),
-				// 		Title:         fmt.Sprintf("[Call %s]%s", tool.Name, tool.ID),
-				// 		Kind:          u.Default(ToolNameToType, tool.Name, "other"),
-				// 		Status:        "pending",
-				// 	},
-				// }, 0)
-
-				// 应使用 request permission API，但 ACP 协议设计有问题
-				latestCtx, latestTyp := sess.SnapshotLatest()
-				if len(latestCtx) != 0 {
-					var waitApproveSessionString strings.Builder
-					waitApproveSessionString.WriteString("---\n### ***[System]*** Waiting Approve Tools:\n```text")
-					for id := range latestCtx {
-						stx := strings.SplitN(id, "_", 4)
-						s := ""
-						if len(stx) == 4 {
-							s = stx[3]
-						}
-						fmt.Fprintf(&waitApproveSessionString, "\n%s", fmt.Sprintf("[Call %s]%s", latestTyp[id], s))
+				broadcastStateUpdate(sessID, "requires_action", "", "")
+				pending := resp.PendingTool
+				pendingMsgID := resp.MsgID
+				go func() {
+					approved, perr := requestPermission(obj, pending)
+					if perr != nil {
+						return // 会话释放
 					}
-					waitApproveSessionString.WriteString("\n```\n> Using `/approve` command to approve or type anything else to reject.\n")
-					err = broadcastSessionUpdate(sessID, SessionUpdate{
-						SessionID: sessID,
-						Update: SessionUpdateUpdate{
-							SessionUpdate: "agent_message_chunk",
-							Content: u.H{
-								"type": "text",
-								"text": waitApproveSessionString.String(),
-							},
-							CompabiltyIgnore: "true",
-						},
-					}, 0)
-				}
-
-				for {
-					select {
-					case i := <-obj.waitStopChan:
-						*i <- StopMsg{StopReason: "end_turn"}
-					default:
+					// 守卫：会话须仍在 WaitApprove 且当前待审批消息未被新的工具调用替换
+					// （权限未决时第二个 prompt 到达会拒绝旧的工具并可能产生新的 WaitApprove）
+					if obj.session.State != state.StateWaitApprove || obj.session.CurrentMessageID != pendingMsgID {
 						return
 					}
-				}
+					if approved {
+						broadcastStateUpdate(sessID, "running", "", "")
+						if err := obj.loop.Approve(); err != nil {
+							logger.Warn("approve error: %v", err)
+						}
+					} else {
+						// reject_once == cancel：结束本轮，不执行、不踢 loop
+						broadcastToolCallCancelled(sessID, pending)
+						broadcastStateUpdate(sessID, "idle", "cancelled", "")
+						if err := request.RejectToolCallsNoDeactivate(obj.session, "rejected by user", nil); err != nil {
+							logger.Warn("reject error: %v", err)
+						}
+					}
+				}()
 			}
 
 		})
@@ -795,6 +911,14 @@ func indexChatHistory(session *structs.Chats, cwd string) {
 	}()
 }
 
+// closePermDone 关闭会话的权限等待信号（防重复关闭；permDone 未初始化时为 no-op）
+func (obj *sessionObj) closePermDone() {
+	if obj == nil || obj.permDone == nil {
+		return
+	}
+	obj.permDoneOnce.Do(func() { close(obj.permDone) })
+}
+
 // closeSession 关闭会话，引用计数递减，处理资源清理
 func closeSession(sessionID string) {
 	sessLock.Lock()
@@ -805,6 +929,7 @@ func closeSession(sessionID string) {
 		if obj.session.ReferCount <= int32(0) {
 			logger.Info("release session ID=%s", sessionID)
 			obj.loop.Cancel()
+			obj.closePermDone()
 			indexChatHistory(obj.session, obj.cwd)
 			closeDB(obj.cwd)
 			delete(sessions, sessionID)
@@ -941,6 +1066,7 @@ func scheduleSessionRelease(sessionID string) {
 
 		logger.Info("release session %s after %ds timeout", sessionID, timeout)
 		obj2.loop.Cancel()
+		obj2.closePermDone()
 		indexChatHistory(obj2.session, obj2.cwd)
 		closeDB(obj2.cwd)
 		delete(sessions, sessionID)
@@ -988,11 +1114,6 @@ func SessionNew(req SessionNewRequest, call func(string, any, *string) error, co
 			}
 		}
 	}
-	modelRealID := "Unconfigured"
-	modelRealCfg, ok := config.GlobalConfig.Model.Models[int32(currentModelID)]
-	if ok {
-		modelRealID = modelRealCfg.ModelID
-	}
 	getDefaultModel()
 
 	// 手动切换一遍模型，确保新会话的模型被正确初始化
@@ -1005,6 +1126,7 @@ func SessionNew(req SessionNewRequest, call func(string, any, *string) error, co
 			"name":        strings.TrimLeft(i, "/"),
 			"description": v.Description,
 			"input": u.H{
+				"type": "text",
 				"hint": v.Hint,
 			},
 		}
@@ -1027,27 +1149,73 @@ func SessionNew(req SessionNewRequest, call func(string, any, *string) error, co
 	}
 
 	return SessionNewResponse{
-		SessionID: sessionID,
-		Models: ModelConfig{
-			AvailableModels: buildModelList(),
-			CurrentModelID:  fmt.Sprintf("%d/%s", currentModelID, modelRealID),
-		},
-		ConfigOptions: buildConfigOptions(currentModelID),
+		SessionID:     sessionID,
+		ConfigOptions: buildConfigOptions(currentModelID, sess.ReasoningEffort),
 	}, nil
 }
 
-// SessionUpdateUpdate 更新会话的参数
+// SessionUpdateUpdate 更新会话的参数（ACP v2：messageId 必填、标准事件字段置于顶层）
 type SessionUpdateUpdate struct {
-	SessionUpdate    string              `json:"sessionUpdate"`
-	Content          any                 `json:"content,omitempty"`
-	Entries          []structs.PlanEntry `json:"entries,omitempty"` // ACP plan 条目（客户端整体替换）
-	ToolCallID       string              `json:"toolCallId,omitempty"`
-	Title            string              `json:"title,omitempty"`
-	Kind             string              `json:"kind,omitempty"`
-	Status           string              `json:"status,omitempty"`
-	ExpandErrorMsg   string              `json:"alk.cxykevin.top/error_msg,omitempty"`
-	CompabiltyIgnore string              `json:"alk.cxykevin.top/ignore,omitempty"`
-	AgentStatus      *string             `json:"alk.cxykevin.top/agent_status,omitempty"`
+	SessionUpdate     string         `json:"sessionUpdate"`
+	MessageID         string         `json:"messageId,omitempty"`         // 消息 chunk 与整消息 upsert
+	Content           any            `json:"content,omitempty"`           // 消息 chunk 的 ContentBlock、tool_call_update 的 content 数组
+	ToolCallID        string         `json:"toolCallId,omitempty"`        // tool_call_update
+	Title             string         `json:"title,omitempty"`             // tool_call_update
+	Kind              string         `json:"kind,omitempty"`              // tool_call_update
+	Status            string         `json:"status,omitempty"`            // tool_call_update
+	State             string         `json:"state,omitempty"`             // state_update
+	StopReason        string         `json:"stopReason,omitempty"`        // state_update idle
+	ConfigOptions     []ConfigOption `json:"configOptions,omitempty"`     // config_option_update
+	AvailableCommands any            `json:"availableCommands,omitempty"` // available_commands_update
+	Used              uint64         `json:"used,omitempty"`              // usage_update
+	Size              uint64         `json:"size,omitempty"`              // usage_update
+	Plan              *PlanItems     `json:"plan,omitempty"`              // plan_update（嵌套在 plan 下）
+	ExpandErrorMsg    string         `json:"alk.cxykevin.top/error_msg,omitempty"`
+	AgentStatus       *string        `json:"alk.cxykevin.top/agent_status,omitempty"`
+}
+
+// PlanItems plan_update 内容（ACP v2：{plan: {type:"items", planId, entries}}）
+type PlanItems struct {
+	Type    string              `json:"type"` // "items"
+	PlanID  string              `json:"planId"`
+	Entries []structs.PlanEntry `json:"entries"`
+}
+
+// PermissionOption request_permission 选项（ACP v2）
+type PermissionOption struct {
+	OptionID string `json:"optionId"`
+	Name     string `json:"name"`
+	Kind     string `json:"kind"` // allow_once | reject_once
+}
+
+// ToolCallInfo request_permission subject 中的工具调用信息（ACP v2 ToolCallUpdate 子集）
+type ToolCallInfo struct {
+	ToolCallID string `json:"toolCallId"`
+	Title      string `json:"title,omitempty"`
+	Kind       string `json:"kind,omitempty"`
+	Status     string `json:"status,omitempty"`
+	Content    any    `json:"content,omitempty"`
+}
+
+// PermissionSubject request_permission 的 subject（ACP v2：type + toolCall 嵌套）
+type PermissionSubject struct {
+	Type     string        `json:"type"` // "tool_call"
+	ToolCall *ToolCallInfo `json:"toolCall,omitempty"`
+}
+
+// RequestPermissionParams session/request_permission 服务端→客户端请求参数（ACP v2）
+type RequestPermissionParams struct {
+	SessionID   string             `json:"sessionId"`
+	Title       string             `json:"title"`
+	Description string             `json:"description,omitempty"`
+	Subject     *PermissionSubject `json:"subject,omitempty"`
+	Options     []PermissionOption `json:"options"`
+}
+
+// RequestPermissionResult 客户端对 request_permission 的响应（ACP v2）
+type RequestPermissionResult struct {
+	Outcome  string `json:"outcome"` // selected | cancelled
+	OptionID string `json:"optionId,omitempty"`
 }
 
 // SessionUpdate 更新会话的请求
@@ -1062,9 +1230,8 @@ type SessionRequestPermission struct {
 	Update    any    `json:"update"`
 }
 
-// SessionLoad 加载会话并发送历史回放
-func SessionLoad(req SessionLoadRequest, call func(string, any, *string) error, connID uint64) (SessionLoadResponse, error) {
-	req.Cwd = path.Clean(req.Cwd)
+// SessionResume 恢复会话（ACP v2：replayFrom={type:"start"} 回放历史；省略则不回放）
+func SessionResume(req SessionResumeRequest, call func(string, any, *string) error, connID uint64) (SessionResumeResponse, error) {
 	cwd, sid, err := sessionID2Cwd(req.SessionID)
 	if err != nil {
 		// 冷还原：服务器重启后内存注册表为空（sessionID2Cwd 报 session not found），
@@ -1073,15 +1240,15 @@ func SessionLoad(req SessionLoadRequest, call func(string, any, *string) error, 
 		var perr error
 		cwd, sid, perr = parseSessionID(req.SessionID)
 		if perr != nil {
-			return SessionLoadResponse{}, err
+			return SessionResumeResponse{}, err
 		}
 	}
-	if cwd != req.Cwd {
-		return SessionLoadResponse{}, fmt.Errorf("cwd not match")
+	if cwd != path.Clean(req.Cwd) {
+		return SessionResumeResponse{}, fmt.Errorf("cwd not match")
 	}
 	sess, err := loadSession(cwd, &sid, true)
 	if err != nil {
-		return SessionLoadResponse{}, err
+		return SessionResumeResponse{}, err
 	}
 	bindedSessionOnConnMu.Lock()
 	bindedSessionOnConn[connID] = append(bindedSessionOnConn[connID], req.SessionID)
@@ -1092,24 +1259,28 @@ func SessionLoad(req SessionLoadRequest, call func(string, any, *string) error, 
 	if sess.Task != "" {
 		entries, perr := task.BuildPlanEntries(sess.Task)
 		if perr != nil {
-			logger.Warn("session load: parse task failed: %v", perr)
+			logger.Warn("session resume: parse task failed: %v", perr)
 		} else if len(entries) > 0 {
 			err = broadcastSessionUpdate(req.SessionID, SessionUpdate{
 				SessionID: req.SessionID,
 				Update: SessionUpdateUpdate{
-					SessionUpdate: "plan",
-					Entries:       entries,
+					SessionUpdate: "plan_update",
+					Plan: &PlanItems{
+						Type:    "items",
+						PlanID:  fmt.Sprintf("plan_%d", sess.ID),
+						Entries: entries,
+					},
 				},
 			}, 0)
 			if err != nil {
-				logger.Warn("failed to broadcast plan on session load: %v", err)
+				logger.Warn("failed to broadcast plan on session resume: %v", err)
 			}
 		}
 	}
 	msgs, err := funcs.GetHistory(sess)
 	previousToolJSON := ""
 	prevMsgID := uint64(0)
-	if !req.SkipHistory {
+	if req.ReplayFrom != nil && req.ReplayFrom.Type == "start" {
 		logger.Info("replay session: %s", req.SessionID)
 		for _, val := range msgs {
 			switch val.Type {
@@ -1117,61 +1288,51 @@ func SessionLoad(req SessionLoadRequest, call func(string, any, *string) error, 
 				err := call("session/update", SessionUpdate{
 					SessionID: req.SessionID,
 					Update: SessionUpdateUpdate{
-						SessionUpdate: "user_message_chunk",
-						Content: u.H{
-							"type": "text",
-							"text": val.Delta,
-						},
-						AgentStatus: new(u.ValDefault(val.AgentID, "")),
+						SessionUpdate: "user_message",
+						MessageID:     msgID(val.ID),
+						Content:       []u.H{{"type": "text", "text": val.Delta}},
+						AgentStatus:   new(u.ValDefault(val.AgentID, "")),
 					},
 				}, nil)
 				if err != nil {
-					return SessionLoadResponse{}, err
+					return SessionResumeResponse{}, err
 				}
 			case structs.MessagesRoleAgent:
 				if val.ThinkingDelta != "" {
 					err := call("session/update", SessionUpdate{
 						SessionID: req.SessionID,
 						Update: SessionUpdateUpdate{
-							SessionUpdate: "agent_thought_chunk",
-							Content: u.H{
-								"type": "text",
-								"text": val.ThinkingDelta,
-							},
-							AgentStatus: new(u.ValDefault(val.AgentID, "")),
+							SessionUpdate: "agent_thought",
+							MessageID:     msgID(val.ID),
+							Content:       []u.H{{"type": "text", "text": val.ThinkingDelta}},
+							AgentStatus:   new(u.ValDefault(val.AgentID, "")),
 						},
 					}, nil)
 					if err != nil {
-						return SessionLoadResponse{}, err
+						return SessionResumeResponse{}, err
 					}
 				}
 				err := call("session/update", SessionUpdate{
 					SessionID: req.SessionID,
 					Update: SessionUpdateUpdate{
-						SessionUpdate: "agent_message_chunk",
-						Content: u.H{
-							"type": "text",
-							"text": val.Delta,
-						},
-						AgentStatus: new(u.ValDefault(val.AgentID, "")),
+						SessionUpdate: "agent_message",
+						MessageID:     msgID(val.ID),
+						Content:       []u.H{{"type": "text", "text": val.Delta}},
+						AgentStatus:   new(u.ValDefault(val.AgentID, "")),
 					},
 				}, nil)
 				previousToolJSON = val.ToolCallingJSONString
 				prevMsgID = val.ID
 				if err != nil {
-					return SessionLoadResponse{}, err
+					return SessionResumeResponse{}, err
 				}
 				if val.TotalTokens != 0 || val.CachedTokens != 0 || val.PromptTokens != 0 || val.CompletionTokens != 0 {
 					err = broadcastSessionUpdate(req.SessionID, SessionUpdate{
 						SessionID: req.SessionID,
 						Update: SessionUpdateUpdate{
-							SessionUpdate: "alk.cxykevin.top/usage",
-							Content: &reqStructs.Usage{
-								TotalTokens:      val.TotalTokens,
-								CachedTokens:     val.CachedTokens,
-								PromptTokens:     val.PromptTokens,
-								CompletionTokens: val.CompletionTokens,
-							},
+							SessionUpdate: "usage_update",
+							Used:          uint64(val.TotalTokens),
+							Size:          currentTokenLimit(sess),
 						},
 					}, 0)
 				}
@@ -1197,7 +1358,7 @@ func SessionLoad(req SessionLoadRequest, call func(string, any, *string) error, 
 						err = call("session/update", SessionUpdate{
 							SessionID: req.SessionID,
 							Update: SessionUpdateUpdate{
-								SessionUpdate: "tool_call",
+								SessionUpdate: "tool_call_update",
 								ToolCallID:    fmt.Sprintf("call_%d_%d_%s", sess.ID, prevMsgID, toolID),
 								Title:         fmt.Sprintf("[Call %s]%s", toolName, toolID),
 								Kind:          u.Default(ToolNameToTypeMap, toolName, "other"),
@@ -1205,7 +1366,7 @@ func SessionLoad(req SessionLoadRequest, call func(string, any, *string) error, 
 							},
 						}, nil)
 						if err != nil {
-							return SessionLoadResponse{}, err
+							return SessionResumeResponse{}, err
 						}
 					}
 				}
@@ -1222,7 +1383,7 @@ func SessionLoad(req SessionLoadRequest, call func(string, any, *string) error, 
 				err = broadcastSessionUpdate(req.SessionID, SessionUpdate{
 					SessionID: req.SessionID,
 					Update: SessionUpdateUpdate{
-						SessionUpdate: "tool_call",
+						SessionUpdate: "tool_call_update",
 						ToolCallID:    id,
 						Kind:          ToolNameToTypeMap[latestTyp[id]],
 						Status:        "pending",
@@ -1234,28 +1395,6 @@ func SessionLoad(req SessionLoadRequest, call func(string, any, *string) error, 
 					logger.Warn("failed to broadcast session update: %v", err)
 				}
 			}
-			// var waitApproveSessionString strings.Builder
-			// waitApproveSessionString.WriteString("---\n### ***[System]*** Waiting Approve Tools:\n```text")
-			// for id := range sess.LatestToolCallingContext {
-			// 	stx := strings.SplitN(id, "_", 4)
-			// 	s := ""
-			// 	if len(stx) == 4 {
-			// 		s = stx[3]
-			// 	}
-			// 	fmt.Fprintf(&waitApproveSessionString, "\n%s", fmt.Sprintf("[Call %s]%s", sess.LatestToolCallingType[id], s))
-			// }
-			// waitApproveSessionString.WriteString("\n```\n> Using `/approve` command to approve or type anything else to reject.\n")
-			// err = broadcastSessionUpdate(req.SessionID, SessionUpdate{
-			// 	SessionID: req.SessionID,
-			// 	Update: SessionUpdateUpdate{
-			// 		SessionUpdate: "agent_message_chunk",
-			// 		Content: u.H{
-			// 			"type": "text",
-			// 			"text": waitApproveSessionString.String(),
-			// 		},
-			// 		CompabiltyIgnore: "true",
-			// 	},
-			// }, 0)
 		}
 	}
 	modelID := sess.LastModelID
@@ -1267,6 +1406,7 @@ func SessionLoad(req SessionLoadRequest, call func(string, any, *string) error, 
 			"name":        strings.TrimLeft(i, "/"),
 			"description": v.Description,
 			"input": u.H{
+				"type": "text",
 				"hint": v.Hint,
 			},
 		}
@@ -1292,25 +1432,65 @@ func SessionLoad(req SessionLoadRequest, call func(string, any, *string) error, 
 		SessionID: req.SessionID,
 		Update: SessionUpdateUpdate{
 			SessionUpdate: "config_option_update",
-			Content:       buildConfigOptions(uint32(modelID)),
+			ConfigOptions: buildConfigOptions(modelID, sess.ReasoningEffort),
 		},
 	}, 0)
 
-	return SessionLoadResponse{
-		Models: ModelConfig{
-			AvailableModels: buildModelList(),
-			CurrentModelID: fmt.Sprintf("%d/%s", modelID, u.Default(config.GlobalConfig.Model.Models, int32(modelID), cfgStructs.ModelConfig{
-				ModelID: fmt.Sprintf("UnknownModel(%d)", modelID),
-			}).ModelID),
-		},
-		ConfigOptions: buildConfigOptions(modelID),
+	return SessionResumeResponse{
+		ConfigOptions: buildConfigOptions(modelID, sess.ReasoningEffort),
 	}, nil
+}
+
+// SessionCloseRequest 关闭会话的请求（ACP v2 session/close）
+type SessionCloseRequest struct {
+	SessionID string `json:"sessionId"`
+}
+
+// SessionClose 关闭会话：释放会话资源但不删除聊天记录。
+// 无其他连接时才真正释放（scheduleSessionRelease 内部处理）；返回空对象 {}。
+func SessionClose(req SessionCloseRequest, call func(string, any, *string) error, connID uint64) (u.H, error) {
+	if req.SessionID == "" {
+		return u.H{}, fmt.Errorf("sessionId is empty")
+	}
+	if _, _, err := sessionID2Cwd(req.SessionID); err != nil {
+		return u.H{}, err
+	}
+	// 解绑当前连接并调度释放
+	unregisterConnCall(connID, req.SessionID)
+	bindedSessionOnConnMu.Lock()
+	bindedSessionOnConn[connID] = slices.DeleteFunc(bindedSessionOnConn[connID], func(s string) bool { return s == req.SessionID })
+	bindedSessionOnConnMu.Unlock()
+	scheduleSessionRelease(req.SessionID)
+	return u.H{}, nil
+}
+
+// msgID 生成 ACP messageId（基于 DB 消息 ID，直播与回放一致）
+func msgID(id uint64) string {
+	return "msg_" + strconv.FormatUint(id, 10)
+}
+
+// currentTokenLimit 返回当前模型上下文窗口大小（usage_update 的 size）
+func currentTokenLimit(sess *structs.Chats) uint64 {
+	if sess == nil {
+		return 8192
+	}
+	modelID := sess.LastModelID
+	if sess.CurrentAgentID != "" {
+		if id := uint32(sess.CurrentAgentConfig.AgentModel); id != 0 {
+			modelID = id
+		}
+	}
+	if cfg, ok := config.GlobalConfig.Model.Models[int32(modelID)]; ok {
+		return uint64(cfg.TokenLimit)
+	}
+	return 8192
 }
 
 // SessionSetConfigOptionRequest 设置配置选项的请求
 type SessionSetConfigOptionRequest struct {
 	SessionID string `json:"sessionId"`
 	ConfigID  string `json:"configId"`
+	Type      string `json:"type"` // "id"（select）| "boolean"（ACP v2 必填）
 	Value     string `json:"value"`
 }
 
@@ -1375,19 +1555,32 @@ func SessionSetConfigOption(req SessionSetConfigOptionRequest, call func(string,
 			return SessionSetConfigOptionResponse{}, fmt.Errorf("failed to set model: %v", err)
 		}
 
+	case "thought_level":
+		logger.Info("set thought level %s in session=%s", req.Value, req.SessionID)
+		switch req.Value {
+		case "unset", "low", "medium", "high", "max", "xhigh":
+			sess.ReasoningEffort = req.Value
+			if err := sess.DB.Model(&structs.Chats{}).Where("id = ?", sess.ID).
+				Update("reasoning_effort", req.Value).Error; err != nil {
+				return SessionSetConfigOptionResponse{}, fmt.Errorf("failed to set thought level: %v", err)
+			}
+		default:
+			return SessionSetConfigOptionResponse{}, fmt.Errorf("invalid thought level: %s", req.Value)
+		}
+
 	default:
 		return SessionSetConfigOptionResponse{}, fmt.Errorf("unknown config option: %s", req.ConfigID)
 	}
 
 	// 生成更新后的配置选项列表
-	configOptions := buildConfigOptions(sess.LastModelID)
+	configOptions := buildConfigOptions(sess.LastModelID, sess.ReasoningEffort)
 
 	// 广播配置更新到所有连接到该会话的客户端
 	err = broadcastSessionUpdate(req.SessionID, SessionUpdate{
 		SessionID: req.SessionID,
 		Update: SessionUpdateUpdate{
 			SessionUpdate: "config_option_update",
-			Content:       configOptions,
+			ConfigOptions: configOptions,
 		},
 	}, 0) // 不排除任何连接，所有客户端都需要知道配置更新
 
@@ -1397,133 +1590,6 @@ func SessionSetConfigOption(req SessionSetConfigOptionRequest, call func(string,
 
 	return SessionSetConfigOptionResponse{
 		ConfigOptions: configOptions,
-	}, nil
-}
-
-// SessionListModelsRequest 列出会话可用模型的请求
-type SessionListModelsRequest struct {
-	SessionID string `json:"sessionId"`
-}
-
-// SessionListModelsResponse 列出会话可用模型的响应
-type SessionListModelsResponse struct {
-	CurrentModelID  string           `json:"currentModelId"`
-	AvailableModels []AvailableModel `json:"availableModels"`
-}
-
-// SessionListModels 列出会话可用的所有模型列表
-// 返回所有配置的模型以及当前会话选中的模型 ID
-func SessionListModels(req SessionListModelsRequest, call func(string, any, *string) error, connID uint64) (SessionListModelsResponse, error) {
-	if req.SessionID == "" {
-		return SessionListModelsResponse{}, fmt.Errorf("sessionId is empty")
-	}
-
-	// 解析会话ID（用于验证格式）
-	_, _, err := sessionID2Cwd(req.SessionID)
-	if err != nil {
-		return SessionListModelsResponse{}, fmt.Errorf("invalid sessionId: %v", err)
-	}
-
-	// 获取会话对象以获取当前模型
-	sessLock.Lock()
-	sessObj, ok := sessions[req.SessionID]
-	sessLock.Unlock()
-	if !ok {
-		return SessionListModelsResponse{}, fmt.Errorf("session not found")
-	}
-
-	sess := sessObj.session
-	modelID := sess.LastModelID
-	currentModelID := fmt.Sprintf("%d/%s", modelID, u.Default(config.GlobalConfig.Model.Models, int32(modelID), cfgStructs.ModelConfig{
-		ModelID: fmt.Sprintf("UnknownModel(%d)", modelID),
-	}).ModelID)
-
-	return SessionListModelsResponse{
-		CurrentModelID:  currentModelID,
-		AvailableModels: buildModelList(),
-	}, nil
-}
-
-// SessionSetModelRequest 设置会话模型的请求（向后兼容的老接口）
-type SessionSetModelRequest struct {
-	SessionID string `json:"sessionId"`
-	ModelID   string `json:"modelId"`
-}
-
-// SessionSetModelResponse 设置会话模型的响应
-type SessionSetModelResponse struct {
-	CurrentModelID  string           `json:"currentModelId"`
-	AvailableModels []AvailableModel `json:"availableModels"`
-}
-
-// SessionSetModel 设置会话模型
-// 这个接口提供与 session/set_config_option 相同的功能
-func SessionSetModel(req SessionSetModelRequest, call func(string, any, *string) error, connID uint64) (SessionSetModelResponse, error) {
-	if req.SessionID == "" {
-		return SessionSetModelResponse{}, fmt.Errorf("sessionId is empty")
-	}
-
-	// 解析会话ID
-	_, _, err := sessionID2Cwd(req.SessionID)
-	if err != nil {
-		return SessionSetModelResponse{}, fmt.Errorf("invalid sessionId: %v", err)
-	}
-
-	// 获取会话对象
-	sessLock.Lock()
-	sessObj, ok := sessions[req.SessionID]
-	if !ok {
-		sessLock.Unlock()
-		return SessionSetModelResponse{}, fmt.Errorf("session not found")
-	}
-	sessLock.Unlock()
-
-	sess := sessObj.session
-
-	parts := strings.SplitN(req.ModelID, "/", 2)
-	if len(parts) != 2 {
-		return SessionSetModelResponse{}, fmt.Errorf("invalid model value format")
-	}
-
-	modelIdx, err := strconv.ParseInt(parts[0], 10, 32)
-	if err != nil {
-		return SessionSetModelResponse{}, fmt.Errorf("invalid model index: %v", err)
-	}
-
-	// 验证模型是否存在
-	cfg := config.GlobalConfig.Model.Models
-	if _, ok := cfg[int32(modelIdx)]; !ok {
-		return SessionSetModelResponse{}, fmt.Errorf("model not found: %d", modelIdx)
-	}
-
-	// 使用 SelectModel 函数更新模型
-	err = funcs.SelectModel(sess, int32(modelIdx))
-	if err != nil {
-		return SessionSetModelResponse{}, fmt.Errorf("failed to set model: %v", err)
-	}
-
-	// 获取更新后的模型信息
-	modelName := u.Default(cfg, int32(modelIdx), cfgStructs.ModelConfig{
-		ModelID: fmt.Sprintf("UnknownModel(%s)", req.ModelID),
-	}).ModelID
-	currentModelID := fmt.Sprintf("%d/%s", modelIdx, modelName)
-
-	// 广播配置更新到所有连接到该会话的客户端
-	err = broadcastSessionUpdate(req.SessionID, SessionUpdate{
-		SessionID: req.SessionID,
-		Update: SessionUpdateUpdate{
-			SessionUpdate: "config_option_update",
-			Content:       buildConfigOptions(uint32(modelIdx)),
-		},
-	}, 0)
-
-	if err != nil {
-		// 仅记录日志，不返回错误
-	}
-
-	return SessionSetModelResponse{
-		CurrentModelID:  currentModelID,
-		AvailableModels: buildModelList(),
 	}, nil
 }
 

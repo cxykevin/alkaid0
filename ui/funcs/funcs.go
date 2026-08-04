@@ -365,6 +365,11 @@ func UserAddMsg(session *structs.Chats, msg string, refers *structs.MessagesRefe
 	return request.UserAddMsg(session, msg, refers)
 }
 
+// UserAddMsgWithID 同 UserAddMsg，但返回持久化的用户消息 DB ID（用于 ACP v2 messageId）
+func UserAddMsgWithID(session *structs.Chats, msg string, refers *structs.MessagesReferList) (uint64, error) {
+	return request.UserAddMsgWithID(session, msg, refers)
+}
+
 // SubAgentReject 子代理拒绝
 func SubAgentReject(session *structs.Chats) error {
 	return request.SubAgentReject(session)

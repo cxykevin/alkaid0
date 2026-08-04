@@ -64,8 +64,8 @@ func newTitleTestSession(t *testing.T, tmpDir string, calls2 chan ReceivedCall) 
 		calls2 <- ReceivedCall{Name: name, Data: data}
 		return nil
 	}
-	if _, err = SessionLoad(SessionLoadRequest{Cwd: tmpDir, SessionID: sessionID}, callFunc2, 2); err != nil {
-		t.Fatalf("SessionLoad failed: %v", err)
+	if _, err = SessionResume(SessionResumeRequest{Cwd: tmpDir, SessionID: sessionID}, callFunc2, 2); err != nil {
+		t.Fatalf("SessionResume failed: %v", err)
 	}
 	return sessionID
 }

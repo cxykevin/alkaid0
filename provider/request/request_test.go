@@ -109,6 +109,48 @@ func TestUserAddMsg_Basic(t *testing.T) {
 	}
 }
 
+// TestUserAddMsgWithID_ReturnsID 验证 UserAddMsgWithID 返回持久化消息的 DB ID
+func TestUserAddMsgWithID_ReturnsID(t *testing.T) {
+	db := setupTestDB(t)
+	defer u.Unwrap(db.DB()).Close()
+
+	chat := storageStructs.Chats{ID: 1, LastModelID: 1}
+	if err := db.Create(&chat).Error; err != nil {
+		t.Fatalf("Failed to create chat: %v", err)
+	}
+
+	session := &storageStructs.Chats{ID: 1, DB: db, CurrentAgentID: ""}
+
+	msgID, err := UserAddMsgWithID(session, "Hello v2", nil)
+	if err != nil {
+		t.Fatalf("UserAddMsgWithID failed: %v", err)
+	}
+	if msgID == 0 {
+		t.Fatal("UserAddMsgWithID 应返回非 0 的消息 ID")
+	}
+
+	var msg storageStructs.Messages
+	if err := db.First(&msg, msgID).Error; err != nil {
+		t.Fatalf("无法按返回 ID 查询消息: %v", err)
+	}
+	if msg.ID != msgID {
+		t.Errorf("DB 消息 ID 不匹配: got %d, want %d", msg.ID, msgID)
+	}
+	if msg.Delta != "Hello v2" {
+		t.Errorf("消息内容不匹配: got %q", msg.Delta)
+	}
+
+	// UserAddMsg 包装应同样落库且无重复
+	if err := UserAddMsg(session, "second", nil); err != nil {
+		t.Fatalf("UserAddMsg failed: %v", err)
+	}
+	var count int64
+	db.Model(&storageStructs.Messages{}).Where("chat_id = ?", 1).Count(&count)
+	if count != 2 {
+		t.Errorf("应有 2 条消息，got %d", count)
+	}
+}
+
 // TestUserAddMsg_WithRefers 测试带引用的消息添加
 // 注意：由于 GORM 的 gob 序列化问题，这个测试被简化
 func TestUserAddMsg_WithRefers(t *testing.T) {
