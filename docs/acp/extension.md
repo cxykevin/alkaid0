@@ -68,17 +68,7 @@ alkaid0 现在遵循 ACP v2 标准事件，且字段置于 update 对象**顶层
 - **`usage_update`**：`used` / `size`（`used` = 累计 token，`size` = 当前模型 `TokenLimit`）。
 - **`config_option_update`**：`configOptions` 字段（顶层）。
 - **`available_commands_update`**：`availableCommands` 字段，命令 `input` 形如 `{ "type": "text", "hint": "..." }`。
-
-### 2.2. `alk.cxykevin.top/summary`
-
-- `type` ***string***: 内容类型。固定为 `text`。
-- `text` ***string***: 摘要文本。为空意味着摘要启动生成还未结束。
-
-> 摘要若出现异常则直接停止 loop 并在 loop 级别报错。
-
-### 2.3. `alk.cxykevin.top/session_title`
-
-- `title` ***string***: 会话最终展示标题（用户设置的标题优先，其次 AI 生成的标题）。
+- **`session_info_update`**：会话元数据更新（标题/最后活动时间），字段置顶层。`title` 为会话最终展示标题（用户设置的标题优先，其次 AI 生成的标题）；`updatedAt` 为 RFC 3339 最后活动时间。
 
 触发时机：
 
@@ -88,13 +78,20 @@ alkaid0 现在遵循 ACP v2 标准事件，且字段置于 update 对象**顶层
 
 客户端可据此刷新会话列表展示。
 
-### 2.4. `alk.cxykevin.top/agent_status`
+### 2.2. `alk.cxykevin.top/summary`
+
+- `type` ***string***: 内容类型。固定为 `text`。
+- `text` ***string***: 摘要文本。为空意味着摘要启动生成还未结束。
+
+> 摘要若出现异常则直接停止 loop 并在 loop 级别报错。
+
+### 2.3. `alk.cxykevin.top/agent_status`
 
 - `alk.cxykevin.top/agent_status` ***string?*** 当前所在的 SubAgent。其为 `""` 则为处于主 Agent。
 
 当 `sessionUpdate` 为 `agent_thought_chunk`/`agent_message_chunk`/`agent_thought`/`agent_message` 时，`alk.cxykevin.top/agent_status` 存在。
 
-### 2.5. `alk.cxykevin.top/error_msg`
+### 2.4. `alk.cxykevin.top/error_msg`
 
 - 挂在 `state_update` 等 update 对象顶层的错误信息扩展（v2 无轮次内错误通道）。`state_update idle` 时若存在非空 `alk.cxykevin.top/error_msg` 表示本轮出错（`stopReason` 为 `refusal`）。
 
@@ -232,6 +229,33 @@ alkaid0 现在遵循 ACP v2 标准事件，且字段置于 update 对象**顶层
   - `description` ***string***: Tag 描述。人类可读。
   - `prompt` ***string***: Agent Tag LLM 完整提示词。
   - `shortPrompt` ***string***: Agent Tag LLM 简短提示词。在 Agent 激活前使用。
+
+### 3.7. `session/update`（客户端 → 服务端，双向扩展）
+
+ACP v2 中 `session/update` 是服务端 → 客户端的通知（含 `session_info_update` 变体）。alkaid0 同时将其注册为客户端可调用的**请求方法**，用于重命名会话标题。请求体与标准通知同构：
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "method": "session/update",
+  "params": {
+    "sessionId": "sess_293:/path/to/project",
+    "update": {
+      "sessionUpdate": "session_info_update",
+      "title": "Implement user authentication"
+    }
+  }
+}
+```
+
+语义：
+
+- 当前仅支持 `session_info_update` 变体（标题更新）。其他变体返回错误。
+- `title`：非空 = 设置用户标题（展示优先）；空串 = 清除用户标题（回退 AI 标题）；`null` 或省略 = 不修改。
+- **会话无需预先 `session/new` / `session/resume`**：`sessionId` 未在内存注册表时，服务端按字符串解析 `cwd`+`id` 并经数据库校验会话真实存在后落库。
+- 变更单列写入 `Chats.title`（`updated_at` 随之刷新），并向该会话所有已连接客户端广播标准 `session_info_update` 通知（含发起者）。
+- 成功返回 `{}`。
 
 ## 4. 字段扩展
 

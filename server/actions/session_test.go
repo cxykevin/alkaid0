@@ -2,8 +2,13 @@ package actions
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
+	"os"
 	"path"
+	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -16,6 +21,7 @@ import (
 	"github.com/cxykevin/alkaid0/ui/loop"
 	"github.com/cxykevin/alkaid0/ui/state"
 	u "github.com/cxykevin/alkaid0/utils"
+	"gorm.io/gorm"
 )
 
 // registerTestSessionByID 按完整 sessionID 注册测试会话。
@@ -242,6 +248,364 @@ func TestSessionListValidation(t *testing.T) {
 			}
 		})
 	}
+}
+
+// newSessionListDB 创建带 .alkaid0 的临时目录并创建 n 个会话。
+// 返回 (目录, db 句柄, 会话 ID 列表)。db 句柄引用计数由 t.Cleanup 平衡。
+func newSessionListDB(t *testing.T, n int) (string, *gorm.DB, []uint32) {
+	t.Helper()
+	tmpDir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(tmpDir, ".alkaid0"), 0o755); err != nil {
+		t.Fatalf("failed to create .alkaid0: %v", err)
+	}
+	db, err := loadDB(tmpDir)
+	if err != nil {
+		t.Fatalf("loadDB failed: %v", err)
+	}
+	ids := make([]uint32, n)
+	for i := 0; i < n; i++ {
+		chat := structs.Chats{Title: fmt.Sprintf("Chat %d", i)}
+		if err := db.Create(&chat).Error; err != nil {
+			t.Fatalf("failed to create chat %d: %v", i, err)
+		}
+		ids[i] = chat.ID
+	}
+	t.Cleanup(func() { closeDB(tmpDir) })
+	return tmpDir, db, ids
+}
+
+// setChatUpdatedAt 通过原生 SQL 覆写会话的 updated_at（绕过 GORM 的 autoUpdateTime 回调）。
+func setChatUpdatedAt(t *testing.T, db *gorm.DB, id uint32, at time.Time) {
+	t.Helper()
+	if err := db.Exec("UPDATE chats SET updated_at = ? WHERE id = ?", at, id).Error; err != nil {
+		t.Fatalf("failed to set updated_at for chat %d: %v", id, err)
+	}
+}
+
+// TestSessionList_OrderAndUpdatedAt 验证 session/list 按最后活动时间倒序并返回 updatedAt
+func TestSessionList_OrderAndUpdatedAt(t *testing.T) {
+	dir, db, ids := newSessionListDB(t, 3)
+	// 设置递增的最后活动时间：id 越大越新
+	base := time.Date(2026, 8, 1, 10, 0, 0, 0, time.UTC)
+	for i, id := range ids {
+		setChatUpdatedAt(t, db, id, base.Add(time.Duration(i)*time.Hour))
+	}
+
+	resp, err := SessionList(SessionListRequest{Cwd: dir}, nil, 1)
+	if err != nil {
+		t.Fatalf("SessionList failed: %v", err)
+	}
+	if len(resp.Sessions) != len(ids) {
+		t.Fatalf("expected %d sessions, got %d", len(ids), len(resp.Sessions))
+	}
+	for i := 0; i < len(ids); i++ {
+		wantID := ids[len(ids)-1-i]
+		got := resp.Sessions[i]
+		if got.SessionID != cwd2SessionID(dir, wantID) {
+			t.Errorf("session[%d] mismatch: got %s, want id %d", i, got.SessionID, wantID)
+		}
+		wantAt := base.Add(time.Duration(len(ids)-1-i) * time.Hour).UTC()
+		parsed, err := time.Parse(time.RFC3339, got.UpdatedAt)
+		if err != nil {
+			t.Fatalf("updatedAt %q not RFC3339: %v", got.UpdatedAt, err)
+		}
+		if !parsed.Equal(wantAt) {
+			t.Errorf("session[%d] updatedAt mismatch: got %s, want %s",
+				i, got.UpdatedAt, wantAt.Format(time.RFC3339))
+		}
+	}
+	// 会话数不足一页时无 nextCursor
+	if resp.NextCursor != "" {
+		t.Errorf("expected no nextCursor, got %q", resp.NextCursor)
+	}
+}
+
+// TestSessionList_Pagination 验证 cursor 分页：每页最多 30 条、跨页不重不漏、顺序全局倒序
+func TestSessionList_Pagination(t *testing.T) {
+	const total = 75 // 30 + 30 + 15
+	dir, db, ids := newSessionListDB(t, total)
+	base := time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)
+	for i, id := range ids {
+		setChatUpdatedAt(t, db, id, base.Add(time.Duration(i)*time.Minute))
+	}
+
+	var all []string
+	cursor := ""
+	pages := 0
+	for {
+		resp, err := SessionList(SessionListRequest{Cwd: dir, Cursor: cursor}, nil, 1)
+		if err != nil {
+			t.Fatalf("SessionList page %d failed: %v", pages, err)
+		}
+		if len(resp.Sessions) > 30 {
+			t.Fatalf("page %d has %d sessions, want <= 30", pages, len(resp.Sessions))
+		}
+		for _, s := range resp.Sessions {
+			all = append(all, s.SessionID)
+		}
+		pages++
+		if resp.NextCursor == "" {
+			break
+		}
+		cursor = resp.NextCursor
+	}
+	if pages != 3 {
+		t.Errorf("expected 3 pages, got %d", pages)
+	}
+	if len(all) != total {
+		t.Fatalf("expected %d sessions across pages, got %d", total, len(all))
+	}
+	// 期望顺序：ids 倒序（updated_at 随创建顺序递增）
+	for i, sid := range all {
+		wantID := ids[total-1-i]
+		if sid != cwd2SessionID(dir, wantID) {
+			t.Fatalf("session %d out of order: got %s, want id %d", i, sid, wantID)
+		}
+	}
+	// 跨页无重复
+	seen := map[string]bool{}
+	for _, sid := range all {
+		if seen[sid] {
+			t.Fatalf("duplicate session %s across pages", sid)
+		}
+		seen[sid] = true
+	}
+}
+
+// TestSessionList_InvalidCursor 无效 cursor 应返回错误（ACP 规范）
+func TestSessionList_InvalidCursor(t *testing.T) {
+	dir, _, _ := newSessionListDB(t, 2)
+	_, err := SessionList(SessionListRequest{Cwd: dir, Cursor: "not-a-valid-cursor"}, nil, 1)
+	if err == nil || !contains(err.Error(), "invalid cursor") {
+		t.Errorf("expected invalid cursor error, got %v", err)
+	}
+}
+
+// TestSessionList_LegacyZeroUpdatedAt 历史数据（updated_at 为零值）应排序垫底且 updatedAt 显示为 Unix 纪元
+func TestSessionList_LegacyZeroUpdatedAt(t *testing.T) {
+	dir, db, ids := newSessionListDB(t, 3)
+	base := time.Date(2026, 8, 1, 12, 0, 0, 0, time.UTC)
+	setChatUpdatedAt(t, db, ids[1], base.Add(time.Hour))
+	setChatUpdatedAt(t, db, ids[2], base)
+	// 显式清空 ids[0] 的时间，模拟未记录 updated_at 的旧会话
+	if err := db.Exec("UPDATE chats SET updated_at = NULL WHERE id = ?", ids[0]).Error; err != nil {
+		t.Fatalf("failed to clear updated_at for chat %d: %v", ids[0], err)
+	}
+
+	resp, err := SessionList(SessionListRequest{Cwd: dir}, nil, 1)
+	if err != nil {
+		t.Fatalf("SessionList failed: %v", err)
+	}
+	if len(resp.Sessions) != len(ids) {
+		t.Fatalf("expected %d sessions, got %d", len(ids), len(resp.Sessions))
+	}
+	want := []uint32{ids[1], ids[2], ids[0]}
+	for i, id := range want {
+		got := resp.Sessions[i]
+		if got.SessionID != cwd2SessionID(dir, id) {
+			t.Errorf("session[%d] mismatch: got %s, want id %d", i, got.SessionID, id)
+		}
+	}
+	if got, want := resp.Sessions[2].UpdatedAt, "1970-01-01T00:00:00Z"; got != want {
+		t.Errorf("legacy session updatedAt = %q, want %q", got, want)
+	}
+}
+
+// sessionInfoUpdatePayload 构造客户端发起的 session_info_update 请求负载
+func sessionInfoUpdatePayload(t *testing.T, title *string) json.RawMessage {
+	t.Helper()
+	m := map[string]any{"sessionUpdate": "session_info_update"}
+	if title != nil {
+		m["title"] = *title
+	}
+	b, err := json.Marshal(m)
+	if err != nil {
+		t.Fatalf("failed to marshal update: %v", err)
+	}
+	return b
+}
+
+// TestHandleSessionUpdate_RenameColdSession 冷会话（未 new/resume）重命名标题：
+// 无需内存注册，按 sessionId 字符串解析 + DB 校验后落库
+func TestHandleSessionUpdate_RenameColdSession(t *testing.T) {
+	dir, db, ids := newSessionListDB(t, 1)
+	sessionID := cwd2SessionID(dir, ids[0])
+
+	resp, err := HandleSessionUpdate(SessionUpdateRequest{
+		SessionID: sessionID,
+		Update:    sessionInfoUpdatePayload(t, strPtr("Implement user authentication")),
+	}, nil, 1)
+	if err != nil {
+		t.Fatalf("HandleSessionUpdate failed: %v", err)
+	}
+	if len(resp) != 0 {
+		t.Errorf("expected empty response, got %v", resp)
+	}
+
+	// 校验 DB 落库
+	var reloaded structs.Chats
+	if err := db.First(&reloaded, ids[0]).Error; err != nil {
+		t.Fatalf("failed to reload chat: %v", err)
+	}
+	if reloaded.Title != "Implement user authentication" {
+		t.Errorf("title = %q, want %q", reloaded.Title, "Implement user authentication")
+	}
+	if reloaded.UpdatedAt.IsZero() {
+		t.Error("updated_at should be set after rename")
+	}
+}
+
+// TestHandleSessionUpdate_ClearTitle 空串标题清除用户标题（回退 AI 标题）
+func TestHandleSessionUpdate_ClearTitle(t *testing.T) {
+	dir, db, ids := newSessionListDB(t, 1)
+	sessionID := cwd2SessionID(dir, ids[0])
+
+	// 先设置用户标题
+	empty := ""
+	if _, err := HandleSessionUpdate(SessionUpdateRequest{
+		SessionID: sessionID,
+		Update:    sessionInfoUpdatePayload(t, strPtr("临时标题")),
+	}, nil, 1); err != nil {
+		t.Fatalf("set title failed: %v", err)
+	}
+	// 清除
+	if _, err := HandleSessionUpdate(SessionUpdateRequest{
+		SessionID: sessionID,
+		Update:    sessionInfoUpdatePayload(t, &empty),
+	}, nil, 1); err != nil {
+		t.Fatalf("clear title failed: %v", err)
+	}
+
+	var reloaded structs.Chats
+	if err := db.First(&reloaded, ids[0]).Error; err != nil {
+		t.Fatalf("failed to reload chat: %v", err)
+	}
+	if reloaded.Title != "" {
+		t.Errorf("title = %q, want empty after clear", reloaded.Title)
+	}
+}
+
+// TestHandleSessionUpdate_NoTitleNoChange title 省略时不应改动标题
+func TestHandleSessionUpdate_NoTitleNoChange(t *testing.T) {
+	dir, db, ids := newSessionListDB(t, 1)
+	sessionID := cwd2SessionID(dir, ids[0])
+
+	payload, _ := json.Marshal(map[string]any{"sessionUpdate": "session_info_update"})
+	if _, err := HandleSessionUpdate(SessionUpdateRequest{SessionID: sessionID, Update: payload}, nil, 1); err != nil {
+		t.Fatalf("HandleSessionUpdate failed: %v", err)
+	}
+	var reloaded structs.Chats
+	if err := db.First(&reloaded, ids[0]).Error; err != nil {
+		t.Fatalf("failed to reload chat: %v", err)
+	}
+	if reloaded.Title != "Chat 0" {
+		t.Errorf("title = %q, want unchanged %q", reloaded.Title, "Chat 0")
+	}
+}
+
+// TestHandleSessionUpdate_InvalidVariant 不支持的 sessionUpdate 变体应报错
+func TestHandleSessionUpdate_InvalidVariant(t *testing.T) {
+	dir, _, ids := newSessionListDB(t, 1)
+	sessionID := cwd2SessionID(dir, ids[0])
+
+	payload, _ := json.Marshal(map[string]any{"sessionUpdate": "state_update"})
+	_, err := HandleSessionUpdate(SessionUpdateRequest{SessionID: sessionID, Update: payload}, nil, 1)
+	if err == nil || !contains(err.Error(), "unsupported session update variant") {
+		t.Errorf("expected unsupported variant error, got %v", err)
+	}
+}
+
+// TestHandleSessionUpdate_SessionNotFound 无效会话 ID 应报错
+func TestHandleSessionUpdate_SessionNotFound(t *testing.T) {
+	_, err := HandleSessionUpdate(SessionUpdateRequest{
+		SessionID: "invalid",
+		Update:    sessionInfoUpdatePayload(t, strPtr("x")),
+	}, nil, 1)
+	if err == nil || !contains(err.Error(), "session") {
+		t.Errorf("expected session error, got %v", err)
+	}
+}
+
+// TestHandleSessionUpdate_BroadcastAndSync 已加载会话：内存同步 + 广播 session_info_update
+func TestHandleSessionUpdate_BroadcastAndSync(t *testing.T) {
+	dir, db, ids := newSessionListDB(t, 1)
+	sessionID := cwd2SessionID(dir, ids[0])
+
+	// 模拟会话已加载（带真实 session 对象）
+	sessObj := &structs.Chats{ID: ids[0], Title: "", AITitle: "AI 标题", DB: db}
+	sessions[sessionID] = &sessionObj{cwd: dir, id: ids[0], session: sessObj}
+	t.Cleanup(func() {
+		sessLock.Lock()
+		delete(sessions, sessionID)
+		sessLock.Unlock()
+	})
+
+	// 模拟已连接客户端捕获广播
+	var mu sync.Mutex
+	var got []SessionUpdate
+	const connID uint64 = 77
+	connCallLock.Lock()
+	connCallMap[connID] = func(method string, update any, _ *string) error {
+		if method != "session/update" {
+			return nil
+		}
+		mu.Lock()
+		if su, ok := update.(SessionUpdate); ok {
+			got = append(got, su)
+		}
+		mu.Unlock()
+		return nil
+	}
+	connCallLock.Unlock()
+	sessionConnLock.Lock()
+	sessionConnMap[sessionID] = []uint64{connID}
+	sessionConnLock.Unlock()
+	t.Cleanup(func() {
+		connCallLock.Lock()
+		delete(connCallMap, connID)
+		connCallLock.Unlock()
+		sessionConnLock.Lock()
+		delete(sessionConnMap, sessionID)
+		sessionConnLock.Unlock()
+	})
+
+	if _, err := HandleSessionUpdate(SessionUpdateRequest{
+		SessionID: sessionID,
+		Update:    sessionInfoUpdatePayload(t, strPtr("新标题")),
+	}, nil, connID); err != nil {
+		t.Fatalf("HandleSessionUpdate failed: %v", err)
+	}
+
+	// 内存同步
+	if sessObj.Title != "新标题" {
+		t.Errorf("in-memory title = %q, want %q", sessObj.Title, "新标题")
+	}
+	if sessObj.UpdatedAt.IsZero() {
+		t.Error("in-memory updated_at should be set")
+	}
+
+	// 广播内容
+	mu.Lock()
+	n := len(got)
+	mu.Unlock()
+	if n != 1 {
+		t.Fatalf("expected 1 broadcast, got %d", n)
+	}
+	inner, ok := got[0].Update.(SessionUpdateUpdate)
+	if !ok {
+		t.Fatalf("unexpected update type %T", got[0].Update)
+	}
+	if inner.SessionUpdate != "session_info_update" || inner.Title != "新标题" {
+		t.Errorf("broadcast mismatch: variant=%q title=%q", inner.SessionUpdate, inner.Title)
+	}
+	if inner.UpdatedAt == "" {
+		t.Error("broadcast should carry updatedAt")
+	}
+}
+
+// strPtr 返回字符串指针
+func strPtr(s string) *string {
+	return &s
 }
 
 // TestSessionResumeValidation 测试SessionResume的参数验证
@@ -721,6 +1085,109 @@ func TestRegisterConnCallCancelsReleaseTimer(t *testing.T) {
 	}
 	if obj.releaseTimer != nil {
 		t.Error("releaseTimer should be nil after registerConnCall")
+	}
+}
+
+// TestSessionDelete_ColdSession 冷会话（未 new/resume）按字符串解析直接删除
+func TestSessionDelete_ColdSession(t *testing.T) {
+	dir, db, ids := newSessionListDB(t, 1)
+	id := ids[0]
+
+	// 插入一条消息，验证子表级联删除
+	msg := structs.Messages{ChatID: id}
+	if err := db.Create(&msg).Error; err != nil {
+		t.Fatalf("failed to create message: %v", err)
+	}
+
+	// 不经过 SessionNew/SessionResume，直接以字符串形式构造 sessionId 删除
+	sessionID := cwd2SessionID(dir, id)
+	if _, err := SessionDelete(SessionDeleteRequest{SessionID: sessionID}, nil, 1); err != nil {
+		t.Fatalf("SessionDelete failed: %v", err)
+	}
+
+	// 会话已从 DB 删除
+	if _, err := funcs.QueryChat(db, id); err == nil {
+		t.Error("chat should be deleted from DB")
+	}
+	// 子记录已级联删除
+	var cnt int64
+	if err := db.Model(&structs.Messages{}).Where("chat_id = ?", id).Count(&cnt).Error; err != nil {
+		t.Fatalf("count messages failed: %v", err)
+	}
+	if cnt != 0 {
+		t.Errorf("messages should be cascade-deleted, got %d", cnt)
+	}
+	// session/list 不再返回该会话
+	resp, err := SessionList(SessionListRequest{Cwd: dir}, nil, 1)
+	if err != nil {
+		t.Fatalf("SessionList failed: %v", err)
+	}
+	for _, s := range resp.Sessions {
+		if s.SessionID == sessionID {
+			t.Error("deleted session should not appear in session/list")
+		}
+	}
+}
+
+// TestSessionDelete_NonexistentCwd cwd 路径不存在时静默成功
+func TestSessionDelete_NonexistentCwd(t *testing.T) {
+	if _, err := SessionDelete(SessionDeleteRequest{
+		SessionID: "sess_1:/nonexistent/path/alkaid0_xyz",
+	}, nil, 1); err != nil {
+		t.Errorf("expected silent success, got %v", err)
+	}
+}
+
+// TestSessionDelete_InvalidID 畸形 sessionId 静默成功
+func TestSessionDelete_InvalidID(t *testing.T) {
+	if _, err := SessionDelete(SessionDeleteRequest{SessionID: "not-a-session-id"}, nil, 1); err != nil {
+		t.Errorf("expected silent success, got %v", err)
+	}
+}
+
+// TestSessionDelete_LoadedSession 已加载会话删除：内存注册表移除 + DB 记录删除
+func TestSessionDelete_LoadedSession(t *testing.T) {
+	oldSessions := sessions
+	oldAgentCallList := agentCallList
+	sessions = map[string]*sessionObj{}
+	agentCallList = map[string]map[string]func(){}
+	defer func() {
+		sessLock.Lock()
+		sessions = oldSessions
+		sessLock.Unlock()
+		agentCallList = oldAgentCallList
+	}()
+
+	dir, db, ids := newSessionListDB(t, 1)
+	id := ids[0]
+
+	// 构造已加载会话对象并注册到内存注册表（DB 引用留空，避免 closeSession 触发后台索引）
+	sessionID := cwd2SessionID(dir, id)
+	obj := &sessionObj{
+		cwd:     dir,
+		id:      id,
+		session: &structs.Chats{ID: id, ReferCount: 1},
+		loop:    loop.New(nil),
+		ctx:     context.Background(),
+	}
+	sessLock.Lock()
+	sessions[sessionID] = obj
+	sessLock.Unlock()
+
+	if _, err := SessionDelete(SessionDeleteRequest{SessionID: sessionID}, nil, 1); err != nil {
+		t.Fatalf("SessionDelete failed: %v", err)
+	}
+
+	// 内存注册表已移除
+	sessLock.Lock()
+	_, ok := sessions[sessionID]
+	sessLock.Unlock()
+	if ok {
+		t.Error("session should be removed from in-memory registry")
+	}
+	// DB 记录已删除
+	if _, err := funcs.QueryChat(db, id); err == nil {
+		t.Error("chat should be deleted from DB")
 	}
 }
 

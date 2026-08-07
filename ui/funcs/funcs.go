@@ -21,7 +21,8 @@ import (
 
 var logger = log.New("funcs")
 
-// GetChats 获取所有聊天
+// GetChats 获取所有聊天，按最后活动时间倒序（UpdatedAt DESC，同时间按 ID DESC）。
+// UpdatedAt 为零值（历史数据未记录时间）视为最旧，排在末尾。
 func GetChats(db *gorm.DB) ([]*structs.Chats, error) {
 	chats := []*structs.Chats{}
 	err := db.Find(&chats).Error
@@ -30,7 +31,13 @@ func GetChats(db *gorm.DB) ([]*structs.Chats, error) {
 	}
 
 	slices.SortFunc(chats, func(a, b *structs.Chats) int {
-		return int(a.ID) - int(b.ID)
+		if at, bt := a.UpdatedAt, b.UpdatedAt; !at.Equal(bt) {
+			if at.Before(bt) {
+				return 1
+			}
+			return -1
+		}
+		return int(b.ID) - int(a.ID)
 	})
 	return chats, nil
 }

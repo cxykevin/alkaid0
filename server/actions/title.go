@@ -2,10 +2,10 @@ package actions
 
 import (
 	"strings"
+	"time"
 
 	"github.com/cxykevin/alkaid0/provider/request"
 	"github.com/cxykevin/alkaid0/storage/structs"
-	u "github.com/cxykevin/alkaid0/utils"
 )
 
 // generateTitle 异步生成并持久化会话标题。
@@ -38,8 +38,10 @@ func generateTitle(sess *structs.Chats, sessionID string, full bool) {
 			logger.Error("failed to save title for chatID=%d: %v", sess.ID, err)
 			return
 		}
+		// 单列 Update 会触发 GORM autoUpdateTime 刷新 DB 的 updated_at，内存同步避免广播时间滞后
+		sess.UpdatedAt = time.Now()
 		logger.Info("auto title generated for chatID=%d: %s", sess.ID, title)
-		broadcastTitle(sessionID, title)
+		broadcastSessionInfoUpdate(sess, sessionID, title)
 	}()
 }
 
@@ -55,7 +57,9 @@ func titleCommand(obj *sessionObj, arg string) error {
 			Update("title", arg).Error; err != nil {
 			return err
 		}
-		broadcastTitle(sessionID, arg)
+		// 单列 Update 触发 GORM autoUpdateTime 刷新 DB 的 updated_at，内存同步避免广播时间滞后
+		obj.session.UpdatedAt = time.Now()
+		broadcastSessionInfoUpdate(obj.session, sessionID, arg)
 		return nil
 	}
 	// 无参数：还原——清除用户标题，展示回退到 AI 标题；没有 AI 标题时也不另外生成
@@ -68,19 +72,23 @@ func titleCommand(obj *sessionObj, arg string) error {
 		Update("title", "").Error; err != nil {
 		return err
 	}
-	broadcastTitle(sessionID, obj.session.AITitle)
+	obj.session.UpdatedAt = time.Now()
+	broadcastSessionInfoUpdate(obj.session, sessionID, obj.session.AITitle)
 	return nil
 }
 
-// broadcastTitle 广播会话标题更新事件
-func broadcastTitle(sessionID, title string) {
+// broadcastSessionInfoUpdate 广播 ACP v2 标准 session_info_update 通知，
+// 同步会话元数据（标题、最后活动时间）到所有已连接客户端（含发起者）。
+// 供标题变更（AI 自动生成 / /title 命令 / compress 重生成）复用，客户端据此刷新会话列表。
+func broadcastSessionInfoUpdate(sess *structs.Chats, sessionID, title string) {
 	if err := broadcastSessionUpdate(sessionID, SessionUpdate{
 		SessionID: sessionID,
 		Update: SessionUpdateUpdate{
-			SessionUpdate: "alk.cxykevin.top/session_title",
-			Content:       u.H{"title": title},
+			SessionUpdate: "session_info_update",
+			Title:         title,
+			UpdatedAt:     formatSessionUpdatedAt(sess),
 		},
 	}, 0); err != nil {
-		logger.Warn("failed to broadcast session title: %v", err)
+		logger.Warn("failed to broadcast session_info_update: %v", err)
 	}
 }

@@ -70,19 +70,15 @@ func newTitleTestSession(t *testing.T, tmpDir string, calls2 chan ReceivedCall) 
 	return sessionID
 }
 
-// matchSessionTitle 匹配 session_title 事件并返回标题
+// matchSessionTitle 匹配 ACP v2 标准 session_info_update 事件并返回标题
 func matchSessionTitle(rc ReceivedCall) (string, bool) {
 	if rc.Name != "session/update" {
 		return "", false
 	}
 	if su, ok := rc.Data.(SessionUpdate); ok {
 		if upd, ok2 := su.Update.(SessionUpdateUpdate); ok2 {
-			if upd.SessionUpdate == "alk.cxykevin.top/session_title" {
-				if content, ok := upd.Content.(u.H); ok {
-					if title, ok := content["title"].(string); ok {
-						return title, true
-					}
-				}
+			if upd.SessionUpdate == "session_info_update" {
+				return upd.Title, true
 			}
 		}
 	}
@@ -360,6 +356,15 @@ func TestSessionList_Fallback(t *testing.T) {
 			t.Fatalf("failed to create chat %d: %v", i, err)
 		}
 	}
+	// 设置递增的最后活动时间，保证排序确定：id 越大越新 → 列表按 id 倒序。
+	// 直接改库绕开 GORM autoUpdateTime 回调。
+	base := time.Date(2026, 8, 1, 10, 0, 0, 0, time.UTC)
+	for i := range chats {
+		if err := db.Exec("UPDATE chats SET updated_at = ? WHERE id = ?",
+			base.Add(time.Duration(i)*time.Hour), chats[i].ID).Error; err != nil {
+			t.Fatalf("failed to set updated_at for chat %d: %v", i, err)
+		}
+	}
 	closeDB(tmpDir)
 
 	// 调用 SessionList
@@ -370,7 +375,12 @@ func TestSessionList_Fallback(t *testing.T) {
 	if len(resp.Sessions) != len(chats) {
 		t.Fatalf("expected %d sessions, got %d", len(chats), len(resp.Sessions))
 	}
-	expects := []string{"用户标题", "AI标题2", fmt.Sprintf("Untitled(%d)", chats[2].ID)}
+	// 新→旧：chats[2] → chats[1] → chats[0]
+	expects := []string{
+		fmt.Sprintf("Untitled(%d)", chats[2].ID),
+		"AI标题2",
+		"用户标题",
+	}
 	for i, e := range expects {
 		if resp.Sessions[i].Title != e {
 			t.Errorf("Session[%d] title mismatch: got %q, want %q", i, resp.Sessions[i].Title, e)

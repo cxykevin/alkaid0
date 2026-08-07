@@ -3,6 +3,7 @@ package actions
 import (
 	"cmp"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -1160,7 +1161,9 @@ type SessionUpdateUpdate struct {
 	MessageID         string         `json:"messageId,omitempty"`         // 消息 chunk 与整消息 upsert
 	Content           any            `json:"content,omitempty"`           // 消息 chunk 的 ContentBlock、tool_call_update 的 content 数组
 	ToolCallID        string         `json:"toolCallId,omitempty"`        // tool_call_update
-	Title             string         `json:"title,omitempty"`             // tool_call_update
+	Title             string         `json:"title,omitempty"`             // tool_call_update 标题；session_info_update 会话标题
+	UpdatedAt         string         `json:"updatedAt,omitempty"`         // session_info_update 最后活动时间（RFC 3339）
+	Meta              any            `json:"_meta,omitempty"`             // session_info_update 扩展元数据
 	Kind              string         `json:"kind,omitempty"`              // tool_call_update
 	Status            string         `json:"status,omitempty"`            // tool_call_update
 	State             string         `json:"state,omitempty"`             // state_update
@@ -1640,14 +1643,72 @@ type SessionInfo struct {
 	SessionID string `json:"sessionId"`
 	Cwd       string `json:"cwd"`
 	Title     string `json:"title"`
+	// UpdatedAt 最后活动时间（RFC 3339，UTC）。历史数据未记录时间时显示为 Unix 纪元 "1970-01-01T00:00:00Z"。
+	UpdatedAt string `json:"updatedAt"`
 }
 
 // SessionListResponse 列出会话的响应
 type SessionListResponse struct {
 	Sessions []SessionInfo `json:"sessions"`
+	// NextCursor 不透明分页游标。存在时表示还有更多会话，客户端将其作为下一页请求的 cursor 参数。
+	NextCursor string `json:"nextCursor,omitempty"`
 }
 
-// SessionList 列出工作目录中的所有会话
+// sessionListPageSize 会话列表单页最大数量（ACP cursor 分页）。
+const sessionListPageSize = 30
+
+// sessionCursor 会话列表分页游标（对客户端不透明）。
+// 以 (UpdatedAt, ID) 复合键定位，与 GetChats 的 (UpdatedAt DESC, ID DESC) 排序保持一致。
+type sessionCursor struct {
+	UpdatedAt time.Time `json:"u"`
+	ID        uint32    `json:"i"`
+}
+
+// encodeSessionCursor 将游标编码为不透明字符串（本页最后一项）。
+func encodeSessionCursor(chat *structs.Chats) (string, error) {
+	b, err := json.Marshal(sessionCursor{UpdatedAt: chat.UpdatedAt, ID: chat.ID})
+	if err != nil {
+		return "", err
+	}
+	return base64.RawURLEncoding.EncodeToString(b), nil
+}
+
+// decodeSessionCursor 解码不透明游标。格式非法时报错（ACP 规范：无效 cursor 应返回错误）。
+func decodeSessionCursor(s string) (sessionCursor, error) {
+	var cur sessionCursor
+	b, err := base64.RawURLEncoding.DecodeString(s)
+	if err != nil {
+		return cur, err
+	}
+	if err := json.Unmarshal(b, &cur); err != nil {
+		return cur, err
+	}
+	return cur, nil
+}
+
+// findSessionPageStart 在按 (UpdatedAt DESC, ID DESC) 排序的会话列表中，返回下一页起点下标。
+// 游标指向上一页的最后一项，因此下一页从第一个"排序位置旧于游标"的会话开始。
+// 若游标对应的会话已被删除，按复合键比较仍能正确跳过，不会重复或遗漏。
+func findSessionPageStart(chats []*structs.Chats, cur sessionCursor) int {
+	for i, c := range chats {
+		if sessionOlderThanCursor(c, cur) {
+			return i
+		}
+	}
+	return len(chats)
+}
+
+// sessionOlderThanCursor 判断会话在 (UpdatedAt, ID) 复合键上是否严格"旧于"游标。
+// UpdatedAt 零值视为最旧；时间相等时以 ID 判断（ID 更大 = 创建更晚）。
+func sessionOlderThanCursor(c *structs.Chats, cur sessionCursor) bool {
+	if c.UpdatedAt.Equal(cur.UpdatedAt) {
+		return c.ID < cur.ID
+	}
+	return c.UpdatedAt.Before(cur.UpdatedAt)
+}
+
+// SessionList 列出工作目录中的所有会话（ACP v2 session/list）。
+// 按最后活动时间倒序（新→旧），每页最多 sessionListPageSize 条，返回 nextCursor 支持 cursor 翻页。
 func SessionList(req SessionListRequest, call func(string, any, *string) error, connID uint64) (SessionListResponse, error) {
 	req.Cwd = path.Clean(req.Cwd)
 	info, err := os.Stat(req.Cwd)
@@ -1671,8 +1732,20 @@ func SessionList(req SessionListRequest, call func(string, any, *string) error, 
 		return SessionListResponse{}, err
 	}
 
-	sess := make([]SessionInfo, len(chats))
-	for idx, chat := range chats {
+	// cursor 分页：定位到上一页游标之后，取一页会话
+	start := 0
+	if req.Cursor != "" {
+		cur, err := decodeSessionCursor(req.Cursor)
+		if err != nil {
+			return SessionListResponse{}, fmt.Errorf("invalid cursor")
+		}
+		start = findSessionPageStart(chats, cur)
+	}
+	end := min(start+sessionListPageSize, len(chats))
+	page := chats[start:end]
+
+	sess := make([]SessionInfo, len(page))
+	for idx, chat := range page {
 		// 展示回退链：用户设置的标题 → AI 生成的标题 → Untitled(N)
 		tit := chat.Title
 		if tit == "" {
@@ -1685,12 +1758,27 @@ func SessionList(req SessionListRequest, call func(string, any, *string) error, 
 			SessionID: cwd2SessionID(req.Cwd, chat.ID),
 			Cwd:       req.Cwd,
 			Title:     tit,
+			UpdatedAt: formatSessionUpdatedAt(chat),
 		}
 	}
 
-	return SessionListResponse{
-		Sessions: sess,
-	}, nil
+	resp := SessionListResponse{Sessions: sess}
+	if end < len(chats) && len(page) > 0 {
+		// 还有更多结果，游标编码本页最后一项
+		if cur, err := encodeSessionCursor(page[len(page)-1]); err == nil {
+			resp.NextCursor = cur
+		}
+	}
+	return resp, nil
+}
+
+// formatSessionUpdatedAt 将会话最后活动时间格式化为 RFC 3339（UTC）。
+// 零值（历史数据未记录时间）返回 Unix 纪元 "1970-01-01T00:00:00Z"，保证客户端始终能取到时间。
+func formatSessionUpdatedAt(chat *structs.Chats) string {
+	if chat.UpdatedAt.IsZero() {
+		return time.Unix(0, 0).UTC().Format(time.RFC3339)
+	}
+	return chat.UpdatedAt.UTC().Format(time.RFC3339)
 }
 
 // SessionDelete 删除会话（ACP session/delete）
@@ -1698,20 +1786,29 @@ func SessionList(req SessionListRequest, call func(string, any, *string) error, 
 //   - 删除的会话不再出现在 session/list 结果中
 //   - 删除已删除或不存在的会话应静默成功
 //   - 返回空对象 {}
+//
+// 不依赖内存注册表校验：sessionId 按字符串解析出 cwd+id，cwd 路径存在则加载该目录数据库，
+// 直接执行删除 SQL，冷会话（未 new/resume）同样可删。路径不存在 / DB 不可用 / 会话不存在均静默成功。
 func SessionDelete(req SessionDeleteRequest, call func(string, any, *string) error, connID uint64) (u.H, error) {
 	if req.SessionID == "" {
 		return u.H{}, fmt.Errorf("sessionId is empty")
 	}
 
-	cwd, id, err := sessionID2Cwd(req.SessionID)
+	// 纯字符串解析 sessionId（sess_<id>:<cwd>），不查内存注册表
+	cwd, id, err := parseSessionID(req.SessionID)
 	if err != nil {
 		// 无效的会话ID，按规范静默成功
 		return u.H{}, nil
 	}
 
-	// 如果会话当前活跃，先关闭它
+	// 先判断路径是否存在：不存在则无可删除内容，静默成功
+	if info, err := os.Stat(cwd); err != nil || !info.IsDir() {
+		return u.H{}, nil
+	}
+
+	// 如果会话当前活跃，先关闭它（取消延迟释放定时器 + closeSession 释放引用）
 	sessLock.Lock()
-	if obj, ok := sessions[req.SessionID]; ok && obj.session.ID == id {
+	if obj, ok := sessions[req.SessionID]; ok && obj.session != nil && obj.session.ID == id {
 		// 取消任何待处理的延迟释放定时器
 		if obj.releaseTimer != nil {
 			obj.releaseTimer.Stop()
@@ -1723,14 +1820,99 @@ func SessionDelete(req SessionDeleteRequest, call func(string, any, *string) err
 		sessLock.Unlock()
 	}
 
+	// 路径存在则尝试加载 db
 	db, err := loadDB(cwd)
 	if err != nil {
 		return u.H{}, nil
 	}
 	defer closeDB(cwd)
 
-	// 删除聊天记录（无论是否存在，按规范静默成功）
+	// 直接执行删除 SQL（无论是否存在，按规范静默成功）
 	_ = funcs.DeleteChat(db, &structs.Chats{ID: id})
+
+	return u.H{}, nil
+}
+
+// SessionUpdateRequest 客户端发起的 session/update 请求参数（ACP v2 双向扩展）。
+// Update 为原始 JSON，便于按 session_info_update 负载做字段级解析（区分"未提供"与"清除"）。
+type SessionUpdateRequest struct {
+	SessionID string          `json:"sessionId"`
+	Update    json.RawMessage `json:"update"`
+}
+
+// HandleSessionUpdate 处理客户端发起的 session/update 请求。
+// 当前支持 ACP v2 session_info_update 变体：更新会话标题（title）。
+//   - 会话无需预先 new/resume：sessionId 未在内存注册表时，按字符串解析 cwd+id，
+//     并打开数据库校验会话真实存在（parseSessionID 结果必须经 DB 确认，与 session/resume 冷还原同信任模型）。
+//   - title 指针语义：nil=不修改（字段未提供或为 null）；空串=清除用户标题（回退 AI 标题）；非空=设置用户标题。
+//   - 变更单列落库（GORM autoUpdateTime 同步刷新 updated_at），并向该会话所有已连接客户端广播
+//     session_info_update 通知（含发起者），客户端据此刷新会话列表。
+func HandleSessionUpdate(req SessionUpdateRequest, call func(string, any, *string) error, connID uint64) (u.H, error) {
+	if req.SessionID == "" {
+		return u.H{}, fmt.Errorf("sessionId is empty")
+	}
+	var upd struct {
+		SessionUpdate string  `json:"sessionUpdate"`
+		Title         *string `json:"title"`
+	}
+	if err := json.Unmarshal(req.Update, &upd); err != nil {
+		return u.H{}, fmt.Errorf("invalid update payload: %v", err)
+	}
+	if upd.SessionUpdate != "session_info_update" {
+		return u.H{}, fmt.Errorf("unsupported session update variant: %q", upd.SessionUpdate)
+	}
+
+	// 解析会话：优先内存注册表（防伪造 cwd），未加载时退化为纯字符串解析
+	cwd, id, err := sessionID2Cwd(req.SessionID)
+	if err != nil {
+		if cwd, id, err = parseSessionID(req.SessionID); err != nil {
+			return u.H{}, err
+		}
+	}
+
+	db, err := loadDB(cwd)
+	if err != nil {
+		return u.H{}, err
+	}
+	defer closeDB(cwd)
+
+	// 校验会话真实存在（parseSessionID 的解析结果必须经数据库确认）
+	chat, err := funcs.QueryChat(db, id)
+	if err != nil {
+		return u.H{}, fmt.Errorf("session not found")
+	}
+
+	// 应用标题变更（title 为 nil 时跳过，避免误清除）
+	if upd.Title != nil {
+		newTitle := *upd.Title
+		if newTitle != chat.Title {
+			if err := db.Model(&structs.Chats{}).Where("id = ?", chat.ID).
+				Update("title", newTitle).Error; err != nil {
+				return u.H{}, err
+			}
+			chat.Title = newTitle
+			// 单列 Update 触发 GORM autoUpdateTime 刷新 DB 的 updated_at，内存同步避免广播时间滞后
+			chat.UpdatedAt = time.Now()
+		}
+	}
+
+	// 会话已加载（在线）时同步内存态，保证运行期展示一致
+	sessLock.Lock()
+	if obj, ok := sessions[req.SessionID]; ok && obj.session != nil && obj.session.ID == id {
+		obj.session.Title = chat.Title
+		obj.session.UpdatedAt = chat.UpdatedAt
+	}
+	sessLock.Unlock()
+
+	// 广播最终展示标题（用户标题 → AI 标题 → Untitled(N)）给所有已连接客户端
+	display := chat.Title
+	if display == "" {
+		display = chat.AITitle
+	}
+	if display == "" {
+		display = fmt.Sprintf("Untitled(%d)", chat.ID)
+	}
+	broadcastSessionInfoUpdate(chat, req.SessionID, display)
 
 	return u.H{}, nil
 }

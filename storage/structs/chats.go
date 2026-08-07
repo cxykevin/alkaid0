@@ -4,6 +4,7 @@ import (
 	"context"
 	"maps"
 	"sync"
+	"time"
 
 	"github.com/cxykevin/alkaid0/config/structs"
 	"github.com/cxykevin/alkaid0/ui/state"
@@ -38,6 +39,9 @@ type Chats struct {
 	AITitle         string // AI 生成的标题（自动生成/compress 重生成写入）
 	ReasoningEffort string
 	Task            string // 任务计划（markdown 列表，@task 虚拟对象编辑，持久化到 chats 表）
+	// UpdatedAt 最后活动时间（GORM autoUpdateTime 约定自动维护）。
+	// 会话任何落库变更（消息写入、标题更新等）都会刷新它，用于 session/list 按活动时间倒序展示。
+	UpdatedAt time.Time
 	// === 会话过程参数 ===
 	contextHolder            *contextHolder      `gorm:"-" json:"-"`
 	Stop                     bool                `gorm:"-" json:"-"`

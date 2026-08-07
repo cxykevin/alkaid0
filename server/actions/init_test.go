@@ -79,6 +79,10 @@ func TestServerCapabilities(t *testing.T) {
 	if _, ok := prompt["image"].(u.H); !ok {
 		t.Error("session.prompt.image 应为 {} 对象")
 	}
+	// delete 为可选扩展能力，已实现 session/delete，必须声明
+	if _, ok := session["delete"].(u.H); !ok {
+		t.Error("capabilities.session.delete 应存在（服务端已实现 session/delete）")
+	}
 }
 
 // TestInitializeValidation 测试参数验证
