@@ -130,18 +130,21 @@ func Load() {
 		return
 	}
 
-	// JSON 反序列化
-	globalConfigMu.Lock()
-	if err := json.Unmarshal(data, GlobalConfig); err != nil {
-		globalConfigMu.Unlock()
-		// 解析失败时备份原文件，并重新生成默认配置与密钥，
-		// 避免服务器因 Key 为空而静默无法启动。
+	// JSON 反序列化到临时变量，避免解析失败时污染 GlobalConfig
+	tempConfig := &structs.Config{}
+	if err := json.Unmarshal(data, tempConfig); err != nil {
+		// 解析失败时备份原文件，GlobalConfig 保持前面设置的默认值
 		backupPath := expandedPath + ".bak"
 		_ = os.Rename(expandedPath, backupPath)
-		Save()
+		// 不调用 Save()，GlobalConfig 已是干净默认值
+		// ensureKey() 会在需要时自动触发 Save()
 		ensureKey()
 		return
 	}
+
+	// 解析成功，将临时配置复制到 GlobalConfig
+	globalConfigMu.Lock()
+	*GlobalConfig = *tempConfig
 	globalConfigMu.Unlock()
 
 	// 加载完成后检查密钥，为空则自动生成
@@ -171,7 +174,7 @@ func Save() error {
 
 	// 原子写入：先写临时文件再重命名
 	tmp := expandedPath + ".tmp"
-	if err := os.WriteFile(tmp, data, 0644); err != nil {
+	if err := os.WriteFile(tmp, data, 0600); err != nil {
 		return err
 	}
 	if err := os.Rename(tmp, expandedPath); err != nil {

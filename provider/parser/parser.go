@@ -73,6 +73,8 @@ const (
 
 // Parser 流式解析器，负责从 AI 响应流中提取 <think> 和 <tools> 标签内容。
 // 它使用状态机处理可能被切分的 token，确保在流式传输中准确识别标签边界。
+// 特殊标签仅在行首（流的开头或紧跟换行符之后）才会被识别，避免正文中
+// 提及 <think>/<tools> 字样时被误判为标签。
 type Parser struct {
 	Session          *structs.Chats
 	Tools            []*ToolsDefine
@@ -80,6 +82,7 @@ type Parser struct {
 	Mode             int16  // 状态机主模式
 	KeyMode          int16  // 当前所处的逻辑区域
 	Stop             bool   // 发生错误时停止解析
+	atLineStart      bool   // 当前是否位于行首（决定 <think>/<tools> 起始标签是否被识别）
 	jsonParser       *json.Parser
 	toolSolveTmp     toolSolveTmp
 	ToolResponse     map[string]string
@@ -330,7 +333,9 @@ func (p *Parser) solveTool() {
 //
 //	0-标签外 → 1-进入标签起始 → 2-标签内容 → 3-可能的结束标签起始 → 4-结束标签名解析
 //
-// 特殊标签：<think>（模型思考过程）和 <tools>（工具调用 JSON 数组）
+// 特殊标签：<think>（模型思考过程）和 <tools>（工具调用 JSON 数组）。
+// 起始标签必须位于一行的开头（流的开头或紧跟 '\n' 之后）才被识别，
+// 否则按普通文本处理；一旦进入标签内容，结束标签按原逻辑匹配退出。
 func (p *Parser) AddToken(token string, tokenThinking string) (string, string, *any, error) {
 	if p.Stop {
 		return "", "", nil, errors.New("parser stop")
@@ -363,14 +368,21 @@ func (p *Parser) AddToken(token string, tokenThinking string) (string, string, *
 			return nil
 		}
 		switch p.Mode {
-		case ModeOutside: // 状态：标签外。寻找标签起始符 '<'。
+		case ModeOutside: // 状态：标签外。仅当标签出现在行首时才进入标签起始状态。
 			// 绝大多数文本在这里直接输出到普通响应缓冲区
-			if char == '<' {
+			if char == '\n' {
+				response.WriteString(string(char))
+				p.atLineStart = true
+				continue
+			}
+			if p.atLineStart && char == '<' {
 				p.Mode = ModeEnterTag
 				p.TokenCache = ""
+				p.atLineStart = false
 				continue
 			}
 			response.WriteString(string(char))
+			p.atLineStart = false
 		case ModeEnterTag: // 状态：已收到 '<'，正在解析标签名。
 			if char == '>' {
 				switch p.TokenCache {
@@ -539,5 +551,6 @@ func NewParser(session *structs.Chats, tools []*ToolsDefine) *Parser {
 	if session != nil {
 		session.TemporyDataOfRequest = make(map[string]any)
 	}
-	return &Parser{Session: session, Tools: tools}
+	// 流起始位置视为行首，因此首个 token 即可识别行首标签
+	return &Parser{Session: session, Tools: tools, atLineStart: true}
 }

@@ -190,6 +190,39 @@ func StartWs(handler func(string, func(string) error, uint64) (returnString stri
 		// 每个连接最多 32 个并发消息处理 goroutine
 		sem := make(chan struct{}, 32)
 
+		// 创建 context 用于优雅退出 ping goroutine
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+
+		// 设置 pong handler，每次收到 pong 时重置读超时
+		ws.SetPongHandler(func(string) error {
+			ws.SetReadDeadline(time.Now().Add(60 * time.Second))
+			return nil
+		})
+		// 设置初始读超时
+		ws.SetReadDeadline(time.Now().Add(60 * time.Second))
+
+		// 启动 ping goroutine，定期发送 ping 保持连接活跃
+		go func() {
+			ticker := time.NewTicker(30 * time.Second)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-ticker.C:
+					writeMu.Lock()
+					ws.SetWriteDeadline(time.Now().Add(10 * time.Second))
+					err := ws.WriteMessage(websocket.PingMessage, nil)
+					writeMu.Unlock()
+					if err != nil {
+						loggerWs.Debug("ping failed: %v", err)
+						return
+					}
+				case <-ctx.Done():
+					return
+				}
+			}
+		}()
+
 		// 处理来自 WebSocket 的消息
 		for {
 			_, message, err := ws.ReadMessage()
@@ -210,6 +243,7 @@ func StartWs(handler func(string, func(string) error, uint64) (returnString stri
 				defer func() { <-sem }()
 				responseStr, shouldExit := handler(string(msg), func(t string) error {
 					writeMu.Lock()
+					ws.SetWriteDeadline(time.Now().Add(10 * time.Second))
 					err := ws.WriteMessage(websocket.TextMessage, []byte(t))
 					writeMu.Unlock()
 					return err
@@ -218,6 +252,7 @@ func StartWs(handler func(string, func(string) error, uint64) (returnString stri
 				// 将响应写入 WebSocket
 				if responseStr != "" {
 					writeMu.Lock()
+					ws.SetWriteDeadline(time.Now().Add(10 * time.Second))
 					err := ws.WriteMessage(websocket.TextMessage, []byte(responseStr))
 					writeMu.Unlock()
 					if err != nil {

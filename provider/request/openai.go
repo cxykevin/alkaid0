@@ -59,7 +59,6 @@ func SimpleOpenAIRequest(ctx context.Context, baseURL, apiKey, model string, bod
 	req, err := http.NewRequestWithContext(ctx, "POST", baseURL+ChatCompletionsEndpoint, bytes.NewBuffer(payload))
 	if err != nil {
 		logger.Error("call openai chat error when create request: %v", err)
-		logger.Debug("error body: %s", string(payload))
 		return fmt.Errorf("failed to create request: %w", err)
 	}
 
@@ -72,7 +71,6 @@ func SimpleOpenAIRequest(ctx context.Context, baseURL, apiKey, model string, bod
 	resp, err := httpClient.Do(req)
 	if err != nil {
 		logger.Error("call openai chat error when call: %v", err)
-		logger.Debug("error body: %s", string(payload))
 		return fmt.Errorf("failed to send request when call: %w", err)
 	}
 	defer resp.Body.Close()
@@ -97,8 +95,7 @@ func SimpleOpenAIRequest(ctx context.Context, baseURL, apiKey, model string, bod
 		var errResp structs.ErrorResponse
 		if err := json.Unmarshal(respBody, &errResp); err != nil {
 			logger.Error("call openai chat error when unmarshal: %v", err)
-			logger.Debug("error body: %d: %s", resp.StatusCode, string(respBody))
-			return fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(respBody))
+			return fmt.Errorf("HTTP %d", resp.StatusCode)
 		}
 		logger.Error("call openai chat error when check stat %v", resp.StatusCode)
 		logger.Debug("error body: %s", errResp.Error.Message)
@@ -201,7 +198,6 @@ func SimpleOpenAIEmbedding(ctx context.Context, baseURL, apiKey, model string, b
 	req, err := http.NewRequestWithContext(ctx, "POST", baseURL+EmbeddingsEndpoint, bytes.NewBuffer(payload))
 	if err != nil {
 		logger.Error("call openai embedding error when create request: %v", err)
-		logger.Debug("error body: %s", string(payload))
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
 
@@ -214,7 +210,6 @@ func SimpleOpenAIEmbedding(ctx context.Context, baseURL, apiKey, model string, b
 	resp, err := httpClient.Do(req)
 	if err != nil {
 		logger.Error("call openai embedding error when call: %v", err)
-		logger.Debug("error body: %s", string(payload))
 		return nil, fmt.Errorf("failed to send request when call: %w", err)
 	}
 	defer resp.Body.Close()
@@ -231,8 +226,7 @@ func SimpleOpenAIEmbedding(ctx context.Context, baseURL, apiKey, model string, b
 		var errResp structs.ErrorResponse
 		if err := json.Unmarshal(respBody, &errResp); err != nil {
 			logger.Error("call openai embedding error when unmarshal: %v", err)
-			logger.Debug("error body: %d: %s", resp.StatusCode, string(respBody))
-			return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(respBody))
+			return nil, fmt.Errorf("HTTP %d", resp.StatusCode)
 		}
 		logger.Error("call openai embedding error: %s", errResp.Error.Message)
 		return nil, fmt.Errorf("API error: %s", errResp.Error.Message)
@@ -242,7 +236,6 @@ func SimpleOpenAIEmbedding(ctx context.Context, baseURL, apiKey, model string, b
 	var embeddingResp structs.EmbeddingResponse
 	if err := json.Unmarshal(respBody, &embeddingResp); err != nil {
 		logger.Error("call openai embedding error when unmarshal response: %v", err)
-		logger.Debug("error body: %s", string(respBody))
 		return nil, fmt.Errorf("failed to unmarshal response: %w", err)
 	}
 

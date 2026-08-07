@@ -15,6 +15,7 @@ type PTY struct {
 	readFd  *os.File // 子进程 stdout 读取端
 	writeFd *os.File // 子进程 stdin 写入端
 	inR     *os.File // stdin 管道读取端（保持打开防止写入 EIO，Close 时释放）
+	outW    *os.File // stdout 管道写入端（保持打开给子进程使用，Close 时释放）
 	file    *os.File // 对外暴露的文件（读取端）
 	mu      sync.Mutex
 	closed  bool
@@ -42,7 +43,7 @@ func New(cfg Config) (*PTY, *os.File, error) {
 	if err != nil {
 		return nil, nil, err
 	}
-	_ = outW.Close() // 关闭写入端，只保留读取
+	// outW 应该传给子进程作为 stdout，由子进程关闭
 
 	// 输入管道：我们写入 → 子进程 stdin
 	inR, inW, err := os.Pipe()
@@ -55,6 +56,7 @@ func New(cfg Config) (*PTY, *os.File, error) {
 		readFd:  outR,
 		writeFd: inW,
 		inR:     inR, // 保持打开，防止写入 inW 时 pipe 已关闭
+		outW:    outW, // 保持打开，子进程需要这个作为 stdout
 		file:    outR,
 		rows:    cfg.Rows,
 		cols:    cfg.Cols,
@@ -126,6 +128,12 @@ func (p *PTY) Close() error {
 			errs = append(errs, err)
 		}
 		p.inR = nil
+	}
+	if p.outW != nil {
+		if err := p.outW.Close(); err != nil {
+			errs = append(errs, err)
+		}
+		p.outW = nil
 	}
 	p.file = nil
 

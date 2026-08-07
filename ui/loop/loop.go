@@ -102,7 +102,7 @@ func New(session *structs.Chats) *Object {
 	return &Object{
 		sendQueue:     make(chan msgObj, queueSize),
 		recvQueue:     make(chan AIResponse, queueSize),
-		recvSyncQueue: make(chan struct{}),
+		recvSyncQueue: make(chan struct{}, 1),
 		lock:          sync.Mutex{},
 		session:       session,
 		done:          make(chan struct{}),

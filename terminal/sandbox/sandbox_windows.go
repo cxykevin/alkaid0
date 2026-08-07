@@ -29,10 +29,14 @@ func (s *Sandbox) createIsolatedCommand(ctx context.Context, name string, args .
 		return nil, fmt.Errorf("初始化沙盒用户失败: %w", err)
 	}
 
-	_, err := winSandbox.SetLimitToDir(s.writableDirs)
-
-	release, err := winSandbox.SetLimitToWorkdir(s.workDir)
+	release1, err := winSandbox.SetLimitToDir(s.writableDirs)
 	if err != nil {
+		return nil, fmt.Errorf("设置目录权限失败: %w", err)
+	}
+
+	release2, err := winSandbox.SetLimitToWorkdir(s.workDir)
+	if err != nil {
+		release1() // 失败时回滚第一个
 		return nil, fmt.Errorf("设置工作目录权限失败: %w", err)
 	}
 
@@ -52,6 +56,15 @@ func (s *Sandbox) createIsolatedCommand(ctx context.Context, name string, args .
 		args:    args,
 		workDir: s.workDir,
 		env:     s.env,
-		temp:    &windowsCommandCleanup{token: nil, release: release},
+		temp: &windowsCommandCleanup{
+			token: nil,
+			release: func() error {
+				// 按相反顺序释放
+				if err := release2(); err != nil {
+					return err
+				}
+				return release1()
+			},
+		},
 	}, nil
 }

@@ -144,8 +144,8 @@ func TestAddTokenToolsTag(t *testing.T) {
 func TestAddTokenMixedContent(t *testing.T) {
 	p := parser.NewParser(nil, testTools)
 
-	// 测试混合内容
-	token := "普通文本<think>思考内容</think>更多文本结尾文本"
+	// 测试混合内容（<think> 位于行首才被识别）
+	token := "普通文本\n<think>思考内容</think>更多文本结尾文本"
 	response, thinking, _, err := p.AddToken(token, "")
 	if err != nil {
 		t.Fatalf("解析失败: %v", err)
@@ -158,7 +158,7 @@ func TestAddTokenMixedContent(t *testing.T) {
 	response += response2
 	thinking += thinking2
 
-	expectedResponse := "普通文本更多文本结尾文本"
+	expectedResponse := "普通文本\n更多文本结尾文本"
 	expectedThinking := "思考内容"
 
 	if response != expectedResponse {
@@ -260,7 +260,7 @@ func TestParserEdgeCases(t *testing.T) {
 // BenchmarkParserAddToken 性能测试
 func BenchmarkParserAddToken(b *testing.B) {
 	p := parser.NewParser(nil, testTools)
-	testToken := "这是一个测试token<think>思考内容</think>更多内容"
+	testToken := "这是一个测试token\n<think>思考内容</think>更多内容"
 
 	for b.Loop() {
 		p.AddToken(testToken, "")
@@ -281,13 +281,13 @@ func TestParserThinkNotFull(t *testing.T) {
 	p := parser.NewParser(nil, testTools)
 
 	// 测试嵌套标签（应该按普通文本处理）
-	nestedTag := "aaaa<think>内容</inner></outer>"
+	nestedTag := "aaaa\n<think>内容</inner></outer>"
 	response, thinking, _, err := p.AddToken(nestedTag, "")
 	if err != nil {
 		t.Fatalf("解析失败: %v", err)
 	}
 
-	expectedResponse := "aaaa"
+	expectedResponse := "aaaa\n"
 	if response != expectedResponse {
 		t.Errorf("期望响应 '%s'，实际 '%s'", expectedResponse, response)
 	}
@@ -298,7 +298,7 @@ func TestParserThinkNotFull(t *testing.T) {
 
 	p = parser.NewParser(nil, testTools)
 	// 测试嵌套标签（应该按普通文本处理）
-	nestedTag = "aaaa<think>内容</inner></outer></aaaaaaaa"
+	nestedTag = "aaaa\n<think>内容</inner></outer></aaaaaaaa"
 	response, thinking, _, err = p.AddToken(nestedTag, "")
 	if err != nil {
 		t.Fatalf("解析失败: %v", err)
@@ -310,7 +310,7 @@ func TestParserThinkNotFull(t *testing.T) {
 	response += response2
 	thinking += thinking2
 
-	expectedResponse = "aaaa"
+	expectedResponse = "aaaa\n"
 	if response != expectedResponse {
 		t.Errorf("期望响应 '%s'，实际 '%s'", expectedResponse, response)
 	}
@@ -321,7 +321,7 @@ func TestParserThinkNotFull(t *testing.T) {
 
 	p = parser.NewParser(nil, testTools)
 	// 测试嵌套标签（应该按普通文本处理）
-	nestedTag = "aaaa<think>内容</inner></outer></think"
+	nestedTag = "aaaa\n<think>内容</inner></outer></think"
 	response, thinking, _, err = p.AddToken(nestedTag, "")
 	if err != nil {
 		t.Fatalf("解析失败: %v", err)
@@ -333,7 +333,7 @@ func TestParserThinkNotFull(t *testing.T) {
 	response += response2
 	thinking += thinking2
 
-	expectedResponse = "aaaa"
+	expectedResponse = "aaaa\n"
 	if response != expectedResponse {
 		t.Errorf("期望响应 '%s'，实际 '%s'", expectedResponse, response)
 	}
@@ -410,9 +410,31 @@ func TestParserUnmatchedTags(t *testing.T) {
 		t.Errorf("期望思考内容为空，实际 '%s'", thinking)
 	}
 
-	// 测试错位标签
+	// 测试行首的结束标签（无开始标签，按普通文本处理）
 	p = parser.NewParser(nil, testTools)
-	token = "前缀<think>思考内容</tools>后缀"
+	token = "内容没有开始标签\n</think>"
+	response, thinking, _, err = p.AddToken(token, "")
+	if err != nil {
+		t.Fatalf("解析失败: %v", err)
+	}
+	response2, thinking2, _, err = p.DoneToken()
+	if err != nil {
+		t.Fatalf("解析失败: %v", err)
+	}
+	response += response2
+	thinking += thinking2
+
+	expectedResponse = "内容没有开始标签\n</think>"
+	if response != expectedResponse {
+		t.Errorf("期望响应 '%s'，实际 '%s'", expectedResponse, response)
+	}
+	if thinking != "" {
+		t.Errorf("期望思考内容为空，实际 '%s'", thinking)
+	}
+
+	// 测试错位标签（<think> 在行首被识别，</tools> 作为普通内容处理）
+	p = parser.NewParser(nil, testTools)
+	token = "前缀\n<think>思考内容</tools>后缀"
 	response, thinking, _, err = p.AddToken(token, "")
 	if err != nil {
 		t.Fatalf("解析失败: %v", err)
@@ -425,7 +447,7 @@ func TestParserUnmatchedTags(t *testing.T) {
 	response += response2
 	thinking += thinking2
 
-	expectedResponse = "前缀"
+	expectedResponse = "前缀\n"
 	if response != expectedResponse {
 		t.Errorf("期望响应 '%s'，实际 '%s'", expectedResponse, response)
 	}
@@ -453,15 +475,15 @@ func TestParserEmptyTags(t *testing.T) {
 		t.Errorf("期望思考内容为空，实际 '%s'", thinking)
 	}
 
-	// 测试空 tools 标签
-	token = "<tools></tools>"
+	// 测试空 tools 标签（位于行首，\n 使其处于新的一行开头）
+	token = "\n<tools></tools>"
 	response, thinking, _, err = p.AddToken(token, "")
 	if err != nil {
 		t.Fatalf("解析失败: %v", err)
 	}
 
-	if response != "" {
-		t.Errorf("期望响应为空，实际 '%s'", response)
+	if response != "\n" {
+		t.Errorf("期望响应 '\\n'，实际 '%s'", response)
 	}
 	if thinking != "" {
 		t.Errorf("期望思考内容为空，实际 '%s'", thinking)
@@ -486,14 +508,14 @@ func TestParserEmptyTags(t *testing.T) {
 func TestParserSpecialCharacters(t *testing.T) {
 	p := parser.NewParser(nil, testTools)
 
-	// 测试换行符
-	token := "第一行\n第二行<think>思考包含\n换行符</think>"
+	// 测试换行符（<think> 位于行首被识别）
+	token := "第一行\n<think>思考包含\n换行符</think>"
 	response, thinking, _, err := p.AddToken(token, "")
 	if err != nil {
 		t.Fatalf("解析失败: %v", err)
 	}
 
-	expectedResponse := "第一行\n第二行"
+	expectedResponse := "第一行\n"
 	if response != expectedResponse {
 		t.Errorf("期望响应 '%s'，实际 '%s'", expectedResponse, response)
 	}
@@ -502,15 +524,15 @@ func TestParserSpecialCharacters(t *testing.T) {
 		t.Errorf("期望思考内容 '%s'，实际 '%s'", expectedThinking, thinking)
 	}
 
-	// 测试制表符
+	// 测试制表符（<think> 位于行首被识别）
 	p = parser.NewParser(nil, testTools)
-	token = "文本\t制表符<think>思考\t制表符</think>"
+	token = "文本\t制表符\n<think>思考\t制表符</think>"
 	response, thinking, _, err = p.AddToken(token, "")
 	if err != nil {
 		t.Fatalf("解析失败: %v", err)
 	}
 
-	expectedResponse = "文本\t制表符"
+	expectedResponse = "文本\t制表符\n"
 	if response != expectedResponse {
 		t.Errorf("期望响应 '%s'，实际 '%s'", expectedResponse, response)
 	}
@@ -540,14 +562,14 @@ func TestParserSpecialCharacters(t *testing.T) {
 func TestParserChineseCharacters(t *testing.T) {
 	p := parser.NewParser(nil, testTools)
 
-	// 测试包含中文的普通文本
-	token := "这是一个中文测试文本<think>这是中文思考内容</think>继续中文文本"
+	// 测试包含中文的普通文本（<think> 位于行首被识别）
+	token := "这是一个中文测试文本\n<think>这是中文思考内容</think>继续中文文本"
 	response, thinking, _, err := p.AddToken(token, "")
 	if err != nil {
 		t.Fatalf("解析失败: %v", err)
 	}
 
-	expectedResponse := "这是一个中文测试文本继续中文文本"
+	expectedResponse := "这是一个中文测试文本\n继续中文文本"
 	if response != expectedResponse {
 		t.Errorf("期望响应 '%s'，实际 '%s'", expectedResponse, response)
 	}
@@ -589,8 +611,8 @@ func TestParserMultipleAddTokens(t *testing.T) {
 	responses = append(responses, response)
 	thinkings = append(thinkings, thinking)
 
-	// 第二批
-	token2 := " 开始思考部分<think>思考内容"
+	// 第二批（<think> 在行首被识别）
+	token2 := "\n<think>思考内容"
 	response, thinking, _, err = p.AddToken(token2, "")
 	if err != nil {
 		t.Fatalf("解析失败: %v", err)
@@ -599,7 +621,7 @@ func TestParserMultipleAddTokens(t *testing.T) {
 	thinkings = append(thinkings, thinking)
 
 	// 第三批
-	token3 := " 结束思考部分</think>继续文本"
+	token3 := "</think>继续文本"
 	response, thinking, _, err = p.AddToken(token3, "")
 	if err != nil {
 		t.Fatalf("解析失败: %v", err)
@@ -615,7 +637,7 @@ func TestParserMultipleAddTokens(t *testing.T) {
 	thinkings = append(thinkings, thinking2)
 
 	// 验证最终结果
-	expectedTotalResponse := "第一段文本开始 开始思考部分继续文本"
+	expectedTotalResponse := "第一段文本开始\n继续文本"
 	var actualTotalResponse strings.Builder
 	for _, r := range responses {
 		actualTotalResponse.WriteString(r)
@@ -625,7 +647,7 @@ func TestParserMultipleAddTokens(t *testing.T) {
 		t.Errorf("期望总响应 '%s'，实际 '%s'", expectedTotalResponse, actualTotalResponse.String())
 	}
 
-	expectedTotalThinking := "思考内容 结束思考部分"
+	expectedTotalThinking := "思考内容"
 	var actualTotalThinking strings.Builder
 	for _, t := range thinkings {
 		actualTotalThinking.WriteString(t)
@@ -738,8 +760,8 @@ func TestParserMaxTagLength(t *testing.T) {
 
 // TestParserComplexScenarios 测试复杂场景
 func TestParserComplexScenarios(t *testing.T) {
-	// 测试多个标签的复杂嵌套
-	complexContent := "文本1<think>思考1</think>文本2\n换行内容<think>思考2\n多行内容</think><tools>[]</tools>\n后续文本"
+	// 测试多个标签的复杂嵌套（所有起始标签均位于行首）
+	complexContent := "文本1\n<think>思考1</think>文本2\n<think>思考2\n多行内容</think>\n<tools>[]</tools>\n后续文本"
 
 	p := parser.NewParser(nil, testTools)
 	response, thinking, _, err := p.AddToken(complexContent, "")
@@ -747,7 +769,7 @@ func TestParserComplexScenarios(t *testing.T) {
 		t.Fatalf("解析失败: %v", err)
 	}
 
-	expectedResponse := "文本1文本2\n换行内容\n后续文本"
+	expectedResponse := "文本1\n文本2\n\n\n后续文本"
 	if response != expectedResponse {
 		t.Errorf("期望响应 '%s'，实际 '%s'", expectedResponse, response)
 	}
@@ -756,7 +778,7 @@ func TestParserComplexScenarios(t *testing.T) {
 		t.Errorf("期望思考内容 '%s'，实际 '%s'", expectedThinking, thinking)
 	}
 
-	// 测试标签在行末的情况
+	// 测试标签在行末的情况（不在行首，按普通文本处理）
 	p = parser.NewParser(nil, testTools)
 	lineEndTag := "行末标签<think>行末思考</think>"
 	response, thinking, _, err = p.AddToken(lineEndTag, "")
@@ -764,13 +786,105 @@ func TestParserComplexScenarios(t *testing.T) {
 		t.Fatalf("解析失败: %v", err)
 	}
 
-	expectedResponse = "行末标签"
+	expectedResponse = "行末标签<think>行末思考</think>"
 	if response != expectedResponse {
 		t.Errorf("期望响应 '%s'，实际 '%s'", expectedResponse, response)
 	}
-	expectedThinking = "行末思考"
+	expectedThinking = ""
 	if thinking != expectedThinking {
 		t.Errorf("期望思考内容 '%s'，实际 '%s'", expectedThinking, thinking)
+	}
+}
+
+// TestParserTagsRequireLineStart 验证 <think>/<tools> 起始标签必须位于行首才被识别。
+// 行首指流的开头或紧跟 '\n' 之后；行中的标签（含行首缩进）一律按普通文本处理。
+func TestParserTagsRequireLineStart(t *testing.T) {
+	cases := []struct {
+		name      string
+		toks      []string // 流式分块喂入，模拟 token 切分
+		wantResp  string
+		wantThink string
+	}{
+		{
+			name:      "行中 think 不识别",
+			toks:      []string{"普通文本<think>不应识别</think>"},
+			wantResp:  "普通文本<think>不应识别</think>",
+			wantThink: "",
+		},
+		{
+			name:      "行中 tools 不识别",
+			toks:      []string{"普通文本<tools>[{\"name\":\"calculator\"}]</tools>"},
+			wantResp:  "普通文本<tools>[{\"name\":\"calculator\"}]</tools>",
+			wantThink: "",
+		},
+		{
+			name:      "行首缩进后 think 不识别",
+			toks:      []string{"  <think>不应识别</think>"},
+			wantResp:  "  <think>不应识别</think>",
+			wantThink: "",
+		},
+		{
+			name:      "换行后 think 识别",
+			toks:      []string{"第一行\n<think>识别</think>"},
+			wantResp:  "第一行\n",
+			wantThink: "识别",
+		},
+		{
+			name:      "行首标签跨 token 切分仍识别",
+			toks:      []string{"\n<thi", "nk>识别</th", "ink>"},
+			wantResp:  "\n",
+			wantThink: "识别",
+		},
+		{
+			name:      "非行首标签跨 token 切分不识别",
+			toks:      []string{"abc<thi", "nk>不识别</th", "ink>"},
+			wantResp:  "abc<think>不识别</think>",
+			wantThink: "",
+		},
+		{
+			name:      "行中 tools 跨 token 切分不识别",
+			toks:      []string{"前言<too", "ls>[]</too", "ls>"},
+			wantResp:  "前言<tools>[]</tools>",
+			wantThink: "",
+		},
+		{
+			name:      "流开头 think 识别",
+			toks:      []string{"<think>识别</think>"},
+			wantResp:  "",
+			wantThink: "识别",
+		},
+		{
+			name:      "行首 tools 识别",
+			toks:      []string{"\n<tools>[{\"name\":\"calculator\",\"id\":\"x\",\"parameters\":{}}]</tools>"},
+			wantResp:  "\n",
+			wantThink: "",
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			p := parser.NewParser(nil, testTools)
+			var resp, think strings.Builder
+			for _, tok := range c.toks {
+				r, th, _, err := p.AddToken(tok, "")
+				if err != nil {
+					t.Fatalf("AddToken(%q) 失败: %v", tok, err)
+				}
+				resp.WriteString(r)
+				think.WriteString(th)
+			}
+			r2, th2, _, err := p.DoneToken()
+			if err != nil {
+				t.Fatalf("DoneToken 失败: %v", err)
+			}
+			resp.WriteString(r2)
+			think.WriteString(th2)
+			if resp.String() != c.wantResp {
+				t.Errorf("期望响应 %q，实际 %q", c.wantResp, resp.String())
+			}
+			if think.String() != c.wantThink {
+				t.Errorf("期望思考 %q，实际 %q", c.wantThink, think.String())
+			}
+		})
 	}
 }
 

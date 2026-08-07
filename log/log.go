@@ -86,7 +86,7 @@ func Load() {
 
 	// 使用 OpenFile 打开日志文件（追加模式，不清空历史日志；
 	// 避免多进程/多实例共用同一日志路径时相互截断、历史日志丢失）
-	file, err := os.OpenFile(expandedPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
+	file, err := os.OpenFile(expandedPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0600)
 	if err != nil {
 		// 打开失败时回退到 stderr，绝不 panic
 		Logger = log.New(os.Stderr, "", log.LstdFlags)

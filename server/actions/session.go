@@ -862,8 +862,10 @@ func loadSession(cwd string, id *uint32, knowID bool) (*structs.Chats, error) {
 		agentCallList[sessID] = make(map[string]func())
 		return sess, nil
 	}
-	sessions[sessID].referCnt++
-	return sessions[sessID].session, nil
+	// 会话已存在，递增引用计数（在锁保护下）
+	obj := sessions[sessID]
+	obj.referCnt++
+	return obj.session, nil
 }
 
 // indexChatHistory 将会话聊天历史打包索引到 codebase（打 chathistory 标签）
@@ -929,6 +931,11 @@ func closeSession(sessionID string) {
 		logger.Debug("close session ID=%s count=%d", sessionID, obj.session.ReferCount)
 		if obj.session.ReferCount <= int32(0) {
 			logger.Info("release session ID=%s", sessionID)
+			// 停止延迟释放定时器，防止 timer 泄漏
+			if obj.releaseTimer != nil {
+				obj.releaseTimer.Stop()
+				obj.releaseTimer = nil
+			}
 			obj.loop.Cancel()
 			obj.closePermDone()
 			indexChatHistory(obj.session, obj.cwd)

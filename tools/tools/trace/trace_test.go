@@ -440,6 +440,82 @@ func TestUntraceNotFound(t *testing.T) {
 	}
 }
 
+func TestTraceDuplicateIsSilentSuccess(t *testing.T) {
+	db := setupTestDB(t)
+	defer u.Unwrap(db.DB()).Close()
+
+	tmpDir := t.TempDir()
+	testFile := filepath.Join(tmpDir, "test.txt")
+	content := "line1\nline2\nline3"
+	if err := os.WriteFile(testFile, []byte(content), 0644); err != nil {
+		t.Fatalf("Failed to create test file: %v", err)
+	}
+
+	chat := structs.Chats{
+		ID:      1,
+		TraceID: 0,
+	}
+	if err := db.Create(&chat).Error; err != nil {
+		t.Fatalf("Failed to create chat: %v", err)
+	}
+
+	session := &structs.Chats{
+		ID:                   1,
+		DB:                   db,
+		TemporyDataOfRequest: make(map[string]any),
+		TemporyDataOfSession: make(map[string]any),
+		Root:                 tmpDir,
+		NowAgent:             "test_agent",
+		TraceID:              0,
+	}
+	session.TemporyDataOfSession["tools:trace"] = traceCache{}
+
+	mp := map[string]*any{
+		"path": func() *any { s := any("test.txt"); return &s }(),
+	}
+
+	// 第一次 trace
+	pass, _, result, err := Trace(session, mp, []*any{})
+	if err != nil {
+		t.Fatalf("Unexpected error: %v", err)
+	}
+	if pass {
+		t.Error("Expected pass to be false")
+	}
+	if successPtr, ok := result["success"]; !ok || successPtr == nil {
+		t.Fatal("Expected success in result")
+	} else if success, ok := (*successPtr).(bool); !ok || !success {
+		t.Error("Expected success to be true")
+	}
+	if session.TraceID != 1 {
+		t.Errorf("Expected TraceID to be 1, got %d", session.TraceID)
+	}
+
+	// 第二次 trace 相同文件：应静默成功且不报唯一约束错误
+	pass, _, result, err = Trace(session, mp, []*any{})
+	if err != nil {
+		t.Fatalf("Unexpected error on duplicate trace: %v", err)
+	}
+	if pass {
+		t.Error("Expected pass to be false")
+	}
+	if successPtr, ok := result["success"]; !ok || successPtr == nil {
+		t.Fatal("Expected success in result")
+	} else if success, ok := (*successPtr).(bool); !ok || !success {
+		t.Error("Expected success to be true for duplicate trace")
+	}
+
+	// 验证数据库只有一条记录，且 TraceID 未被重复递增
+	var count int64
+	db.Model(&structs.Traces{}).Where("chat_id = ? AND path = ? AND agent_id = ?", session.ID, "test.txt", session.NowAgent).Count(&count)
+	if count != 1 {
+		t.Errorf("Expected 1 trace record, got %d", count)
+	}
+	if session.TraceID != 1 {
+		t.Errorf("Expected TraceID to remain 1, got %d", session.TraceID)
+	}
+}
+
 func TestBuildTrace(t *testing.T) {
 	db := setupTestDB(t)
 	defer u.Unwrap(db.DB()).Close()

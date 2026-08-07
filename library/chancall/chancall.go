@@ -54,7 +54,8 @@ func Register(consumer string, fn func(any) (any, error)) CallFunc {
 
 func start() {
 	for ev := range ActChan {
-		func() {
+		// 异步执行，避免嵌套调用时阻塞分派器导致死锁
+		go func(ev EventChan) {
 			defer func() {
 				if r := recover(); r != nil {
 					log.Printf("chancall: panic in consumer %s: %v", ev.Consumer, r)
@@ -68,6 +69,7 @@ func start() {
 			consumersMu.RUnlock()
 			if !ok {
 				ev.Out <- Ret{Ret: nil, Err: fmt.Errorf("consumer %s not found", ev.Consumer)}
+				close(ev.Out)
 				return
 			}
 			ret, err := consumer(ev.In)
@@ -76,7 +78,7 @@ func start() {
 				Err: err,
 			}
 			close(ev.Out)
-		}()
+		}(ev)
 	}
 }
 

@@ -282,47 +282,63 @@ func Trace(session *structs.Chats, mp map[string]*any, push []*any) (bool, []*an
 			}, nil
 		}
 
-		// 更新 TraceID
-		session.TraceID++
-		// 写数据库
-		trace := structs.Traces{
-			ChatID:  session.ID,
-			Path:    path,
-			TraceID: session.TraceID,
-			AgentID: session.NowAgent,
-		}
-		err = session.DB.Save(&trace).Error
-		if err != nil {
-			logger.Warn("trace failed: %v", err)
+		// 若文件已在当前会话的跟踪列表中，静默成功（避免复合主键唯一约束冲突）
+		var tracedCount int64
+		if err := session.DB.Model(&structs.Traces{}).
+			Where("chat_id = ? AND path = ? AND agent_id = ?", session.ID, path, session.NowAgent).
+			Count(&tracedCount).Error; err != nil {
+			logger.Warn("check trace failed: %v", err)
 			boolx := false
 			success := any(boolx)
 			errMsg := any(err.Error())
 			return false, push, map[string]*any{
 				"success": &success,
 				"error":   &errMsg,
-			}, nil
+			}, err
 		}
-		err = session.DB.Model(&structs.Chats{}).Where("id = ?", session.ID).Update("trace_id", session.TraceID).Error
-		if err != nil {
-			logger.Warn("update trace failed: %v", err)
-			boolx := false
-			success := any(boolx)
-			errMsg := any(err.Error())
-			return false, push, map[string]*any{
-				"success": &success,
-				"error":   &errMsg,
-			}, nil
+		if tracedCount == 0 {
+			// 更新 TraceID
+			session.TraceID++
+			// 写数据库
+			trace := structs.Traces{
+				ChatID:  session.ID,
+				Path:    path,
+				TraceID: session.TraceID,
+				AgentID: session.NowAgent,
+			}
+			err = session.DB.Save(&trace).Error
+			if err != nil {
+				logger.Warn("trace failed: %v", err)
+				boolx := false
+				success := any(boolx)
+				errMsg := any(err.Error())
+				return false, push, map[string]*any{
+					"success": &success,
+					"error":   &errMsg,
+				}, nil
+			}
+			err = session.DB.Model(&structs.Chats{}).Where("id = ?", session.ID).Update("trace_id", session.TraceID).Error
+			if err != nil {
+				logger.Warn("update trace failed: %v", err)
+				boolx := false
+				success := any(boolx)
+				errMsg := any(err.Error())
+				return false, push, map[string]*any{
+					"success": &success,
+					"error":   &errMsg,
+				}, nil
+			}
+			// 后台静默索引（打 tempfs 标签）
+			go func() {
+				idxPath := path
+				if vpath, ok := strings.CutPrefix(idxPath, "@temp/"); ok {
+					idxPath = vpath
+				}
+				if indexTaskFn != nil {
+					indexTaskFn(session.Root, idxPath, str, str, []string{"tempfs"})
+				}
+			}()
 		}
-		// 后台静默索引（打 tempfs 标签）
-		go func() {
-			idxPath := path
-			if vpath, ok := strings.CutPrefix(idxPath, "@temp/"); ok {
-				idxPath = vpath
-			}
-			if indexTaskFn != nil {
-				indexTaskFn(session.Root, idxPath, str, str, []string{"tempfs"})
-			}
-		}()
 	}
 
 	// TODO: RAG trace
@@ -536,31 +552,42 @@ func AddTempObject(session *structs.Chats, path string, content string, ro bool)
 		return err
 	}
 
-	// 更新 TraceID
-	session.TraceID++
-	// 写数据库
-	trace := structs.Traces{
-		ChatID:  session.ID,
-		Path:    "@temp/" + path,
-		TraceID: session.TraceID,
-		AgentID: session.NowAgent,
-	}
-	err = session.DB.Save(&trace).Error
-	if err != nil {
-		logger.Warn("add trace failed: %v", err)
+	// 若该临时文件已 trace 过，跳过 Traces 写入（静默成功，避免复合主键唯一约束冲突）
+	tracePath := "@temp/" + path
+	var tracedCount int64
+	if err := session.DB.Model(&structs.Traces{}).
+		Where("chat_id = ? AND path = ? AND agent_id = ?", session.ID, tracePath, session.NowAgent).
+		Count(&tracedCount).Error; err != nil {
+		logger.Warn("check trace failed: %v", err)
 		return err
 	}
-
-	// 后台静默索引（打 tempfs 标签）
-	go func() {
-		if indexTaskFn != nil {
-			indexTaskFn(session.Root, path, content, content, []string{"tempfs"})
+	if tracedCount == 0 {
+		// 更新 TraceID
+		session.TraceID++
+		// 写数据库
+		trace := structs.Traces{
+			ChatID:  session.ID,
+			Path:    tracePath,
+			TraceID: session.TraceID,
+			AgentID: session.NowAgent,
 		}
-	}()
-	err = session.DB.Model(&structs.Chats{}).Where("id = ?", session.ID).Update("trace_id", session.TraceID).Error
-	if err != nil {
-		logger.Warn("add trace failed: %v", err)
-		return err
+		err = session.DB.Save(&trace).Error
+		if err != nil {
+			logger.Warn("add trace failed: %v", err)
+			return err
+		}
+
+		// 后台静默索引（打 tempfs 标签）
+		go func() {
+			if indexTaskFn != nil {
+				indexTaskFn(session.Root, path, content, content, []string{"tempfs"})
+			}
+		}()
+		err = session.DB.Model(&structs.Chats{}).Where("id = ?", session.ID).Update("trace_id", session.TraceID).Error
+		if err != nil {
+			logger.Warn("add trace failed: %v", err)
+			return err
+		}
 	}
 
 	if session.TemporyDataOfSession == nil {
