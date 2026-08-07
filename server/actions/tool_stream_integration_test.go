@@ -95,7 +95,12 @@ func TestToolCallStreaming(t *testing.T) {
 	}
 	t.Logf("received streaming event: toolCallId=%s kind=%s", streamUpd.ToolCallID, streamUpd.Kind)
 
-	// 等待最终 tool_call（审批自动通过后 ExecuteToolCalls 完成触发）
+	// 等待最终 tool_call（审批自动通过后 ExecuteToolCalls 完成触发）。
+	// 断言 Status==completed：auto-approve 后 loop 在 handleWaitApprove 中先标记
+	// ToolState=1 再发空回调（阻塞等待 SetCallback 读取 ToolState 广播），因此最终
+	// tool_call_update 的 status 必然为 completed。修复前跳过该空回调，final 条目
+	// 残留到下一轮 SendRequest（已重置 ToolState=0）才被 TakeFinalToolCalling 取出，
+	// 会错误地广播为 pending——此断言即为该 bug 的回归测试。
 	matchFinal := func(rc ReceivedCall) bool {
 		if rc.Name != "session/update" {
 			return false
@@ -108,8 +113,7 @@ func TestToolCallStreaming(t *testing.T) {
 		if !ok2 {
 			return false
 		}
-		// Status 可能是 completed/pending（approve 后 ToolState 有竞态），只断言事件与调用 ID
-		return upd.SessionUpdate == "tool_call_update" && upd.ToolCallID != ""
+		return upd.SessionUpdate == "tool_call_update" && upd.ToolCallID != "" && upd.Status == "completed"
 	}
 	if _, ok := waitForUpdate(calls2, matchFinal, 20*time.Second); !ok {
 		t.Fatal("did not receive final tool_call_update event")

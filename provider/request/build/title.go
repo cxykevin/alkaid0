@@ -62,7 +62,7 @@ func TitleFull(chatID uint32, db *gorm.DB) (*reqStruct.ChatCompletionRequest, er
 	return buildTitleRequest(messages)
 }
 
-// buildTitleRequest 组装标题生成请求：system 全局提示词 + 对话消息 + 标题指令
+// buildTitleRequest 组装标题生成请求：标题专用 system 提示词 + 对话消息 + 标题指令
 func buildTitleRequest(dialogMessages []reqStruct.Message) (*reqStruct.ChatCompletionRequest, error) {
 	modelConfig, err := GetModelConfig(config.GlobalConfig.Agent.TitleModel)
 	if err != nil {
@@ -83,19 +83,18 @@ func buildTitleRequest(dialogMessages []reqStruct.Message) (*reqStruct.ChatCompl
 	maxTokenObj := titleMaxToken
 	response.MaxTokens = &maxTokenObj
 
-	// 生成 messages：system 全局提示词 + 对话消息 + 标题指令
-	globalRendered, err := prompts.Render(prompts.GlobalTemplate, struct {
-		ModelName string
-	}{
-		ModelName: modelConfig.ModelName,
-	})
+	// 生成 messages：标题专用 system 提示词 + 对话消息 + 标题指令。
+	// 注意：不能复用 GlobalTemplate（global.md，面向软件工程师的编码提示词）——
+	// 其 "Think in English" 会与标题语言匹配规则冲突、git 提交/ReACT 等无关指令
+	// 会污染输出并浪费 token。改用精简的标题专用 system（title_system.md）。
+	titleSystemRendered, err := prompts.Render(prompts.TitleSystemTemplate, struct{}{})
 	if err != nil {
 		return nil, err
 	}
 	messages := make([]reqStruct.Message, 0, len(dialogMessages)+2)
 	messages = append(messages, reqStruct.Message{
 		Role:    "system",
-		Content: globalRendered,
+		Content: titleSystemRendered,
 	})
 	messages = append(messages, dialogMessages...)
 	messages = append(messages, reqStruct.Message{

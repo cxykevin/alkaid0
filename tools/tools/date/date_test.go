@@ -18,7 +18,7 @@ func TestTodayDateInDefaultDash(t *testing.T) {
 		{"UTC", time.UTC},
 		{"UTC+8", time.FixedZone("CST", 8*60*60)},
 		{"UTC-8", time.FixedZone("PST", -8*60*60)},
-		{"UTC+5:30", time.FixedZone("IST", 5*60*60 + 30*60)},
+		{"UTC+5:30", time.FixedZone("IST", 5*60*60+30*60)},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -55,7 +55,7 @@ func TestTodayDateInEnvSetOtherZonesDash(t *testing.T) {
 	}{
 		{"UTC", time.UTC},
 		{"UTC-8", time.FixedZone("PST", -8*60*60)},
-		{"UTC+5:30", time.FixedZone("IST", 5*60*60 + 30*60)},
+		{"UTC+5:30", time.FixedZone("IST", 5*60*60+30*60)},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

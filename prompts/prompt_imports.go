@@ -51,6 +51,11 @@ var SummaryWrap string
 //go:embed prompts/title.md
 var Title string
 
+// TitleSystem 标题生成系统提示词
+//
+//go:embed prompts/title_system.md
+var TitleSystem string
+
 // ToolEnhance 工具调用增强提示词
 //
 //go:embed prompts/tool_enhance.md
@@ -118,6 +123,9 @@ var SummaryWrapTemplate *template.Template
 // Title 标题生成提示词模板
 var TitleTemplate *template.Template
 
+// TitleSystem 标题生成系统提示词模板
+var TitleSystemTemplate *template.Template
+
 // ToolEnhance 工具调用增强提示词模板
 var ToolEnhanceTemplate *template.Template
 
@@ -152,6 +160,7 @@ func initTemplates() {
 	SummaryTemplate = Load("Summary", Summary)
 	SummaryWrapTemplate = Load("SummaryWrap", SummaryWrap)
 	TitleTemplate = Load("Title", Title)
+	TitleSystemTemplate = Load("TitleSystem", TitleSystem)
 	ToolEnhanceTemplate = Load("ToolEnhance", ToolEnhance)
 	ToolPrehookTemplate = Load("ToolPrehook", ToolPrehook)
 	ToolResponseWrapTemplate = Load("ToolResponseWrap", ToolResponseWrap)

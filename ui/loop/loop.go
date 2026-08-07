@@ -516,6 +516,17 @@ func (p *Object) handleWaitApprove(session *structs.Chats, call func(AIResponse)
 
 	if autoHandled {
 		if approved {
+			// 对齐手动批准（msgActionApprove）：工具已执行完毕，需立即标记 completed
+			// 并触发空回调广播 final tool_call 状态。否则 final 条目会残留到下一轮
+			// SendRequest 的流式回调才被 TakeFinalToolCalling 取出广播，而此刻 ToolState
+			// 已被 SendRequest 重置为 0，tool_call_update 的 status 会错误地显示为 pending。
+			session.ToolState = 1
+			call(AIResponse{
+				MsgID:           msgID,
+				ThinkingContext: "",
+				Content:         "",
+			})
+			session.ToolState = 0
 			return true
 		}
 		// auto-rejected：标记工具状态为已取消，无论主会话还是子代理都继续
