@@ -179,17 +179,30 @@ func TestGetSizeOnClosed(t *testing.T) {
 }
 
 func TestReadStderr(t *testing.T) {
-	// ReadStderr 委托给 Read，在无子进程时返回 EIO
-	// 这里只验证接口可用且不 panic
+	// ReadStderr 委托给 Read。无数据且无子进程时读取会阻塞（Unix 返回 EIO，
+	// Windows 管道实现则等待数据），因此放入 goroutine，随后关闭 PTY 触发读取返回，
+	// 避免在任一平台永久阻塞。
 	p, _, err := New(Config{Rows: 24, Cols: 80})
 	if err != nil {
 		t.Fatalf("创建PTY失败: %v", err)
 	}
-	defer p.Close()
 
-	_, err = p.ReadStderr(nil)
-	if err == nil {
-		t.Log("ReadStderr with nil buffer returned nil (expected with no slave)")
+	done := make(chan error, 1)
+	go func() {
+		_, err := p.ReadStderr(make([]byte, 128))
+		done <- err
+	}()
+
+	time.Sleep(50 * time.Millisecond)
+	_ = p.Close()
+
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Log("ReadStderr with nil buffer returned nil (expected with no slave)")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("关闭后 ReadStderr 未返回")
 	}
 }
 
@@ -227,7 +240,8 @@ func TestCopyToWithoutSlave(t *testing.T) {
 	select {
 	case err := <-done:
 		if err != nil && !strings.Contains(err.Error(), "closed") &&
-			!strings.Contains(err.Error(), "input/output error") {
+			!strings.Contains(err.Error(), "input/output error") &&
+			!strings.Contains(err.Error(), "aborted") {
 			t.Errorf("CopyTo unexpected error: %v", err)
 		}
 	case <-time.After(time.Second):
