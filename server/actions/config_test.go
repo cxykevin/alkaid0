@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/cxykevin/alkaid0/config"
+	cfgStructs "github.com/cxykevin/alkaid0/config/structs"
 )
 
 // ---- helpers ----
@@ -24,9 +25,10 @@ func configSetup(t *testing.T) (restore func()) {
 	tmpCfgPath := filepath.Join(tmpDir, "config.json")
 	t.Setenv("ALKAID0_CONFIG_PATH", tmpCfgPath)
 
-	// 保存一份初始默认配置到临时路径（使后续 config.Save() 能正常写入）
-	// config.Save() 内部用 configPath 缓存，首次调用时从 env 读取路径
-	config.Save()
+	// 重置 configPath 缓存指向临时路径（Load 会从 env 重新解析），
+	// 避免 config.Save() 误用其它测试缓存下来的旧路径。文件不存在时
+	// Load 内部会创建默认配置并保存，后续 config.Save() 即可正常写入。
+	config.Load()
 
 	return func() {
 		config.GlobalConfigSwap(origConfig)
@@ -259,5 +261,100 @@ func TestConfigSetUpdateModelConfig(t *testing.T) {
 	if config.GlobalConfig.Model.DefaultModelID != newDefaultID {
 		t.Errorf("Model.DefaultModelID = %d, want %d",
 			config.GlobalConfig.Model.DefaultModelID, newDefaultID)
+	}
+}
+
+// TestConfigSetDeleteModelItem config/set 传 {"Models":{"1":null}} 应真正删除模型键，
+// 而不是像纯 json.Unmarshal 那样只把值置零（修复删除不同步到 server 的问题）。
+func TestConfigSetDeleteModelItem(t *testing.T) {
+	defer configSetup(t)()
+
+	// 预置两个模型。
+	config.GlobalConfig.Model.Models = map[int32]cfgStructs.ModelConfig{
+		1: {ModelName: "one", ModelID: "m1"},
+		2: {ModelName: "two", ModelID: "m2"},
+	}
+	reqData, _ := json.Marshal(map[string]any{
+		"Model": map[string]any{
+			"Models": map[string]any{"1": nil},
+		},
+	})
+
+	_, err := ConfigSet(ConfigSetRequest{Config: reqData}, nil, 0)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if m, ok := config.GlobalConfig.Model.Models[1]; ok {
+		t.Errorf("model 1 should be deleted from GlobalConfig, got %+v", m)
+	}
+	if _, ok := config.GlobalConfig.Model.Models[2]; !ok {
+		t.Error("model 2 should remain unchanged")
+	}
+
+	// 验证已持久化到文件（键 1 不应出现在保存的配置中）。
+	tmpCfgPath := os.Getenv("ALKAID0_CONFIG_PATH")
+	savedData, err := os.ReadFile(tmpCfgPath)
+	if err != nil {
+		t.Fatalf("failed to read saved config: %v", err)
+	}
+	var savedCfg struct {
+		Model struct {
+			Models map[string]json.RawMessage `json:"Models"`
+		} `json:"Model"`
+	}
+	if err := json.Unmarshal(savedData, &savedCfg); err != nil {
+		t.Fatalf("failed to unmarshal saved config: %v", err)
+	}
+	if _, ok := savedCfg.Model.Models["1"]; ok {
+		t.Error("model 1 should not appear in the persisted config file")
+	}
+	if _, ok := savedCfg.Model.Models["2"]; !ok {
+		t.Error("model 2 should appear in the persisted config file")
+	}
+}
+
+// TestConfigSetDeleteAgentItem config/set 传 {"Agents":{"main":null}} 应真正删除子代理键。
+func TestConfigSetDeleteAgentItem(t *testing.T) {
+	defer configSetup(t)()
+
+	config.GlobalConfig.Agent.Agents = map[string]cfgStructs.AgentConfig{
+		"main":     {AgentName: "Main"},
+		"frontend": {AgentName: "Front"},
+	}
+	reqData, _ := json.Marshal(map[string]any{
+		"Agent": map[string]any{
+			"Agents": map[string]any{"main": nil},
+		},
+	})
+
+	_, err := ConfigSet(ConfigSetRequest{Config: reqData}, nil, 0)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if a, ok := config.GlobalConfig.Agent.Agents["main"]; ok {
+		t.Errorf("agent main should be deleted from GlobalConfig, got %+v", a)
+	}
+	if _, ok := config.GlobalConfig.Agent.Agents["frontend"]; !ok {
+		t.Error("agent frontend should remain unchanged")
+	}
+}
+
+// TestConfigSetNullStructField struct 字段传 null 保持 unmarshal 行为：
+// encoding/json 对非 map 的 struct 字段传 null 不设置，保持原值不变。
+func TestConfigSetNullStructField(t *testing.T) {
+	defer configSetup(t)()
+
+	config.GlobalConfig.Server.Host = "10.0.0.1"
+	reqData, _ := json.Marshal(map[string]any{"Server": nil})
+
+	_, err := ConfigSet(ConfigSetRequest{Config: reqData}, nil, 0)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if config.GlobalConfig.Server.Host != "10.0.0.1" {
+		t.Errorf("Server.Host should remain unchanged for struct null, got %q", config.GlobalConfig.Server.Host)
 	}
 }
