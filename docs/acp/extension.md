@@ -39,9 +39,12 @@ alkaid0 对于客户端并 **不强制** 要求客户端初始化，这与 [ACP 
   "session": {
     "prompt": { "image": {}, "embeddedContext": {} },
     "delete": {}
-  }
+  },
+  "alk.cxykevin.top/alkaid0/v0.4": {}
 }
 ```
+
+其中 `alk.cxykevin.top/alkaid0/v0.4` 为 alkaid0 扩展协议版本能力标记。
 
 `session/list`、`session/resume`、`session/close` 是 `session` 基线能力，无需标记。
 
