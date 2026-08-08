@@ -154,7 +154,20 @@ func (s *Server) handle(arg string, call func(string) error, connID uint64) (ret
 		}
 
 		if obj == nil {
-			return nil, false
+			// 方法成功但无返回结果（返回 nil,nil）。通知请求（无 ID）按 JSON-RPC 规范
+			// 不回响应；但带 ID 的非通知请求必须回响应（result 为 null），否则客户端
+			// 将永久等待挂起——历史上 config/set、config/reload 等返回 nil 的方法
+			// 曾因此让前端界面卡住。
+			if isNotif {
+				return nil, false
+			}
+			// 用 json.RawMessage("null") 显式携带 result:null：Result 字段带 omitempty，
+			// 直接放 nil 会被省略导致响应缺少 result 键（不合 JSON-RPC 规范）。
+			return &Response{
+				Version: JSONRPCVersion,
+				ID:      req.ID,
+				Result:  json.RawMessage("null"),
+			}, false
 		}
 
 		if isNotif {

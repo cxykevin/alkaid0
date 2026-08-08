@@ -152,7 +152,7 @@ alkaid0 现在遵循 ACP v2 标准事件，且字段置于 update 对象**顶层
 
 ### 3.3. `alk.cxykevin.top/config/reload`
 
-重载配置文件。无参数无返回值。异步执行。
+重载配置文件。无参数，异步执行。成功时对带 ID 的请求返回 `result: null` 响应（不挂起客户端）。
 
 ### 3.4. `alk.cxykevin.top/config/get` `alk.cxykevin.top/config/set`
 
@@ -194,7 +194,7 @@ alkaid0 现在遵循 ACP v2 标准事件，且字段置于 update 对象**顶层
 
   - `config` ***object***: 需要更新的配置片段。接受完整的或部分的配置 JSON。支持**深层嵌套字段的部分更新**（如 `Model.defaultModelID`）。
 
-- **响应**：成功时为 `null`。失败时返回错误信息。
+- **响应**：成功时返回空对象 `{}`（`result` 非空，确保带 ID 的请求能收到响应而非永久等待）。失败时返回错误信息。
 
 - **错误**：
 

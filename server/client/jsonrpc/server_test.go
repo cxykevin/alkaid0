@@ -2,6 +2,7 @@ package jsonrpc
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 
@@ -426,6 +427,71 @@ func TestParseErrorIDHandling(t *testing.T) {
 
 	if resp.Error == nil || resp.Error.Code != JRPCParseError {
 		t.Errorf("应该返回ParseError，但得到: %v", resp.Error)
+	}
+}
+
+// TestNilResultRespondsToID 回归测试：方法返回 nil,nil 时，带 ID 的非通知请求
+// 必须返回 result:null 响应，否则客户端将永久等待挂起
+// （历史 bug：config/set 等返回 nil 的方法曾因此阻塞前端界面）。
+func TestNilResultRespondsToID(t *testing.T) {
+	srv := New()
+	Set(srv, "void", func(_ u.H, _ func(string, any, *string) error, _ uint64) (any, error) {
+		return nil, nil
+	})
+
+	req := Request{
+		Version: JSONRPCVersion,
+		ID:      1,
+		Method:  "void",
+		Params:  u.H{},
+	}
+	reqData, _ := json.Marshal(req)
+	returnStr, _ := srv.handle(string(reqData), func(s string) error {
+		return nil
+	}, 1)
+
+	if returnStr == "" {
+		t.Fatal("返回 nil,nil 的方法对带 ID 请求应返回响应，否则客户端永久等待挂起")
+	}
+
+	var resp Response
+	if err := json.Unmarshal([]byte(returnStr), &resp); err != nil {
+		t.Fatalf("响应 JSON 解析失败: %v", err)
+	}
+	if resp.Error != nil {
+		t.Errorf("不应有错误: %v", resp.Error)
+	}
+	if resp.ID != float64(1) {
+		t.Errorf("响应 ID 不匹配: got %v, want 1", resp.ID)
+	}
+	if resp.Result != nil {
+		t.Errorf("result 应为 null, got %#v", resp.Result)
+	}
+	if !strings.Contains(returnStr, `"result":null`) {
+		t.Errorf("原始响应应包含 result:null, got %s", returnStr)
+	}
+}
+
+// TestNilResultNotificationNoResponse 返回 nil,nil 的方法对通知请求（无 ID）仍不应响应
+func TestNilResultNotificationNoResponse(t *testing.T) {
+	srv := New()
+	Set(srv, "void", func(_ u.H, _ func(string, any, *string) error, _ uint64) (any, error) {
+		return nil, nil
+	})
+
+	req := Request{
+		Version: JSONRPCVersion,
+		ID:      nil,
+		Method:  "void",
+		Params:  u.H{},
+	}
+	reqData, _ := json.Marshal(req)
+	returnStr, _ := srv.handle(string(reqData), func(s string) error {
+		return nil
+	}, 1)
+
+	if returnStr != "" {
+		t.Errorf("通知请求不应返回响应, got %q", returnStr)
 	}
 }
 

@@ -97,6 +97,7 @@ func Load() {
 	cfg := structs.BuildDefault(structs.Config{})
 	cfg.Version = product.VersionID
 	cfg.Model = model
+	EnsureOnlineSearchDefaults(&cfg, nil)
 
 	globalConfigMu.Lock()
 	GlobalConfig = &cfg
@@ -142,9 +143,11 @@ func Load() {
 		return
 	}
 
-	// 解析成功，将临时配置复制到 GlobalConfig
+	// 解析成功，将临时配置复制到 GlobalConfig（缺失字段填充 OnlineSearch 默认值，
+	// 依据原始 JSON 实际出现过的键，保留用户显式配置）
 	globalConfigMu.Lock()
 	*GlobalConfig = *tempConfig
+	EnsureOnlineSearchDefaults(GlobalConfig, json.RawMessage(data))
 	globalConfigMu.Unlock()
 
 	// 加载完成后检查密钥，为空则自动生成
