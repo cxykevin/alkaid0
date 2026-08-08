@@ -245,14 +245,15 @@ type ModelList struct {
 	Config cfgStructs.ModelConfig
 }
 
-// GetModels 获取所有模型
+// GetModels 获取所有可见模型（跳过 Hide 的模型）
 func GetModels() []ModelList {
 	models := config.GlobalConfig.Model.Models
-	modelsObj := make([]ModelList, len(models))
-	idx := 0
+	modelsObj := make([]ModelList, 0, len(models))
 	for id, model := range models {
-		modelsObj[idx] = ModelList{ID: id, Config: model}
-		idx++
+		if model.Hide {
+			continue
+		}
+		modelsObj = append(modelsObj, ModelList{ID: id, Config: model})
 	}
 	slices.SortFunc(modelsObj, func(a, b ModelList) int {
 		return int(a.ID) - int(b.ID)

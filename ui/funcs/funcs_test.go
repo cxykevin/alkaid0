@@ -178,6 +178,31 @@ func TestGetModels_Empty(t *testing.T) {
 	}
 }
 
+func TestGetModels_HideFilter(t *testing.T) {
+	defer configSetup()()
+
+	*config.GlobalConfig = cfgStructs.Config{
+		Model: cfgStructs.ModelsConfig{
+			Models: map[int32]cfgStructs.ModelConfig{
+				1: {ModelName: "visible-1", Hide: false},
+				2: {ModelName: "hidden-2", Hide: true},
+				3: {ModelName: "visible-3", Hide: false},
+			},
+		},
+	}
+
+	models := GetModels()
+	if len(models) != 2 {
+		t.Fatalf("Expected 2 visible models, got %d", len(models))
+	}
+	if models[0].ID != 1 || models[1].ID != 3 {
+		t.Errorf("GetModels 应跳过隐藏模型并按 ID 排序: got %+v", models)
+	}
+	if models[0].Config.ModelName != "visible-1" || models[1].Config.ModelName != "visible-3" {
+		t.Errorf("GetModels 返回了错误的模型: got %+v", models)
+	}
+}
+
 func TestGetModelInfo(t *testing.T) {
 	defer configSetup()()
 

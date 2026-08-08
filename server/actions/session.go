@@ -160,14 +160,63 @@ func getMinValueByKey[K cmp.Ordered, T any](m map[K]T) (K, *T, bool) {
 	return minKey, minValue, true
 }
 
+// firstVisibleModel 返回键最小的可见（未被 Hide）模型。
+// 若 map 为空或所有模型均被 Hide 则返回 ok=false。
+func firstVisibleModel(cfg map[int32]cfgStructs.ModelConfig) (int32, cfgStructs.ModelConfig, bool) {
+	var minKey int32
+	var minVal cfgStructs.ModelConfig
+	first := true
+	for k, v := range cfg {
+		if v.Hide {
+			continue
+		}
+		if first || k < minKey {
+			minKey = k
+			minVal = v
+			first = false
+		}
+	}
+	if first {
+		return 0, cfgStructs.ModelConfig{}, false
+	}
+	return minKey, minVal, true
+}
+
+// resolveNewSessionModel 解析新会话的模型 ID：
+//   - LastModelID 非零且未被 Hide 时优先使用；
+//   - 否则回退到可见的默认模型；
+//   - 默认模型被 Hide/不存在时回退到键最小的可见模型；
+//   - 全部不可见或为空时返回 0。
+func resolveNewSessionModel(lastModelID uint32) uint32 {
+	cfg := config.GlobalConfig.Model.Models
+	if lastModelID != 0 {
+		if mc, ok := cfg[int32(lastModelID)]; ok && !mc.Hide {
+			return lastModelID
+		}
+	}
+	defaultID := uint32(config.GlobalConfig.Model.DefaultModelID)
+	if mc, ok := cfg[int32(defaultID)]; ok && !mc.Hide {
+		return defaultID
+	}
+	if id, _, ok := firstVisibleModel(cfg); ok {
+		return uint32(id)
+	}
+	return 0
+}
+
 func getDefaultModel() string {
 	cfg := config.GlobalConfig.Model.Models
 	defaultID := config.GlobalConfig.Model.DefaultModelID
-	if obj, ok := cfg[defaultID]; ok {
+	// 默认模型被 Hide 时回退到第一个可见模型
+	if obj, ok := cfg[defaultID]; ok && !obj.Hide {
 		return fmt.Sprintf("%d/%s", defaultID, obj.ModelID)
 	}
 	if len(cfg) == 0 {
 		return "0/UnconfiguredAnyModel"
+	}
+	if id, obj, ok := firstVisibleModel(cfg); ok {
+		logger.Debug("default model: %s", fmt.Sprintf("%d/%s", id, obj.ModelID))
+		return fmt.Sprintf("%d/%s", id, obj.ModelID)
 	}
 	id, obj, _ := getMinValueByKey(cfg)
 	logger.Debug("default model: %s", fmt.Sprintf("%d/%s", id, obj.ModelID))
@@ -197,10 +246,16 @@ func buildConfigOptions(currentModelID uint32, reasoningEffort string) []ConfigO
 		return int(ia - ib)
 	})
 
-	// 确保当前模型值格式正确
+	// 确保当前模型值格式正确；若当前模型被 Hide 或不存在，回退到第一个可见模型，
+	// 避免隐藏模型以"当前选中模型"的形式泄漏到客户端界面。
 	currentValue := fmt.Sprintf("%d/%s", currentModelID, u.Default(cfg, int32(currentModelID), cfgStructs.ModelConfig{
 		ModelID: fmt.Sprintf("UnknownModel(%d)", currentModelID),
 	}).ModelID)
+	if mc, ok := cfg[int32(currentModelID)]; !ok || mc.Hide {
+		if id, obj, ok := firstVisibleModel(cfg); ok {
+			currentValue = fmt.Sprintf("%d/%s", id, obj.ModelID)
+		}
+	}
 
 	// 推理强度（thought_level）选项
 	effort := reasoningEffort
@@ -1109,19 +1164,9 @@ func SessionNew(req SessionNewRequest, call func(string, any, *string) error, co
 	// 注册连接的call函数用于后续广播
 	registerConnCall(connID, sessionID, call)
 
-	// 获取当前模型ID（新会话使用默认模型）
-	currentModelID := sess.LastModelID
-	if currentModelID == 0 {
-		// 如果未设置，使用配置的默认模型
-		cfg := config.GlobalConfig.Model.Models
-		currentModelID = uint32(config.GlobalConfig.Model.DefaultModelID)
-		if _, ok := cfg[int32(currentModelID)]; !ok && len(cfg) > 0 {
-			currentModelIDTmp, _, ok := getMinValueByKey(cfg)
-			if ok {
-				currentModelID = uint32(currentModelIDTmp)
-			}
-		}
-	}
+	// 获取当前模型ID（新会话使用默认模型）。
+	// 若 LastModelID / 默认模型被 Hide 或不存在，回退到第一个可见模型，避免选中隐藏模型。
+	currentModelID := resolveNewSessionModel(sess.LastModelID)
 	getDefaultModel()
 
 	// 手动切换一遍模型，确保新会话的模型被正确初始化
@@ -1553,9 +1598,9 @@ func SessionSetConfigOption(req SessionSetConfigOptionRequest, call func(string,
 			return SessionSetConfigOptionResponse{}, fmt.Errorf("invalid model index: %v", err)
 		}
 
-		// 验证模型是否存在
+		// 验证模型是否存在且未被隐藏
 		cfg := config.GlobalConfig.Model.Models
-		if _, ok := cfg[int32(modelIdx)]; !ok {
+		if mc, ok := cfg[int32(modelIdx)]; !ok || mc.Hide {
 			return SessionSetConfigOptionResponse{}, fmt.Errorf("model not found: %s", req.Value)
 		}
 
