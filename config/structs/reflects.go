@@ -39,6 +39,16 @@ func BuildDefault[T any](obj T) T {
 		// 取 default 标签
 		defaultTag := field.Tag.Get("default")
 		kind := fv.Kind()
+
+		// map/slice 统一初始化为空容器（JSON 序列化为 {} / [] 而非 null）
+		if (kind == reflect.Map || kind == reflect.Slice) && fv.CanSet() && fv.IsNil() {
+			if kind == reflect.Map {
+				fv.Set(reflect.MakeMap(fv.Type()))
+			} else {
+				fv.Set(reflect.MakeSlice(fv.Type(), 0, 0))
+			}
+		}
+
 		if defaultTag != "" && fv.CanSet() {
 			// if fv.Kind() == reflect.String {
 			// 	fv.SetString(defaultTag)

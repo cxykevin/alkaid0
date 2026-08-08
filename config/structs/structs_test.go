@@ -1,6 +1,8 @@
 package structs
 
 import (
+	"encoding/json"
+	"strings"
 	"testing"
 )
 
@@ -32,6 +34,45 @@ func TestModelsConfig(t *testing.T) {
 	mc = BuildDefault(mc)
 	if mc.ProviderURL == "" {
 		t.Error("ProviderURL should not be empty after BuildDefault")
+	}
+}
+
+func TestEmptyContainers(t *testing.T) {
+	c := BuildDefault(Config{})
+	// map 字段应初始化为空 map（JSON 序列化为 {} 而非 null）
+	if c.Model.Models == nil {
+		t.Error("Model.Models should be initialized to empty map")
+	}
+	if len(c.Model.Models) != 0 {
+		t.Errorf("Model.Models should be empty, got len %d", len(c.Model.Models))
+	}
+	if c.Agent.Agents == nil {
+		t.Error("Agent.Agents should be initialized to empty map")
+	}
+	if c.Context.LSP.LanguageServers == nil {
+		t.Error("Context.LSP.LanguageServers should be initialized to empty map")
+	}
+	if c.Agent.TerminalEnvs == nil {
+		t.Error("Agent.TerminalEnvs should be initialized to empty map")
+	}
+	// slice 字段应初始化为空 slice（JSON 序列化为 [] 而非 null）
+	if c.Context.Phrase.Phrases == nil {
+		t.Error("Context.Phrase.Phrases should be initialized to empty slice")
+	}
+	if len(c.Context.Phrase.Phrases) != 0 {
+		t.Errorf("Context.Phrase.Phrases should be empty, got len %d", len(c.Context.Phrase.Phrases))
+	}
+
+	// 序列化验证：Agents/LanguageServers/Models 输出 {}，Phrases 输出 []
+	data, err := json.Marshal(c)
+	if err != nil {
+		t.Fatalf("Marshal failed: %v", err)
+	}
+	s := string(data)
+	for _, key := range []string{"\"Agents\":{}", "\"LanguageServers\":{}", "\"Models\":{}", "\"Phrases\":[]"} {
+		if !strings.Contains(s, key) {
+			t.Errorf("JSON output should contain %s, got: %s", key, s)
+		}
 	}
 }
 
