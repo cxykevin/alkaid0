@@ -9,8 +9,9 @@ import (
 	"github.com/cxykevin/alkaid0/storage/structs"
 )
 
+//go:fix inline
 func strPtr2(s string) *string {
-	return &s
+	return new(s)
 }
 
 // TestSummary_InputIncludesRecent 验证 summary 请求把最近的对话消息也作为输入喂给模型，
@@ -35,7 +36,7 @@ func TestSummary_InputIncludesRecent(t *testing.T) {
 			ChatID:  1,
 			Type:    structs.MessagesRoleCommunicate,
 			Delta:   "子代理报告：已完成代码审查，发现 3 个问题",
-			AgentID: strPtr2("subagent-1"),
+			AgentID: new("subagent-1"),
 		},
 		{ChatID: 1, Type: structs.MessagesRoleAgent, Delta: "根据审查结果修复了 3 个问题"},
 	}

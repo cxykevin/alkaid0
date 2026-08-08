@@ -51,7 +51,7 @@ func collectFeedbackBroadcasts(t *testing.T, obj *sessionObj, arg string) []Sess
 	}
 
 	var got []SessionUpdate
-	for i := 0; i < 2; i++ {
+	for i := range 2 {
 		select {
 		case u := <-updates:
 			got = append(got, u)

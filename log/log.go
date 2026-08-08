@@ -140,10 +140,7 @@ func Tail(maxBytes int) string {
 		return ""
 	}
 	size := fi.Size()
-	offset := size - int64(maxBytes)
-	if offset < 0 {
-		offset = 0
-	}
+	offset := max(size-int64(maxBytes), 0)
 	buf := make([]byte, size-offset)
 	if _, err := f.ReadAt(buf, offset); err != nil {
 		return ""

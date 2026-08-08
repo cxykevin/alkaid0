@@ -281,7 +281,7 @@ func TestTail(t *testing.T) {
 	tmp := t.TempDir()
 	p := filepath.Join(tmp, "log.log")
 	var b strings.Builder
-	for i := 0; i < 200; i++ {
+	for i := range 200 {
 		b.WriteString(fmt.Sprintf("line %d: %s\n", i, strings.Repeat("x", 40)))
 	}
 	content := b.String()

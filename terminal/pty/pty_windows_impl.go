@@ -55,7 +55,7 @@ func New(cfg Config) (*PTY, *os.File, error) {
 	p := &PTY{
 		readFd:  outR,
 		writeFd: inW,
-		inR:     inR, // 保持打开，防止写入 inW 时 pipe 已关闭
+		inR:     inR,  // 保持打开，防止写入 inW 时 pipe 已关闭
 		outW:    outW, // 保持打开，子进程需要这个作为 stdout
 		file:    outR,
 		rows:    cfg.Rows,

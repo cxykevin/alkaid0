@@ -263,7 +263,7 @@ func newSessionListDB(t *testing.T, n int) (string, *gorm.DB, []uint32) {
 		t.Fatalf("loadDB failed: %v", err)
 	}
 	ids := make([]uint32, n)
-	for i := 0; i < n; i++ {
+	for i := range n {
 		chat := structs.Chats{Title: fmt.Sprintf("Chat %d", i)}
 		if err := db.Create(&chat).Error; err != nil {
 			t.Fatalf("failed to create chat %d: %v", i, err)
@@ -298,7 +298,7 @@ func TestSessionList_OrderAndUpdatedAt(t *testing.T) {
 	if len(resp.Sessions) != len(ids) {
 		t.Fatalf("expected %d sessions, got %d", len(ids), len(resp.Sessions))
 	}
-	for i := 0; i < len(ids); i++ {
+	for i := range ids {
 		wantID := ids[len(ids)-1-i]
 		got := resp.Sessions[i]
 		if got.SessionID != cwd2SessionID(dir, wantID) {
@@ -433,7 +433,7 @@ func TestHandleSessionUpdate_RenameColdSession(t *testing.T) {
 
 	resp, err := HandleSessionUpdate(SessionUpdateRequest{
 		SessionID: sessionID,
-		Update:    sessionInfoUpdatePayload(t, strPtr("Implement user authentication")),
+		Update:    sessionInfoUpdatePayload(t, new("Implement user authentication")),
 	}, nil, 1)
 	if err != nil {
 		t.Fatalf("HandleSessionUpdate failed: %v", err)
@@ -464,7 +464,7 @@ func TestHandleSessionUpdate_ClearTitle(t *testing.T) {
 	empty := ""
 	if _, err := HandleSessionUpdate(SessionUpdateRequest{
 		SessionID: sessionID,
-		Update:    sessionInfoUpdatePayload(t, strPtr("临时标题")),
+		Update:    sessionInfoUpdatePayload(t, new("临时标题")),
 	}, nil, 1); err != nil {
 		t.Fatalf("set title failed: %v", err)
 	}
@@ -519,7 +519,7 @@ func TestHandleSessionUpdate_InvalidVariant(t *testing.T) {
 func TestHandleSessionUpdate_SessionNotFound(t *testing.T) {
 	_, err := HandleSessionUpdate(SessionUpdateRequest{
 		SessionID: "invalid",
-		Update:    sessionInfoUpdatePayload(t, strPtr("x")),
+		Update:    sessionInfoUpdatePayload(t, new("x")),
 	}, nil, 1)
 	if err == nil || !contains(err.Error(), "session") {
 		t.Errorf("expected session error, got %v", err)
@@ -571,7 +571,7 @@ func TestHandleSessionUpdate_BroadcastAndSync(t *testing.T) {
 
 	if _, err := HandleSessionUpdate(SessionUpdateRequest{
 		SessionID: sessionID,
-		Update:    sessionInfoUpdatePayload(t, strPtr("新标题")),
+		Update:    sessionInfoUpdatePayload(t, new("新标题")),
 	}, nil, connID); err != nil {
 		t.Fatalf("HandleSessionUpdate failed: %v", err)
 	}
@@ -604,8 +604,10 @@ func TestHandleSessionUpdate_BroadcastAndSync(t *testing.T) {
 }
 
 // strPtr 返回字符串指针
+//
+//go:fix inline
 func strPtr(s string) *string {
-	return &s
+	return new(s)
 }
 
 // TestSessionResumeValidation 测试SessionResume的参数验证

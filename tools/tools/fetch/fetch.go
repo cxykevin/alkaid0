@@ -311,7 +311,7 @@ func intAny(v int) *any {
 
 // parseHeaders 解析多行 "Key: Value" 请求头。
 func parseHeaders(req *http.Request, raw string) error {
-	for _, line := range strings.Split(raw, "\n") {
+	for line := range strings.SplitSeq(raw, "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" {
 			continue

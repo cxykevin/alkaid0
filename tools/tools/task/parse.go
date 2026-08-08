@@ -57,8 +57,8 @@ func ParseTask(content string) ([]*TaskItem, error) {
 		rest := m[3]
 		// 用第一个 ":" 分割 taskName 与 taskDetails
 		name, detail := rest, ""
-		if ci := strings.Index(rest, ":"); ci >= 0 {
-			name, detail = rest[:ci], rest[ci+1:]
+		if before, after, ok := strings.Cut(rest, ":"); ok {
+			name, detail = before, after
 		} else {
 			return nil, fmt.Errorf("line %d: 缺少 `:` 分隔 taskName 与 taskDetails：%q", idx+1, raw)
 		}
