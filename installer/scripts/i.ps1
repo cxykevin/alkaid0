@@ -1,8 +1,8 @@
 #!/usr/bin/env pwsh
-# Alkaid0 Windows è‡ªåŠ¨å®‰è£…è„šæœ¬ï¼ˆMSIXï¼‰
+# Alkaid0 Windows ×Ô¶¯°²×°½Å±¾£¨MSIX£©
 #requires -RunAsAdministrator
 
-# é¢œè‰²å®šä¹‰
+# ÑÕÉ«¶¨Òå
 $RED = 'Red'
 $GREEN = 'Green'
 $YELLOW = 'Yellow'
@@ -25,12 +25,12 @@ function Write-LogSubWarn {
 
 function Write-LogWarn {
     param([string]$Message)
-    Write-Host "==> è­¦å‘Š: $Message" -ForegroundColor $YELLOW
+    Write-Host "==> ¾¯¸æ: $Message" -ForegroundColor $YELLOW
 }
 
 function Write-LogError {
     param([string]$Message)
-    Write-Host "==> é”™è¯¯: $Message" -ForegroundColor $RED
+    Write-Host "==> ´íÎó: $Message" -ForegroundColor $RED
     exit 1
 }
 
@@ -38,12 +38,12 @@ function Print-Logo {
     @"
 [0m       [47m  [0m [47m  [0m            [46m [0m[46m [0m     [47m  [0m       
        [47m  [0m [47m  [0m                   [47m  [0m [47m      [0m
-[47m[8malkaid[0m[8m0[47m  [0m [47m  [0m  [47m  [0m [47m      [0m [47m  [0m [47m   [0m [47m  [0m [47m  [0m  [47m  [0m
+[47m[8malkaid[0m[8m [47m[8m0 [0m [47m  [0m  [47m  [0m [47m      [0m [47m  [0m [47m   [0m [47m  [0m [47m  [0m  [47m  [0m
 [47m  [0m  [47m  [0m [47m  [0m [47m    [0m   [47m  [0m  [47m  [0m [47m  [0m [47m  [0m  [47m  [0m [47m  [0m  [47m  [0m
 [47m   [0m [47m     [0m [47m  [0m  [47m  [0m [47m   [0m [47m     [0m [47m      [0m [47m      [0m
-[0m  [2mâ•­â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â•®[0m
-[0m  [2mâ”‚ [0m[1;34malkaid0[0m[2m coding agent installer â”‚[0m
-[0m  [2mâ•°â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â•¯[0m
+[0m  [2m¨q©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤¨r[0m
+[0m  [2m©¦ [0m[1;34malkaid0[0m[2m coding agent installer ©¦[0m
+[0m  [2m¨t©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤¨s[0m
 "@
 }
 
@@ -52,10 +52,10 @@ function Detect-Arch {
     if ($arch -eq 'AMD64') {
         return 'amd64'
     } elseif ($arch -eq 'ARM64') {
-        Write-LogSubWarn "ARM64 æ¶æ„å°†ä½¿ç”¨ amd64 MSIX åŒ…"
+        Write-LogSubWarn "ARM64 ¼Ü¹¹½«Ê¹ÓÃ amd64 MSIX °ü"
         return 'amd64'
     } else {
-        Write-LogError "ä¸æ”¯æŒçš„æ¶æ„: $arch"
+        Write-LogError "²»Ö§³ÖµÄ¼Ü¹¹: $arch"
     }
 }
 
@@ -73,13 +73,13 @@ function Get-LatestRelease {
                 if ($tag) {
                     return $tag
                 } else {
-                    Write-LogSubWarn "æœªæ‰¾åˆ°æœ‰æ•ˆçš„ Release tag (å°è¯• $attempt/$maxRetries)"
+                    Write-LogSubWarn "Î´ÕÒµ½ÓĞĞ§µÄ Release tag (³¢ÊÔ $attempt/$maxRetries)"
                 }
             } else {
-                Write-LogSubWarn "API è¿”å›ç©ºå“åº” (å°è¯• $attempt/$maxRetries)"
+                Write-LogSubWarn "API ·µ»Ø¿ÕÏìÓ¦ (³¢ÊÔ $attempt/$maxRetries)"
             }
         } catch {
-            Write-LogSubWarn "è¯·æ±‚å¤±è´¥ (å°è¯• $attempt/$maxRetries): $($_.Exception.Message)"
+            Write-LogSubWarn "ÇëÇóÊ§°Ü (³¢ÊÔ $attempt/$maxRetries): $($_.Exception.Message)"
         }
 
         if ($attempt -lt $maxRetries) {
@@ -87,78 +87,85 @@ function Get-LatestRelease {
         }
         $attempt++
     }
-    Write-LogError "è·å–æœ€æ–° Release å¤±è´¥ï¼Œå·²é‡è¯• $maxRetries æ¬¡"
+    Write-LogError "»ñÈ¡×îĞÂ Release Ê§°Ü£¬ÒÑÖØÊÔ $maxRetries ´Î"
 }
 
 function Install-MSIX {
     param([string]$PackagePath)
 
-    Write-LogSub "å®‰è£… MSIX åŒ…: $PackagePath"
+    Write-LogSub "°²×°Ö¤Êé: ${PackagePath}.cer"
     
-    # å°è¯•ä½¿ç”¨ -AllowUnsigned -Trustï¼ˆå¦‚æœ PowerShell ç‰ˆæœ¬æ”¯æŒï¼‰
+    Import-Certificate -FilePath "${PackagePath}.cer" -CertStoreLocation Cert:\LocalMachine\Root
+
+    Write-LogSub "°²×° MSIX °ü: $PackagePath"
+    
+    # ³¢ÊÔÊ¹ÓÃ -AllowUnsigned -Trust£¨Èç¹û PowerShell °æ±¾Ö§³Ö£©
     $params = @{
         Path = $PackagePath
         ErrorAction = 'Stop'
     }
-    # åœ¨è¾ƒæ–° PowerShell ä¸­ï¼Œ-Trust å¯èƒ½ä¸å­˜åœ¨ï¼›ä½¿ç”¨ -AllowUnsigned å’Œ -Trust å¯ä»¥å…±å­˜
+    # ÔÚ½ÏĞÂ PowerShell ÖĞ£¬-Trust ¿ÉÄÜ²»´æÔÚ£»Ê¹ÓÃ -AllowUnsigned ºÍ -Trust ¿ÉÒÔ¹²´æ
     try {
-        Add-AppxPackage @params -AllowUnsigned -Trust -ErrorAction Stop
-        Write-LogSub "å®‰è£…æˆåŠŸ"
+        Add-AppxPackage @params -AllowUnsigned
+        Write-LogSub "°²×°³É¹¦"
         return
     } catch {
-        Write-LogSubWarn "ä½¿ç”¨ -AllowUnsigned -Trust å¤±è´¥: $($_.Exception.Message)"
-        Write-LogSubWarn "å°è¯•ä½¿ç”¨æ™®é€šå®‰è£…ï¼ˆå¯èƒ½éœ€è¦æ‰‹åŠ¨ç¡®è®¤ï¼‰..."
+        Write-LogSubWarn "Ê¹ÓÃ -AllowUnsigned Ê§°Ü: $($_.Exception.Message)"
+        Write-LogSubWarn "³¢ÊÔÊ¹ÓÃÆÕÍ¨°²×°£¨¿ÉÄÜĞèÒªÊÖ¶¯È·ÈÏ£©..."
     }
 
-    # å›é€€ï¼šä¸å¸¦ -AllowUnsigned -Trust
+    # »ØÍË£º²»´ø -AllowUnsigned -Trust
     try {
-        Add-AppxPackage @params -ErrorAction Stop -AllowUnsigned
-        Write-LogSub "å®‰è£…æˆåŠŸ"
+        Add-AppxPackage @params 
+        Write-LogSub "°²×°³É¹¦"
     } catch {
-        Write-LogError "ä½¿ç”¨ -AllowUnsigned å®‰è£…å¤±è´¥: $($_.Exception.Message)"
+        Write-LogError "Ê¹ÓÃ -AllowUnsigned °²×°Ê§°Ü: $($_.Exception.Message)"
     }
     try {
         Add-AppxPackage @params -ErrorAction Stop
-        Write-LogSub "å®‰è£…æˆåŠŸ"
+        Write-LogSub "°²×°³É¹¦"
     } catch {
-        Write-LogError "å®‰è£…å¤±è´¥: $($_.Exception.Message)"
+        Write-LogError "°²×°Ê§°Ü: $($_.Exception.Message)"
     }
 }
 
 function Main {
     Print-Logo
-    Write-LogMain "Alkaid0 å®‰è£…è„šæœ¬ (Windows)"
+    Write-LogMain "Alkaid0 °²×°½Å±¾ (Windows)"
     
     $ARCH = Detect-Arch
-    Write-LogSub "æ¶æ„: $ARCH"
+    Write-LogSub "¼Ü¹¹: $ARCH"
     
-    Write-LogMain "è·å–æœ€æ–° Release..."
+    Write-LogMain "»ñÈ¡×îĞÂ Release..."
     $TAG = Get-LatestRelease
-    Write-LogSub "æœ€æ–°ç‰ˆæœ¬: $TAG"
+    Write-LogSub "×îĞÂ°æ±¾: $TAG"
     
     $package = "alkaid0-windows-amd64.msix"
     $downloadUrl = "https://github.com/cxykevin/alkaid0/releases/download/$TAG/$package"
-    Write-LogSub "å®‰è£…åŒ…: $package"
+    $downloadCrtUrl = "https://raw.githubusercontent.com/cxykevin/.pubkey/refs/heads/main/msix-software.cer"
+    Write-LogSub "°²×°°ü: $package"
     
     $tempDir = Join-Path $env:TEMP "alkaid0_install"
     New-Item -ItemType Directory -Force -Path $tempDir | Out-Null
     $localPath = Join-Path $tempDir $package
     
-    Write-LogMain "ä¸‹è½½å®‰è£…åŒ…"
-    Write-LogSub "ä¸‹è½½: $downloadUrl"
+    Write-LogMain "ÏÂÔØ°²×°°ü"
     try {
-        Invoke-WebRequest -Uri $downloadUrl -OutFile $localPath -TimeoutSec 120 -ErrorAction Stop
+        Write-LogSub "ÏÂÔØ: $downloadCrtUrl "
+        Invoke-WebRequest -Uri $downloadCrtUrl -OutFile "${localPath}.cer" -TimeoutSec 60 -ErrorAction Stop -UseBasicParsing
+        Write-LogSub "ÏÂÔØ: $downloadUrl"
+        Invoke-WebRequest -Uri $downloadUrl -OutFile $localPath -TimeoutSec 180 -ErrorAction Stop -UseBasicParsing
     } catch {
-        Write-LogError "ä¸‹è½½å¤±è´¥: $($_.Exception.Message)"
+        Write-LogError "ÏÂÔØÊ§°Ü: $($_.Exception.Message)"
     }
     
-    Write-LogMain "å®‰è£… MSIX"
+    Write-LogMain "°²×° MSIX"
     Install-MSIX -PackagePath $localPath
     
     Remove-Item -Recurse -Force $tempDir -ErrorAction SilentlyContinue
     
-    Write-LogMain "å®‰è£…å®Œæˆ!"
-    Write-LogSub "åº”ç”¨ç¨‹åºå·²å®‰è£…ï¼Œè¯·ä»å¼€å§‹èœå•å¯åŠ¨ alkaid0"
+    Write-LogMain "°²×°Íê³É!"
+    Write-LogSub "Ó¦ÓÃ³ÌĞòÒÑ°²×°£¬Çë´Ó¿ªÊ¼²Ëµ¥Æô¶¯ alkaid0"
 }
 
 Main
