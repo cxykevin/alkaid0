@@ -1,10 +1,13 @@
 package structs
 
+import "encoding/json"
+
 // 消息角色常量
 const (
 	RoleUser      = "user"
 	RoleAssistant = "assistant"
 	RoleSystem    = "system"
+	RoleTool      = "tool"
 )
 
 // ChatCompletionThinkingType 设置thinking类型
@@ -29,13 +32,57 @@ type ChatCompletionRequest struct {
 	StreamOptions   *ChatCompletionStreamOptions `json:"stream_options,omitempty"`
 	Thinking        *ChatCompletionThinkingType  `json:"thinking,omitempty"`         // enabled | disabled
 	ReasoningEffort *string                      `json:"reasoning_effort,omitempty"` // low | medium | high | max | xhigh
+	Tools           []Tool                       `json:"tools,omitempty"`            // 原生函数定义
+	ToolChoice      any                          `json:"tool_choice,omitempty"`      // "auto" | "none" | "required" | {"type":"function",...}
+}
+
+// Tool 请求级工具定义（OpenAI tools 参数）
+type Tool struct {
+	Type     string       `json:"type"` // 固定 "function"
+	Function ToolFunction `json:"function"`
+}
+
+// ToolFunction 工具函数定义
+type ToolFunction struct {
+	Name        string          `json:"name"`
+	Description string          `json:"description,omitempty"`
+	Parameters  json.RawMessage `json:"parameters"` // JSON Schema 对象（避免二次转义）
+}
+
+// ToolCallMsg assistant 消息内携带的完整工具调用（历史回放，非流式，无 index）
+type ToolCallMsg struct {
+	ID       string        `json:"id"`
+	Type     string        `json:"type"` // "function"
+	Function ToolCallFunc  `json:"function"`
+}
+
+// ToolCallFunc 工具调用的函数信息
+type ToolCallFunc struct {
+	Name      string `json:"name"`
+	Arguments string `json:"arguments"` // JSON 对象字符串
+}
+
+// StreamToolCall 流式 delta.tool_calls 增量（OpenAI 标准：index + 可选 id/type/function 片段）
+type StreamToolCall struct {
+	Index    int                  `json:"index,omitempty"` // 省略 0：流式单调用与历史回放（完整格式）均合法
+	ID       string               `json:"id,omitempty"`
+	Type     string               `json:"type,omitempty"`
+	Function *StreamToolCallFunc  `json:"function,omitempty"`
+}
+
+// StreamToolCallFunc 流式函数增量
+type StreamToolCallFunc struct {
+	Name      string `json:"name,omitempty"`
+	Arguments string `json:"arguments,omitempty"`
 }
 
 // Message 消息结构体
 type Message struct {
-	Role             string  `json:"role"` // RoleUser | RoleAssistant | RoleSystem
-	Content          string  `json:"content"`
-	ReasoningContent *string `json:"reasoning_content,omitempty"`
+	Role             string            `json:"role"` // RoleUser | RoleAssistant | RoleSystem | RoleTool
+	Content          string            `json:"content"`
+	ReasoningContent *string           `json:"reasoning_content,omitempty"`
+	ToolCalls        []StreamToolCall  `json:"tool_calls,omitempty"` // assistant 消息的 tool_calls（含流式 delta 反序列化目标）
+	ToolCallID       string            `json:"tool_call_id,omitempty"` // tool 角色结果关联的调用 id
 }
 
 // ChatCompletionResponse OpenAI ChatCompletion 响应结构体
@@ -83,8 +130,10 @@ type StreamChoice struct {
 
 // StreamDelta 流式增量消息
 type StreamDelta struct {
-	Role    string `json:"role,omitempty"`
-	Content string `json:"content,omitempty"`
+	Role             string           `json:"role,omitempty"`
+	Content          string           `json:"content,omitempty"`
+	ReasoningContent *string          `json:"reasoning_content,omitempty"`
+	ToolCalls        []StreamToolCall `json:"tool_calls,omitempty"`
 }
 
 // EmbeddingRequest 嵌入请求

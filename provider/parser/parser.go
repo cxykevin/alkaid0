@@ -93,6 +93,11 @@ type Parser struct {
 	// 用于流式中检测模型是否绕过了 <tools> 标签、直接输出原生 tool calling 格式
 	// （如 {"tool_calls":...} / {"functionCall":...} / {"name":"...","arguments":"..."}）。
 	PlainOutput strings.Builder
+	// NativeMode 原生 tool_calls 模式（response.NewNativeSolver 构造时设置）。
+	// 原生模式下 <tools> 标签不再解析，检测到即置 LegacyToolsDetected 由上层打回。
+	NativeMode bool
+	// LegacyToolsDetected 原生模式下检测到模型输出 <tools> 起始标签。
+	LegacyToolsDetected bool
 }
 
 type toolSolveTmp struct {
@@ -253,51 +258,8 @@ func (p *Parser) solveTool() {
 				continue
 			}
 		}
-		// 实时参数类型校验，确保在工具执行前捕获 AI 的格式错误
-		// 校验规则：根据工具定义的参数类型，检查实际 JSON 值的 Go 类型是否匹配
-		// 注意：对于 string 和 object 类型还需检查对应的 Slot 占位符类型（流式解析未完成状态）
-		for key, value := range toolParameters {
-			if value == nil {
-				// 单个可选参数为 null 不应中止整个流式响应（LLM 输出 null 很常见）
-				logger.Warn("parameter '%s' for tool '%s' is null, skip", key, toolName)
-				continue
-			}
-			switch p.Tools[toolID].Parameters[key].Type {
-			case ToolTypeString:
-				_, okStr := (*value).(string)
-				_, okTmpStr := (*value).(json.StringSlot)
-				if !okStr && !okTmpStr {
-					logger.Warn("parameter '%s' for tool '%s' expected string, got %T, skip", key, toolName, *value)
-					continue
-				}
-			case ToolTypeNumber:
-				_, ok := (*value).(float64)
-				if !ok {
-					logger.Warn("parameter '%s' for tool '%s' expected number(float64), got %T, skip", key, toolName, *value)
-					continue
-				}
-			case ToolTypeBoolean:
-				_, ok := (*value).(bool)
-				if !ok {
-					logger.Warn("parameter '%s' for tool '%s' expected bool, got %T, skip", key, toolName, *value)
-					continue
-				}
-			case ToolTypeArray:
-				_, ok := (*value).([]any)
-				_, okArrSlot := (*value).(json.ArraySlot)
-				if !ok && !okArrSlot {
-					logger.Warn("parameter '%s' for tool '%s' expected array, got %T, skip", key, toolName, *value)
-					continue
-				}
-			case ToolTypeObject:
-				_, okMap := (*value).(map[string]*any)
-				_, okMapSlot := (*value).(json.ObjectSlot)
-				if !okMap && !okMapSlot {
-					logger.Warn("parameter '%s' for tool '%s' expected object, got %T, skip", key, toolName, *value)
-					continue
-				}
-			}
-		}
+		// 实时参数类型校验（宽松语义：不匹配仅告警，不中止流式响应）
+		validateParams(p.Tools[toolID], toolParameters)
 		// 调用工具的回调函数（如更新 UI 或执行预检）
 		// toolFinishTag 告知回调本次调用是否为完整对象（对实时预览 UI 有意义）
 		if p.Tools[toolID].Func != nil {
@@ -392,6 +354,16 @@ func (p *Parser) AddToken(token string, tokenThinking string) (string, string, *
 					logger.Info("Parser: entering think mode")
 					p.KeyMode = KeyModeThink
 				case "tools":
+					if p.NativeMode {
+						// 原生模式下模型不应输出 <tools> 标签：置标记由上层打回，
+						// 标签及后续内容按普通文本处理，不建立 jsonParser。
+						logger.Warn("Parser: legacy <tools> tag detected in native mode")
+						p.LegacyToolsDetected = true
+						response.WriteString("<tools>")
+						p.TokenCache = ""
+						p.Mode = ModeOutside
+						continue
+					}
 					// 匹配 <tools> 标签，创建 JSON 解析器开始解析工具调用数组
 					logger.Debug("entering tools mode")
 					logger.Info("Parser: entering tools mode")

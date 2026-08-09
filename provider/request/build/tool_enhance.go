@@ -45,3 +45,28 @@ func ToolPromptEnhanceBlock(mc *cfgStruct.ModelConfig) string {
 		return prompts.ToolEnhance
 	}
 }
+
+// NativeToolPromptEnhanceBlock 原生 tool_calls 模式下的增强段（prompts/prompts/tool_enhance_native.md）。
+// 与 ToolPromptEnhanceBlock 共享同一套 ToolPromptEnhance auto/on/off + 模型名单判定逻辑，
+// 仅返回原生模式的增强文本。其作用为提示词模式的"反向"：强化"必须使用原生 tool_calls"、
+// 声明 <tools>/<tools_input>/<tools_return> 标签会被整体拒绝。
+func NativeToolPromptEnhanceBlock(mc *cfgStruct.ModelConfig) string {
+	if mc == nil {
+		return ""
+	}
+	mode := strings.ToLower(strings.TrimSpace(mc.ProviderSpecificConfig.ToolPromptEnhance))
+	switch mode {
+	case "off":
+		return ""
+	case "on":
+		return prompts.ToolEnhanceNative
+	default: // "auto" / "" 均为默认增强
+		id := strings.ToLower(mc.ModelID)
+		for _, kw := range noEnhanceKeywords {
+			if strings.Contains(id, kw) {
+				return ""
+			}
+		}
+		return prompts.ToolEnhanceNative
+	}
+}

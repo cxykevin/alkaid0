@@ -61,6 +61,16 @@ var TitleSystem string
 //go:embed prompts/tool_enhance.md
 var ToolEnhance string
 
+// ToolEnhanceNative 原生工具调用增强提示词（反向于 tool_enhance.md）
+//
+//go:embed prompts/tool_enhance_native.md
+var ToolEnhanceNative string
+
+// ToolNative 原生工具提示词（反向于 tools.md）
+//
+//go:embed prompts/tool_native.md
+var ToolNative string
+
 // ToolPrehook 工具预调用提示词生成器
 //
 //go:embed prompts/tool_prehook.md
@@ -129,6 +139,12 @@ var TitleSystemTemplate *template.Template
 // ToolEnhance 工具调用增强提示词模板
 var ToolEnhanceTemplate *template.Template
 
+// ToolEnhanceNative 原生工具调用增强提示词（反向于 tool_enhance.md）模板
+var ToolEnhanceNativeTemplate *template.Template
+
+// ToolNative 原生工具提示词（反向于 tools.md）模板
+var ToolNativeTemplate *template.Template
+
 // ToolPrehook 工具预调用提示词生成器模板
 var ToolPrehookTemplate *template.Template
 
@@ -162,6 +178,8 @@ func initTemplates() {
 	TitleTemplate = Load("Title", Title)
 	TitleSystemTemplate = Load("TitleSystem", TitleSystem)
 	ToolEnhanceTemplate = Load("ToolEnhance", ToolEnhance)
+	ToolEnhanceNativeTemplate = Load("ToolEnhanceNative", ToolEnhanceNative)
+	ToolNativeTemplate = Load("ToolNative", ToolNative)
 	ToolPrehookTemplate = Load("ToolPrehook", ToolPrehook)
 	ToolResponseWrapTemplate = Load("ToolResponseWrap", ToolResponseWrap)
 	ToolScopesTemplate = Load("ToolScopes", ToolScopes)

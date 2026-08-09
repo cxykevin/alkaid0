@@ -39,10 +39,34 @@ func RequestBody(chatID uint32, modelID int32, agentCode string, toolsList *[]*p
 	}
 
 	response := &reqStruct.ChatCompletionRequest{}
+	nativeMode := modelConfig.EnableToolCalling
 
 	// 配置模型信息
 	response.Model = modelConfig.ModelID
 	response.Stream = true
+	if nativeMode && toolsList != nil {
+		// 原生模式：工具定义通过 API tools 参数声明（而非注入提示词）
+		tools := make([]reqStruct.Tool, 0, len(*toolsList))
+		for _, td := range *toolsList {
+			if td == nil {
+				continue
+			}
+			schemaRaw, err := json.Marshal(ToolParametersToJSONSchema(td.Parameters))
+			if err != nil {
+				return nil, err
+			}
+			tools = append(tools, reqStruct.Tool{
+				Type: "function",
+				Function: reqStruct.ToolFunction{
+					Name:        td.Name,
+					Description: td.Description,
+					Parameters:  schemaRaw,
+				},
+			})
+		}
+		response.Tools = tools
+		response.ToolChoice = "auto"
+	}
 	if modelConfig.ProviderSpecificConfig.EnableUsage {
 		response.StreamOptions = &reqStruct.ChatCompletionStreamOptions{
 			IncludeUsage: true,
@@ -105,7 +129,33 @@ func RequestBody(chatID uint32, modelID int32, agentCode string, toolsList *[]*p
 				msg.Content = rendered
 				exitFlag = true
 			} else {
-				if v.Type == structs.MessagesRoleUser {
+				if nativeMode && v.Type == structs.MessagesRoleAgent {
+					// 原生模式：assistant 历史消息用原来的文本拼法回放——工具调用以 <tools> 段
+					// 拼回 content（不引入原生 tool_calls/tool_call_id）；工具返回也走原来的
+					// <tools_return> 文本段（见下方 MessagesRoleTool 分支）。仅当前轮请求用
+					// 原生 tools 参数声明、响应用原生 tool_calls 解析。
+					msg.Role = reqStruct.RoleAssistant
+					thinkingWrap := ""
+					if modelConfig.EnableThinking && v.ThinkingDelta != "" {
+						thinkingString := v.ThinkingDelta
+						msg.ReasoningContent = &thinkingString
+					} else if !modelConfig.EnableThinking {
+						thinkingWrap = v.ThinkingDelta
+					}
+					deltaRendered, err := prompts.Render(prompts.DeltaWrapTemplate, struct {
+						Thinking  string
+						Delta     string
+						ToolsCall string
+					}{
+						Thinking:  thinkingWrap,
+						Delta:     v.Delta,
+						ToolsCall: v.ToolCallingJSONString,
+					})
+					if err != nil {
+						return nil, err
+					}
+					msg.Content = deltaRendered
+				} else if v.Type == structs.MessagesRoleUser {
 					rendered, err := prompts.Render(prompts.UserWrapTemplate, struct {
 						Prompt string
 						Refers structs.MessagesReferList
@@ -225,26 +275,37 @@ func RequestBody(chatID uint32, modelID int32, agentCode string, toolsList *[]*p
 		systemContent += prompts.DefaultAgent + "\n\n"
 	}
 
-	// 4. 工具使用指引（永远拼接两次；第二次由增强开关决定：基础版或增强段）
-	systemContent += prompts.Tools + "\n\n"
-	// 4b. 反幻觉增强段（ProviderSpecificConfig.ToolPromptEnhance 控制；
-	// auto 下 GPT/Claude 系模型 id 命中免增强名单时回退为基础版）
-	if enhance := ToolPromptEnhanceBlock(modelConfig); enhance != "" {
-		systemContent += enhance + "\n\n"
+	// 4. 工具使用指引（模式相关）：
+	//    提示词模式：prompts.Tools（永远拼接两次，第二次由增强开关决定）
+	//    原生模式：prompts.ToolNative + 反向增强段（ToolEnhanceNative，警告 <tools> 标签）
+	if nativeMode {
+		systemContent += prompts.ToolNative + "\n\n"
+		if enhance := NativeToolPromptEnhanceBlock(modelConfig); enhance != "" {
+			systemContent += enhance + "\n\n"
+		}
 	} else {
 		systemContent += prompts.Tools + "\n\n"
+		// 4b. 反幻觉增强段（ProviderSpecificConfig.ToolPromptEnhance 控制；
+		// auto 下 GPT/Claude 系模型 id 命中免增强名单时回退为基础版）
+		if enhance := ToolPromptEnhanceBlock(modelConfig); enhance != "" {
+			systemContent += enhance + "\n\n"
+		} else {
+			systemContent += prompts.Tools + "\n\n"
+		}
 	}
 
-	// 5. 工具列表
-	toolsRendered, err := prompts.Render(prompts.ToolsWrapTemplate, struct {
-		Tools string
-	}{
-		Tools: string(toolsLst),
-	})
-	if err != nil {
-		return nil, err
+	// 5. 工具列表（仅提示词模式注入 <tools_input>；原生模式工具定义走 API tools 参数）
+	if !nativeMode {
+		toolsRendered, err := prompts.Render(prompts.ToolsWrapTemplate, struct {
+			Tools string
+		}{
+			Tools: string(toolsLst),
+		})
+		if err != nil {
+			return nil, err
+		}
+		systemContent += toolsRendered + "\n\n"
 	}
-	systemContent += toolsRendered + "\n\n"
 
 	// 6. 自动审批规则说明 — 告知 AI 哪些工具会不经确认直接执行
 	autoApproveRules := getEffectiveAutoApprove(agentCfg)

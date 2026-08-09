@@ -158,12 +158,35 @@ type ChatCompletionRequest struct {
 	Model    string    `json:"model"`
 	Messages []Message `json:"messages"`
 	Stream   bool      `json:"stream,omitempty"`
+	Tools    []Tool    `json:"tools,omitempty"`
+}
+
+// Tool 请求级工具定义（仅用于判定原生 tool_calls 模式）
+type Tool struct {
+	Type     string `json:"type"`
+	Function any    `json:"function"`
+}
+
+// StreamToolCall 流式 delta.tool_calls 增量
+type StreamToolCall struct {
+	Index    int                     `json:"index"`
+	ID       string                  `json:"id,omitempty"`
+	Type     string                  `json:"type,omitempty"`
+	Function *StreamToolCallFunction `json:"function,omitempty"`
+}
+
+// StreamToolCallFunction 流式函数增量
+type StreamToolCallFunction struct {
+	Name      string `json:"name,omitempty"`
+	Arguments string `json:"arguments,omitempty"`
 }
 
 // Message 消息结构
 type Message struct {
-	Role    string `json:"role"`
-	Content string `json:"content"`
+	Role        string           `json:"role"`
+	Content     string           `json:"content"`
+	ToolCallID  string           `json:"tool_call_id,omitempty"`
+	ToolCalls   []StreamToolCall `json:"tool_calls,omitempty"`
 }
 
 // ChatCompletionResponse 聊天补全响应
@@ -340,7 +363,13 @@ func handleStreamingChatCompletion(w http.ResponseWriter, _ *http.Request, req C
 	}
 
 	if strings.Contains(req.Model, "toolcall") {
-		// 增量工具调用流式响应：`strings.Fields` 按空格把 JSON 拆成多个 chunk，
+		// 原生 tool_calls 模式：请求携带 tools 参数（模型 test-chat-toolcall-native）
+		if len(req.Tools) > 0 {
+			handleNativeToolCallStream(w, req, flusher)
+			return
+		}
+		// 提示词 <tools> 标签模式：增量工具调用流式响应
+		// `strings.Fields` 按空格把 JSON 拆成多个 chunk，
 		// 参数逐 token 增量到达，用于验证工具调用增量流式广播。
 		// 若请求已含工具返回（<tools_return>，即上一轮工具已执行），改回普通文本，
 		// 避免 auto-approve 场景下工具调用无限循环。
@@ -432,6 +461,85 @@ func handleStreamingChatCompletion(w http.ResponseWriter, _ *http.Request, req C
 		}
 	}
 
+	fmt.Fprintf(w, "data: [DONE]\n\n")
+	flusher.Flush()
+}
+
+// handleNativeToolCallStream 原生 tool_calls 模式流式响应（test-chat-toolcall-native 系列模型）。
+// 输出 delta.tool_calls 增量：首个 chunk 带 id/type/function.name，中间 chunk 逐片 function.arguments，
+// 末 chunk finish_reason:"tool_calls"。若请求已含 role:"tool" 结果（上一轮工具已执行），返回普通文本。
+func handleNativeToolCallStream(w http.ResponseWriter, req ChatCompletionRequest, flusher http.Flusher) {
+	promptTokens := 0
+	for _, msg := range req.Messages {
+		promptTokens += calculateTokens(msg.Content)
+	}
+
+	// 原生模式下历史工具结果以 user 角色 + <tools_return> 文本段回传（与提示词模式一致，
+	// build 回放不引入 role:"tool" 消息），检测到即说明上一轮工具已执行，
+	// 返回普通文本避免 auto-approve 死循环
+	toolReturned := false
+	for _, m := range req.Messages {
+		if m.Role == "user" && strings.Contains(m.Content, "<tools_return>") {
+			toolReturned = true
+			break
+		}
+	}
+
+	type streamChunk struct {
+		delta  Message
+		finish string
+	}
+	var chunks []streamChunk
+	if toolReturned {
+		chunks = []streamChunk{
+			{delta: Message{Role: "assistant", Content: fmt.Sprintf("This is a mock response from model %s. Tool executed.", req.Model)}, finish: "stop"},
+		}
+	} else {
+		chunks = []streamChunk{
+			{delta: Message{Role: "assistant", ToolCalls: []StreamToolCall{{Index: 0, ID: "call_mock_1", Type: "function", Function: &StreamToolCallFunction{Name: "edit"}}}}, finish: ""},
+			{delta: Message{ToolCalls: []StreamToolCall{{Index: 0, Function: &StreamToolCallFunction{Arguments: `{"path": "a.txt"`}}}}, finish: ""},
+			{delta: Message{ToolCalls: []StreamToolCall{{Index: 0, Function: &StreamToolCallFunction{Arguments: `, "target": "x"`}}}}, finish: ""},
+			{delta: Message{ToolCalls: []StreamToolCall{{Index: 0, Function: &StreamToolCallFunction{Arguments: `, "text": "hello"}`}}}}, finish: ""},
+			{delta: Message{}, finish: "tool_calls"},
+		}
+	}
+
+	responseID := generateID("chatcmpl")
+	created := time.Now().Unix()
+
+	for _, c := range chunks {
+		completionTokens := 0
+		if c.delta.Content != "" {
+			completionTokens = calculateTokens(c.delta.Content)
+		}
+		resp := ChatCompletionResponse{
+			ID:      responseID,
+			Object:  "chat.completion.chunk",
+			Created: created,
+			Model:   req.Model,
+			Choices: []Choice{{
+				Index:        0,
+				Delta:        c.delta,
+				FinishReason: c.finish,
+			}},
+			Usage: Usage{
+				PromptTokens:     promptTokens,
+				CompletionTokens: completionTokens,
+				TotalTokens:      promptTokens + completionTokens,
+			},
+		}
+		data, err := json.Marshal(resp)
+		if err != nil {
+			log.Printf("[mock] failed to marshal native toolcall chunk: %v", err)
+			http.Error(w, "Failed to marshal response", http.StatusInternalServerError)
+			return
+		}
+		fmt.Fprintf(w, "data: %s\n\n", data)
+		if !strings.Contains(req.Model, "-flash") {
+			flusher.Flush()
+			time.Sleep(50 * time.Millisecond)
+		}
+	}
 	fmt.Fprintf(w, "data: [DONE]\n\n")
 	flusher.Flush()
 }

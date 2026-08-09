@@ -10,6 +10,7 @@ import (
 	cfgStruct "github.com/cxykevin/alkaid0/config/structs"
 	"github.com/cxykevin/alkaid0/provider/parser"
 	agentconfig "github.com/cxykevin/alkaid0/provider/request/agents/config"
+	reqStruct "github.com/cxykevin/alkaid0/provider/request/structs"
 	"github.com/cxykevin/alkaid0/storage/structs"
 	"github.com/glebarez/sqlite"
 	"gorm.io/gorm"
@@ -520,39 +521,123 @@ func TestRequestBody_ManyMessages(t *testing.T) {
 	}
 }
 
-// TestRequestBody_ToolMessage 测试工具类型消息
+// TestRequestBody_ToolMessage 测试工具类型消息（模式感知）：
+// 两种模式下工具结果都走原来的 <tools_return> 文本拼法（映射为 user 角色），
+// 原生模式不引入 role:"tool" 消息 / tool_call_id 字段。
 func TestRequestBody_ToolMessage(t *testing.T) {
-	setupTestConfig()
 	db := setupTestDB(t)
-
-	// 插入工具类型消息
-	message := structs.Messages{
-		ChatID: 7,
-		Type:   structs.MessagesRoleTool,
-		Delta:  "Tool result",
-	}
-
-	if err := db.Create(&message).Error; err != nil {
-		t.Fatalf("Failed to create test message: %v", err)
-	}
 
 	toolsList := []*parser.ToolsDefine{}
 
-	request, err := RequestBody(7, 1, "", &toolsList, db, "", "", cfgStruct.AgentConfig{}, &structs.Chats{})
-	if err != nil {
-		t.Fatalf("RequestBody failed: %v", err)
+	buildReq := func(chatID uint32, native bool, delta string) *reqStruct.ChatCompletionRequest {
+		setupTestConfig()
+		cfg := *config.GlobalConfig
+		m := cfg.Model.Models[cfg.Model.DefaultModelID]
+		m.EnableToolCalling = native
+		cfg.Model.Models[cfg.Model.DefaultModelID] = m
+		config.GlobalConfigSwap(cfg)
+		if err := db.Create(&structs.Messages{ChatID: chatID, Type: structs.MessagesRoleTool, Delta: delta}).Error; err != nil {
+			t.Fatalf("Failed to create test message: %v", err)
+		}
+		request, err := RequestBody(chatID, 1, "", &toolsList, db, "", "", cfgStruct.AgentConfig{}, &structs.Chats{})
+		if err != nil {
+			t.Fatalf("RequestBody failed: %v", err)
+		}
+		return request
 	}
 
-	// 验证工具消息被映射为用户角色
+	// 提示词模式：工具结果映射为 user 角色，内容含 <tools_return> 段
+	req := buildReq(7, false, "Tool result")
 	foundToolMsg := false
-	for _, msg := range request.Messages {
-		if strings.Contains(msg.Content, "Tool result") && msg.Role == "user" {
+	for _, msg := range req.Messages {
+		if strings.Contains(msg.Content, "Tool result") && strings.Contains(msg.Content, "<tools_return>") && msg.Role == "user" {
 			foundToolMsg = true
 			break
 		}
 	}
-
 	if !foundToolMsg {
-		t.Error("Expected to find tool message mapped to user role")
+		t.Error("提示词模式：Expected tool message mapped to user role with <tools_return> wrapper")
+	}
+
+	// 原生模式：同样走 <tools_return> 文本拼法，不产生 role:"tool" 消息
+	nreq := buildReq(8, true, `[{"name":"edit","id":"call_1","return":"{\"ok\":true}"},{"name":"edit","id":"call_2","return":"{\"ok\":false}"}]`)
+	var toolMsgs []reqStruct.Message
+	for _, msg := range nreq.Messages {
+		if msg.Role == reqStruct.RoleTool {
+			toolMsgs = append(toolMsgs, msg)
+		}
+	}
+	if len(toolMsgs) != 0 {
+		t.Errorf("原生模式：should NOT emit role:tool messages, got %d", len(toolMsgs))
+	}
+	nfound := false
+	for _, msg := range nreq.Messages {
+		// return 字段值是 JSON 序列化字符串（转义后的对象），如 {\"ok\":true}
+		if msg.Role == "user" && strings.Contains(msg.Content, "<tools_return>") && strings.Contains(msg.Content, `{\"ok\":true}`) {
+			nfound = true
+			break
+		}
+	}
+	if !nfound {
+		t.Error("原生模式：Expected tool result as user role with <tools_return> wrapper")
+	}
+}
+
+// TestRequestBody_NativeHistoryReplay 原生模式完整历史回放：
+// assistant 工具调用以 <tools> 文本段拼回 content（不引入原生 tool_calls/tool_call_id），
+// 工具结果以 <tools_return> 文本段回放（user 角色），顺序保持原始。
+func TestRequestBody_NativeHistoryReplay(t *testing.T) {
+	db := setupTestDB(t)
+	toolsList := []*parser.ToolsDefine{}
+
+	setupTestConfig()
+	cfg := *config.GlobalConfig
+	m := cfg.Model.Models[cfg.Model.DefaultModelID]
+	m.EnableToolCalling = true
+	cfg.Model.Models[cfg.Model.DefaultModelID] = m
+	config.GlobalConfigSwap(cfg)
+
+	msgs := []structs.Messages{
+		{ChatID: 9, Type: structs.MessagesRoleUser, Delta: "call a tool"},
+		{ChatID: 9, Type: structs.MessagesRoleAgent, Delta: "", ToolCallingJSONString: `[{"name":"edit","id":"call_1","parameters":{"path":"a.txt","text":"hi"}}]`},
+		{ChatID: 9, Type: structs.MessagesRoleTool, Delta: `[{"name":"edit","id":"call_1","return":"{\"ok\":true}"}]`},
+		{ChatID: 9, Type: structs.MessagesRoleUser, Delta: "continue"},
+	}
+	for _, mm := range msgs {
+		if err := db.Create(&mm).Error; err != nil {
+			t.Fatalf("create msg: %v", err)
+		}
+	}
+
+	req, err := RequestBody(9, 1, "", &toolsList, db, "", "", cfgStruct.AgentConfig{}, &structs.Chats{})
+	if err != nil {
+		t.Fatalf("RequestBody failed: %v", err)
+	}
+
+	var assistantWithTools, toolReturn bool
+	var assistantHasNativeToolCalls bool
+	for _, msg := range req.Messages {
+		switch msg.Role {
+		case "assistant":
+			if strings.Contains(msg.Content, "<tools>") && strings.Contains(msg.Content, `"name":"edit"`) {
+				assistantWithTools = true
+			}
+			if len(msg.ToolCalls) > 0 {
+				assistantHasNativeToolCalls = true
+			}
+		case "user":
+			if strings.Contains(msg.Content, "<tools_return>") && strings.Contains(msg.Content, `{\"ok\":true}`) {
+				toolReturn = true
+			}
+		}
+	}
+	if !assistantWithTools {
+		t.Error("assistant history should replay tool call as <tools> text segment")
+	}
+	if assistantHasNativeToolCalls {
+		t.Error("assistant history should NOT carry native tool_calls (no tool_call_id)")
+	}
+	if !toolReturn {
+		t.Error("tool result should replay as <tools_return> text segment")
 	}
 }
