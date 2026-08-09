@@ -1,30 +1,30 @@
 {{/* Init 指令：分析代码库并生成 AGENTS.md */}}
 <!-- Alkaid Init Prompt -->
-# /init 指令
+# /init Command
 
-请分析**当前工作目录**的代码库，并创建一个 `AGENTS.md` 文件，该文件将提供给未来在此仓库中运行的 Alkaid0 agent 实例使用。
+Please analyze the codebase in the **current working directory** and create an `AGENTS.md` file, which will be provided to future Alkaid0 agent instances running in this repository.
 
-请使用你的工具（如 `tree`、`search`、`edit`、`run`）主动探索代码库结构、构建方式与测试方式，然后生成 `AGENTS.md`。
+Use your tools (such as `tree`, `search`, `edit`, `run`) to actively explore the codebase structure, build process, and test process, then generate `AGENTS.md`.
 
-## AGENTS.md 需要包含的内容
+## What AGENTS.md Should Contain
 
-1. **常用命令**：如何构建、lint 和运行测试。包含在此代码库中开发所需的必要命令，例如如何运行单个测试。
-2. **高层代码架构与结构**：以便未来的实例能更快地投入工作。重点放在需要阅读多个文件才能理解的"大图景"架构上。
+1. **Common Commands**: How to build, lint, and run tests. Include the essential commands needed for development in this codebase, such as how to run a single test.
+2. **High-level Architecture and Structure**: So future instances can get up to speed faster. Focus on the "big picture" architecture that requires reading multiple files to understand.
 
-## 编写要求
+## Writing Requirements
 
-- 如果已有 `AGENTS.md`，请先阅读并**改进它**；否则创建新的。
-- 不要重复自己，不要包含明显、人人都懂的指令（如"向用户提供有用的错误消息"、"为所有新工具编写单元测试"、"绝不将敏感信息放入代码或提交中"）。
-- 避免列出每个容易发现的组件或文件结构。
-- 不要包含泛泛的开发实践。
-- 如果有 `README.md`，请阅读并包含重要部分。
-- 如果有 Cursor 规则（`.cursor/rules/` 或 `.cursorrules`）或 Copilot 规则（`.github/copilot-instructions.md`），请务必包含重要部分。
-- 除非已在源码中明确看到，否则不要编造"常见开发任务"、"开发技巧"、"支持与文档"等章节。
-- 请用与仓库现有文档一致的语言撰写（该仓库文档通常为中文）。
+- If an `AGENTS.md` already exists, read it first and **improve it**; otherwise, create a new one.
+- Don't repeat yourself, and don't include obvious instructions everyone already knows (such as "provide useful error messages to users", "write unit tests for all new tools", "never put sensitive information in code or commits").
+- Avoid listing every easily discoverable component or file structure.
+- Don't include generic development practices.
+- If there is a `README.md`, read it and include the important parts.
+- If there are Cursor rules (`.cursor/rules/` or `.cursorrules`) or Copilot rules (`.github/copilot-instructions.md`), be sure to include the important parts.
+- Don't fabricate sections such as "Common Development Tasks", "Development Tips", "Support and Documentation" unless they are explicitly visible in the source code.
+- Write in the same language as the repository's existing documentation (this repository's docs are usually in Chinese).
 
-## 文件前缀
+## File Prefix
 
-`AGENTS.md` 必须以以下文本**逐字开头**（作为文件头部引导语）：
+`AGENTS.md` must start **verbatim** with the following text (as a header preamble):
 
 ```
 # AGENTS.md
@@ -32,4 +32,4 @@
 This file provides guidance to Alkaid0 agent when working with code in this repository.
 ```
 
-完成后，请简要总结你对代码库的理解以及 AGENTS.md 的生成情况。
+When finished, briefly summarize your understanding of the codebase and the status of the generated `AGENTS.md`.

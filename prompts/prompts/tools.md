@@ -1,4 +1,4 @@
-{{/* 工具提示词 */}}
+{{/* Tool calling prompt */}}
 <!-- Alkaid Tools Define -->
 # Tool Calling Protocol
 

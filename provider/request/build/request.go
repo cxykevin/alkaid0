@@ -280,9 +280,11 @@ func RequestBody(chatID uint32, modelID int32, agentCode string, toolsList *[]*p
 	//    原生模式：prompts.ToolNative + 反向增强段（ToolEnhanceNative，警告 <tools> 标签）
 	if nativeMode {
 		systemContent += prompts.ToolNative + "\n\n"
-		if enhance := NativeToolPromptEnhanceBlock(modelConfig); enhance != "" {
-			systemContent += enhance + "\n\n"
-		}
+		// 反幻觉增强段暂时禁用：调试原生 tool_calls 格式时保持提示词纯净，
+		// 待工具调用格式稳定后再按模型恢复。恢复时取消下面两行注释。
+		// if enhance := NativeToolPromptEnhanceBlock(modelConfig); enhance != "" {
+		// 	systemContent += enhance + "\n\n"
+		// }
 	} else {
 		systemContent += prompts.Tools + "\n\n"
 		// 4b. 反幻觉增强段（ProviderSpecificConfig.ToolPromptEnhance 控制；

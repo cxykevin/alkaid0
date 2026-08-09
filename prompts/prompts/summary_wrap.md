@@ -1,4 +1,4 @@
-{{/* 对于不支持思考的模型的思考占位符 */}}
+{{/* Summary */}}
 <!-- Alkaid Summary -->
 ### Context summary
 

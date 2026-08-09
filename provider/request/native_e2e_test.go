@@ -356,7 +356,7 @@ func TestNativeSendRequest_LegacyRejection(t *testing.T) {
 	if last.Type != storageStructs.MessagesRoleUser {
 		t.Errorf("correction message should be user type, got %d", last.Type)
 	}
-	if !strings.Contains(last.Delta, "原生 function-calling API") {
+	if !strings.Contains(last.Delta, "native function-calling API") {
 		t.Errorf("correction message should mention native function-calling, got: %q", last.Delta)
 	}
 }

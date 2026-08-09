@@ -90,6 +90,9 @@ type Messages struct {
 	// SubAgents             SubAgents         `gorm:"foreignKey:AgentID;constraints:OnDelete:RESTRICT;OnUpdate:CASCADE"`
 	Refers                MessagesReferList `gorm:"type:bytes;serialize:gob"`
 	ToolCallingJSONString string            `gorm:"type:text"`
+	// ToolCallingContent 工具调用展示内容（ACP v2 tool_call_update 的 content 数组 JSON）。
+	// 格式：{"<工具调用ID>": [content...]}，含编辑后的 ACP v2 Diffs 段，会话还原时按工具 ID 重放。
+	ToolCallingContent string `gorm:"type:text"`
 	// ToolFinished          bool              `gorm:"default:false"`
 	Time             uint64 `gorm:"autoCreateTime"`
 	ModelName        string

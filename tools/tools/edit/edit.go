@@ -4,8 +4,10 @@ import (
 	"bufio"
 	"bytes"
 	_ "embed" // embed
+	"encoding/json"
 	"errors"
 	"fmt"
+	"mime"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -65,15 +67,10 @@ type PassInfo struct {
 // 	TextOutputedLen int32
 // }
 
-func updateInfo(session *structs.Chats, mp map[string]*any, cross []*any, toolID string) (bool, []*any, error) {
-	toolCallID := fmt.Sprintf("call_%d_%d_%s", session.ID, session.CurrentMessageID, toolID)
+// buildRespObj 构造 edit 工具调用的展示内容（文本 + calling_info），
+// 供 OnHook 流式预览与 PostHook 追加 ACP v2 Diffs 段时复用。
+func buildRespObj(session *structs.Chats, mp map[string]*any) []u.H {
 	respString := ""
-	// tmp, ok := session.TemporyDataOfRequest["tools:edit"]
-	// if !ok || tmp == nil {
-	// 	session.TemporyDataOfRequest["tools:edit"] = toolCallFlagTempory{}
-	// 	tmp = session.TemporyDataOfRequest["tools:edit"]
-	// }
-	// tmpObj := tmp.(toolCallFlagTempory)
 	var pathVal *string
 	var targetVal *string
 	var textVal *string
@@ -95,7 +92,7 @@ func updateInfo(session *structs.Chats, mp map[string]*any, cross []*any, toolID
 			textVal = &text
 		}
 	}
-	respObj := []u.H{{
+	return []u.H{{
 		"type": "content",
 		"content": u.H{
 			"type": "text",
@@ -111,8 +108,251 @@ func updateInfo(session *structs.Chats, mp map[string]*any, cross []*any, toolID
 			"text":   textVal,
 		},
 	}}
-	session.SetToolCalling(toolCallID, respObj, "edit")
+}
+
+func updateInfo(session *structs.Chats, mp map[string]*any, cross []*any, toolID string) (bool, []*any, error) {
+	toolCallID := fmt.Sprintf("call_%d_%d_%s", session.ID, session.CurrentMessageID, toolID)
+	session.SetToolCalling(toolCallID, buildRespObj(session, mp), "edit")
 	return true, cross, nil
+}
+
+// === ACP v2 Diffs 段生成 ===
+
+// splitLines 按行分割内容，忽略末尾空行（避免 diff 尾部噪音）。
+func splitLines(s string) []string {
+	if s == "" {
+		return nil
+	}
+	lines := strings.Split(s, "\n")
+	if lines[len(lines)-1] == "" {
+		lines = lines[:len(lines)-1]
+	}
+	return lines
+}
+
+// diffLine 表示一行的 diff 操作：' ' 上下文、'-' 删除、'+' 新增。
+type diffLine struct {
+	kind byte
+	text string
+}
+
+// lineDiff 计算两个行序列的行级 diff（LCS 回溯）。
+// 行数乘积过大时退化为整体替换，避免内存爆炸。
+func lineDiff(oldLines, newLines []string) []diffLine {
+	n, m := len(oldLines), len(newLines)
+	if n*m > 4_000_000 {
+		ops := make([]diffLine, 0, n+m)
+		for _, l := range oldLines {
+			ops = append(ops, diffLine{'-', l})
+		}
+		for _, l := range newLines {
+			ops = append(ops, diffLine{'+', l})
+		}
+		return ops
+	}
+	dp := make([][]int, n+1)
+	for i := range dp {
+		dp[i] = make([]int, m+1)
+	}
+	for i := n - 1; i >= 0; i-- {
+		for j := m - 1; j >= 0; j-- {
+			if oldLines[i] == newLines[j] {
+				dp[i][j] = dp[i+1][j+1] + 1
+			} else if dp[i+1][j] >= dp[i][j+1] {
+				dp[i][j] = dp[i+1][j]
+			} else {
+				dp[i][j] = dp[i][j+1]
+			}
+		}
+	}
+	ops := make([]diffLine, 0, n+m)
+	i, j := 0, 0
+	for i < n && j < m {
+		if oldLines[i] == newLines[j] {
+			ops = append(ops, diffLine{' ', oldLines[i]})
+			i++
+			j++
+		} else if dp[i+1][j] >= dp[i][j+1] {
+			ops = append(ops, diffLine{'-', oldLines[i]})
+			i++
+		} else {
+			ops = append(ops, diffLine{'+', newLines[j]})
+			j++
+		}
+	}
+	for ; i < n; i++ {
+		ops = append(ops, diffLine{'-', oldLines[i]})
+	}
+	for ; j < m; j++ {
+		ops = append(ops, diffLine{'+', newLines[j]})
+	}
+	return ops
+}
+
+// buildGitPatch 生成 git 格式的 unified diff 文本（diff --git / --- / +++ / @@ hunks）。
+// isNew=true 时旧路径为 /dev/null；无实际变化时返回空字符串。
+func buildGitPatch(absPath, oldContent, newContent string, isNew bool) string {
+	ops := lineDiff(splitLines(oldContent), splitLines(newContent))
+	hasChange := false
+	for _, op := range ops {
+		if op.kind != ' ' {
+			hasChange = true
+			break
+		}
+	}
+	if !hasChange {
+		return ""
+	}
+	oldPath := absPath
+	if isNew {
+		oldPath = "/dev/null"
+	}
+	var buf bytes.Buffer
+	fmt.Fprintf(&buf, "diff --git %s %s\n", oldPath, absPath)
+	fmt.Fprintf(&buf, "--- %s\n", oldPath)
+	fmt.Fprintf(&buf, "+++ %s\n", absPath)
+
+	const ctx = 3
+	type interval struct{ start, end int }
+	ivs := []interval{}
+	start := -1
+	for i, op := range ops {
+		if op.kind != ' ' && start < 0 {
+			start = i
+		}
+		if op.kind == ' ' && start >= 0 {
+			ivs = append(ivs, interval{start, i})
+			start = -1
+		}
+	}
+	if start >= 0 {
+		ivs = append(ivs, interval{start, len(ops)})
+	}
+	merged := []interval{}
+	for _, iv := range ivs {
+		if len(merged) > 0 && iv.start-merged[len(merged)-1].end <= 2*ctx {
+			merged[len(merged)-1].end = iv.end
+		} else {
+			merged = append(merged, iv)
+		}
+	}
+
+	oldLine, newLine := 1, 1
+	pos := 0
+	for _, iv := range merged {
+		s := iv.start - ctx
+		if s < 0 {
+			s = 0
+		}
+		e := iv.end + ctx
+		if e > len(ops) {
+			e = len(ops)
+		}
+		// 推进到 hunk 起点，维护全局行号
+		for ; pos < s; pos++ {
+			switch ops[pos].kind {
+			case ' ', '-':
+				oldLine++
+			}
+			if ops[pos].kind != '-' {
+				newLine++
+			}
+		}
+		oldStart, newStart := oldLine, newLine
+		oldCount, newCount := 0, 0
+		for i := s; i < e; i++ {
+			switch ops[i].kind {
+			case ' ':
+				oldCount++
+				newCount++
+			case '-':
+				oldCount++
+			case '+':
+				newCount++
+			}
+		}
+		// count=0（纯插入/删除）时起点用前一行号，文件头为 0（git 惯例）
+		if oldCount == 0 {
+			oldStart = oldLine - 1
+		}
+		if newCount == 0 {
+			newStart = newLine - 1
+		}
+		fmt.Fprintf(&buf, "@@ -%d,%d +%d,%d @@\n", oldStart, oldCount, newStart, newCount)
+		for i := s; i < e; i++ {
+			buf.WriteByte(ops[i].kind)
+			buf.WriteString(ops[i].text)
+			buf.WriteByte('\n')
+		}
+		for i := s; i < e; i++ {
+			switch ops[i].kind {
+			case ' ', '-':
+				oldLine++
+			}
+			if ops[i].kind != '-' {
+				newLine++
+			}
+		}
+		pos = e
+	}
+	return buf.String()
+}
+
+// buildDiffContent 构造 ACP v2 tool_call_update 的 Diffs 段。
+// 无实际内容变化时返回 nil（如空文本触发 LSP 诊断）。
+func buildDiffContent(absPath string, oldContent, newContent string, isNew bool) u.H {
+	patchText := buildGitPatch(absPath, oldContent, newContent, isNew)
+	if patchText == "" {
+		return nil
+	}
+	operation := "modify"
+	if isNew {
+		operation = "add"
+	}
+	change := u.H{
+		"operation": operation,
+		"path":      absPath,
+		"fileType":  "text",
+	}
+	if mt := mime.TypeByExtension(filepath.Ext(absPath)); mt != "" {
+		change["mimeType"] = mt
+	}
+	return u.H{
+		"type":    "diff",
+		"changes": []u.H{change},
+		"patch": u.H{
+			"format": "git_patch",
+			"text":   patchText,
+		},
+	}
+}
+
+// saveToolCallingContent 将工具调用的展示 content（含 Diffs 段）持久化到当前消息，
+// 按工具调用 ID 索引（map JSON），供会话还原时按 ID 重放 Content。
+func saveToolCallingContent(session *structs.Chats, toolID string, content []u.H) {
+	if session == nil || session.DB == nil {
+		return
+	}
+	var msg structs.Messages
+	if err := session.DB.First(&msg, session.CurrentMessageID).Error; err != nil {
+		logger.Warn("failed to load message %d for tool content: %v", session.CurrentMessageID, err)
+		return
+	}
+	contentMap := map[string]any{}
+	if msg.ToolCallingContent != "" {
+		if err := json.Unmarshal([]byte(msg.ToolCallingContent), &contentMap); err != nil {
+			logger.Warn("failed to unmarshal tool content: %v", err)
+		}
+	}
+	contentMap[toolID] = content
+	b, err := json.Marshal(contentMap)
+	if err != nil {
+		logger.Warn("failed to marshal tool content: %v", err)
+		return
+	}
+	if err := session.DB.Model(&structs.Messages{}).Where("id = ?", session.CurrentMessageID).Update("tool_calling_content", string(b)).Error; err != nil {
+		logger.Warn("failed to save tool content: %v", err)
+	}
 }
 
 // CheckPath 处理路径
@@ -372,6 +612,13 @@ func writeFile(session *structs.Chats, mp map[string]*any, cross []*any) (bool, 
 			"error":   &errMsg,
 		}, nil
 	}
+	// 保存旧内容原始字节（scanner 逐行读取会丢失末尾换行，此处重读用于精确 diff）
+	var oldContentRaw string
+	if fileExists {
+		if ob, err := os.ReadFile(path); err == nil {
+			oldContentRaw = string(ob)
+		}
+	}
 	// 写入文件
 	err = os.WriteFile(path, []byte(newContent), 0644)
 	if err != nil {
@@ -397,6 +644,24 @@ func writeFile(session *structs.Chats, mp map[string]*any, cross []*any) (bool, 
 	fmtResult := lsp.FormatAndDiagnose(session.Root, path)
 	if fmtResult.Error != "" {
 		logger.Warn("LSP format+diagnose for %s: %s", path, fmtResult.Error)
+	}
+
+	// 生成 ACP v2 Diffs 段：基于磁盘最终内容（LSP 格式化可能已改写文件），
+	// 更新广播 content 并持久化，供客户端实时展示与会话还原重放。
+	finalContent := newContent
+	if fb, err := os.ReadFile(path); err == nil {
+		finalContent = string(fb)
+	}
+	respObj := buildRespObj(session, mp)
+	if diffObj := buildDiffContent(path, oldContentRaw, finalContent, !fileExists); diffObj != nil {
+		respObj = append(respObj, diffObj)
+	}
+	if toolIDPtr, ok := mp["_id"]; ok && toolIDPtr != nil {
+		if toolID, ok := (*toolIDPtr).(string); ok && toolID != "" {
+			toolCallID := fmt.Sprintf("call_%d_%d_%s", session.ID, session.CurrentMessageID, toolID)
+			session.SetToolCalling(toolCallID, respObj, "edit")
+			saveToolCallingContent(session, toolID, respObj)
+		}
 	}
 
 	resultMap := map[string]*any{

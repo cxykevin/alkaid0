@@ -1334,6 +1334,7 @@ func SessionResume(req SessionResumeRequest, call func(string, any, *string) err
 	}
 	msgs, err := funcs.GetHistory(sess)
 	previousToolJSON := ""
+	previousToolContent := ""
 	prevMsgID := uint64(0)
 	if req.ReplayFrom != nil && req.ReplayFrom.Type == "start" {
 		logger.Info("replay session: %s", req.SessionID)
@@ -1377,6 +1378,7 @@ func SessionResume(req SessionResumeRequest, call func(string, any, *string) err
 					},
 				}, nil)
 				previousToolJSON = val.ToolCallingJSONString
+				previousToolContent = val.ToolCallingContent
 				prevMsgID = val.ID
 				if err != nil {
 					return SessionResumeResponse{}, err
@@ -1399,6 +1401,13 @@ func SessionResume(req SessionResumeRequest, call func(string, any, *string) err
 						logger.Warn("error when replay session marshal json: %v", err)
 						continue
 					}
+					// 解析持久化的 tool_call content（含 edit 的 ACP v2 Diffs 段），按工具 ID 匹配重放
+					contentMap := map[string]any{}
+					if previousToolContent != "" {
+						if err := json.Unmarshal([]byte(previousToolContent), &contentMap); err != nil {
+							logger.Warn("error when replay session unmarshal tool content: %v", err)
+						}
+					}
 					for _, obj := range jsonObj {
 						toolName, ok := u.GetH[string](obj, "name")
 						if !ok {
@@ -1410,6 +1419,7 @@ func SessionResume(req SessionResumeRequest, call func(string, any, *string) err
 							logger.Warn("error when replay session without tool id: %v", err)
 							continue
 						}
+						content, _ := contentMap[toolID]
 						err = call("session/update", SessionUpdate{
 							SessionID: req.SessionID,
 							Update: SessionUpdateUpdate{
@@ -1418,6 +1428,7 @@ func SessionResume(req SessionResumeRequest, call func(string, any, *string) err
 								Title:         fmt.Sprintf("[Call %s]%s", toolName, toolID),
 								Kind:          u.Default(ToolNameToTypeMap, toolName, "other"),
 								Status:        "completed",
+								Content:       content,
 							},
 						}, nil)
 						if err != nil {

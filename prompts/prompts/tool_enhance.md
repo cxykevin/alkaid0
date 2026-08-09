@@ -1,4 +1,4 @@
-{{/* 工具调用增强提示词 */}}
+{{/* Tool calling reinforcement prompt */}}
 <!-- Alkaid Tool Calling Reinforcement -->
 ## [TOOL CALLING — HARD REINFORCEMENT]
 

@@ -43,5 +43,5 @@ Edit or create file or virtual objects. To trigger LSP diagnostics on a file wit
 - Trigger diagnostics (no change): `{"path":"main.go","target":"","text":""}`
 - Tree copy entry: ``{"path":"@tree","target":"hello","text":"hello\n  - bar_copy `1`"}``
 - Tree delete entry: `{"path":"@tree","target":"@ln:4","text":""}`
-- Task append: `{"path":"@task","target":"","text":"- [ ] 1.3 完成C模块: 完成C模块程序"}`
-- Task toggle: `{"path":"@task","target":"- [ ] 1.3 完成C模块: 完成C模块程序","text":"- [X] 1.3 完成C模块: 完成C模块程序"}`
+- Task append: `{"path":"@task","target":"","text":"- [ ] 1.3 Finish module C: implement the module C program"}`
+- Task toggle: `{"path":"@task","target":"- [ ] 1.3 Finish module C: implement the module C program","text":"- [X] 1.3 Finish module C: implement the module C program"}`

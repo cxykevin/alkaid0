@@ -37,20 +37,20 @@ var errNativeToolCallFormat = errors.New("native tool calling format detected, r
 // 会通过 UserWrapTemplate 渲染为 <user_prompt> 看到，从而改用 <tools> 标签。
 const nativeFormatCorrectionMsg = `[System: Tool call format rejected]
 
-你上一条回复使用了原生 function-calling 格式（例如 {"tool_calls":[...]} 或 {"name":"...","arguments":"..."}），但本系统不解析该格式，工具不会执行，任务因此失败。
+Your last reply used the native function-calling format (e.g. {"tool_calls":[...]} or {"name":"...","arguments":"..."}). This system does NOT parse that format, so no tool executed and the task failed.
 
-所有工具调用必须使用 <tools> 标签包裹的 JSON 数组，并且必须放在回复的最后：
+All tool calls must be written as a JSON array wrapped in a <tools> tag, placed at the very end of your reply:
 <tools>
-[{"name":"工具名","id":"唯一id","parameters":{...}}]
+[{"name":"tool_name","id":"unique_id","parameters":{...}}]
 </tools>
 
-要求：
-1. "name" 必须匹配系统提供的工具名；
-2. "id" 是任意唯一字符串；
-3. "parameters" 必须是真实的 JSON 对象（键值对），绝不能是字符串或转义文本；
-4. <tools> 后不能再有任何文字。
+Requirements:
+1. "name" must match one of the tool names provided by the system;
+2. "id" is any unique string;
+3. "parameters" must be a real JSON object (key-value pairs), never a string or escaped text;
+4. Nothing may follow </tools>.
 
-请重新输出你的工具调用。`
+Please re-emit your tool calls.`
 
 // injectNativeFormatCorrection 打回时向对话历史注入一条格式纠正消息，
 // 使模型在下一轮请求中收到明确反馈并改用 <tools> 标签。
@@ -71,17 +71,20 @@ func injectNativeFormatCorrection(db *gorm.DB, session *storageStructs.Chats) er
 // 该错误由 solveFunc 在流式检测到 <tools> 时返回，SendRequest 据此"打回"并重试。
 var errLegacyToolCallFormat = errors.New("legacy <tools> format detected in native mode, reject response")
 
-// nativeLegacyFormatCorrectionMsg 原生模式打回时注入的格式纠正消息（与 tool_enhance_native.md 呼应）。
+// nativeLegacyFormatCorrectionMsg 原生模式打回时注入的格式纠正消息（与 tool_native.md 呼应）。
 const nativeLegacyFormatCorrectionMsg = `[System: Tool call format rejected]
 
-你上一条回复使用了 <tools> 标签（或 <tools_input> 标签），但本系统当前使用原生 function-calling API：工具通过 API tools 参数声明，调用通过原生 tool_calls（id + function.name + function.arguments）产生。<tools> 标签不会被解析，工具不会执行，任务因此失败。
+Your last reply used a <tools> tag, but this system currently uses the native function-calling API: tools are declared through the API tools parameter, and calls are made via native tool_calls. <tools> tags are not parsed, so no tool executed.
 
-要求：
-1. 不要输出 <tools>、<tools_input> 标签；
-2. 直接输出原生 tool_calls（function.name 必须匹配 tools 参数声明的工具名，function.arguments 必须是符合声明的 JSON 对象字符串）；
-3. 若未收到 <tools_return> 结果块，说明工具未执行，请重新发出同一调用。
+Note: the <tools> / <tools_return> text blocks in the conversation history are read-only archives of your past calls (already executed). Do NOT imitate them — from this turn on, every new call must be a native tool_calls entry.
 
-请重新输出你的工具调用。`
+Requirements:
+1. Emit native tool_calls; each call carries its own unique id (conventional call_ prefix, e.g. call_ab12cd);
+2. function.name must match a tool name declared in the tools parameter;
+3. function.arguments must be a JSON object string conforming to the declared schema;
+4. If no <tools_return> block with your call's result arrives, the tool did not run — re-emit that same call once.
+
+Please re-emit your tool calls.`
 
 // injectLegacyFormatCorrection 原生模式打回时向对话历史注入一条格式纠正消息，
 // 使模型在下一轮请求中改用原生 tool_calls。AgentID 跟随当前会话（同 injectNativeFormatCorrection）。

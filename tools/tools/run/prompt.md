@@ -23,6 +23,16 @@ Start a task to run something likes code, command, and so on.
 - `"zsh"`: MacOS.
 - `"powershell"`: Windows.
 
+#### Rules:
+
+DO NOT use the `run` tools or bash cmds to perform ANY tasks that belong to other tools!!!
+DO NOT use the `run` tools or bash cmds to perform ANY tasks that belong to other tools!!!
+DO NOT use the `run` tools or bash cmds to perform ANY tasks that belong to other tools!!!
+
+NEVER read file by `run` tools, instead, use `trace` tools!
+NEVER write file by `run` tools, instead, use `edit` tools!
+NEVER fetch page by `run` tools, instead, use `fetch` tools!
+
 #### Quick Examples:
 
 - Build project: `{"type":"shell","reason":"build project","command":"go build ./..."}`

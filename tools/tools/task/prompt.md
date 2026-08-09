@@ -24,5 +24,5 @@ Indent: `2 spaces`
 **DO NOT INCLUDE LINE NUMBERS IN EDITING!**
 
 #### Quick Examples
-- Append: `{"path":"@task","target":"","text":"- [ ] 1.3 完成C模块: 完成C模块程序"}`
-- Toggle: `{"path":"@task","target":"- [ ] 1.3 完成C模块: 完成C模块程序","text":"- [X] 1.3 完成C模块: 完成C模块程序"}`
+- Append: `{"path":"@task","target":"","text":"- [ ] 1.3 Finish module C: implement the module C program"}`
+- Toggle: `{"path":"@task","target":"- [ ] 1.3 Finish module C: implement the module C program","text":"- [X] 1.3 Finish module C: implement the module C program"}`

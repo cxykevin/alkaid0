@@ -1,2 +1,2 @@
-{{/* 默认 Agent 的提示词 */}}
+{{/* Default agent prompt */}}
 <!-- Alkaid Default Agent -->

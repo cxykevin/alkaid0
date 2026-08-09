@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/cxykevin/alkaid0/storage/structs"
+	u "github.com/cxykevin/alkaid0/utils"
 )
 
 //go:fix inline
@@ -275,5 +276,98 @@ func TestWriteFile(t *testing.T) {
 	data, _ = os.ReadFile(filepath.Join(tmpdir, "rx.txt"))
 	if string(data) != "Hello bar FOO world\n" {
 		t.Fatalf("regex write mismatch: %q", string(data))
+	}
+}
+
+func TestBuildGitPatch(t *testing.T) {
+	// 修改：替换一行
+	patch := buildGitPatch("/abs/file.go", "line1\nline2\nline3\n", "line1\nline2X\nline3\n", false)
+	if !strings.Contains(patch, "diff --git /abs/file.go /abs/file.go") {
+		t.Fatalf("patch missing diff header: %q", patch)
+	}
+	if !strings.Contains(patch, "--- /abs/file.go") || !strings.Contains(patch, "+++ /abs/file.go") {
+		t.Fatalf("patch missing ---/+++ header: %q", patch)
+	}
+	if !strings.Contains(patch, "@@") {
+		t.Fatalf("patch missing hunk header: %q", patch)
+	}
+	if !strings.Contains(patch, "-line2") || !strings.Contains(patch, "+line2X") {
+		t.Fatalf("patch missing changed lines: %q", patch)
+	}
+
+	// 新建文件：旧路径为 /dev/null，operation 语义由调用方决定
+	patch = buildGitPatch("/abs/new.txt", "", "hello\nworld\n", true)
+	if !strings.Contains(patch, "--- /dev/null") {
+		t.Fatalf("new file patch should use /dev/null: %q", patch)
+	}
+	if !strings.Contains(patch, "+hello") || !strings.Contains(patch, "+world") {
+		t.Fatalf("new file patch missing added lines: %q", patch)
+	}
+
+	// 无变化：返回空
+	if p := buildGitPatch("/abs/same.txt", "a\nb\n", "a\nb\n", false); p != "" {
+		t.Fatalf("identical content should yield empty patch: %q", p)
+	}
+}
+
+func TestBuildDiffContent(t *testing.T) {
+	// 修改文件
+	obj := buildDiffContent("/abs/main.go", "package main\n\nfunc main() {}\n", "package main\n\nfunc main() {\n\tprintln(\"hi\")\n}\n", false)
+	if obj == nil {
+		t.Fatalf("expected diff content for modified file")
+	}
+	if obj["type"] != "diff" {
+		t.Fatalf("unexpected type: %v", obj["type"])
+	}
+	changes, ok := obj["changes"].([]u.H)
+	if !ok || len(changes) != 1 {
+		t.Fatalf("unexpected changes: %v", obj["changes"])
+	}
+	if changes[0]["operation"] != "modify" || changes[0]["path"] != "/abs/main.go" || changes[0]["fileType"] != "text" {
+		t.Fatalf("unexpected change entry: %v", changes[0])
+	}
+	patch, ok := obj["patch"].(u.H)
+	if !ok || patch["format"] != "git_patch" {
+		t.Fatalf("unexpected patch: %v", obj["patch"])
+	}
+
+	// 新建文件：operation = add
+	obj = buildDiffContent("/abs/new.go", "", "package main\n", true)
+	changes, ok = obj["changes"].([]u.H)
+	if !ok || len(changes) != 1 {
+		t.Fatalf("unexpected add changes: %v", obj["changes"])
+	}
+	if changes[0]["operation"] != "add" {
+		t.Fatalf("expected add operation, got %v", changes[0]["operation"])
+	}
+
+	// 无变化：返回 nil
+	if obj := buildDiffContent("/abs/same.go", "a\n", "a\n", false); obj != nil {
+		t.Fatalf("identical content should yield nil diff: %v", obj)
+	}
+}
+
+func TestLineDiff(t *testing.T) {
+	ops := lineDiff([]string{"a", "b", "c"}, []string{"a", "x", "c"})
+	var out []string
+	for _, op := range ops {
+		out = append(out, string(op.kind)+op.text)
+	}
+	got := strings.Join(out, "|")
+	// 期望：保留 a、删除 b、新增 x、保留 c（LCS 回溯顺序）
+	if got != " a| b|-b|+x| c" && got != " a|-b|+x| c" {
+		t.Fatalf("unexpected line diff: %q", got)
+	}
+
+	// 退化路径：超大行数乘积直接整体替换
+	bigOld := make([]string, 3000)
+	bigNew := make([]string, 3000)
+	for i := range bigOld {
+		bigOld[i] = "old"
+		bigNew[i] = "new"
+	}
+	ops = lineDiff(bigOld, bigNew)
+	if len(ops) != 6000 {
+		t.Fatalf("degraded diff should replace all lines, got %d ops", len(ops))
 	}
 }
