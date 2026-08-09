@@ -312,7 +312,8 @@ func CleanSymbols(directory, filePath string, activeSymbols []string) error {
 	defer tx.Rollback()
 
 	var idsToDelete []int64
-	if len(activeSymbols) == 0 {
+	n := len(activeSymbols)
+	if n == 0 {
 		// 无活跃符号，删除所有非空符号的记录
 		rows, err := tx.Query(
 			"SELECT id FROM codebase_items WHERE file_path=? AND symbol!=''",
@@ -335,9 +336,14 @@ func CleanSymbols(directory, filePath string, activeSymbols []string) error {
 			return fmt.Errorf("delete orphan items: %w", err)
 		}
 	} else {
+		maxInt := int(^uint(0) >> 1)
+		if n > maxInt-1 {
+			return fmt.Errorf("activeSymbols too large: %d", n)
+		}
+
 		// 构建 IN 占位符
-		placeholders := make([]string, len(activeSymbols))
-		args := make([]any, 0, len(activeSymbols)+1)
+		placeholders := make([]string, n)
+		args := make([]any, 0, n+1)
 		args = append(args, filePath)
 		for i, s := range activeSymbols {
 			placeholders[i] = "?"
