@@ -38,6 +38,7 @@ var defaultLanguageServers = map[string]LanguageServerConfig{
 	".scss": {Command: "vscode-css-language-server", Args: []string{"--stdio"}},
 	".sass": {Command: "vscode-css-language-server", Args: []string{"--stdio"}},
 	".less": {Command: "vscode-css-language-server", Args: []string{"--stdio"}},
+	".tq":   {Command: "talqor-cli", Args: []string{"--lsp"}},
 	// .json/.yaml/.yml/.txt: 不支持 LSP（见 noLSPExtensions），无需启动进程
 }
 

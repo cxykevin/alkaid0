@@ -107,14 +107,16 @@ func RequestBody(chatID uint32, modelID int32, agentCode string, toolsList *[]*p
 	}
 
 	// 预扫描（原生模式）：收集回放范围内所有 assistant 工具调用 id（toolCallIDs，
-	// 用于工具结果配对）与所有工具结果 id（resultIDs，用于判断哪些调用结果缺失）。
+	// 用于工具结果配对）、所有工具结果 id（resultIDs，用于判断哪些调用结果缺失）与
+	// 失败调用 id（failedResultIDs，其真实参数在回放时不再省略，供模型自我修正）。
 	// 回放是倒序查询 + PushFront，结果消息先于其 assistant 被处理，无法边扫边配，
 	// 因此在主循环前先倒序分页扫描一次。id 全局唯一、结果紧跟调用，不会误配。
 	// 与主循环一致：遇到 summary（历史截断点）即停止。
-	var toolCallIDs, resultIDs map[string]struct{}
+	var toolCallIDs, resultIDs, failedResultIDs map[string]struct{}
 	if nativeMode {
 		toolCallIDs = make(map[string]struct{})
 		resultIDs = make(map[string]struct{})
+		failedResultIDs = make(map[string]struct{})
 	scan:
 		for offsetPage := range maxPage {
 			var obj []structs.Messages
@@ -136,11 +138,14 @@ func RequestBody(chatID uint32, modelID int32, agentCode string, toolsList *[]*p
 						for _, r := range results {
 							if r.ID != "" {
 								resultIDs[r.ID] = struct{}{}
+								if isFailedToolResult(r.Return) {
+									failedResultIDs[r.ID] = struct{}{}
+								}
 							}
 						}
 					}
 				} else if v.Type == structs.MessagesRoleAgent && v.ToolCallingJSONString != "" {
-					calls, err := parseStoredToolCalls(v.ToolCallingJSONString)
+					calls, err := parseStoredToolCalls(v.ToolCallingJSONString, nil)
 					if err == nil {
 						for _, c := range calls {
 							if c.ID != "" {
@@ -198,7 +203,7 @@ func RequestBody(chatID uint32, modelID int32, agentCode string, toolsList *[]*p
 						msg.Content = "<think>\n" + thinkingWrap + "\n</think>\n" + v.Delta
 					}
 					if v.ToolCallingJSONString != "" {
-						toolCalls, err := parseStoredToolCalls(v.ToolCallingJSONString)
+						toolCalls, err := parseStoredToolCalls(v.ToolCallingJSONString, failedResultIDs)
 						if err == nil && len(toolCalls) > 0 {
 							msg.ToolCalls = toolCalls
 							// 为被终止（无对应结果消息）的调用补发占位 role:"tool" 消息，
@@ -447,17 +452,20 @@ func RequestBody(chatID uint32, modelID int32, agentCode string, toolsList *[]*p
 
 // storedToolCall 存储层工具调用项（tool_calling_json_string 内部格式 [{"name","id","parameters"}]）。
 // 存储层为标准 encoding/json 序列化（nativeAcc.Origin()），此处直接解析，避免依赖 request 包（循环依赖）。
-// 仅取 id/name 用于回放调用结构；parameters（具体参数内容）不随请求体发给模型。
+// id/name 用于回放调用结构；Parameters 保留真实参数，供失败调用的历史回放使用。
 type storedToolCall struct {
-	Name string `json:"name"`
-	ID   string `json:"id"`
+	Name       string          `json:"name"`
+	ID         string          `json:"id"`
+	Parameters json.RawMessage `json:"parameters"`
 }
 
 // parseStoredToolCalls 解析存储层工具调用 JSON 为原生 tool_calls 消息。
 // 返回 nil（空 payload/解析失败）时表示无工具调用。
-// 历史回放不携带具体参数内容：arguments 统一以 "..." 占位，只保留调用结构
+// 历史回放默认不携带具体参数内容：arguments 统一以 "..." 占位，只保留调用结构
 // （id/type/function.name），避免把完整命令与参数重复发给模型。
-func parseStoredToolCalls(payload string) ([]reqStruct.StreamToolCall, error) {
+// 例外：failedIDs 中命中的调用（对应工具结果含 success:false / error，即调用失败）
+// 回放真实参数（Parameters 原样填入 arguments），让模型看到自己上次传错的参数名以自我修正。
+func parseStoredToolCalls(payload string, failedIDs map[string]struct{}) ([]reqStruct.StreamToolCall, error) {
 	if strings.TrimSpace(payload) == "" {
 		return nil, nil
 	}
@@ -467,16 +475,43 @@ func parseStoredToolCalls(payload string) ([]reqStruct.StreamToolCall, error) {
 	}
 	calls := make([]reqStruct.StreamToolCall, 0, len(items))
 	for _, it := range items {
+		args := "..."
+		if failedIDs != nil && len(it.Parameters) > 0 {
+			if _, failed := failedIDs[it.ID]; failed {
+				args = string(it.Parameters)
+			}
+		}
 		calls = append(calls, reqStruct.StreamToolCall{
 			ID:   it.ID,
 			Type: "function",
 			Function: &reqStruct.StreamToolCallFunc{
 				Name:      it.Name,
-				Arguments: "...",
+				Arguments: args,
 			},
 		})
 	}
 	return calls, nil
+}
+
+// isFailedToolResult 判定工具结果是否表示调用失败。
+// 内置工具失败时返回 map 序列化为含 "success":false 或 "error" 键的 JSON。
+// 判定规则：success 键优先——存在且为 false 即失败；为 true 时不判失败（即使带 error 键，
+// 防误判）；success 键缺失时回退检查 error 键是否存在。返回空/非 JSON 对象一律视为成功。
+func isFailedToolResult(returnJSON string) bool {
+	if strings.TrimSpace(returnJSON) == "" {
+		return false
+	}
+	var obj map[string]any
+	if err := json.Unmarshal([]byte(returnJSON), &obj); err != nil {
+		return false
+	}
+	if success, ok := obj["success"]; ok {
+		if b, isBool := success.(bool); isBool {
+			return !b
+		}
+	}
+	_, hasError := obj["error"]
+	return hasError
 }
 
 // storedToolResult 存储层工具结果项（MessagesRoleTool.Delta 内部格式 [{"name","id","return"}]）。

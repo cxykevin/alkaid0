@@ -111,8 +111,14 @@ func sseChunk(w http.ResponseWriter, resp structs.ChatCompletionResponse) {
 
 // emitNativeToolCallsSSE 输出一轮原生 tool_calls 流式增量（id/name 首片 + 两片 arguments + 结束帧）。
 func emitNativeToolCallsSSE(w http.ResponseWriter) {
+	emitNativeToolCallsSSEFor(w, "e2e_tool")
+}
+
+// emitNativeToolCallsSSEFor 输出一轮指定工具名的原生 tool_calls 流式增量，
+// arguments 固定为 {"input":"hello"}（两片增量拼接）。
+func emitNativeToolCallsSSEFor(w http.ResponseWriter, toolName string) {
 	chunks := []structs.Message{
-		{Role: structs.RoleAssistant, ToolCalls: []structs.StreamToolCall{{Index: 0, ID: "call_e2e_1", Type: "function", Function: &structs.StreamToolCallFunc{Name: "e2e_tool"}}}},
+		{Role: structs.RoleAssistant, ToolCalls: []structs.StreamToolCall{{Index: 0, ID: "call_e2e_1", Type: "function", Function: &structs.StreamToolCallFunc{Name: toolName}}}},
 		{ToolCalls: []structs.StreamToolCall{{Index: 0, Function: &structs.StreamToolCallFunc{Arguments: `{"input": "hel`}}}},
 		{ToolCalls: []structs.StreamToolCall{{Index: 0, Function: &structs.StreamToolCallFunc{Arguments: `lo"}`}}}},
 	}
@@ -369,5 +375,163 @@ func TestNativeSendRequest_LegacyRejection(t *testing.T) {
 	}
 	if !strings.Contains(last.Delta, "native function-calling API") {
 		t.Errorf("correction message should mention native function-calling, got: %q", last.Delta)
+	}
+}
+
+// registerE2EFailingTool 注册一个返回失败结果（success:false + error）的安全测试工具。
+// 用于验证失败工具调用在历史回放时保留真实参数。t.Cleanup 恢复全局注册，避免污染同包其他测试。
+func registerE2EFailingTool(t *testing.T, name string, recs *[]e2eToolRecord) {
+	toolobj.ToolsMu.Lock()
+	orig, had := toolobj.ToolsList[name]
+	toolobj.ToolsMu.Unlock()
+
+	actions.AddTool(&toolobj.Tools{
+		Scope:           "",
+		Name:            name,
+		ID:              name,
+		UserDescription: "e2e safe failing test tool",
+		Parameters: map[string]parser.ToolParameters{
+			"input": {Type: parser.ToolTypeString, Required: true},
+		},
+		Hooks: []toolobj.Hook{{
+			Scope: "",
+			OnHook: toolobj.OnHookFunction{
+				Func: func(session *storageStructs.Chats, args map[string]*any, passObjs []*any, toolID string) (bool, []*any, error) {
+					*recs = append(*recs, e2eToolRecord{id: toolID, finished: false})
+					return false, passObjs, nil
+				},
+			},
+			PostHook: toolobj.PostHookFunction{
+				Func: func(session *storageStructs.Chats, args map[string]*any, passObjs []*any) (bool, []*any, map[string]*any, error) {
+					id := ""
+					if p, ok := args["_id"]; ok && p != nil {
+						if s, ok := (*p).(string); ok {
+							id = s
+						}
+					}
+					*recs = append(*recs, e2eToolRecord{id: id, finished: true})
+					success := any(false)
+					errMsg := any("bad parameter: missing input")
+					return false, passObjs, map[string]*any{"success": &success, "error": &errMsg}, nil
+				},
+			},
+		}},
+	})
+
+	t.Cleanup(func() {
+		toolobj.ToolsMu.Lock()
+		if had {
+			toolobj.ToolsList[name] = orig
+		} else {
+			delete(toolobj.ToolsList, name)
+		}
+		toolobj.ToolsMu.Unlock()
+	})
+}
+
+// TestNativeSendRequest_FailedToolCallReplayRealArgs 失败工具调用全链路 e2e：
+// 轮 1：工具执行返回 success:false（失败结果持久化）；
+// 轮 2：历史回放时失败调用的 arguments 为真实参数（非 "..." 占位），
+// 让模型看到自己传错的参数名，从而在下一轮修正。
+func TestNativeSendRequest_FailedToolCallReplayRealArgs(t *testing.T) {
+	initAgentsConsumer()
+	var recs []e2eToolRecord
+	registerE2EFailingTool(t, "e2e_fail_tool", &recs)
+
+	var mu sync.Mutex
+	var bodies []structs.ChatCompletionRequest
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		payload, _ := io.ReadAll(r.Body)
+		var req structs.ChatCompletionRequest
+		if err := json.Unmarshal(payload, &req); err != nil {
+			t.Errorf("unmarshal request: %v", err)
+		}
+		mu.Lock()
+		bodies = append(bodies, req)
+		mu.Unlock()
+
+		w.Header().Set("Content-Type", "text/event-stream")
+		if reqHasToolReturn(req) {
+			emitTextSSE(w, "e2e_fail_tool executed (failed)")
+		} else {
+			emitNativeToolCallsSSEFor(w, "e2e_fail_tool")
+		}
+		fmt.Fprintf(w, "data: %s\n\n", SSEDoneMarker)
+	}))
+	defer srv.Close()
+	setupNativeE2EConfig(srv.URL)
+
+	db := setupTestDB(t)
+	defer u.Unwrap(db.DB()).Close()
+
+	chat := storageStructs.Chats{ID: 9003, LastModelID: 1}
+	if err := db.Create(&chat).Error; err != nil {
+		t.Fatalf("create chat: %v", err)
+	}
+	if err := db.Create(&storageStructs.Messages{ChatID: chat.ID, Type: storageStructs.MessagesRoleUser, Delta: "please call a failing tool"}).Error; err != nil {
+		t.Fatalf("create user msg: %v", err)
+	}
+
+	session := &storageStructs.Chats{
+		ID:             chat.ID,
+		DB:             db,
+		LastModelID:    1,
+		CurrentAgentID: "",
+		InTestFlag:     false,
+		EnableScopes:   make(map[string]bool),
+	}
+
+	// 轮 1：原生 tool_calls → WaitApprove
+	ok, err := SendRequest(context.Background(), session, noopCallback)
+	if err != nil {
+		t.Fatalf("round1 SendRequest: %v", err)
+	}
+	if !ok || session.State != state.StateWaitApprove {
+		t.Fatalf("round1 should enter WaitApprove, ok=%v state=%v", ok, session.State)
+	}
+
+	// 执行工具 → 失败结果持久化
+	var assistMsg storageStructs.Messages
+	if err := db.First(&assistMsg, session.CurrentMessageID).Error; err != nil {
+		t.Fatalf("read assistant msg: %v", err)
+	}
+	if _, err := ExecuteToolCalls(session, assistMsg.ToolCallingJSONString); err != nil {
+		t.Fatalf("ExecuteToolCalls: %v", err)
+	}
+	var toolMsg storageStructs.Messages
+	if err := db.Where("chat_id = ? AND type = ?", chat.ID, storageStructs.MessagesRoleTool).Order("id DESC").First(&toolMsg).Error; err != nil {
+		t.Fatalf("tool result message not persisted: %v", err)
+	}
+	var toolResults []map[string]string
+	if err := json.Unmarshal([]byte(toolMsg.Delta), &toolResults); err != nil {
+		t.Fatalf("tool result delta not valid json: %q (%v)", toolMsg.Delta, err)
+	}
+	if len(toolResults) != 1 || !strings.Contains(toolResults[0]["return"], `"success":false`) {
+		t.Fatalf("tool result should contain success:false, got %q", toolMsg.Delta)
+	}
+
+	// 轮 2：历史回放，失败调用 arguments 应为真实参数
+	if _, err := SendRequest(context.Background(), session, noopCallback); err != nil {
+		t.Fatalf("round2 SendRequest: %v", err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(bodies) < 2 {
+		t.Fatalf("expected >=2 request bodies, got %d", len(bodies))
+	}
+	round2 := bodies[len(bodies)-1]
+	foundRealArgs := false
+	for _, m := range round2.Messages {
+		if m.Role != structs.RoleAssistant {
+			continue
+		}
+		for _, tc := range m.ToolCalls {
+			if tc.ID == "call_e2e_1" && tc.Function != nil && tc.Function.Arguments == `{"input":"hello"}` {
+				foundRealArgs = true
+			}
+		}
+	}
+	if !foundRealArgs {
+		t.Error("round2 should replay failed call's real arguments (not \"...\")")
 	}
 }

@@ -762,3 +762,158 @@ func TestRequestBody_TerminatedToolCall(t *testing.T) {
 		t.Errorf("partial-result: real result call_a=%v, terminated placeholder call_b=%v", realA, termB)
 	}
 }
+
+// helper: 原生模式回放辅助 —— 对给定消息序列调用 RequestBody，
+// 返回 assistant 消息中指定 id 的工具调用 arguments。
+func replayArguments(t *testing.T, chatID uint32, msgs []structs.Messages, callID string) string {
+	t.Helper()
+	db := setupTestDB(t)
+	toolsList := []*parser.ToolsDefine{}
+	setupTestConfig()
+	cfg := *config.GlobalConfig
+	m := cfg.Model.Models[cfg.Model.DefaultModelID]
+	m.EnableToolCalling = true
+	cfg.Model.Models[cfg.Model.DefaultModelID] = m
+	config.GlobalConfigSwap(cfg)
+	for _, mm := range msgs {
+		if err := db.Create(&mm).Error; err != nil {
+			t.Fatalf("create msg: %v", err)
+		}
+	}
+	req, err := RequestBody(chatID, 1, "", &toolsList, db, "", "", cfgStruct.AgentConfig{}, &structs.Chats{})
+	if err != nil {
+		t.Fatalf("RequestBody failed: %v", err)
+	}
+	for _, msg := range req.Messages {
+		if msg.Role == reqStruct.RoleAssistant {
+			for _, tc := range msg.ToolCalls {
+				if tc.ID == callID && tc.Function != nil {
+					return tc.Function.Arguments
+				}
+			}
+		}
+	}
+	return ""
+}
+
+// TestRequestBody_FailedToolCallReplayRealArgs 失败的调用回放真实参数：
+// 模型曾以错误参数名（"paht"）调用 edit，工具结果 success:false —— 历史回放时
+// arguments 应为当初传入的真实 JSON（非 "..." 占位），让模型看到自己传错的参数名。
+func TestRequestBody_FailedToolCallReplayRealArgs(t *testing.T) {
+	args := replayArguments(t, 12, []structs.Messages{
+		{ChatID: 12, Type: structs.MessagesRoleUser, Delta: "edit a.txt"},
+		{ChatID: 12, Type: structs.MessagesRoleAgent, Delta: "", ToolCallingJSONString: `[{"name":"edit","id":"call_fail","parameters":{"paht":"a.txt","text":"hi"}}]`},
+		{ChatID: 12, Type: structs.MessagesRoleTool, Delta: `[{"name":"edit","id":"call_fail","return":"{\"success\":false,\"error\":\"missing path parameter\"}"}]`},
+		{ChatID: 12, Type: structs.MessagesRoleUser, Delta: "continue"},
+	}, "call_fail")
+	if args != `{"paht":"a.txt","text":"hi"}` {
+		t.Errorf("failed call should replay real arguments, got %q", args)
+	}
+}
+
+// TestRequestBody_MixedSuccessFailureReplay 同一轮内成功调用占位、失败调用真实参数。
+func TestRequestBody_MixedSuccessFailureReplay(t *testing.T) {
+	msgs := []structs.Messages{
+		{ChatID: 13, Type: structs.MessagesRoleUser, Delta: "two calls"},
+		{ChatID: 13, Type: structs.MessagesRoleAgent, Delta: "", ToolCallingJSONString: `[{"name":"edit","id":"call_ok","parameters":{"path":"a.txt"}},{"name":"edit","id":"call_fail","parameters":{"paht":"b.txt"}}]`},
+		{ChatID: 13, Type: structs.MessagesRoleTool, Delta: `[{"name":"edit","id":"call_ok","return":"{\"success\":true}"},{"name":"edit","id":"call_fail","return":"{\"success\":false}"}]`},
+	}
+	db := setupTestDB(t)
+	toolsList := []*parser.ToolsDefine{}
+	setupTestConfig()
+	cfg := *config.GlobalConfig
+	m := cfg.Model.Models[cfg.Model.DefaultModelID]
+	m.EnableToolCalling = true
+	cfg.Model.Models[cfg.Model.DefaultModelID] = m
+	config.GlobalConfigSwap(cfg)
+	for _, mm := range msgs {
+		if err := db.Create(&mm).Error; err != nil {
+			t.Fatalf("create msg: %v", err)
+		}
+	}
+	req, err := RequestBody(13, 1, "", &toolsList, db, "", "", cfgStruct.AgentConfig{}, &structs.Chats{})
+	if err != nil {
+		t.Fatalf("RequestBody failed: %v", err)
+	}
+	gotOK, gotFail := "", ""
+	for _, msg := range req.Messages {
+		if msg.Role == reqStruct.RoleAssistant {
+			for _, tc := range msg.ToolCalls {
+				if tc.Function == nil {
+					continue
+				}
+				switch tc.ID {
+				case "call_ok":
+					gotOK = tc.Function.Arguments
+				case "call_fail":
+					gotFail = tc.Function.Arguments
+				}
+			}
+		}
+	}
+	if gotOK != "..." {
+		t.Errorf("successful call should keep \"...\" placeholder, got %q", gotOK)
+	}
+	if gotFail != `{"paht":"b.txt"}` {
+		t.Errorf("failed call should replay real arguments, got %q", gotFail)
+	}
+}
+
+// TestRequestBody_SuccessWithErrorKeyNotFailed success:true 即使带 error 键也不判失败（防误判）。
+func TestRequestBody_SuccessWithErrorKeyNotFailed(t *testing.T) {
+	args := replayArguments(t, 14, []structs.Messages{
+		{ChatID: 14, Type: structs.MessagesRoleUser, Delta: "do something"},
+		{ChatID: 14, Type: structs.MessagesRoleAgent, Delta: "", ToolCallingJSONString: `[{"name":"run","id":"call_warn","parameters":{"command":"ls"}}]`},
+		{ChatID: 14, Type: structs.MessagesRoleTool, Delta: `[{"name":"run","id":"call_warn","return":"{\"success\":true,\"error\":\"warning text\"}"}]`},
+	}, "call_warn")
+	if args != "..." {
+		t.Errorf("success:true result should keep placeholder, got %q", args)
+	}
+}
+
+// TestRequestBody_ErrorKeyOnlyTreatedAsFailed 无 success 键、仅 error 键判定为失败。
+func TestRequestBody_ErrorKeyOnlyTreatedAsFailed(t *testing.T) {
+	args := replayArguments(t, 15, []structs.Messages{
+		{ChatID: 15, Type: structs.MessagesRoleUser, Delta: "do something"},
+		{ChatID: 15, Type: structs.MessagesRoleAgent, Delta: "", ToolCallingJSONString: `[{"name":"edit","id":"call_err","parameters":{"path":"c.txt"}}]`},
+		{ChatID: 15, Type: structs.MessagesRoleTool, Delta: `[{"name":"edit","id":"call_err","return":"{\"error\":\"boom\"}"}]`},
+	}, "call_err")
+	if args != `{"path":"c.txt"}` {
+		t.Errorf("error-only result should replay real arguments, got %q", args)
+	}
+}
+
+// TestParseStoredToolCalls_WithFailedIDs parseStoredToolCalls 三态单测：
+// failedIDs 命中 → 真实参数；未命中/nil failedIDs/无 parameters → "..."。
+func TestParseStoredToolCalls_WithFailedIDs(t *testing.T) {
+	payload := `[{"name":"edit","id":"call_1","parameters":{"path":"a.txt"}},{"name":"edit","id":"call_2","parameters":{"path":"b.txt"}},{"name":"edit","id":"call_3"}]`
+
+	// failedIDs 命中 call_2
+	calls, err := parseStoredToolCalls(payload, map[string]struct{}{"call_2": {}})
+	if err != nil {
+		t.Fatalf("parse with failedIDs: %v", err)
+	}
+	if len(calls) != 3 {
+		t.Fatalf("expected 3 calls, got %d", len(calls))
+	}
+	if got := calls[0].Function.Arguments; got != "..." {
+		t.Errorf("call_1 (not failed) should keep placeholder, got %q", got)
+	}
+	if got := calls[1].Function.Arguments; got != `{"path":"b.txt"}` {
+		t.Errorf("call_2 (failed) should replay real arguments, got %q", got)
+	}
+	if got := calls[2].Function.Arguments; got != "..." {
+		t.Errorf("call_3 (no parameters) should keep placeholder, got %q", got)
+	}
+
+	// nil failedIDs —— 全部占位
+	callsNil, err := parseStoredToolCalls(payload, nil)
+	if err != nil {
+		t.Fatalf("parse with nil failedIDs: %v", err)
+	}
+	for i, c := range callsNil {
+		if c.Function.Arguments != "..." {
+			t.Errorf("call %d with nil failedIDs should keep placeholder, got %q", i, c.Function.Arguments)
+		}
+	}
+}
