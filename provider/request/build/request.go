@@ -19,6 +19,11 @@ const readPageSize = 20
 const maxPage = 10
 const maxToken = 8192
 
+// toolCallTerminatedMsg 工具调用被强行终止（无对应结果消息）时补发的占位结果内容。
+// 保证 assistant 的每个 tool_call_id 都有 role:"tool" 响应，满足 OpenAI 兼容 API 校验，
+// 同时让模型知道该调用未执行。
+const toolCallTerminatedMsg = "[Tool call terminated] This call was cancelled before execution and did not run."
+
 var msgRole = map[structs.MessagesRole]string{
 	structs.MessagesRoleUser:        "user",
 	structs.MessagesRoleAgent:       "assistant",
@@ -101,6 +106,53 @@ func RequestBody(chatID uint32, modelID int32, agentCode string, toolsList *[]*p
 		}
 	}
 
+	// 预扫描（原生模式）：收集回放范围内所有 assistant 工具调用 id（toolCallIDs，
+	// 用于工具结果配对）与所有工具结果 id（resultIDs，用于判断哪些调用结果缺失）。
+	// 回放是倒序查询 + PushFront，结果消息先于其 assistant 被处理，无法边扫边配，
+	// 因此在主循环前先倒序分页扫描一次。id 全局唯一、结果紧跟调用，不会误配。
+	// 与主循环一致：遇到 summary（历史截断点）即停止。
+	var toolCallIDs, resultIDs map[string]struct{}
+	if nativeMode {
+		toolCallIDs = make(map[string]struct{})
+		resultIDs = make(map[string]struct{})
+	scan:
+		for offsetPage := range maxPage {
+			var obj []structs.Messages
+			if agentCode == "" {
+				db.Where("`chat_id` = ? AND (`agent_id` = \"\" OR `agent_id` IS NULL)", chatID).Order("id DESC").Offset(offsetPage * readPageSize).Limit(readPageSize).Find(&obj)
+			} else {
+				db.Where("`chat_id` = ? AND `agent_id` = ?", chatID, agentCode).Order("id DESC").Offset(offsetPage * readPageSize).Limit(readPageSize).Find(&obj)
+			}
+			if len(obj) == 0 {
+				break
+			}
+			for _, v := range obj {
+				if v.Summary != "" {
+					break scan
+				}
+				if v.Type == structs.MessagesRoleTool {
+					results, err := parseStoredToolResults(v.Delta)
+					if err == nil {
+						for _, r := range results {
+							if r.ID != "" {
+								resultIDs[r.ID] = struct{}{}
+							}
+						}
+					}
+				} else if v.Type == structs.MessagesRoleAgent && v.ToolCallingJSONString != "" {
+					calls, err := parseStoredToolCalls(v.ToolCallingJSONString)
+					if err == nil {
+						for _, c := range calls {
+							if c.ID != "" {
+								toolCallIDs[c.ID] = struct{}{}
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+
 	// 生成 messages
 	responseDeltaList := list.New()
 	exitFlag := false
@@ -130,10 +182,9 @@ func RequestBody(chatID uint32, modelID int32, agentCode string, toolsList *[]*p
 				exitFlag = true
 			} else {
 				if nativeMode && v.Type == structs.MessagesRoleAgent {
-					// 原生模式：assistant 历史消息用原来的文本拼法回放——工具调用以 <tools> 段
-					// 拼回 content（不引入原生 tool_calls/tool_call_id）；工具返回也走原来的
-					// <tools_return> 文本段（见下方 MessagesRoleTool 分支）。仅当前轮请求用
-					// 原生 tools 参数声明、响应用原生 tool_calls 解析。
+					// 原生模式：assistant 历史消息回放原生 tool_calls —— content 保留文本 Delta，
+					// 工具调用解析 ToolCallingJSONString 为 msg.ToolCalls（tool_call_id + function.name/arguments），
+					// 与当前轮请求的 tools 参数/响应解析同一种格式，不再出现 <tools> 文本段。
 					msg.Role = reqStruct.RoleAssistant
 					thinkingWrap := ""
 					if modelConfig.EnableThinking && v.ThinkingDelta != "" {
@@ -142,19 +193,34 @@ func RequestBody(chatID uint32, modelID int32, agentCode string, toolsList *[]*p
 					} else if !modelConfig.EnableThinking {
 						thinkingWrap = v.ThinkingDelta
 					}
-					deltaRendered, err := prompts.Render(prompts.DeltaWrapTemplate, struct {
-						Thinking  string
-						Delta     string
-						ToolsCall string
-					}{
-						Thinking:  thinkingWrap,
-						Delta:     v.Delta,
-						ToolsCall: v.ToolCallingJSONString,
-					})
-					if err != nil {
-						return nil, err
+					msg.Content = v.Delta
+					if thinkingWrap != "" {
+						msg.Content = "<think>\n" + thinkingWrap + "\n</think>\n" + v.Delta
 					}
-					msg.Content = deltaRendered
+					if v.ToolCallingJSONString != "" {
+						toolCalls, err := parseStoredToolCalls(v.ToolCallingJSONString)
+						if err == nil && len(toolCalls) > 0 {
+							msg.ToolCalls = toolCalls
+							// 为被终止（无对应结果消息）的调用补发占位 role:"tool" 消息，
+							// 保证 assistant 的每个 tool_call_id 都有响应，满足 API 校验
+							// "assistant with tool_calls must be followed by tool messages"。
+							// 倒序 PushFront：占位按 toolCalls 顺序排在 assistant 之后。
+							for i := len(toolCalls) - 1; i >= 0; i-- {
+								c := toolCalls[i]
+								if c.ID == "" {
+									continue
+								}
+								if _, ok := resultIDs[c.ID]; !ok {
+									responseDeltaList.PushFront(reqStruct.Message{
+										Role:       reqStruct.RoleTool,
+										Content:    toolCallTerminatedMsg,
+										ToolCallID: c.ID,
+									})
+								}
+							}
+						}
+						// 解析失败容错为普通文本消息（Content 已保留），不中断回放
+					}
 				} else if v.Type == structs.MessagesRoleUser {
 					rendered, err := prompts.Render(prompts.UserWrapTemplate, struct {
 						Prompt string
@@ -167,7 +233,8 @@ func RequestBody(chatID uint32, modelID int32, agentCode string, toolsList *[]*p
 						return nil, err
 					}
 					msg.Content = rendered
-				} else if v.Type == structs.MessagesRoleTool {
+				} else if !nativeMode && v.Type == structs.MessagesRoleTool {
+					// 提示词模式：工具结果以 <tools_return> 文本段回放
 					toolRendered, err := prompts.Render(prompts.ToolResponseWrapTemplate, struct {
 						Prompt string
 					}{
@@ -229,6 +296,28 @@ func RequestBody(chatID uint32, modelID int32, agentCode string, toolsList *[]*p
 				} else {
 					msg.Content = v.Delta
 				}
+			}
+			if nativeMode && v.Type == structs.MessagesRoleTool {
+				// 原生模式：工具结果按 id 拆分为多条 role:"tool" 消息，严格配对——
+				// 结果 id 必须命中预扫描的 assistant 工具调用集合（丢弃孤立的幽灵结果）。
+				// 被终止调用的占位结果由 assistant 分支补齐。
+				// PushFront 正序：多条需倒序 push。
+				results, err := parseStoredToolResults(v.Delta)
+				if err == nil && len(results) > 0 {
+					for i := len(results) - 1; i >= 0; i-- {
+						r := results[i]
+						if _, ok := toolCallIDs[r.ID]; !ok {
+							continue
+						}
+						responseDeltaList.PushFront(reqStruct.Message{
+							Role:       reqStruct.RoleTool,
+							Content:    r.Return,
+							ToolCallID: r.ID,
+						})
+					}
+				}
+				// 结果消息已按 id 拆分推送（或解析失败/全部丢弃则不推送），跳过统一 push
+				continue
 			}
 			responseDeltaList.PushFront(msg)
 			if exitFlag {
@@ -354,6 +443,59 @@ func RequestBody(chatID uint32, modelID int32, agentCode string, toolsList *[]*p
 		response.Messages[i] = j.Value.(reqStruct.Message)
 	}
 	return response, nil
+}
+
+// storedToolCall 存储层工具调用项（tool_calling_json_string 内部格式 [{"name","id","parameters"}]）。
+// 存储层为标准 encoding/json 序列化（nativeAcc.Origin()），此处直接解析，避免依赖 request 包（循环依赖）。
+// 仅取 id/name 用于回放调用结构；parameters（具体参数内容）不随请求体发给模型。
+type storedToolCall struct {
+	Name string `json:"name"`
+	ID   string `json:"id"`
+}
+
+// parseStoredToolCalls 解析存储层工具调用 JSON 为原生 tool_calls 消息。
+// 返回 nil（空 payload/解析失败）时表示无工具调用。
+// 历史回放不携带具体参数内容：arguments 统一以 "..." 占位，只保留调用结构
+// （id/type/function.name），避免把完整命令与参数重复发给模型。
+func parseStoredToolCalls(payload string) ([]reqStruct.StreamToolCall, error) {
+	if strings.TrimSpace(payload) == "" {
+		return nil, nil
+	}
+	var items []storedToolCall
+	if err := json.Unmarshal([]byte(payload), &items); err != nil {
+		return nil, err
+	}
+	calls := make([]reqStruct.StreamToolCall, 0, len(items))
+	for _, it := range items {
+		calls = append(calls, reqStruct.StreamToolCall{
+			ID:   it.ID,
+			Type: "function",
+			Function: &reqStruct.StreamToolCallFunc{
+				Name:      it.Name,
+				Arguments: "...",
+			},
+		})
+	}
+	return calls, nil
+}
+
+// storedToolResult 存储层工具结果项（MessagesRoleTool.Delta 内部格式 [{"name","id","return"}]）。
+type storedToolResult struct {
+	Name   string `json:"name"`
+	ID     string `json:"id"`
+	Return string `json:"return"`
+}
+
+// parseStoredToolResults 解析存储层工具结果 JSON。空 payload/解析失败返回空切片。
+func parseStoredToolResults(payload string) ([]storedToolResult, error) {
+	if strings.TrimSpace(payload) == "" {
+		return nil, nil
+	}
+	var items []storedToolResult
+	if err := json.Unmarshal([]byte(payload), &items); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 // getEffectiveAutoApprove 获取用户配置的 AutoApprove 规则（不含内置规则合并）

@@ -10,7 +10,6 @@ import (
 	"path"
 	"runtime"
 	"strconv"
-	"strings"
 	"sync"
 	"time"
 
@@ -54,7 +53,7 @@ var paras = map[string]parser.ToolParameters{
 	"type": {
 		Type:        parser.ToolTypeString,
 		Required:    true,
-		Description: "A Enum decided which type of task want to do. Must Be First Parameter. Enum: [\"shell\", \"sleep\"]",
+		Description: "A Enum decided which type of task want to do. Must Be First Parameter. Enum: [\"shell\", \"sleep\", \"wait\"]",
 	},
 	"reason": {
 		Type:        parser.ToolTypeString,
@@ -64,23 +63,23 @@ var paras = map[string]parser.ToolParameters{
 	"command": {
 		Type:        parser.ToolTypeString,
 		Required:    true,
-		Description: `Command or program will be run or seconds will be sleep. Must Be Third Parameter`,
+		Description: `Command or program will be run. For "sleep" type, it must be an int number representing seconds to wait. For "wait" type, it must be the run id returned by a background run. Must Be Third Parameter`,
 	},
 	"timeout": {
 		Type:        parser.ToolTypeNumber,
 		Required:    false,
-		Description: "Timeout of the command. Default is 60(seconds). If it will not be run in background(default), it must less than 300(seconds). Only avaible in \"shell\" type",
+		Description: "Timeout of the command. Default is 60(seconds). If it will not be run in background(default), it must less than 300(seconds). If run in background, default is no timeout and no limit. Only avaible in \"shell\" type",
 	},
 	"sandbox": {
 		Type:        parser.ToolTypeBoolean,
 		Required:    false,
 		Description: "Whether run in sandbox. Some type don't support this parameter. Default is true. Only avaible in \"shell\" type",
 	},
-	// "background": {
-	// 	Type:        parser.ToolTypeBoolen,
-	// 	Required:    false,
-	// 	Description: "Whether run in background. Default is false",
-	// },
+	"background": {
+		Type:        parser.ToolTypeBoolean,
+		Required:    false,
+		Description: "Whether run in background. Default is false. If true, the command runs asynchronously: a temp object is created immediately and its path returned as run id, updated every 60 seconds until the command finishes. Only avaible in \"shell\" type",
+	},
 }
 
 // PassInfo 传递信息
@@ -281,6 +280,48 @@ func sleepTask(session *structs.Chats, mp map[string]*any, cross []*any) (bool, 
 	return false, cross, res, nil
 }
 
+// waitTask 处理 run 工具的 "wait" 类型：阻塞等待指定 runid（后台任务 temp obj 路径）结束。
+func waitTask(session *structs.Chats, mp map[string]*any, cross []*any) (bool, []*any, map[string]*any, error) {
+	runIDObj, ok := mp["command"]
+	if !ok || runIDObj == nil {
+		return errResult("[System] Parameter Error: command(run id) is required for type 'wait'", cross)
+	}
+	runID, ok := asString(runIDObj)
+	if !ok || runID == "" {
+		return errResult("[System] Parameter Error: command must be string(run id) for type 'wait'", cross)
+	}
+
+	job := Default.Find(runID)
+	if job == nil {
+		return errResult(fmt.Sprintf("[System] Run id not found: %s", runID), cross)
+	}
+
+	logger.Info("wait runid %s in ID=%d,agentID=%s", runID, session.ID, session.CurrentAgentID)
+
+	// 阻塞直到后台任务结束（不触发 kill，仅等待）
+	ctx := session.GetContext()
+	select {
+	case <-job.Done():
+	case <-ctx.Done():
+		boolx := false
+		success := any(boolx)
+		errStr := any("[System] wait interrupted")
+		return false, cross, map[string]*any{
+			"success": &success,
+			"error":   &errStr,
+		}, nil
+	}
+
+	boolx := true
+	success := any(boolx)
+	outAny := any(runID)
+	res := map[string]*any{
+		"success": &success,
+		"path":    &outAny,
+	}
+	return false, cross, res, nil
+}
+
 func runTask(session *structs.Chats, mp map[string]*any, cross []*any) (bool, []*any, map[string]*any, error) {
 	runTypeObj, ok := mp["type"]
 	if !ok || runTypeObj == nil {
@@ -290,12 +331,15 @@ func runTask(session *structs.Chats, mp map[string]*any, cross []*any) (bool, []
 	if !ok {
 		return errResult("[System] Parameter Error: type must be string", cross)
 	}
-	if runType != "shell" && runType != "sleep" {
-		return errResult(fmt.Sprintf("[System] Parameter Error: type '%s' not supported, only 'shell' and 'sleep' are allowed", runType), cross)
+	if runType != "shell" && runType != "sleep" && runType != "wait" {
+		return errResult(fmt.Sprintf("[System] Parameter Error: type '%s' not supported, only 'shell' and 'sleep' and 'wait' are allowed", runType), cross)
 	}
 
 	if runType == "sleep" {
 		return sleepTask(session, mp, cross)
+	}
+	if runType == "wait" {
+		return waitTask(session, mp, cross)
 	}
 
 	reasonObj, ok := mp["reason"]
@@ -352,10 +396,22 @@ func runTask(session *structs.Chats, mp map[string]*any, cross []*any) (bool, []
 		sandboxFlag = false
 	}
 
+	var backgroundFlag bool
+	if bgObj, ok := mp["background"]; ok && bgObj != nil {
+		if b, ok := (*bgObj).(bool); ok {
+			backgroundFlag = b
+		}
+	}
+
 	timeoutObj, ok := mp["timeout"]
 	var timeout int32
 	if !ok || timeoutObj == nil {
-		timeout = 60 // 与工具描述一致：默认 60 秒
+		if backgroundFlag {
+			// 后台任务默认无超时
+			timeout = 0
+		} else {
+			timeout = 60 // 与工具描述一致：默认 60 秒
+		}
 	} else {
 		if v, ok := asInt32(timeoutObj); ok {
 			timeout = v
@@ -363,24 +419,34 @@ func runTask(session *structs.Chats, mp map[string]*any, cross []*any) (bool, []
 			timeout = 60
 		}
 	}
-	if timeout >= 300 {
-		return errResult("[System] Parameter Error: timeout must less than 300", cross)
-	}
-	if timeout <= 0 {
-		// 显式传 0/负值视为无效，钳制到默认 60，避免静默变成无超时导致命令无限阻塞
-		timeout = 60
+	if backgroundFlag {
+		// 后台任务不受 300 秒限制，显式负值视为无超时
+		if timeout < 0 {
+			timeout = 0
+		}
+	} else {
+		if timeout >= 300 {
+			return errResult("[System] Parameter Error: timeout must less than 300", cross)
+		}
+		if timeout <= 0 {
+			// 显式传 0/负值视为无效，钳制到默认 60，避免静默变成无超时导致命令无限阻塞
+			timeout = 60
+		}
 	}
 
-	logger.Info("run shell \"%s\"(reason: %s)(%ds) sandbox:%v in ID=%d,agentID=%s", command, reason, timeout, sandboxFlag, session.ID, session.CurrentAgentID)
+	// 工具 ID 用于输出文件命名
+	idAny, ok := mp["_id"]
+	toolID := "unknown"
+	if ok && idAny != nil {
+		if s, ok := (*idAny).(string); ok {
+			toolID = s
+		}
+	}
 
 	// get shell
 	shell := getShell(config.GlobalConfig.Agent.UseShell)
 
-	// start task
-	isolateMode := sandbox.IsolationNone
-	if sandboxFlag {
-		isolateMode = sandbox.IsolationOS
-	}
+	// 构建命令环境
 	env := os.Environ()
 	env = append(env, "SANDBOX=alkaid0")
 	env = append(env, "TERM=xterm-256color")
@@ -395,130 +461,100 @@ func runTask(session *structs.Chats, mp map[string]*any, cross []*any) (bool, []
 		env = append(env, k+"="+v)
 	}
 
-	// 只有显式指定了超时时才设置 sandbox timeout，否则为 0（无超时）
-	var sandTimeout time.Duration
-	if timeout > 0 {
-		sandTimeout = time.Duration(timeout)*time.Second + 1*time.Second
+	// background 模式：runid = temp obj 路径，作为后台任务的唯一标识
+	var runid string
+	var updateFn func(string)
+	if backgroundFlag {
+		runid = "run/" + toolID + "-" + time.Now().Format("20060102-150405")
+		updateFn = func(content string) {
+			_ = trace.UpdateTempObject(session, runid, content)
+		}
 	}
-	sand, err := sandbox.New(sandbox.Config{
-		WorkDir:       path.Join(session.Root, session.CurrentActivatePath),
-		Env:           env,
-		Timeout:       sandTimeout,
-		IsolationMode: isolateMode,
-	})
-	if err != nil {
-		return false, cross, nil, err
+
+	// 运行命令 = 新建后台服务（job）并等待响应
+	req := &RunRequest{
+		SessionID:        session.ID,
+		AgentID:          session.CurrentAgentID,
+		ToolID:           toolID,
+		Command:          command,
+		Reason:           reason,
+		Shell:            shell,
+		Env:              env,
+		WorkDir:          path.Join(session.Root, session.CurrentActivatePath),
+		Timeout:          time.Duration(timeout) * time.Second,
+		Sandbox:          sandboxFlag,
+		SandboxSpecified: sandboxSpecified,
+		RunID:            runid,
+		UpdateFn:         updateFn,
 	}
-	startCmd := []string{}
-	switch shell {
-	case "powershell", "powershell.exe", "pwsh", "pwsh.exe":
-		startCmd = []string{"-Command", command}
-	case "cmd", "cmd.exe":
-		startCmd = []string{"/C", command}
-	default:
-		startCmd = []string{"-c", command}
+
+	if backgroundFlag {
+		// 先创建 temp obj 并立即返回其路径作为 runid（命令在后台执行）
+		_ = trace.AddTempObject(session, runid, bgInitialContent(command), true)
+		if _, err := Default.Submit(req, context.Background()); err != nil {
+			return false, cross, nil, err
+		}
+		logger.Info("run shell in background \"%s\"(reason: %s) sandbox:%v in ID=%d,agentID=%s runid=%s", command, reason, sandboxFlag, session.ID, session.CurrentAgentID, runid)
+		boolx := true
+		success := any(boolx)
+		bgAny := any(true)
+		reasonAny := any(reason)
+		outAny := any("@temp/" + runid)
+		res := map[string]*any{
+			"success":    &success,
+			"background": &bgAny,
+			"reason":     &reasonAny,
+			"path":       &outAny,
+			"run_id":     &outAny,
+		}
+		return false, cross, res, nil
 	}
-	c, err := sand.Execute(shell, startCmd...)
+
+	ctx := session.GetContext()
+	job, err := Default.Submit(req, ctx)
 	if err != nil {
 		return false, cross, nil, err
 	}
 
-	// 注册停止回调，使 loop.Stop() 能直接 kill 此进程
-	session.SetToolKillFn(func() { c.Kill() })
+	// 注册停止回调，使 loop.Stop() 能直接 kill 此后台任务
+	session.SetToolKillFn(func() { _ = Default.Kill(job.ID) })
 	defer session.SetToolKillFn(nil)
 
-	var buf bytes.Buffer
+	logger.Info("run shell \"%s\"(reason: %s)(%ds) sandbox:%v in ID=%d,agentID=%s job=%s", command, reason, timeout, sandboxFlag, session.ID, session.CurrentAgentID, job.ID)
 
-	// 监听context的Done信号，当context被取消时强制kill进程
-	ctx := session.GetContext()
+	// 等待后台服务响应
+	result := job.Wait(ctx)
 
-	// 使用 PTY 运行命令（Unix），若不可用则回退到缓冲区模式（Windows）
-	err = runCmd(ctx, c, &buf, command)
-
-	errString := ""
-	if err != nil {
-		if sandboxFlag && !sandboxSpecified && strings.Contains(err.Error(), "unshare") {
-			errString = "[System] Sandbox unavailable, fallback to non-sandbox\n"
-			sand2, err2 := sandbox.New(sandbox.Config{
-				WorkDir:       path.Join(session.Root, session.CurrentActivatePath),
-				Env:           env,
-				Timeout:       sandTimeout,
-				IsolationMode: sandbox.IsolationNone,
-			})
-			if err2 != nil {
-				errString += fmt.Sprintf("[System] Command Execute Error: %v\n", err)
-				outStr := errString + buf.String()
-				boolx := false
-				success := any(boolx)
-				outAny := any(outStr)
-				return false, cross, map[string]*any{
-					"success": &success,
-					"error":   &outAny,
-				}, nil
-			}
-			c2, err2 := sand2.Execute(shell, startCmd...)
-			if err2 != nil {
-				errString += fmt.Sprintf("[System] Command Execute Error: %v\n", err2)
-				outStr := errString + buf.String()
-				boolx := false
-				success := any(boolx)
-				outAny := any(outStr)
-				return false, cross, map[string]*any{
-					"success": &success,
-					"error":   &outAny,
-				}, nil
-			}
-			var buf2 bytes.Buffer
-
-			// 覆盖为 c2 的停止回调（fallback 使用新进程）
-			session.SetToolKillFn(func() { c2.Kill() })
-
-			// 监听context的Done信号
-			ctx2 := session.GetContext()
-
-			err2 = runCmd(ctx2, c2, &buf2, command)
-
-			if err2 != nil {
-				errString += fmt.Sprintf("[System] Command Execute Error: %v\n", err2)
-			}
-			outStr := errString + buf2.String()
-			boolx := err2 == nil
-			success := any(boolx)
-			outAny := any(outStr)
-			res := map[string]*any{
-				"success": &success,
-				"path":    &outAny,
-			}
-			if !boolx {
-				res["error"] = &outAny
-			}
-			return false, cross, res, nil
-		}
-		errString = fmt.Sprintf("[System] Command Execute Error: %v\n", err)
+	if result.CreateErr != nil {
+		return false, cross, nil, result.CreateErr
 	}
 
-	idAny, ok := mp["_id"]
-	toolID := ""
-	if !ok || idAny == nil {
-		toolID = "unknown"
-	} else {
-		toolID, ok = (*idAny).(string)
-		if !ok {
-			toolID = "unknown"
+	boolx := result.Success
+	success := any(boolx)
+
+	// 非沙盒降级路径：输出直接作为 path/error 字段，不写 trace（与原行为一致）
+	if result.Fallback {
+		outStr := result.ErrString + result.Output
+		outAny := any(outStr)
+		res := map[string]*any{
+			"success": &success,
+			"path":    &outAny,
 		}
+		if !boolx {
+			res["error"] = &outAny
+		}
+		return false, cross, res, nil
 	}
 
-	outStr := "[agent execute] $ " + command + "\n\n" + errString + buf.String()
-	// gettime
+	// 主路径：保存到 trace 供 AI 读取
+	outStr := "[agent execute] $ " + command + "\n\n" + result.ErrString + result.Output
 	timeStr := time.Now().Format("20060102-150405")
-	path := "run/" + toolID + "-" + timeStr
-	trace.AddTempObject(session, path, outStr, true)
-	logger.Info("command execution finished, output saved to: %s", path)
-	outPth := "@temp/" + path
+	tracePath := "run/" + toolID + "-" + timeStr
+	trace.AddTempObject(session, tracePath, outStr, true)
+	logger.Info("command execution finished, output saved to: %s", tracePath)
+	outPth := "@temp/" + tracePath
 	outAny := any(outPth)
 	reasonAny := any(reason)
-	boolx := err == nil
-	success := any(boolx)
 	res := map[string]*any{
 		"success": &success,
 		"reason":  &reasonAny,

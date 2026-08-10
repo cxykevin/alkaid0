@@ -610,6 +610,22 @@ func AddTempObject(session *structs.Chats, path string, content string, ro bool)
 	return err
 }
 
+// UpdateTempObject 更新已存在的临时对象内容（按 ChatID+Path 主键覆盖）。
+// 用于后台任务定期刷新运行状态/最终结果。
+func UpdateTempObject(session *structs.Chats, path string, content string) error {
+	// 截取ctn后2000行（与 AddTempObject 保持一致）
+	if ln := len(strings.Split(content, "\n")); ln > 2000 {
+		content = "(omitted)\n" + strings.Join(strings.Split(content, "\n")[ln-1998:], "\n")
+	}
+	err := session.DB.Model(&structs.ReferFiles{}).
+		Where("chat_id = ? AND path = ?", session.ID, path).
+		Update("content", content).Error
+	if err != nil {
+		logger.Warn("update temp object failed: %v", err)
+	}
+	return err
+}
+
 // StoreTempObject 仅存储到 ReferFiles，不创建 Traces 记录。
 // 用于 prompt 分类器，避免 code/log 段被自动 trace。
 // ---------------------------------------------------------------------------

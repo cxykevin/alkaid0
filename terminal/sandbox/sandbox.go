@@ -128,6 +128,9 @@ type Command struct {
 	cmd     Icmd
 	ctx     context.Context
 	cancel  context.CancelFunc
+	// cmdMu 串行化 Start/Kill 对底层 cmd 的访问，
+	// 防止 Start 写入 Process 与 Kill 读取 Process 并发导致的 data race。
+	cmdMu sync.Mutex
 	// 命令信息
 	name    string
 	args    []string
@@ -207,6 +210,8 @@ func (c *Command) SetStderr(w io.Writer) {
 // Start 启动命令
 func (c *Command) Start() error {
 	logger.Debug("starting command: %s", c.name)
+	c.cmdMu.Lock()
+	defer c.cmdMu.Unlock()
 	return c.cmd.Start()
 }
 
@@ -234,6 +239,8 @@ func (c *Command) Run() error {
 // Kill 强制终止命令
 func (c *Command) Kill() error {
 	logger.Info("killing command: %s", c.name)
+	c.cmdMu.Lock()
+	defer c.cmdMu.Unlock()
 	if c.cmd != nil {
 		return c.cmd.Kill()
 	}

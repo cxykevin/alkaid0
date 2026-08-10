@@ -48,9 +48,9 @@ const (
 
 // ToolParameters 工具参数
 type ToolParameters struct {
-	Type        ToolType
-	Required    bool
-	Description string
+	Type        ToolType `json:"type"`
+	Required    bool     `json:"required"`
+	Description string   `json:"description,omitempty"`
 }
 
 const maxTagLen = 6

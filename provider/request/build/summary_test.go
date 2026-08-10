@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/cxykevin/alkaid0/config"
+	reqStruct "github.com/cxykevin/alkaid0/provider/request/structs"
 	"github.com/cxykevin/alkaid0/storage/structs"
 )
 
@@ -689,5 +690,60 @@ func TestSummary_MessageOrdering(t *testing.T) {
 	// 验证第一条消息是系统消息
 	if len(request.Messages) > 0 && request.Messages[0].Role != "system" {
 		t.Error("Expected first message to be system message")
+	}
+}
+
+// TestSummary_ExcludesToolCalls 断言总结输入不包含任何工具调用信息：
+// 带工具调用的 assistant 消息与工具结果消息（MessagesRoleTool）一律跳过，
+// 不产生 role:"tool" / <tools> / <tools_return> / 工具结果内容 / 工具调用 id。
+func TestSummary_ExcludesToolCalls(t *testing.T) {
+	setupTestConfig()
+	db := setupTestDB(t)
+	config.GlobalConfig.Agent.SummaryModel = 1
+
+	messages := []structs.Messages{
+		{ChatID: 55, Type: structs.MessagesRoleUser, Delta: "please use the edit tool"},
+		{ChatID: 55, Type: structs.MessagesRoleAgent, Delta: "", ToolCallingJSONString: `[{"name":"edit","id":"call_1","parameters":{"path":"a.txt"}}]`},
+		{ChatID: 55, Type: structs.MessagesRoleTool, Delta: `[{"name":"edit","id":"call_1","return":"{\"ok\":true}"}]`},
+		{ChatID: 55, Type: structs.MessagesRoleAgent, Delta: "done editing"},
+		{ChatID: 55, Type: structs.MessagesRoleUser, Delta: "good"},
+	}
+	for _, mm := range messages {
+		if err := db.Create(&mm).Error; err != nil {
+			t.Fatalf("create msg: %v", err)
+		}
+	}
+
+	_, request, err := Summary(55, "", db)
+	if err != nil {
+		t.Fatalf("Summary failed: %v", err)
+	}
+	if request == nil {
+		t.Fatal("expected non-nil request")
+	}
+
+	for _, msg := range request.Messages {
+		if msg.Role == reqStruct.RoleTool {
+			t.Error("summary input should NOT contain role:tool messages")
+		}
+		if strings.Contains(msg.Content, "<tools>") || strings.Contains(msg.Content, "<tools_return>") {
+			t.Error("summary input should NOT contain <tools>/<tools_return> text segments")
+		}
+		if strings.Contains(msg.Content, `"ok":true`) {
+			t.Error("summary input should NOT contain tool result content")
+		}
+		if strings.Contains(msg.Content, "call_1") {
+			t.Error("summary input should NOT contain tool call id")
+		}
+	}
+	// 纯文本对话消息仍保留
+	foundDone := false
+	for _, msg := range request.Messages {
+		if strings.Contains(msg.Content, "done editing") {
+			foundDone = true
+		}
+	}
+	if !foundDone {
+		t.Error("summary input should keep pure-text assistant message")
 	}
 }

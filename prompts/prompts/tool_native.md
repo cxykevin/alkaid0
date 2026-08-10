@@ -16,18 +16,9 @@ You may batch several `tool_calls` entries in one reply.
 1. `function.name` must match a declared tool exactly.
 2. `function.arguments` is a JSON object string, never an object literal or a nested JSON-encoded string.
 3. Thinking (`reasoning_content`) is rehearsal only — any call you plan there must be re-emitted as a real `tool_calls` entry, or it never executes.
-4. If no `<tools_return>` block with your call's result arrives, the tool did not run — re-emit that same call once.
+4. A tool call runs only after its result arrives as a `role:"tool"` message carrying your `id` (the `tool_call_id`). Until that result arrives, the tool did not run — re-emit that same call once.
 
-## 3. Historical archive format (read-only — do NOT imitate)
-
-Earlier turns in this conversation show your tool calls as plain-text blocks:
-
-- assistant messages: `<tools>[{"name","id","parameters"}]</tools>` — past calls, already executed
-- user messages: `<tools_return>[{"name","id","return"}]</tools_return>` — past results
-
-These are read-only archives. Do NOT copy that shape into your current reply — the runtime rejects `<tools>` output. From this turn on, every new call must be a native `tool_calls` entry.
-
-## 4. Example
+## 3. Example
 
 Tools declared via the API: `get_weather(location: string)`.
 
@@ -40,4 +31,4 @@ You reply with native `tool_calls`:
 {"id":"call_ef34gh","type":"function","function":{"name":"get_weather","arguments":"{\"location\":\"Shanghai\"}"}}
 ```
 
-The runtime executes both and delivers both results as a `<tools_return>` block. Continue the conversation using those results.
+The runtime executes both and delivers each result back as a `role:"tool"` message matched by `tool_call_id` (`call_ab12cd`, `call_ef34gh`). Continue the conversation using those results.

@@ -136,10 +136,13 @@ func emitTextSSE(w http.ResponseWriter, text string) {
 	})
 }
 
-// reqHasToolReturn 判断请求体是否已含 <tools_return> 文本段（历史工具已执行）。
-// 原生模式历史回放走原文本拼法，不产生 role:"tool" 消息。
+// reqHasToolReturn 判断请求体是否已含工具结果（历史工具已执行）。
+// 原生模式：存在 role:"tool" 消息即已执行；提示词模式：含 <tools_return> 文本段。
 func reqHasToolReturn(req structs.ChatCompletionRequest) bool {
 	for _, m := range req.Messages {
+		if m.Role == structs.RoleTool {
+			return true
+		}
 		if m.Role == structs.RoleUser && strings.Contains(m.Content, "<tools_return>") {
 			return true
 		}
@@ -264,32 +267,40 @@ func TestNativeSendRequest_ToolCalling(t *testing.T) {
 		t.Fatalf("expected >=2 request bodies, got %d", len(bodies))
 	}
 	round2 := bodies[len(bodies)-1]
-	// 历史回放走原文本拼法：assistant 工具调用以 <tools> 段回放（无原生 tool_calls/tool_call_id），
-	// 工具结果以 <tools_return> 段回放（user 角色）
+	// 历史回放原生格式：assistant 带原生 tool_calls，工具结果以 role:"tool" 消息回放（tool_call_id 配对），
+	// 无 <tools>/<tools_return> 文本段
 	foundAssistantTools := false
 	foundToolReturn := false
-	noNativeToolCalls := true
-	for _, m := range round2.Messages {
+	hasLegacyTools := false
+	var asstIdx, toolIdx = -1, -1
+	for i, m := range round2.Messages {
 		if m.Role == structs.RoleAssistant {
-			if strings.Contains(m.Content, "<tools>") && strings.Contains(m.Content, `"name":"e2e_tool"`) {
-				foundAssistantTools = true
+			if strings.Contains(m.Content, "<tools>") {
+				hasLegacyTools = true
 			}
-			if len(m.ToolCalls) > 0 {
-				noNativeToolCalls = false
+			for _, tc := range m.ToolCalls {
+				if tc.ID == "call_e2e_1" && tc.Type == "function" && tc.Function != nil && tc.Function.Name == "e2e_tool" {
+					foundAssistantTools = true
+					asstIdx = i
+				}
 			}
 		}
-		if m.Role == structs.RoleUser && strings.Contains(m.Content, "<tools_return>") && strings.Contains(m.Content, `{\"result\":\"ok\"}`) {
+		if m.Role == structs.RoleTool && m.ToolCallID == "call_e2e_1" {
 			foundToolReturn = true
+			toolIdx = i
 		}
+	}
+	if hasLegacyTools {
+		t.Error("round2 request should NOT contain <tools> text segment")
 	}
 	if !foundAssistantTools {
-		t.Error("round2 request should replay assistant tool call as <tools> text segment")
-	}
-	if !noNativeToolCalls {
-		t.Error("round2 request should NOT carry native tool_calls (no tool_call_id)")
+		t.Error("round2 request should replay assistant tool call as native tool_calls (id/name)")
 	}
 	if !foundToolReturn {
-		t.Error("round2 request should replay tool result as <tools_return> text segment")
+		t.Error("round2 request should replay tool result as role:tool message with matching tool_call_id")
+	}
+	if !(asstIdx >= 0 && toolIdx > asstIdx) {
+		t.Errorf("round2 message order wrong: asstIdx=%d toolIdx=%d", asstIdx, toolIdx)
 	}
 }
 

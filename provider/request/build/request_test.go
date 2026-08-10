@@ -522,8 +522,8 @@ func TestRequestBody_ManyMessages(t *testing.T) {
 }
 
 // TestRequestBody_ToolMessage 测试工具类型消息（模式感知）：
-// 两种模式下工具结果都走原来的 <tools_return> 文本拼法（映射为 user 角色），
-// 原生模式不引入 role:"tool" 消息 / tool_call_id 字段。
+// 提示词模式工具结果走 <tools_return> 文本拼法（映射为 user 角色）；
+// 原生模式按 id 拆分为 role:"tool" 消息并严格配对（无对应 assistant 调用的结果丢弃）。
 func TestRequestBody_ToolMessage(t *testing.T) {
 	db := setupTestDB(t)
 
@@ -559,33 +559,43 @@ func TestRequestBody_ToolMessage(t *testing.T) {
 		t.Error("提示词模式：Expected tool message mapped to user role with <tools_return> wrapper")
 	}
 
-	// 原生模式：同样走 <tools_return> 文本拼法，不产生 role:"tool" 消息
-	nreq := buildReq(8, true, `[{"name":"edit","id":"call_1","return":"{\"ok\":true}"},{"name":"edit","id":"call_2","return":"{\"ok\":false}"}]`)
+	// 原生模式：先创建带工具调用的 assistant 消息（提供配对 id 集合）
+	if err := db.Create(&structs.Messages{
+		ChatID:                8,
+		Type:                  structs.MessagesRoleAgent,
+		Delta:                 "",
+		ToolCallingJSONString: `[{"name":"edit","id":"call_1","parameters":{"ok":true}},{"name":"edit","id":"call_2","parameters":{"ok":false}}]`,
+	}).Error; err != nil {
+		t.Fatalf("create assistant msg: %v", err)
+	}
+	// 结果含一个无对应调用的 ghost 结果（应被丢弃）
+	nreq := buildReq(8, true, `[{"name":"edit","id":"call_1","return":"{\"ok\":true}"},{"name":"edit","id":"call_2","return":"{\"ok\":false}"},{"name":"edit","id":"call_ghost","return":"{\"no\":true}"}]`)
 	var toolMsgs []reqStruct.Message
 	for _, msg := range nreq.Messages {
 		if msg.Role == reqStruct.RoleTool {
 			toolMsgs = append(toolMsgs, msg)
 		}
 	}
-	if len(toolMsgs) != 0 {
-		t.Errorf("原生模式：should NOT emit role:tool messages, got %d", len(toolMsgs))
+	if len(toolMsgs) != 2 {
+		t.Fatalf("原生模式：expected 2 paired role:tool messages (call_ghost dropped), got %d", len(toolMsgs))
 	}
-	nfound := false
+	if toolMsgs[0].ToolCallID != "call_1" || !strings.Contains(toolMsgs[0].Content, `{"ok":true}`) {
+		t.Errorf("原生模式：first tool msg mismatch: %+v", toolMsgs[0])
+	}
+	if toolMsgs[1].ToolCallID != "call_2" || !strings.Contains(toolMsgs[1].Content, `{"ok":false}`) {
+		t.Errorf("原生模式：second tool msg mismatch: %+v", toolMsgs[1])
+	}
+	// 原生模式工具结果消息不产生 <tools_return> 文本段（system 提示词含示例文本，不在此检查范围）
 	for _, msg := range nreq.Messages {
-		// return 字段值是 JSON 序列化字符串（转义后的对象），如 {\"ok\":true}
-		if msg.Role == "user" && strings.Contains(msg.Content, "<tools_return>") && strings.Contains(msg.Content, `{\"ok\":true}`) {
-			nfound = true
-			break
+		if msg.Role == reqStruct.RoleTool && strings.Contains(msg.Content, "<tools_return>") {
+			t.Error("原生模式：tool result message should NOT contain <tools_return> text segment")
 		}
-	}
-	if !nfound {
-		t.Error("原生模式：Expected tool result as user role with <tools_return> wrapper")
 	}
 }
 
 // TestRequestBody_NativeHistoryReplay 原生模式完整历史回放：
-// assistant 工具调用以 <tools> 文本段拼回 content（不引入原生 tool_calls/tool_call_id），
-// 工具结果以 <tools_return> 文本段回放（user 角色），顺序保持原始。
+// assistant 工具调用以原生 tool_calls 回放（id/name/arguments，content 保留文本），
+// 工具结果按 id 拆分为 role:"tool" 消息（tool_call_id 严格配对），顺序保持原始，无 <tools> 文本段。
 func TestRequestBody_NativeHistoryReplay(t *testing.T) {
 	db := setupTestDB(t)
 	toolsList := []*parser.ToolsDefine{}
@@ -615,29 +625,140 @@ func TestRequestBody_NativeHistoryReplay(t *testing.T) {
 	}
 
 	var assistantWithTools, toolReturn bool
-	var assistantHasNativeToolCalls bool
-	for _, msg := range req.Messages {
+	var wrongTextSeg bool
+	var asstIdx, toolIdx, continueIdx = -1, -1, -1
+	for i, msg := range req.Messages {
 		switch msg.Role {
 		case "assistant":
-			if strings.Contains(msg.Content, "<tools>") && strings.Contains(msg.Content, `"name":"edit"`) {
-				assistantWithTools = true
+			if strings.Contains(msg.Content, "<tools>") {
+				wrongTextSeg = true
 			}
 			if len(msg.ToolCalls) > 0 {
-				assistantHasNativeToolCalls = true
+				tc := msg.ToolCalls[0]
+				if tc.ID == "call_1" && tc.Type == "function" && tc.Function != nil &&
+					tc.Function.Name == "edit" && tc.Function.Arguments == "..." {
+					assistantWithTools = true
+					asstIdx = i
+				}
+			}
+		case reqStruct.RoleTool:
+			if msg.ToolCallID == "call_1" && strings.Contains(msg.Content, `{"ok":true}`) {
+				toolReturn = true
+				toolIdx = i
 			}
 		case "user":
-			if strings.Contains(msg.Content, "<tools_return>") && strings.Contains(msg.Content, `{\"ok\":true}`) {
-				toolReturn = true
+			// user 消息被 UserWrapTemplate 包裹为 <user_prompt>...</user_prompt>
+			if strings.Contains(msg.Content, "continue") {
+				continueIdx = i
 			}
 		}
 	}
-	if !assistantWithTools {
-		t.Error("assistant history should replay tool call as <tools> text segment")
+	if wrongTextSeg {
+		t.Error("assistant history should NOT contain <tools> text segment")
 	}
-	if assistantHasNativeToolCalls {
-		t.Error("assistant history should NOT carry native tool_calls (no tool_call_id)")
+	if !assistantWithTools {
+		t.Error("assistant history should carry native tool_calls (id/name/arguments)")
 	}
 	if !toolReturn {
-		t.Error("tool result should replay as <tools_return> text segment")
+		t.Error("tool result should replay as role:tool message with matching tool_call_id")
+	}
+	// 顺序：assistant(工具调用) → role:tool(结果) → user(continue)
+	if !(asstIdx >= 0 && toolIdx > asstIdx && continueIdx > toolIdx) {
+		t.Errorf("message order wrong: asstIdx=%d toolIdx=%d continueIdx=%d", asstIdx, toolIdx, continueIdx)
+	}
+}
+
+// TestRequestBody_TerminatedToolCall 工具调用被强行终止/结果缺失时的回放：
+// assistant 保留 tool_calls，对无对应结果的调用补发占位 role:"tool" 消息
+// （说明调用被终止），保证每个 tool_call_id 都有响应，满足 API 校验
+// "assistant with tool_calls must be followed by tool messages"。
+func TestRequestBody_TerminatedToolCall(t *testing.T) {
+	db := setupTestDB(t)
+	toolsList := []*parser.ToolsDefine{}
+
+	setupTestConfig()
+	cfg := *config.GlobalConfig
+	m := cfg.Model.Models[cfg.Model.DefaultModelID]
+	m.EnableToolCalling = true
+	cfg.Model.Models[cfg.Model.DefaultModelID] = m
+	config.GlobalConfigSwap(cfg)
+
+	// 场景 A：工具被强行终止——assistant 带 tool_calls 但结果消息缺失
+	msgs := []structs.Messages{
+		{ChatID: 10, Type: structs.MessagesRoleUser, Delta: "please call a tool"},
+		{ChatID: 10, Type: structs.MessagesRoleAgent, Delta: "calling now", ToolCallingJSONString: `[{"name":"run","id":"call_kill","parameters":{"command":"ls"}}]`},
+		{ChatID: 10, Type: structs.MessagesRoleUser, Delta: "never mind"},
+	}
+	for _, mm := range msgs {
+		if err := db.Create(&mm).Error; err != nil {
+			t.Fatalf("create msg: %v", err)
+		}
+	}
+	req, err := RequestBody(10, 1, "", &toolsList, db, "", "", cfgStruct.AgentConfig{}, &structs.Chats{})
+	if err != nil {
+		t.Fatalf("RequestBody failed: %v", err)
+	}
+	terminatedToolFound := false
+	for _, msg := range req.Messages {
+		if msg.Role == reqStruct.RoleAssistant {
+			if len(msg.ToolCalls) != 1 || msg.ToolCalls[0].ID != "call_kill" {
+				t.Errorf("terminated assistant should keep its tool_calls: %+v", msg.ToolCalls)
+			}
+			if !strings.Contains(msg.Content, "calling now") {
+				t.Errorf("assistant text should be kept, got %q", msg.Content)
+			}
+		}
+		if msg.Role == reqStruct.RoleTool && msg.ToolCallID == "call_kill" {
+			if !strings.Contains(msg.Content, "terminated") {
+				t.Errorf("terminated tool result should mention termination, got %q", msg.Content)
+			}
+			terminatedToolFound = true
+		}
+	}
+	if !terminatedToolFound {
+		t.Error("terminated tool call should emit a placeholder role:tool result")
+	}
+
+	// 场景 B：部分结果——assistant 两个调用仅一个结果 → call_a 真实结果、call_b 补终止占位
+	msgsB := []structs.Messages{
+		{ChatID: 11, Type: structs.MessagesRoleUser, Delta: "two tools"},
+		{ChatID: 11, Type: structs.MessagesRoleAgent, Delta: "", ToolCallingJSONString: `[{"name":"run","id":"call_a","parameters":{}},{"name":"edit","id":"call_b","parameters":{}}]`},
+		{ChatID: 11, Type: structs.MessagesRoleTool, Delta: `[{"name":"run","id":"call_a","return":"{\"ok\":true}"}]`},
+	}
+	for _, mm := range msgsB {
+		if err := db.Create(&mm).Error; err != nil {
+			t.Fatalf("create msg B: %v", err)
+		}
+	}
+	reqB, err := RequestBody(11, 1, "", &toolsList, db, "", "", cfgStruct.AgentConfig{}, &structs.Chats{})
+	if err != nil {
+		t.Fatalf("RequestBody B failed: %v", err)
+	}
+	asstBCount := 0
+	realA, termB := false, false
+	for _, msg := range reqB.Messages {
+		if msg.Role == reqStruct.RoleAssistant {
+			asstBCount = len(msg.ToolCalls)
+		}
+		if msg.Role == reqStruct.RoleTool {
+			switch msg.ToolCallID {
+			case "call_a":
+				if strings.Contains(msg.Content, "terminated") {
+					t.Error("call_a should carry real result, not termination placeholder")
+				}
+				realA = true
+			case "call_b":
+				if !strings.Contains(msg.Content, "terminated") {
+					t.Errorf("call_b should carry termination placeholder, got %q", msg.Content)
+				}
+				termB = true
+			}
+		}
+	}
+	if asstBCount != 2 {
+		t.Errorf("partial-result assistant should keep 2 tool_calls, got %d", asstBCount)
+	}
+	if !realA || !termB {
+		t.Errorf("partial-result: real result call_a=%v, terminated placeholder call_b=%v", realA, termB)
 	}
 }

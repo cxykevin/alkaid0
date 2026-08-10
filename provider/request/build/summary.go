@@ -89,7 +89,11 @@ func SummaryWithKeepNumber(chatID uint32, agentID string, db *gorm.DB, keepNum i
 					exitFlag = true
 				}
 			} else {
-				if v.Type == structs.MessagesRoleUser {
+				if v.Type == structs.MessagesRoleTool || (v.Type == structs.MessagesRoleAgent && v.ToolCallingJSONString != "") {
+					// 工具调用信息不进入总结：工具结果消息与带工具调用的 assistant 消息一律跳过，
+					// 总结模型只见纯文本对话，不接触任何工具格式（<tools> / <tools_return> / tool_calls）。
+					skipMsg = true
+				} else if v.Type == structs.MessagesRoleUser {
 					rendered, err := prompts.Render(prompts.UserWrapTemplate, struct {
 						Prompt string
 						Refers structs.MessagesReferList

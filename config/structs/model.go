@@ -35,7 +35,7 @@ type ModelConfig struct {
 	ProviderURL            string                 `default:"https://openrouter.com/api/v1"` // 覆写模型提供者URL
 	ProviderKey            string                 `default:"sk-or-xxx"`                     // 复写模型提供者Key
 	EnableThinking         bool                   `default:"false"`                         // 是否启用思考
-	EnableToolCalling      bool                   `default:"false"`                         // 是否启用原生 tools 参数/tool_calls 模式（默认 false = 提示词 <tools> 标签模式）
+	EnableToolCalling      bool                   `default:"true"`                          // 是否启用原生 tools 参数/tool_calls 模式（默认 true = 原生 tool_calls 模式；false = 提示词 <tools> 标签模式，兼容旧配置）
 	CompressSize           uint32                 `default:"128000"`                        // 压缩大小
 	Hide                   bool                   `default:"false"`                         // 在列表中隐藏
 	Type                   ModelType              `default:""`                              // 模型类型

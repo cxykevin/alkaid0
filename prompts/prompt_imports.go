@@ -11,7 +11,7 @@ import (
 //go:embed prompts/agent_wrap.md
 var AgentWrap string
 
-// DefaultAgent 默认 Agent 的提示词
+// DefaultAgent Default agent prompt
 //
 //go:embed prompts/default_agent.md
 var DefaultAgent string
@@ -36,17 +36,17 @@ var Init string
 //go:embed prompts/subagent_wrap.md
 var SubagentWrap string
 
-// Summary 总结提示词
+// Summary Summary prompt
 //
 //go:embed prompts/summary.md
 var Summary string
 
-// SummaryWrap 对于不支持思考的模型的思考占位符
+// SummaryWrap Summary
 //
 //go:embed prompts/summary_wrap.md
 var SummaryWrap string
 
-// Title 标题生成提示词
+// Title Title generation prompt
 //
 //go:embed prompts/title.md
 var Title string
@@ -56,17 +56,17 @@ var Title string
 //go:embed prompts/title_system.md
 var TitleSystem string
 
-// ToolEnhance 工具调用增强提示词
+// ToolEnhance Tool calling reinforcement prompt
 //
 //go:embed prompts/tool_enhance.md
 var ToolEnhance string
 
-// ToolEnhanceNative 原生工具调用增强提示词（反向于 tool_enhance.md）
+// ToolEnhanceNative Native tool calling reinforcement prompt (counterpart of tool_enhance.md)
 //
 //go:embed prompts/tool_enhance_native.md
 var ToolEnhanceNative string
 
-// ToolNative 原生工具提示词（反向于 tools.md）
+// ToolNative Native tool calling prompt (counterpart of tools.md)
 //
 //go:embed prompts/tool_native.md
 var ToolNative string
@@ -86,7 +86,7 @@ var ToolResponseWrap string
 //go:embed prompts/tool_scopes.md
 var ToolScopes string
 
-// Tools 工具提示词
+// Tools Tool calling prompt
 //
 //go:embed prompts/tools.md
 var Tools string
@@ -109,7 +109,7 @@ var UserWrap string
 // AgentWrap Agent交互提示词模板
 var AgentWrapTemplate *template.Template
 
-// DefaultAgent 默认 Agent 的提示词模板
+// DefaultAgent Default agent prompt模板
 var DefaultAgentTemplate *template.Template
 
 // DeltaWrap AI response 占位符模板
@@ -124,25 +124,25 @@ var InitTemplate *template.Template
 // SubagentWrap Agent交互提示词模板
 var SubagentWrapTemplate *template.Template
 
-// Summary 总结提示词模板
+// Summary Summary prompt模板
 var SummaryTemplate *template.Template
 
-// SummaryWrap 对于不支持思考的模型的思考占位符模板
+// SummaryWrap Summary模板
 var SummaryWrapTemplate *template.Template
 
-// Title 标题生成提示词模板
+// Title Title generation prompt模板
 var TitleTemplate *template.Template
 
 // TitleSystem 标题生成系统提示词模板
 var TitleSystemTemplate *template.Template
 
-// ToolEnhance 工具调用增强提示词模板
+// ToolEnhance Tool calling reinforcement prompt模板
 var ToolEnhanceTemplate *template.Template
 
-// ToolEnhanceNative 原生工具调用增强提示词（反向于 tool_enhance.md）模板
+// ToolEnhanceNative Native tool calling reinforcement prompt (counterpart of tool_enhance.md)模板
 var ToolEnhanceNativeTemplate *template.Template
 
-// ToolNative 原生工具提示词（反向于 tools.md）模板
+// ToolNative Native tool calling prompt (counterpart of tools.md)模板
 var ToolNativeTemplate *template.Template
 
 // ToolPrehook 工具预调用提示词生成器模板
@@ -154,7 +154,7 @@ var ToolResponseWrapTemplate *template.Template
 // ToolScopes 工具作用域模板
 var ToolScopesTemplate *template.Template
 
-// Tools 工具提示词模板
+// Tools Tool calling prompt模板
 var ToolsTemplate *template.Template
 
 // ToolsWrap 工具占位符模板
