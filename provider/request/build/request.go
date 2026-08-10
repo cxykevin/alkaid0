@@ -106,17 +106,23 @@ func RequestBody(chatID uint32, modelID int32, agentCode string, toolsList *[]*p
 		}
 	}
 
-	// 预扫描（原生模式）：收集回放范围内所有 assistant 工具调用 id（toolCallIDs，
-	// 用于工具结果配对）、所有工具结果 id（resultIDs，用于判断哪些调用结果缺失）与
-	// 失败调用 id（failedResultIDs，其真实参数在回放时不再省略，供模型自我修正）。
+	// 预扫描（原生模式）：收集回放范围内
+	//   toolCallIDs    — 所有 assistant 工具调用 id（用于工具结果配对，丢弃孤立幽灵结果）
+	//   resultIDs      — 所有工具结果 id（用于判断哪些调用结果缺失、需补终止占位）
+	//   failedResultIDs— 失败调用 id（其真实参数在回放时不再省略，供模型自我修正）
+	//   recentIDs      — 最近 5 轮工具调用 assistant 的调用 id（只对最近 5 轮完整回放，
+	//                     更旧的工具调用轮次降级为纯文本，避免历史堆叠过长）
 	// 回放是倒序查询 + PushFront，结果消息先于其 assistant 被处理，无法边扫边配，
-	// 因此在主循环前先倒序分页扫描一次。id 全局唯一、结果紧跟调用，不会误配。
+	// 因此在主循环前先倒序分页扫描一次。倒序即最新在前，故前 5 条带工具调用的
+	// assistant 消息即"最近 5 轮"。id 全局唯一、结果紧跟调用，不会误配。
 	// 与主循环一致：遇到 summary（历史截断点）即停止。
-	var toolCallIDs, resultIDs, failedResultIDs map[string]struct{}
+	var toolCallIDs, resultIDs, failedResultIDs, recentIDs map[string]struct{}
 	if nativeMode {
 		toolCallIDs = make(map[string]struct{})
 		resultIDs = make(map[string]struct{})
 		failedResultIDs = make(map[string]struct{})
+		recentIDs = make(map[string]struct{})
+		recentTurns := 0
 	scan:
 		for offsetPage := range maxPage {
 			var obj []structs.Messages
@@ -152,6 +158,14 @@ func RequestBody(chatID uint32, modelID int32, agentCode string, toolsList *[]*p
 								toolCallIDs[c.ID] = struct{}{}
 							}
 						}
+						if recentTurns < 5 {
+							recentTurns++
+							for _, c := range calls {
+								if c.ID != "" {
+									recentIDs[c.ID] = struct{}{}
+								}
+							}
+						}
 					}
 				}
 			}
@@ -172,6 +186,7 @@ func RequestBody(chatID uint32, modelID int32, agentCode string, toolsList *[]*p
 			break
 		}
 		for _, v := range obj {
+			skipMsg := false
 			msg := reqStruct.Message{
 				Role:    msgRole[v.Type],
 				Content: "",
@@ -205,26 +220,41 @@ func RequestBody(chatID uint32, modelID int32, agentCode string, toolsList *[]*p
 					if v.ToolCallingJSONString != "" {
 						toolCalls, err := parseStoredToolCalls(v.ToolCallingJSONString, failedResultIDs)
 						if err == nil && len(toolCalls) > 0 {
-							msg.ToolCalls = toolCalls
-							// 为被终止（无对应结果消息）的调用补发占位 role:"tool" 消息，
-							// 保证 assistant 的每个 tool_call_id 都有响应，满足 API 校验
-							// "assistant with tool_calls must be followed by tool messages"。
-							// 倒序 PushFront：占位按 toolCalls 顺序排在 assistant 之后。
-							for i := len(toolCalls) - 1; i >= 0; i-- {
-								c := toolCalls[i]
-								if c.ID == "" {
-									continue
+							// 仅对最近 5 轮工具调用完整回放（带 tool_calls + 结果/终止占位）；
+							// 更旧的工具调用轮次降级为纯文本，不再携带 tool_calls（其调用/结果也不回放）。
+							inRecent := true
+							for _, c := range toolCalls {
+								if _, ok := recentIDs[c.ID]; !ok {
+									inRecent = false
+									break
 								}
-								if _, ok := resultIDs[c.ID]; !ok {
-									responseDeltaList.PushFront(reqStruct.Message{
-										Role:       reqStruct.RoleTool,
-										Content:    toolCallTerminatedMsg,
-										ToolCallID: c.ID,
-									})
+							}
+							if inRecent {
+								msg.ToolCalls = toolCalls
+								// 为被终止（无对应结果消息）的调用补发占位 role:"tool" 消息，
+								// 保证 assistant 的每个 tool_call_id 都有响应，满足 API 校验
+								// "assistant with tool_calls must be followed by tool messages"。
+								// 倒序 PushFront：占位按 toolCalls 顺序排在 assistant 之后。
+								for i := len(toolCalls) - 1; i >= 0; i-- {
+									c := toolCalls[i]
+									if c.ID == "" {
+										continue
+									}
+									if _, ok := resultIDs[c.ID]; !ok {
+										responseDeltaList.PushFront(reqStruct.Message{
+											Role:       reqStruct.RoleTool,
+											Content:    toolCallTerminatedMsg,
+											ToolCallID: c.ID,
+										})
+									}
 								}
 							}
 						}
 						// 解析失败容错为普通文本消息（Content 已保留），不中断回放
+					}
+					// 降级后无文本内容（纯工具调用轮次）：跳过空 assistant 消息
+					if len(msg.ToolCalls) == 0 && msg.Content == "" && msg.ReasoningContent == nil {
+						skipMsg = true
 					}
 				} else if v.Type == structs.MessagesRoleUser {
 					rendered, err := prompts.Render(prompts.UserWrapTemplate, struct {
@@ -304,14 +334,17 @@ func RequestBody(chatID uint32, modelID int32, agentCode string, toolsList *[]*p
 			}
 			if nativeMode && v.Type == structs.MessagesRoleTool {
 				// 原生模式：工具结果按 id 拆分为多条 role:"tool" 消息，严格配对——
-				// 结果 id 必须命中预扫描的 assistant 工具调用集合（丢弃孤立的幽灵结果）。
-				// 被终止调用的占位结果由 assistant 分支补齐。
+				// 结果 id 必须命中最近 5 轮 assistant 工具调用集合（丢弃更旧调用结果与
+				// 孤立的幽灵结果）。被终止调用的占位结果由 assistant 分支补齐。
 				// PushFront 正序：多条需倒序 push。
 				results, err := parseStoredToolResults(v.Delta)
 				if err == nil && len(results) > 0 {
 					for i := len(results) - 1; i >= 0; i-- {
 						r := results[i]
 						if _, ok := toolCallIDs[r.ID]; !ok {
+							continue
+						}
+						if _, ok := recentIDs[r.ID]; !ok {
 							continue
 						}
 						responseDeltaList.PushFront(reqStruct.Message{
@@ -322,6 +355,9 @@ func RequestBody(chatID uint32, modelID int32, agentCode string, toolsList *[]*p
 					}
 				}
 				// 结果消息已按 id 拆分推送（或解析失败/全部丢弃则不推送），跳过统一 push
+				continue
+			}
+			if skipMsg {
 				continue
 			}
 			responseDeltaList.PushFront(msg)

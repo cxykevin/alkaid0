@@ -763,6 +763,78 @@ func TestRequestBody_TerminatedToolCall(t *testing.T) {
 	}
 }
 
+// TestRequestBody_RecentFiveToolTurns 只对最近 5 轮工具调用完整回放：
+// 更旧的工具调用轮次（assistant 带 tool_calls）降级为纯文本，其调用与结果均不回放。
+func TestRequestBody_RecentFiveToolTurns(t *testing.T) {
+	db := setupTestDB(t)
+	toolsList := []*parser.ToolsDefine{}
+
+	setupTestConfig()
+	cfg := *config.GlobalConfig
+	m := cfg.Model.Models[cfg.Model.DefaultModelID]
+	m.EnableToolCalling = true
+	cfg.Model.Models[cfg.Model.DefaultModelID] = m
+	config.GlobalConfigSwap(cfg)
+
+	// 6 轮工具调用，按 id 递增（call_1 最旧 → call_6 最新），每轮都带结果
+	var msgs []structs.Messages
+	for i := 1; i <= 6; i++ {
+		id := fmt.Sprintf("call_%d", i)
+		msgs = append(msgs,
+			structs.Messages{ChatID: 12, Type: structs.MessagesRoleAgent, Delta: fmt.Sprintf("turn %d", i), ToolCallingJSONString: `[{"name":"run","id":"` + id + `","parameters":{"command":"echo"}}]`},
+			structs.Messages{ChatID: 12, Type: structs.MessagesRoleTool, Delta: `[{"name":"run","id":"` + id + `","return":"{\"ok\":true}"}]`},
+		)
+	}
+	for _, mm := range msgs {
+		if err := db.Create(&mm).Error; err != nil {
+			t.Fatalf("create msg: %v", err)
+		}
+	}
+
+	req, err := RequestBody(12, 1, "", &toolsList, db, "", "", cfgStruct.AgentConfig{}, &structs.Chats{})
+	if err != nil {
+		t.Fatalf("RequestBody failed: %v", err)
+	}
+
+	asstWithTools := 0   // 携带 tool_calls 的 assistant 数
+	asstTextOnly := 0    // 降级为纯文本的 assistant 数
+	toolResults := 0     // role:"tool" 结果数
+	hasOldest, hasNewest := false, false
+	for _, msg := range req.Messages {
+		if msg.Role == reqStruct.RoleAssistant {
+			if len(msg.ToolCalls) > 0 {
+				asstWithTools++
+				if msg.ToolCalls[0].ID == "call_1" {
+					hasOldest = true
+				}
+				if msg.ToolCalls[0].ID == "call_6" {
+					hasNewest = true
+				}
+			} else if strings.Contains(msg.Content, "turn 1") {
+				asstTextOnly++
+			}
+		}
+		if msg.Role == reqStruct.RoleTool {
+			toolResults++
+		}
+	}
+	if asstWithTools != 5 {
+		t.Errorf("expected 5 recent assistant turns with tool_calls, got %d", asstWithTools)
+	}
+	if asstTextOnly != 1 {
+		t.Errorf("expected oldest turn (call_1) downgraded to text-only, got %d", asstTextOnly)
+	}
+	if hasOldest {
+		t.Error("oldest turn (call_1) should NOT carry tool_calls")
+	}
+	if !hasNewest {
+		t.Error("newest turn (call_6) should carry tool_calls")
+	}
+	if toolResults != 5 {
+		t.Errorf("expected 5 recent tool results replayed, got %d", toolResults)
+	}
+}
+
 // helper: 原生模式回放辅助 —— 对给定消息序列调用 RequestBody，
 // 返回 assistant 消息中指定 id 的工具调用 arguments。
 func replayArguments(t *testing.T, chatID uint32, msgs []structs.Messages, callID string) string {
