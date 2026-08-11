@@ -20,7 +20,7 @@ import (
 	u "github.com/cxykevin/alkaid0/utils"
 )
 
-const toolName = "trace"
+const toolName = "read"
 
 //go:embed prompt.md
 var prompt string
@@ -369,8 +369,13 @@ func Trace(session *structs.Chats, mp map[string]*any, push []*any) (bool, []*an
 
 	boolx := true
 	success := any(boolx)
+	msg := "The file has been traced and injected into the top of the context."
+	msgAny := any(msg)
+	pathAny := any(path)
 	return false, push, map[string]*any{
 		"success": &success,
+		"message": &msgAny,
+		"path":    &pathAny,
 	}, nil
 }
 
@@ -644,6 +649,7 @@ func SetIndexTaskFn(fn IndexTaskFn) {
 	indexTaskFn = fn
 }
 
+// StoreTempObject 存储临时对象（不创建 Traces 记录）
 func StoreTempObject(session *structs.Chats, path string, content string, ro bool) error {
 	err := session.DB.Create(structs.ReferFiles{
 		ChatID:   session.ID,

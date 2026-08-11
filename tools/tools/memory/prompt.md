@@ -20,8 +20,3 @@ Use them to store and recall:
 5. When a memory file does not exist yet, use `target: "@all"` (or `""`), never `@ln:`/`@insert:` targeting lines above 1.
 
 **DO NOT INCLUDE LINE NUMBERS IN EDITING!**
-
-#### Quick Examples
-- Append to project memory: `{"path":"@memory","target":"","text":"- The project uses pure-Go dependencies."}`
-- Replace global memory: `{"path":"@memory/global","target":"@all","text":"- Always reply in Chinese."}`
-- Update a substring: `{"path":"@memory","target":"pure-Go","text":"pure-Go (no cgo)"}`

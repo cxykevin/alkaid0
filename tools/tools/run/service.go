@@ -36,8 +36,8 @@ func (s JobState) String() string {
 	}
 }
 
-// RunRequest 一次命令执行请求。
-type RunRequest struct {
+// Request 一次命令执行请求。
+type Request struct {
 	SessionID        uint32
 	AgentID          string
 	ToolID           string
@@ -55,8 +55,8 @@ type RunRequest struct {
 	UpdateFn func(content string)
 }
 
-// RunResult 命令执行结果。
-type RunResult struct {
+// Result 命令执行结果。
+type Result struct {
 	Success   bool
 	ErrString string // 前置错误/降级说明（拼接在输出之前）
 	Output    string // 命令 stdout/stderr 内容
@@ -77,7 +77,7 @@ type Job struct {
 	done chan struct{} // 关闭表示命令执行结束
 
 	resultMu sync.Mutex
-	result   *RunResult
+	result   *Result
 
 	// UpdateFn 后台任务运行状态刷新回调（background 模式，写入 temp obj）
 	UpdateFn func(content string)
@@ -116,7 +116,7 @@ func (j *Job) wasKilled() bool {
 }
 
 // Wait 等待任务完成并返回结果。ctx 取消时终止命令并等待清理完成。
-func (j *Job) Wait(ctx context.Context) *RunResult {
+func (j *Job) Wait(ctx context.Context) *Result {
 	select {
 	case <-j.done:
 	case <-ctx.Done():
@@ -145,7 +145,7 @@ func (j *Job) Done() <-chan struct{} {
 type serviceReq interface{}
 
 type submitReq struct {
-	req  *RunRequest
+	req  *Request
 	ctx  context.Context
 	resp chan *Job
 }
@@ -197,7 +197,7 @@ func (s *Service) Find(runid string) *Job {
 
 // Submit 提交一次命令执行：等价于"新建一个后台服务（job）并启动"。
 // 立即返回 job，调用方通过 job.Wait 等待响应。
-func (s *Service) Submit(req *RunRequest, ctx context.Context) (*Job, error) {
+func (s *Service) Submit(ctx context.Context, req *Request) (*Job, error) {
 	resp := make(chan *Job, 1)
 	s.reqChan <- &submitReq{req: req, ctx: ctx, resp: resp}
 	job := <-resp
@@ -226,7 +226,7 @@ func (s *Service) loop() {
 	for req := range s.reqChan {
 		switch r := req.(type) {
 		case *submitReq:
-			r.resp <- s.doSubmit(r.req, r.ctx)
+			r.resp <- s.doSubmit(r.ctx, r.req)
 		case *killReq:
 			r.resp <- s.doKill(r.id)
 		case *statusReq:
@@ -235,7 +235,7 @@ func (s *Service) loop() {
 	}
 }
 
-func (s *Service) doSubmit(req *RunRequest, ctx context.Context) *Job {
+func (s *Service) doSubmit(ctx context.Context, req *Request) *Job {
 	s.mu.Lock()
 	s.seq++
 	id := fmt.Sprintf("run_%d", s.seq)
@@ -255,7 +255,7 @@ func (s *Service) doSubmit(req *RunRequest, ctx context.Context) *Job {
 	s.mu.Unlock()
 
 	logger.Info("background service: new job %s (session=%d, agent=%s, runid=%s) cmd=%q", id, req.SessionID, req.AgentID, req.RunID, req.Command)
-	go s.execute(job, req, ctx)
+	go s.execute(ctx, job, req)
 	return job
 }
 
@@ -277,7 +277,7 @@ func (s *Service) doStatus(id string) *Job {
 }
 
 // execute 在独立 goroutine 中执行命令并写入结果，最后关闭 done。
-func (s *Service) execute(job *Job, req *RunRequest, ctx context.Context) {
+func (s *Service) execute(ctx context.Context, job *Job, req *Request) {
 	// background 模式：每 backgroundUpdateInterval 刷新一次 temp obj 运行状态
 	var tickerStop, tickerDone chan struct{}
 	stopTicker := func() {
@@ -310,14 +310,14 @@ func (s *Service) execute(job *Job, req *RunRequest, ctx context.Context) {
 		if r := recover(); r != nil {
 			logger.Error("background job %s panicked: %v", job.ID, r)
 			job.resultMu.Lock()
-			job.result = &RunResult{Success: false, ErrString: fmt.Sprintf("[System] background job %s panicked: %v\n", job.ID, r)}
+			job.result = &Result{Success: false, ErrString: fmt.Sprintf("[System] background job %s panicked: %v\n", job.ID, r)}
 			job.State = JobFinished
 			job.resultMu.Unlock()
 		}
 		close(job.done)
 	}()
 
-	result := s.runCommand(job, req, ctx)
+	result := s.runCommand(ctx, job, req)
 
 	// 停止定时刷新，写最终结果（命令结束后最后一次更新 temp obj）
 	stopTicker()
@@ -349,12 +349,12 @@ func bgRunningContent(command string, start time.Time) string {
 }
 
 // bgFinalContent 后台任务结束后的最终状态文本。
-func bgFinalContent(command string, r *RunResult) string {
+func bgFinalContent(command string, r *Result) string {
 	return fmt.Sprintf("[agent execute] $ %s\n\n%s%s[Background] Finished: success=%v\n", command, r.ErrString, r.Output, r.Success)
 }
 
 // runCommand 在沙盒中执行命令（含非沙盒降级），并填充结果。
-func (s *Service) runCommand(job *Job, req *RunRequest, ctx context.Context) *RunResult {
+func (s *Service) runCommand(ctx context.Context, job *Job, req *Request) *Result {
 	isolateMode := sandbox.IsolationNone
 	if req.Sandbox {
 		isolateMode = sandbox.IsolationOS
@@ -373,7 +373,7 @@ func (s *Service) runCommand(job *Job, req *RunRequest, ctx context.Context) *Ru
 		IsolationMode: isolateMode,
 	})
 	if err != nil {
-		return &RunResult{CreateErr: err}
+		return &Result{CreateErr: err}
 	}
 
 	startCmd := []string{}
@@ -388,7 +388,7 @@ func (s *Service) runCommand(job *Job, req *RunRequest, ctx context.Context) *Ru
 
 	c, err := sand.Execute(req.Shell, startCmd...)
 	if err != nil {
-		return &RunResult{CreateErr: err}
+		return &Result{CreateErr: err}
 	}
 
 	// 注册终止回调：loop.Stop()/context 取消经 Kill(id) 终止此命令
@@ -397,7 +397,7 @@ func (s *Service) runCommand(job *Job, req *RunRequest, ctx context.Context) *Ru
 	// 命令启动前已被终止请求：不执行，直接返回（避免无效启动后漏杀）
 	if job.wasKilled() {
 		logger.Info("job %s killed before command start, skip execution", job.ID)
-		return &RunResult{Success: false, ErrString: "[System] Command killed before start\n", Killed: true}
+		return &Result{Success: false, ErrString: "[System] Command killed before start\n", Killed: true}
 	}
 
 	var buf bytes.Buffer
@@ -416,18 +416,18 @@ func (s *Service) runCommand(job *Job, req *RunRequest, ctx context.Context) *Ru
 		})
 		if err2 != nil {
 			errString += fmt.Sprintf("[System] Command Execute Error: %v\n", err)
-			return &RunResult{Success: false, ErrString: errString, Output: buf.String(), Fallback: true}
+			return &Result{Success: false, ErrString: errString, Output: buf.String(), Fallback: true}
 		}
 		c2, err2 := sand2.Execute(req.Shell, startCmd...)
 		if err2 != nil {
 			errString += fmt.Sprintf("[System] Command Execute Error: %v\n", err2)
-			return &RunResult{Success: false, ErrString: errString, Output: buf.String(), Fallback: true}
+			return &Result{Success: false, ErrString: errString, Output: buf.String(), Fallback: true}
 		}
 		// 覆盖终止回调为新进程
 		job.setKillFn(func() { _ = c2.Kill() })
 		if job.wasKilled() {
 			logger.Info("job %s killed before fallback command start, skip execution", job.ID)
-			return &RunResult{Success: false, ErrString: errString + "[System] Command killed before start\n", Killed: true}
+			return &Result{Success: false, ErrString: errString + "[System] Command killed before start\n", Killed: true}
 		}
 
 		var buf2 bytes.Buffer
@@ -436,7 +436,7 @@ func (s *Service) runCommand(job *Job, req *RunRequest, ctx context.Context) *Ru
 		if err2 != nil {
 			errString += fmt.Sprintf("[System] Command Execute Error: %v\n", err2)
 		}
-		return &RunResult{
+		return &Result{
 			Success:   err2 == nil,
 			ErrString: errString,
 			Output:    buf2.String(),
@@ -446,12 +446,12 @@ func (s *Service) runCommand(job *Job, req *RunRequest, ctx context.Context) *Ru
 	}
 
 	if err != nil {
-		return &RunResult{
+		return &Result{
 			Success:   false,
 			ErrString: fmt.Sprintf("[System] Command Execute Error: %v\n", err),
 			Output:    buf.String(),
 			Killed:    ctx.Err() != nil,
 		}
 	}
-	return &RunResult{Success: true, Output: buf.String()}
+	return &Result{Success: true, Output: buf.String()}
 }

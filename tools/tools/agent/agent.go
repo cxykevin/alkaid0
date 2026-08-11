@@ -15,7 +15,6 @@ import (
 	agentconfig "github.com/cxykevin/alkaid0/provider/request/agents/config"
 	"github.com/cxykevin/alkaid0/storage/structs"
 	"github.com/cxykevin/alkaid0/tools/actions"
-	"github.com/cxykevin/alkaid0/tools/index"
 	"github.com/cxykevin/alkaid0/tools/toolobj"
 )
 
@@ -558,5 +557,5 @@ func load() string {
 }
 
 func init() {
-	index.AddIndex(load)
+	// index.AddIndex(load)
 }

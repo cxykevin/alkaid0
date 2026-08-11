@@ -34,8 +34,11 @@ Returns a JSON object:
 - For `hidden=true`, a Chrome TLS fingerprint is used even when the global `Agent.FetchProxy` proxy is configured (manual CONNECT/socks5 tunnel + utls).
 - GET with a body is allowed but unusual; prefer POST/PUT when sending a body.
 
+DO NOT use this tool to fetch "file://" or any local files! Instead of using `read` tool.
+
 #### Quick Examples:
 
-- Fetch a web page: `{"method":"GET","url":"https://example.com","summary":"Summarize the key points of this page","hidden":true}`
-- Call a JSON API: `{"method":"GET","url":"https://api.example.com/v1/status","headers":"Authorization: Bearer token","timeout":10}`
-- POST JSON: `{"method":"POST","url":"https://api.example.com/v1/items","headers":"Content-Type: application/json","body":"{\"name\":\"test\"}"}`
+- Fetch a web page (summarized): `{"method":"GET","url":"https://example.com","summary":"Summarize this page in markdown"}`
+- Call a REST API: `{"method":"POST","url":"https://api.example.com/data","headers":"Content-Type: application/json","body":"{\"key\":\"value\"}"}`
+- Disguise as browser: `{"method":"GET","url":"https://blocked-site.com","hidden":true}`
+- Long request timeout: `{"method":"GET","url":"https://example.com/slow","timeout":30}`

@@ -41,10 +41,9 @@ NEVER fetch page by `run` tools, instead, use `fetch` tools!
 
 #### Quick Examples:
 
-- Build project: `{"type":"shell","reason":"build project","command":"go build ./..."}`
-- Run tests: `{"type":"shell","reason":"run tests","command":"go test ./...","timeout":120}`
-- Quick command no sandbox: `{"type":"shell","reason":"check disk","command":"df -h","sandbox":false}`
-- Run long build in background: `{"type":"shell","reason":"build in background","command":"go build ./...","background":true}` (returns `run_id` immediately)
-- Wait for a background task: `{"type":"wait","reason":"wait for build to finish","command":"@temp/run/tool_20260810-120000"}`
-- Wait 30 seconds: `{"type":"sleep","reason":"wait for service to start","command":30}`
-- Wait 5 seconds: `{"type":"sleep","reason":"wait for file to be created","command":5}`
+- Run a command: `{"type":"shell","reason":"check git status","command":"git status"}`
+- Sleep briefly: `{"type":"sleep","reason":"wait for build to finish","command":"5"}`
+- Wait for background job: `{"type":"wait","reason":"wait for server start","command":"run/run-20260101-120000"}`
+- Run in background: `{"type":"shell","reason":"start dev server","command":"go run .","background":true}`
+- Disable sandbox: `{"type":"shell","reason":"list workspace files","command":"ls -la","sandbox":false}`
+- Custom timeout: `{"type":"shell","reason":"run slow tests","command":"go test -v ./...","timeout":120}`

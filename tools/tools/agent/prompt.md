@@ -17,8 +17,8 @@ Subagents inherit context from the parent agent session. They communicate exclus
 1. Create agent with `agent` tool (specify name, tag, optional path)
 2. Activate it with `activate_agent` (provide name and task prompt)
 3. Receive deactivation signal when task completes or on error
-
 #### Quick Examples:
-- Create agent: `{"name":"frontend-dev1","tag":"frontend"}` → activate: `{"name":"frontend-dev1","prompt":"Write a simple helloworld.html"}`
-- Create with path restriction: `{"name":"backend-api","tag":"backend","path":"api/"}`
-- Delete agent: `{"name":"frontend-dev1","delete":true}`
+
+- Create an agent: `{"name":"code_reviewer","tag":"fast","path":"src"}`
+- Update an agent: `{"name":"code_reviewer","tag":"fast","path":"src/review"}`
+- Delete an agent: `{"name":"code_reviewer","delete":true}`

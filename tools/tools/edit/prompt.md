@@ -33,15 +33,13 @@ Edit or create file or virtual objects. To trigger LSP diagnostics on a file wit
   - Each line: `- [X] taskName: taskDetails` (only `-` bullet, no `*`/`+`/numbers).
   - Status: `[ ]` (waiting), `[-]` (doing), `[X]` (done).
   - Nesting: exactly **2 spaces** per level. `taskName`/`taskDetails` are separated by the first `:`.
-
 #### Quick Examples:
 
-- Create file: `{"path":"hello.py","target":"@all","text":"print('hello world')\n"}`
-- Replace line: `{"path":"app.go","target":"@ln:42","text":"\treturn fmt.Errorf(\"failed: %w\", err)"}`
-- Replace substring: `{"path":"main.go","target":"old_func ()","text":"new_func ()"}`
-- Append to file: `{"path":"log.txt","target":"","text":"new entry"}`
-- Trigger diagnostics (no change): `{"path":"main.go","target":"","text":""}`
-- Tree copy entry: ``{"path":"@tree","target":"hello","text":"hello\n  - bar_copy `1`"}``
-- Tree delete entry: `{"path":"@tree","target":"@ln:4","text":""}`
-- Task append: `{"path":"@task","target":"","text":"- [ ] 1.3 Finish module C: implement the module C program"}`
-- Task toggle: `{"path":"@task","target":"- [ ] 1.3 Finish module C: implement the module C program","text":"- [X] 1.3 Finish module C: implement the module C program"}`
+- Fix a bug: `{"path":"src/main.go","target":"@ln:42","text":"return result, nil"}`
+- Create a new file: `{"path":"README.md","target":"@all","text":"# My Project\n\nDocs here."}`
+- Append a line: `{"path":".gitignore","target":"","text":"node_modules/\n*.log"}`
+- Regex replace all: `{"path":"config.json","target":"@regex:/localhost/g","text":"127.0.0.1"}`
+- Trigger diagnostics only: `{"path":"main.go","target":"","text":""}`
+- Update task plan: `{"path":"@task","target":"- [ ] fix bug","text":"- [X] fix bug"}`
+- Move a file in tree: `{"path":"@tree","target":"- old.go `1`","text":"- new.go `1`"}`
+- Save project memory: `{"path":"@memory","target":"","text":"- Key decision: use SQLite for storage."}`

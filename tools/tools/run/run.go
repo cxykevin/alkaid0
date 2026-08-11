@@ -472,7 +472,7 @@ func runTask(session *structs.Chats, mp map[string]*any, cross []*any) (bool, []
 	}
 
 	// 运行命令 = 新建后台服务（job）并等待响应
-	req := &RunRequest{
+	req := &Request{
 		SessionID:        session.ID,
 		AgentID:          session.CurrentAgentID,
 		ToolID:           toolID,
@@ -491,7 +491,7 @@ func runTask(session *structs.Chats, mp map[string]*any, cross []*any) (bool, []
 	if backgroundFlag {
 		// 先创建 temp obj 并立即返回其路径作为 runid（命令在后台执行）
 		_ = trace.AddTempObject(session, runid, bgInitialContent(command), true)
-		if _, err := Default.Submit(req, context.Background()); err != nil {
+		if _, err := Default.Submit(context.Background(), req); err != nil {
 			return false, cross, nil, err
 		}
 		logger.Info("run shell in background \"%s\"(reason: %s) sandbox:%v in ID=%d,agentID=%s runid=%s", command, reason, sandboxFlag, session.ID, session.CurrentAgentID, runid)
@@ -511,7 +511,7 @@ func runTask(session *structs.Chats, mp map[string]*any, cross []*any) (bool, []
 	}
 
 	ctx := session.GetContext()
-	job, err := Default.Submit(req, ctx)
+	job, err := Default.Submit(ctx, req)
 	if err != nil {
 		return false, cross, nil, err
 	}
@@ -555,10 +555,13 @@ func runTask(session *structs.Chats, mp map[string]*any, cross []*any) (bool, []
 	outPth := "@temp/" + tracePath
 	outAny := any(outPth)
 	reasonAny := any(reason)
+	msg := "The file has been traced and injected into the top of the context."
+	msgAny := any(msg)
 	res := map[string]*any{
 		"success": &success,
 		"reason":  &reasonAny,
 		"path":    &outAny,
+		"message": &msgAny,
 	}
 	if !boolx {
 		res["error"] = &outAny

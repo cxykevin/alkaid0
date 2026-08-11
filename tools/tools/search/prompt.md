@@ -42,10 +42,10 @@ When `online=false`, performs two-phase local search:
 Results are merged with source markers (`grep` / `context`).
 
 When `online=true`, searches the internet via configured search engines (Bing, GitHub, arXiv, Tavily) and summarizes the results via LLM before returning.
-
 #### Quick Examples:
 
-- Search by pattern: `{"query":"func Handler","path":".","max_results":15}`
-- Search by regex: `{"query":"/func\\s+[A-Z]\\w+/"}`
-- Search online: `{"query":"Go 1.22 range over int","online":true}`
-
+- Search codebase: `{"query":"func Handler","online":false}`
+- Regex search: `{"query":"/func.*Handler/g","online":false}`
+- Wildcard search: `{"query":"func*Handler","online":false}`
+- Search in subdir: `{"query":"error handling","path":"server","online":false}`
+- Online search: `{"query":"Go LSP client","online":true}`

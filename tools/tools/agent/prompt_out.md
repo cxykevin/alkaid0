@@ -7,8 +7,7 @@ Terminate the subagent session and return results to the parent agent. Required 
 #### Parameters:
 
 - `prompt` (required): Final output, summary, or error report to return to parent agent
-
 #### Quick Examples:
 
-- Success: `{"prompt":"Task completed. Found 2 high-severity issues in login.js, 3 medium issues. Full report attached."}`
-- Error: `{"prompt":"Error: Cannot access /src/auth directory. Permission denied. Suggest checking directory permissions or using a different workspace path."}`
+- Report success: `{"prompt":"Security scan completed. Found 3 vulnerabilities (all P1). Details in /src/auth/scan-report.md"}`
+- Report failure: `{"prompt":"Task failed: model API timeout after 3 retries. No files were modified."}`

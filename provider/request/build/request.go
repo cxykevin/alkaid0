@@ -17,7 +17,7 @@ import (
 
 const readPageSize = 20
 const maxPage = 10
-const maxToken = 8192
+const maxToken = 16384
 
 // toolCallTerminatedMsg 工具调用被强行终止（无对应结果消息）时补发的占位结果内容。
 // 保证 assistant 的每个 tool_call_id 都有 role:"tool" 响应，满足 OpenAI 兼容 API 校验，
@@ -511,7 +511,7 @@ func parseStoredToolCalls(payload string, failedIDs map[string]struct{}) ([]reqS
 	}
 	calls := make([]reqStruct.StreamToolCall, 0, len(items))
 	for _, it := range items {
-		args := "..."
+		args := "(omit successed tool call arguments)"
 		if failedIDs != nil && len(it.Parameters) > 0 {
 			if _, failed := failedIDs[it.ID]; failed {
 				args = string(it.Parameters)

@@ -1,8 +1,8 @@
-### Tool: `trace`
+### Tool: `read`
 
 #### Description:
 
-Adds a specified code file to the vector database or boosts its retrieval priority if it already exists. This ensures the file is treated as high-priority context for the RAG (Retrieval-Augmented Generation) system.
+Adds a specified code file to the vector database or boosts its retrieval priority if it already exists.
 
 #### Behavioral Logic:
 
@@ -18,8 +18,12 @@ Adds a specified code file to the vector database or boosts its retrieval priori
 
 **When to untrace**: If the file is no longer relevant to the task or if it's been sufficiently covered by other context, use the `untrace` to remove it from the context system. If you only need a small part of the file, trace it, repeat the text you need, and then untrace it. DO NOT keep many traced files (more than 30) in the system!
 
+### Where is the file content?
+
+The file content is on the top of the full context. Please LOOK UP if you could not find the context after the tool call.
+
 #### Quick Examples:
 
-- Trace file: `{"path":"main.cpp"}` → content appears in traced files
-- Untrace: `{"path":"main.cpp","untrace":true}`
-- Trace-read-untrace pattern: `{"path":"helper.go"}` → read → `{"path":"helper.go","untrace":true}`
+- Trace a file: `{"path":"src/main.go"}`
+- Untrace a file: `{"path":"src/main.go","untrace":true}`
+- Trace then untrace after use: `{"path":"utils/helper.go"}` → `{"path":"utils/helper.go","untrace":true}`

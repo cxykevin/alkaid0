@@ -15,8 +15,8 @@ import (
 )
 
 // testRunRequest 构造一个最小化的命令执行请求（无沙盒，避免依赖 unshare）。
-func testRunRequest(command string) *RunRequest {
-	return &RunRequest{
+func testRunRequest(command string) *Request {
+	return &Request{
 		Command: command,
 		Shell:   getShell(""),
 		WorkDir: os.TempDir(),
@@ -30,7 +30,7 @@ func TestServiceSubmitEcho(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	job, err := Default.Submit(testRunRequest("echo hello-background"), ctx)
+	job, err := Default.Submit(ctx, testRunRequest("echo hello-background"))
 	if err != nil {
 		t.Fatalf("Submit failed: %v", err)
 	}
@@ -59,7 +59,7 @@ func TestServiceKillByContextCancel(t *testing.T) {
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
-	job, err := Default.Submit(testRunRequest("sleep 30"), ctx)
+	job, err := Default.Submit(ctx, testRunRequest("sleep 30"))
 	if err != nil {
 		t.Fatalf("Submit failed: %v", err)
 	}
@@ -89,7 +89,7 @@ func TestServiceKillByID(t *testing.T) {
 		t.Skip("跳过 Windows")
 	}
 
-	job, err := Default.Submit(testRunRequest("sleep 30"), context.Background())
+	job, err := Default.Submit(context.Background(), testRunRequest("sleep 30"))
 	if err != nil {
 		t.Fatalf("Submit failed: %v", err)
 	}
@@ -140,7 +140,7 @@ func TestServiceConcurrent(t *testing.T) {
 		go func(idx int) {
 			defer wg.Done()
 			cmd := "sleep 0.2 && echo job" + string(rune('0'+idx))
-			job, err := Default.Submit(testRunRequest(cmd), context.Background())
+			job, err := Default.Submit(context.Background(), testRunRequest(cmd))
 			if err != nil {
 				t.Errorf("Submit(%d) failed: %v", idx, err)
 				return
@@ -160,7 +160,7 @@ func TestServiceKillBeforeStart(t *testing.T) {
 		t.Skip("跳过 Windows")
 	}
 
-	job, err := Default.Submit(testRunRequest("sleep 30"), context.Background())
+	job, err := Default.Submit(context.Background(), testRunRequest("sleep 30"))
 	if err != nil {
 		t.Fatalf("Submit failed: %v", err)
 	}
@@ -229,7 +229,7 @@ func TestServiceBackgroundUpdateFn(t *testing.T) {
 	req.RunID = "run/test-bg-update"
 	req.UpdateFn = updateFn
 
-	job, err := Default.Submit(req, context.Background())
+	job, err := Default.Submit(context.Background(), req)
 	if err != nil {
 		t.Fatalf("Submit failed: %v", err)
 	}
@@ -261,7 +261,7 @@ func TestServiceFind(t *testing.T) {
 
 	req := testRunRequest("echo find-me")
 	req.RunID = "run/test-find"
-	job, err := Default.Submit(req, context.Background())
+	job, err := Default.Submit(context.Background(), req)
 	if err != nil {
 		t.Fatalf("Submit failed: %v", err)
 	}
@@ -286,7 +286,7 @@ func TestWaitTask(t *testing.T) {
 
 	req := testRunRequest("sleep 0.2 && echo wait-done")
 	req.RunID = "run/test-wait"
-	job, err := Default.Submit(req, context.Background())
+	job, err := Default.Submit(context.Background(), req)
 	if err != nil {
 		t.Fatalf("Submit failed: %v", err)
 	}
@@ -371,13 +371,13 @@ func TestRunTaskBackground(t *testing.T) {
 		t.Fatalf("Failed to create chat: %v", err)
 	}
 	session := &structs.Chats{
-		ID:                    1,
-		DB:                    db,
-		NowAgent:              "test_agent",
-		CurrentActivatePath:   "/tmp",
-		TemporyDataOfRequest:  make(map[string]any),
-		TemporyDataOfSession:  make(map[string]any),
-		TraceID:               0,
+		ID:                   1,
+		DB:                   db,
+		NowAgent:             "test_agent",
+		CurrentActivatePath:  "/tmp",
+		TemporyDataOfRequest: make(map[string]any),
+		TemporyDataOfSession: make(map[string]any),
+		TraceID:              0,
 	}
 
 	mp := map[string]*any{

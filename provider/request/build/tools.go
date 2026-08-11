@@ -2,6 +2,7 @@ package build
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/cxykevin/alkaid0/prompts"
 	"github.com/cxykevin/alkaid0/provider/parser"
@@ -82,7 +83,7 @@ func Tools(session *structs.Chats) (string, string, *[]*parser.ToolsDefine, erro
 			continue
 		}
 		unusedPrompt, activePrompt, paras := tools.ExecOneToolGetPrompts(session, k)
-		toolDescription, err := prompts.Render(prompts.ToolPrehookTemplate, struct {
+		prehookRendered, err := prompts.Render(prompts.ToolPrehookTemplate, struct {
 			Unused []string
 			Active []string
 		}{
@@ -93,10 +94,18 @@ func Tools(session *structs.Chats) (string, string, *[]*parser.ToolsDefine, erro
 			toolobj.ToolsMu.RUnlock()
 			return "", "", &[]*parser.ToolsDefine{}, err
 		}
+		// 工具描述 = prompt.md（UserDescription，静态 few-shot）+ PreHook 动态输出。
+		// 内置工具 PreHook 多为 nil（无动态上下文），仅保留静态描述；
+		// 虚拟对象（@task/@memory/@tree）的 PreHook 输出追加在后，维持原有注入语义。
+		desc := v.UserDescription
+		if strings.TrimSpace(prehookRendered) != "" {
+			desc = strings.TrimSpace(desc) + "\n\n" + strings.TrimSpace(prehookRendered)
+		}
 		toolDefObj := &parser.ToolsDefine{
 			Name:        k,
-			Description: toolDescription,
+			Description: strings.TrimSpace(desc),
 		}
+
 		toolDefObj.Parameters = paras
 		toolsDef = append(toolsDef, toolDefObj)
 	}
