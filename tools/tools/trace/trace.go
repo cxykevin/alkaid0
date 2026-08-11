@@ -386,9 +386,87 @@ type templateStruct struct {
 	Text   string
 }
 
+// FileBlock 单个被追踪文件渲染后的内容块（trace.md 模板的模板对象），供 build 包类型断言。
+type FileBlock = templateStruct
+
 type traceCache map[string]([]structs.Traces)
 
-func buildTrace(session *structs.Chats) (string, error) {
+// renderTraceFile 渲染单个被追踪文件的内容块（读盘 + 编码转换 + 逐行行号），失败返回 ok=false。
+func renderTraceFile(session *structs.Chats, nowpath string, traceObj structs.Traces) (FileBlock, bool) {
+	var str string
+	var size int64
+	var originLen int
+
+	if vpath, ok := strings.CutPrefix(traceObj.Path, "@temp/"); ok {
+		// 查db
+		var fileObj structs.ReferFiles
+		session.DB.Where("chat_id = ?", session.ID).Where("path = ?", vpath).First(&fileObj)
+		str = fileObj.Content
+	} else {
+		path := filepath.Join(nowpath, traceObj.Path)
+		// 读取文件Stat
+		stat, err := os.Stat(path)
+		if err != nil {
+			logger.Warn("trace warning: \"%s\" get stat error: %v", traceObj.Path, err)
+			return FileBlock{}, false
+		}
+		// 文件过大(100K)
+		if stat.Size() > MaxFileSize {
+			logger.Warn("trace warning: \"%s\" too large (%d)", traceObj.Path, stat.Size())
+			return FileBlock{}, false
+		}
+		// 读取文件内容
+		content, err := os.ReadFile(path)
+		if err != nil {
+			logger.Warn("trace warning: \"%s\" read error: %v", traceObj.Path, err)
+			return FileBlock{}, false
+		}
+		str = fileContentToString(content)
+		if len(str) == 0 {
+			// logger.Warn("trace warning: \"%s\" empty", traceObj.Path)
+			return FileBlock{}, false
+		}
+		size = stat.Size()
+		originLen = len(content)
+	}
+
+	// 读取行数
+	lines := strings.Split(str, "\n")
+	if len(lines) > MaxFileLine {
+		logger.Warn("trace warning: \"%s\" too long (%d)", traceObj.Path, len(lines))
+		return FileBlock{}, false
+	}
+	allLenStrLen := len(fmt.Sprintf("%d", len(lines)))
+	builder := strings.Builder{}
+	for lineno, line := range lines {
+		fmt.Fprintf(&builder, "%*d|%s\n", allLenStrLen, lineno+1, line)
+	}
+	return FileBlock{
+		Name:   traceObj.Path,
+		Size:   strconv.FormatInt(size, 10),
+		Length: uint32(originLen),
+		Text:   builder.String(),
+	}, true
+}
+
+// isEventFile 判断 path（文件或 @task）在本轮是否有最近 read/edit 事件。
+func isEventFile(session *structs.Chats, path string) bool {
+	if session.TemporyDataOfSession == nil {
+		return false
+	}
+	m, ok := session.TemporyDataOfSession[structs.TempKeyTraceEvents].(map[string]*structs.TraceEvent)
+	if !ok {
+		return false
+	}
+	_, ok = m[path]
+	return ok
+}
+
+// RenderTraceBlocks 读取当前 agent 的 Traces 列表，按事件映射分区渲染内容块：
+//   - 有最近 read/edit 事件的文件 → 存入 eventBlocks（map[path]FileBlock）并写入
+//     session.TemporyDataOfSession[TempKeyTraceFileBlocks]，供 build 包按事件插入；
+//   - 无事件的文件 → 渲染进 topBlock（顶部聚合，现状）。
+func RenderTraceBlocks(session *structs.Chats) (topBlock string, eventBlocks map[string]FileBlock, err error) {
 	nowpath := session.Root
 	if nowpath == "" {
 		nowpath = "."
@@ -398,9 +476,9 @@ func buildTrace(session *structs.Chats) (string, error) {
 		activatePath = "."
 	}
 	nowpath = filepath.Join(nowpath, activatePath)
-	nowpath, err := filepath.Abs(nowpath)
+	nowpath, err = filepath.Abs(nowpath)
 	if err != nil {
-		return "", errors.New("failed to get absolute path")
+		return "", nil, errors.New("failed to get absolute path")
 	}
 	if session.TemporyDataOfSession == nil {
 		session.TemporyDataOfSession = make(map[string]any)
@@ -416,79 +494,45 @@ func buildTrace(session *structs.Chats) (string, error) {
 		traces := []structs.Traces{}
 		err := session.DB.Where("chat_id = ? AND agent_id = ?", session.ID, session.NowAgent).Find(&traces).Error
 		if err != nil {
-			return "", err
+			return "", nil, err
 		}
 		session.TemporyDataOfSession["tools:trace"].(traceCache)[session.NowAgent] = traces
 	}
 	traces, ok := session.TemporyDataOfSession["tools:trace"].(traceCache)[session.NowAgent]
 	if !ok {
-		return "", errors.New("failed to read traces from database")
+		return "", nil, errors.New("failed to read traces from database")
 	}
 
-	var obj []templateStruct
+	eventBlocks = make(map[string]FileBlock)
+	topFrags := make([]FileBlock, 0, len(traces))
 	for _, traceObj := range traces {
-
-		var str string
-		var size int64
-		var originLen int
-
-		if vpath, ok := strings.CutPrefix(traceObj.Path, "@temp/"); ok {
-			// 查db
-			var fileObj structs.ReferFiles
-			session.DB.Where("chat_id = ?", session.ID).Where("path = ?", vpath).First(&fileObj)
-			str = fileObj.Content
-		} else {
-			path := filepath.Join(nowpath, traceObj.Path)
-			// 读取文件Stat
-			stat, err := os.Stat(path)
-			if err != nil {
-				logger.Warn("trace warning: \"%s\" get stat error: %v", traceObj.Path, err)
-				continue
-			}
-			// 文件过大(100K)
-			if stat.Size() > MaxFileSize {
-				logger.Warn("trace warning: \"%s\" too large (%d)", traceObj.Path, stat.Size())
-				continue
-			}
-			// 读取文件内容
-			content, err := os.ReadFile(path)
-			if err != nil {
-				logger.Warn("trace warning: \"%s\" read error: %v", traceObj.Path, err)
-				continue
-			}
-			str = fileContentToString(content)
-			if len(str) == 0 {
-				// logger.Warn("trace warning: \"%s\" empty", traceObj.Path)
-				continue
-			}
-			size = stat.Size()
-			originLen = len(content)
-		}
-
-		// 读取行数
-		lines := strings.Split(str, "\n")
-		if len(lines) > MaxFileLine {
-			logger.Warn("trace warning: \"%s\" too long (%d)", traceObj.Path, len(lines))
+		frag, ok := renderTraceFile(session, nowpath, traceObj)
+		if !ok {
 			continue
 		}
-		allLenStrLen := len(fmt.Sprintf("%d", len(lines)))
-		builder := strings.Builder{}
-		for lineno, line := range lines {
-			fmt.Fprintf(&builder, "%*d|%s\n", allLenStrLen, lineno+1, line)
+		if isEventFile(session, traceObj.Path) {
+			eventBlocks[traceObj.Path] = frag
+		} else {
+			topFrags = append(topFrags, frag)
 		}
-		// 转换为字符串
-		obj = append(obj, templateStruct{
-			Name:   traceObj.Path,
-			Size:   strconv.FormatInt(size, 10),
-			Length: uint32(originLen),
-			Text:   builder.String(),
-		})
 	}
-	traceList, err := prompts.Render(traceTempate, obj)
+	// 始终渲染（含空 slice）：trace.md 有固定 intro 头部，空文件列表也应输出该说明，保持与原 buildTrace 一致
+	topBlock, err = prompts.Render(traceTempate, topFrags)
 	if err != nil {
-		return "", err
+		return "", nil, err
 	}
-	return traceList, nil
+	session.TemporyDataOfSession[structs.TempKeyTraceFileBlocks] = eventBlocks
+	return topBlock, eventBlocks, nil
+}
+
+// RenderTraceBlock 渲染一批 FileBlock 为单个 <tracedFiles> 内容块（单 intro + 多 <file>）。
+func RenderTraceBlock(files []FileBlock) (string, error) {
+	return prompts.Render(traceTempate, files)
+}
+
+func buildTrace(session *structs.Chats) (string, error) {
+	topBlock, _, err := RenderTraceBlocks(session)
+	return topBlock, err
 }
 
 func load() string {

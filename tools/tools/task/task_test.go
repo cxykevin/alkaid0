@@ -254,3 +254,29 @@ func TestUpdateInfo(t *testing.T) {
 		t.Fatalf("expected From=task, got %q", pi.From)
 	}
 }
+
+// TestBuildGlobalPrompt_WithTaskEvent @task 有最近 edit 事件时，顶部不放，事件块存 session。
+func TestBuildGlobalPrompt_WithTaskEvent(t *testing.T) {
+	session := &structs.Chats{
+		Task: "- [X] 任务: 详情",
+		TemporyDataOfSession: map[string]any{
+			structs.TempKeyTraceEvents: map[string]*structs.TraceEvent{
+				"@task": {MsgID: 1, ToolCallID: "call_1", IsEdit: true, IsTask: true, InRecent: true},
+			},
+		},
+	}
+	out, err := buildGlobalPrompt(session)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if out != "" {
+		t.Fatalf("expected empty top output when @task has event, got %q", out)
+	}
+	block, ok := session.TemporyDataOfSession[structs.TempKeyTaskEventBlock].(string)
+	if !ok || block == "" {
+		t.Fatalf("expected task event block in session")
+	}
+	if !strings.Contains(block, "- [X] 任务: 详情") {
+		t.Fatalf("expected task content in event block, got %q", block)
+	}
+}

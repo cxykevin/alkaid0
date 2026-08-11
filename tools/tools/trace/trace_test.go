@@ -1155,3 +1155,76 @@ func TestBuildTraceConcurrent(t *testing.T) {
 		t.Error("Some concurrent buildTrace calls failed")
 	}
 }
+
+// TestRenderTraceBlocks_Partition 验证按事件映射分区：有事件文件进 eventBlocks、无事件文件进 topBlock。
+func TestRenderTraceBlocks_Partition(t *testing.T) {
+	db := setupTestDB(t)
+	defer u.Unwrap(db.DB()).Close()
+
+	tmpDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(tmpDir, "a.txt"), []byte("line A1\nline A2\n"), 0644); err != nil {
+		t.Fatalf("write a.txt: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(tmpDir, "b.txt"), []byte("line B1\n"), 0644); err != nil {
+		t.Fatalf("write b.txt: %v", err)
+	}
+	if err := db.Create(&structs.Traces{ChatID: 1, Path: "a.txt", TraceID: 1, AgentID: "test_agent"}).Error; err != nil {
+		t.Fatalf("create trace a: %v", err)
+	}
+	if err := db.Create(&structs.Traces{ChatID: 1, Path: "b.txt", TraceID: 2, AgentID: "test_agent"}).Error; err != nil {
+		t.Fatalf("create trace b: %v", err)
+	}
+
+	session := &structs.Chats{
+		ID:       1,
+		DB:       db,
+		NowAgent: "test_agent",
+		Root:     tmpDir,
+		TemporyDataOfSession: map[string]any{
+			structs.TempKeyTraceEvents: map[string]*structs.TraceEvent{
+				"a.txt": {MsgID: 1, ToolCallID: "call_1", IsEdit: true},
+			},
+		},
+	}
+
+	topBlock, eventBlocks, err := RenderTraceBlocks(session)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if strings.Contains(topBlock, "line A1") {
+		t.Error("top block should NOT contain event file a.txt")
+	}
+	if !strings.Contains(topBlock, "line B1") {
+		t.Error("top block should contain non-event file b.txt")
+	}
+	if _, ok := eventBlocks["a.txt"]; !ok {
+		t.Error("eventBlocks should contain a.txt")
+	}
+	if _, ok := eventBlocks["b.txt"]; ok {
+		t.Error("eventBlocks should NOT contain b.txt")
+	}
+}
+
+// TestRenderTraceBlock_SingleAndMulti 验证单/多 FileBlock 渲染，多文件只有一份 intro。
+func TestRenderTraceBlock_SingleAndMulti(t *testing.T) {
+	single, err := RenderTraceBlock([]FileBlock{{Name: "a.txt", Size: "5", Length: 5, Text: "1|hello\n"}})
+	if err != nil {
+		t.Fatalf("single render: %v", err)
+	}
+	if !strings.Contains(single, "a.txt") || !strings.Contains(single, "hello") {
+		t.Errorf("single block missing content: %q", single)
+	}
+	multi, err := RenderTraceBlock([]FileBlock{
+		{Name: "a.txt", Size: "5", Length: 5, Text: "1|A\n"},
+		{Name: "b.txt", Size: "5", Length: 5, Text: "1|B\n"},
+	})
+	if err != nil {
+		t.Fatalf("multi render: %v", err)
+	}
+	if strings.Count(multi, "### Traced read Files") != 1 {
+		t.Errorf("expected exactly one intro, got %d", strings.Count(multi, "### Traced read Files"))
+	}
+	if !strings.Contains(multi, "a.txt") || !strings.Contains(multi, "b.txt") {
+		t.Errorf("multi block missing files: %q", multi)
+	}
+}

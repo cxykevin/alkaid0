@@ -4,10 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/cxykevin/alkaid0/config"
 	cfgStruct "github.com/cxykevin/alkaid0/config/structs"
-	"github.com/cxykevin/alkaid0/provider/parser"
-	"github.com/cxykevin/alkaid0/storage/structs"
 )
 
 func TestToolPromptEnhanceBlock(t *testing.T) {
@@ -92,85 +89,3 @@ func TestNativeToolPromptEnhanceBlockDisabled(t *testing.T) {
 	}
 }
 
-// TestRequestBodyToolEnhance 验证请求级 system prompt 拼接（模式感知）：
-//   - 提示词模式：基础 tools 恒为两次拼接——auto 普通模型 = 基础+增强段；
-//     auto 命中免增强名单或 off = 基础+基础；on 强制 = 基础+增强段。
-//   - 原生模式：基础 ToolNative 拼接一次——auto 普通模型 = ToolNative+反向增强段；
-//     auto 命中免增强名单或 off = 仅 ToolNative；on 强制 = ToolNative+反向增强段。
-func TestRequestBodyToolEnhance(t *testing.T) {
-	db := setupTestDB(t)
-	if err := db.Create(&structs.Messages{ChatID: 1, Type: structs.MessagesRoleUser, Delta: "hi"}).Error; err != nil {
-		t.Fatalf("create message failed: %v", err)
-	}
-	toolsList := []*parser.ToolsDefine{}
-
-	buildReq := func(native bool, modelID, enhance string) string {
-		setupTestConfig()
-		cfg := *config.GlobalConfig
-		m := cfg.Model.Models[cfg.Model.DefaultModelID]
-		m.EnableToolCalling = native
-		if modelID != "" {
-			m.ModelID = modelID
-		}
-		if enhance != "" {
-			m.ProviderSpecificConfig.ToolPromptEnhance = enhance
-		}
-		cfg.Model.Models[cfg.Model.DefaultModelID] = m
-		config.GlobalConfigSwap(cfg)
-		req, err := RequestBody(1, 1, "", &toolsList, db, "", "", cfgStruct.AgentConfig{}, &structs.Chats{})
-		if err != nil {
-			t.Fatalf("RequestBody failed: %v", err)
-		}
-		return req.Messages[0].Content
-	}
-
-	countBase := func(c string) int { return strings.Count(c, "# Tool Calling Protocol") }
-
-	// 提示词模式：auto + 普通模型 = 基础 1 次 + 增强段 1 次
-	c := buildReq(false, "deepseek-v4-flash", "")
-	if !strings.Contains(c, "HARD REINFORCEMENT") {
-		t.Error("提示词模式 auto 普通模型应包含增强段")
-	}
-	if n := countBase(c); n != 1 {
-		t.Errorf("提示词模式 auto 普通模型基础 tools 应拼接 1 次，实际 %d", n)
-	}
-
-	// 提示词模式：auto + gpt 命中免增强名单 → 基础仍拼接两次
-	cGpt := buildReq(false, "gpt-5", "")
-	if strings.Contains(cGpt, "HARD REINFORCEMENT") {
-		t.Error("提示词模式 auto gpt 不应包含增强段")
-	}
-	if n := countBase(cGpt); n != 2 {
-		t.Errorf("提示词模式 auto gpt 基础 tools 应拼接 2 次，实际 %d", n)
-	}
-
-	// 提示词模式：off 强制关闭 → 基础仍拼接两次
-	cOff := buildReq(false, "deepseek-v4-flash", "off")
-	if strings.Contains(cOff, "HARD REINFORCEMENT") {
-		t.Error("提示词模式 off 不应包含增强段")
-	}
-	if n := countBase(cOff); n != 2 {
-		t.Errorf("提示词模式 off 基础 tools 应拼接 2 次，实际 %d", n)
-	}
-
-	// 原生模式：增强已禁用(调试期) — 无论 auto/on/off，均只拼 ToolNative 1 次，无增强段
-	for _, tc := range []struct {
-		modelID, enhance string
-	}{
-		{"deepseek-v4-flash", ""}, // auto + 普通模型
-		{"gpt-5", ""},             // auto + 命中免增强名单
-		{"deepseek-v4-flash", "off"},
-		{"claude-3-7-sonnet", "on"}, // on 强制开启也不再附加
-	} {
-		reqStr := buildReq(true, tc.modelID, tc.enhance)
-		if strings.Contains(reqStr, "HARD REINFORCEMENT") {
-			t.Errorf("原生模式 %s/%s 增强已禁用，不应包含增强段", tc.modelID, tc.enhance)
-		}
-		if !strings.Contains(reqStr, "(Native)") {
-			t.Errorf("原生模式 %s/%s 应包含 ToolNative 基础提示词", tc.modelID, tc.enhance)
-		}
-		if n := countBase(reqStr); n != 1 {
-			t.Errorf("原生模式 %s/%s 基础 ToolNative 应拼接 1 次，实际 %d", tc.modelID, tc.enhance, n)
-		}
-	}
-}

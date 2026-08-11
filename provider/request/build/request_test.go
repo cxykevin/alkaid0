@@ -12,6 +12,7 @@ import (
 	agentconfig "github.com/cxykevin/alkaid0/provider/request/agents/config"
 	reqStruct "github.com/cxykevin/alkaid0/provider/request/structs"
 	"github.com/cxykevin/alkaid0/storage/structs"
+	"github.com/cxykevin/alkaid0/tools/tools/trace"
 	"github.com/glebarez/sqlite"
 	"gorm.io/gorm"
 )
@@ -636,7 +637,7 @@ func TestRequestBody_NativeHistoryReplay(t *testing.T) {
 			if len(msg.ToolCalls) > 0 {
 				tc := msg.ToolCalls[0]
 				if tc.ID == "call_1" && tc.Type == "function" && tc.Function != nil &&
-					tc.Function.Name == "edit" && tc.Function.Arguments == "..." {
+					tc.Function.Name == "edit" && tc.Function.Arguments == "(omit successed tool call arguments)" {
 					assistantWithTools = true
 					asstIdx = i
 				}
@@ -923,8 +924,8 @@ func TestRequestBody_MixedSuccessFailureReplay(t *testing.T) {
 			}
 		}
 	}
-	if gotOK != "..." {
-		t.Errorf("successful call should keep \"...\" placeholder, got %q", gotOK)
+	if gotOK != "(omit successed tool call arguments)" {
+		t.Errorf("successful call should keep placeholder, got %q", gotOK)
 	}
 	if gotFail != `{"paht":"b.txt"}` {
 		t.Errorf("failed call should replay real arguments, got %q", gotFail)
@@ -938,7 +939,7 @@ func TestRequestBody_SuccessWithErrorKeyNotFailed(t *testing.T) {
 		{ChatID: 14, Type: structs.MessagesRoleAgent, Delta: "", ToolCallingJSONString: `[{"name":"run","id":"call_warn","parameters":{"command":"ls"}}]`},
 		{ChatID: 14, Type: structs.MessagesRoleTool, Delta: `[{"name":"run","id":"call_warn","return":"{\"success\":true,\"error\":\"warning text\"}"}]`},
 	}, "call_warn")
-	if args != "..." {
+	if args != "(omit successed tool call arguments)" {
 		t.Errorf("success:true result should keep placeholder, got %q", args)
 	}
 }
@@ -968,13 +969,13 @@ func TestParseStoredToolCalls_WithFailedIDs(t *testing.T) {
 	if len(calls) != 3 {
 		t.Fatalf("expected 3 calls, got %d", len(calls))
 	}
-	if got := calls[0].Function.Arguments; got != "..." {
+	if got := calls[0].Function.Arguments; got != "(omit successed tool call arguments)" {
 		t.Errorf("call_1 (not failed) should keep placeholder, got %q", got)
 	}
 	if got := calls[1].Function.Arguments; got != `{"path":"b.txt"}` {
 		t.Errorf("call_2 (failed) should replay real arguments, got %q", got)
 	}
-	if got := calls[2].Function.Arguments; got != "..." {
+	if got := calls[2].Function.Arguments; got != "(omit successed tool call arguments)" {
 		t.Errorf("call_3 (no parameters) should keep placeholder, got %q", got)
 	}
 
@@ -984,8 +985,360 @@ func TestParseStoredToolCalls_WithFailedIDs(t *testing.T) {
 		t.Fatalf("parse with nil failedIDs: %v", err)
 	}
 	for i, c := range callsNil {
-		if c.Function.Arguments != "..." {
+		if c.Function.Arguments != "(omit successed tool call arguments)" {
 			t.Errorf("call %d with nil failedIDs should keep placeholder, got %q", i, c.Function.Arguments)
 		}
+	}
+}
+
+// eventTestChatLn 构造带事件映射与内容块的 chatLn（模拟 DetectTraceEvents + PreHook 分区的结果）。
+func eventTestChatLn(events map[string]*structs.TraceEvent, fileBlocks map[string]trace.FileBlock) *structs.Chats {
+	return &structs.Chats{
+		TemporyDataOfSession: map[string]any{
+			structs.TempKeyTraceEvents:     events,
+			structs.TempKeyTraceFileBlocks: fileBlocks,
+		},
+	}
+}
+
+// TestRequestBody_TraceFollowsEvent_Native 原生模式：trace/edit 文件内容块紧跟最近事件
+// （assistant 调用 + 其 role:tool 结果）之后，事件之前不出现该内容。
+func TestRequestBody_TraceFollowsEvent_Native(t *testing.T) {
+	db := setupTestDB(t)
+	toolsList := []*parser.ToolsDefine{}
+
+	setupTestConfig()
+	cfg := *config.GlobalConfig
+	m := cfg.Model.Models[cfg.Model.DefaultModelID]
+	m.EnableToolCalling = true
+	cfg.Model.Models[cfg.Model.DefaultModelID] = m
+	config.GlobalConfigSwap(cfg)
+
+	msgs := []structs.Messages{
+		{ChatID: 20, Type: structs.MessagesRoleUser, Delta: "edit a.txt"},
+		{ChatID: 20, Type: structs.MessagesRoleAgent, Delta: "", ToolCallingJSONString: `[{"name":"edit","id":"call_1","parameters":{"path":"a.txt","text":"hi"}}]`},
+		{ChatID: 20, Type: structs.MessagesRoleTool, Delta: `[{"name":"edit","id":"call_1","return":"{\"ok\":true}"}]`},
+		{ChatID: 20, Type: structs.MessagesRoleUser, Delta: "continue"},
+	}
+	for i := range msgs {
+		if err := db.Create(&msgs[i]).Error; err != nil {
+			t.Fatalf("create msg: %v", err)
+		}
+	}
+	asstID := msgs[1].ID
+
+	chatLn := eventTestChatLn(
+		map[string]*structs.TraceEvent{
+			"a.txt": {MsgID: asstID, ToolCallID: "call_1", IsEdit: true, InRecent: true},
+		},
+		map[string]trace.FileBlock{
+			"a.txt": {Name: "a.txt", Size: "5", Length: 5, Text: "1|hi\n"},
+		},
+	)
+
+	req, err := RequestBody(20, 1, "", &toolsList, db, "", "", cfgStruct.AgentConfig{}, chatLn)
+	if err != nil {
+		t.Fatalf("RequestBody failed: %v", err)
+	}
+
+	toolIdx, blockIdx := -1, -1
+	for i, msg := range req.Messages {
+		if msg.Role == reqStruct.RoleTool && msg.ToolCallID == "call_1" {
+			toolIdx = i
+		}
+		if msg.Role == "user" && strings.Contains(msg.Content, `path="a.txt"`) {
+			blockIdx = i
+		}
+	}
+	if toolIdx < 0 {
+		t.Fatal("expected tool result for call_1")
+	}
+	if blockIdx < 0 {
+		t.Fatal("expected trace content block after event")
+	}
+	if !(blockIdx > toolIdx) {
+		t.Errorf("content block should follow tool result: toolIdx=%d blockIdx=%d", toolIdx, blockIdx)
+	}
+	// 事件之前不应出现该文件内容块
+	for i := 0; i < toolIdx; i++ {
+		if strings.Contains(req.Messages[i].Content, `path="a.txt"`) {
+			t.Errorf("event file content should NOT appear before event, idx=%d", i)
+		}
+	}
+}
+
+// TestRequestBody_TraceFollowsEvent_Prompt 提示词模式：内容块紧跟事件 assistant 消息之后。
+func TestRequestBody_TraceFollowsEvent_Prompt(t *testing.T) {
+	db := setupTestDB(t)
+	toolsList := []*parser.ToolsDefine{}
+
+	setupTestConfig()
+	cfg := *config.GlobalConfig
+	m := cfg.Model.Models[cfg.Model.DefaultModelID]
+	m.EnableToolCalling = false
+	cfg.Model.Models[cfg.Model.DefaultModelID] = m
+	config.GlobalConfigSwap(cfg)
+
+	msgs := []structs.Messages{
+		{ChatID: 21, Type: structs.MessagesRoleUser, Delta: "read a.txt"},
+		{ChatID: 21, Type: structs.MessagesRoleAgent, Delta: "reading now", ToolCallingJSONString: `[{"name":"read","id":"call_2","parameters":{"path":"a.txt"}}]`},
+		{ChatID: 21, Type: structs.MessagesRoleTool, Delta: `[{"name":"read","id":"call_2","return":"traced"}]`},
+	}
+	for i := range msgs {
+		if err := db.Create(&msgs[i]).Error; err != nil {
+			t.Fatalf("create msg: %v", err)
+		}
+	}
+	asstID := msgs[1].ID
+
+	chatLn := eventTestChatLn(
+		map[string]*structs.TraceEvent{
+			"a.txt": {MsgID: asstID, ToolCallID: "call_2", IsEdit: false, InRecent: false},
+		},
+		map[string]trace.FileBlock{
+			"a.txt": {Name: "a.txt", Size: "5", Length: 5, Text: "1|hi\n"},
+		},
+	)
+
+	req, err := RequestBody(21, 1, "", &toolsList, db, "", "", cfgStruct.AgentConfig{}, chatLn)
+	if err != nil {
+		t.Fatalf("RequestBody failed: %v", err)
+	}
+
+	asstIdx, blockIdx := -1, -1
+	for i, msg := range req.Messages {
+		if msg.Role == "assistant" && strings.Contains(msg.Content, "reading now") {
+			asstIdx = i
+		}
+		if msg.Role == "user" && strings.Contains(msg.Content, `path="a.txt"`) {
+			blockIdx = i
+		}
+	}
+	if asstIdx < 0 {
+		t.Fatal("expected event assistant message")
+	}
+	if blockIdx < 0 {
+		t.Fatal("expected trace content block after event")
+	}
+	if blockIdx != asstIdx+1 {
+		t.Errorf("content block should follow event assistant immediately: asstIdx=%d blockIdx=%d", asstIdx, blockIdx)
+	}
+}
+
+// TestRequestBody_TraceFollowsEvent_MultiFileOneMessage 同一事件内多文件合并为一条 user 消息，
+// 且位于该事件所有 tool 结果之后。
+func TestRequestBody_TraceFollowsEvent_MultiFileOneMessage(t *testing.T) {
+	db := setupTestDB(t)
+	toolsList := []*parser.ToolsDefine{}
+
+	setupTestConfig()
+	cfg := *config.GlobalConfig
+	m := cfg.Model.Models[cfg.Model.DefaultModelID]
+	m.EnableToolCalling = true
+	cfg.Model.Models[cfg.Model.DefaultModelID] = m
+	config.GlobalConfigSwap(cfg)
+
+	msgs := []structs.Messages{
+		{ChatID: 22, Type: structs.MessagesRoleUser, Delta: "edit two files"},
+		{ChatID: 22, Type: structs.MessagesRoleAgent, Delta: "", ToolCallingJSONString: `[{"name":"edit","id":"call_1","parameters":{"path":"a.txt"}},{"name":"edit","id":"call_2","parameters":{"path":"b.txt"}}]`},
+		{ChatID: 22, Type: structs.MessagesRoleTool, Delta: `[{"name":"edit","id":"call_1","return":"{\"ok\":true}"},{"name":"edit","id":"call_2","return":"{\"ok\":true}"}]`},
+		{ChatID: 22, Type: structs.MessagesRoleUser, Delta: "continue"},
+	}
+	for i := range msgs {
+		if err := db.Create(&msgs[i]).Error; err != nil {
+			t.Fatalf("create msg: %v", err)
+		}
+	}
+	asstID := msgs[1].ID
+
+	chatLn := eventTestChatLn(
+		map[string]*structs.TraceEvent{
+			"a.txt": {MsgID: asstID, ToolCallID: "call_1", IsEdit: true, InRecent: true},
+			"b.txt": {MsgID: asstID, ToolCallID: "call_2", IsEdit: true, InRecent: true},
+		},
+		map[string]trace.FileBlock{
+			"a.txt": {Name: "a.txt", Size: "5", Length: 5, Text: "1|AAA\n"},
+			"b.txt": {Name: "b.txt", Size: "5", Length: 5, Text: "1|BBB\n"},
+		},
+	)
+
+	req, err := RequestBody(22, 1, "", &toolsList, db, "", "", cfgStruct.AgentConfig{}, chatLn)
+	if err != nil {
+		t.Fatalf("RequestBody failed: %v", err)
+	}
+
+	// 找到 call_1 / call_2 两个 tool 结果的最大 index，以及合并内容块的 index
+	lastToolIdx, blockIdx, blockCount := -1, -1, 0
+	for i, msg := range req.Messages {
+		if msg.Role == reqStruct.RoleTool && (msg.ToolCallID == "call_1" || msg.ToolCallID == "call_2") {
+			if i > lastToolIdx {
+				lastToolIdx = i
+			}
+		}
+		if msg.Role == "user" && strings.Contains(msg.Content, `path="a.txt"`) && strings.Contains(msg.Content, `path="b.txt"`) {
+			blockIdx = i
+			blockCount++
+		}
+	}
+	if blockCount != 1 {
+		t.Errorf("expected exactly one merged content block, got %d", blockCount)
+	}
+	if blockIdx < 0 {
+		t.Fatal("expected merged content block with both files")
+	}
+	if !(blockIdx > lastToolIdx) {
+		t.Errorf("merged block should follow all tool results: lastToolIdx=%d blockIdx=%d", lastToolIdx, blockIdx)
+	}
+}
+
+// TestRequestBody_NonRecentEvent_FallsBackTop 不可锚定事件（事件消息被 skip/超分页）的内容块
+// 进入顶部 fallback（addUserPrompt 之后、历史之前），不丢失文件。
+func TestRequestBody_NonRecentEvent_FallsBackTop(t *testing.T) {
+	db := setupTestDB(t)
+	toolsList := []*parser.ToolsDefine{}
+
+	setupTestConfig()
+	cfg := *config.GlobalConfig
+	m := cfg.Model.Models[cfg.Model.DefaultModelID]
+	m.EnableToolCalling = true
+	cfg.Model.Models[cfg.Model.DefaultModelID] = m
+	config.GlobalConfigSwap(cfg)
+
+	msgs := []structs.Messages{
+		{ChatID: 23, Type: structs.MessagesRoleUser, Delta: "go"},
+		{ChatID: 23, Type: structs.MessagesRoleAgent, Delta: "working", ToolCallingJSONString: `[{"name":"read","id":"call_1","parameters":{"path":"a.txt"}}]`},
+	}
+	for i := range msgs {
+		if err := db.Create(&msgs[i]).Error; err != nil {
+			t.Fatalf("create msg: %v", err)
+		}
+	}
+
+	// 事件 MsgID 指向不存在的记录 → findEventAnchor 返回 nil → 顶部 fallback
+	chatLn := eventTestChatLn(
+		map[string]*structs.TraceEvent{
+			"a.txt": {MsgID: 99999, ToolCallID: "call_1", IsEdit: false, InRecent: true},
+		},
+		map[string]trace.FileBlock{
+			"a.txt": {Name: "a.txt", Size: "5", Length: 5, Text: "1|hi\n"},
+		},
+	)
+
+	req, err := RequestBody(23, 1, "", &toolsList, db, "", "TOP_MARKER", cfgStruct.AgentConfig{}, chatLn)
+	if err != nil {
+		t.Fatalf("RequestBody failed: %v", err)
+	}
+
+	topIdx, blockIdx := -1, -1
+	for i, msg := range req.Messages {
+		if msg.Role == "user" && strings.Contains(msg.Content, "TOP_MARKER") {
+			topIdx = i
+		}
+		if msg.Role == "user" && strings.Contains(msg.Content, `path="a.txt"`) {
+			blockIdx = i
+		}
+	}
+	if topIdx < 0 {
+		t.Fatal("expected addUserPrompt top marker")
+	}
+	if blockIdx < 0 {
+		t.Fatal("expected fallback content block at top")
+	}
+	if blockIdx != topIdx+1 {
+		t.Errorf("fallback block should follow addUserPrompt: topIdx=%d blockIdx=%d", topIdx, blockIdx)
+	}
+}
+
+// TestRequestBody_NoEventFile_Top 无事件映射时，trace 内容仍在顶部聚合（现状），历史中无内容块。
+func TestRequestBody_NoEventFile_Top(t *testing.T) {
+	db := setupTestDB(t)
+	toolsList := []*parser.ToolsDefine{}
+
+	setupTestConfig()
+	cfg := *config.GlobalConfig
+	m := cfg.Model.Models[cfg.Model.DefaultModelID]
+	m.EnableToolCalling = true
+	cfg.Model.Models[cfg.Model.DefaultModelID] = m
+	config.GlobalConfigSwap(cfg)
+
+	msgs := []structs.Messages{
+		{ChatID: 24, Type: structs.MessagesRoleUser, Delta: "hello"},
+	}
+	if err := db.Create(&msgs[0]).Error; err != nil {
+		t.Fatalf("create msg: %v", err)
+	}
+
+	// 无 TemporyDataOfSession → 无事件 → 内容全在顶部 addUserPrompt
+	req, err := RequestBody(24, 1, "", &toolsList, db, "", "TOP a.txt trace block", cfgStruct.AgentConfig{}, &structs.Chats{})
+	if err != nil {
+		t.Fatalf("RequestBody failed: %v", err)
+	}
+
+	topIdx, histIdx := -1, -1
+	for i, msg := range req.Messages {
+		if msg.Role == "user" && strings.Contains(msg.Content, "TOP a.txt") {
+			topIdx = i
+		}
+		if msg.Role == "user" && strings.Contains(msg.Content, "hello") {
+			histIdx = i
+		}
+	}
+	if topIdx < 0 {
+		t.Fatal("expected top trace block")
+	}
+	if histIdx < 0 {
+		t.Fatal("expected history user message")
+	}
+	if !(topIdx < histIdx) {
+		t.Errorf("top trace block should come before history: topIdx=%d histIdx=%d", topIdx, histIdx)
+	}
+}
+
+// TestDetectTraceEvents 验证事件检测：path 提取、只留最新、@task 识别、Summary 截断。
+func TestDetectTraceEvents(t *testing.T) {
+	db := setupTestDB(t)
+
+	// 消息按 id 递增（旧→新）：最后两条为 read a.txt / edit a.txt，a.txt 最新事件应为 read（最新一次）。
+	msgs := []structs.Messages{
+		{ChatID: 30, Type: structs.MessagesRoleUser, Delta: "u1"},
+		{ChatID: 30, Type: structs.MessagesRoleAgent, Delta: "", Summary: "sum", ToolCallingJSONString: `[{"name":"edit","id":"call_9","parameters":{"path":"z.txt"}}]`},
+		{ChatID: 30, Type: structs.MessagesRoleAgent, Delta: "", ToolCallingJSONString: `[{"name":"edit","id":"call_3","parameters":{"path":"@task"}}]`},
+		{ChatID: 30, Type: structs.MessagesRoleAgent, Delta: "", ToolCallingJSONString: `[{"name":"edit","id":"call_2","parameters":{"path":"a.txt"}}]`},
+		{ChatID: 30, Type: structs.MessagesRoleAgent, Delta: "", ToolCallingJSONString: `[{"name":"read","id":"call_1","parameters":{"path":"a.txt"}}]`},
+	}
+	for i := range msgs {
+		if err := db.Create(&msgs[i]).Error; err != nil {
+			t.Fatalf("create msg: %v", err)
+		}
+	}
+
+	session := &structs.Chats{ID: 30, DB: db}
+	if err := DetectTraceEvents(db, session, ""); err != nil {
+		t.Fatalf("DetectTraceEvents: %v", err)
+	}
+	em, ok := session.TemporyDataOfSession[structs.TempKeyTraceEvents].(map[string]*structs.TraceEvent)
+	if !ok {
+		t.Fatal("expected trace events in session")
+	}
+
+	// a.txt：从新到旧先扫到 read（call_1，最新），edit 被"只留最新"覆盖
+	evA, ok := em["a.txt"]
+	if !ok {
+		t.Fatal("expected a.txt event")
+	}
+	if evA.ToolCallID != "call_1" || evA.IsEdit {
+		t.Errorf("a.txt latest event should be read call_1, got %+v", evA)
+	}
+	if evA.MsgID != msgs[4].ID {
+		t.Errorf("a.txt event MsgID should be %d, got %d", msgs[4].ID, evA.MsgID)
+	}
+	// @task 识别
+	taskEv, ok := em["@task"]
+	if !ok || !taskEv.IsTask || !taskEv.IsEdit {
+		t.Errorf("expected @task edit event, got %+v", taskEv)
+	}
+	// Summary 截断：z.txt 在 summary 之后（更旧），不应被记录
+	if _, ok := em["z.txt"]; ok {
+		t.Error("z.txt event should be truncated by summary")
 	}
 }

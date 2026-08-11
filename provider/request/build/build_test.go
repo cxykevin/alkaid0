@@ -354,8 +354,8 @@ func TestBuildModelTemperatureAndTopP(t *testing.T) {
 	// 验证MaxTokens参数
 	if result.MaxTokens == nil {
 		t.Errorf("Expected non-nil MaxTokens")
-	} else if *result.MaxTokens != 8192 {
-		t.Errorf("Expected MaxTokens 8192, got %d", *result.MaxTokens)
+	} else if *result.MaxTokens != 16384 {
+		t.Errorf("Expected MaxTokens 16384, got %d", *result.MaxTokens)
 	}
 }
 

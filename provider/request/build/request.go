@@ -3,6 +3,7 @@ package build
 import (
 	"container/list"
 	"encoding/json"
+	"sort"
 	"strings"
 
 	"github.com/cxykevin/alkaid0/config"
@@ -12,6 +13,7 @@ import (
 	reqStruct "github.com/cxykevin/alkaid0/provider/request/structs"
 	"github.com/cxykevin/alkaid0/storage/structs"
 	storageStructs "github.com/cxykevin/alkaid0/storage/structs"
+	"github.com/cxykevin/alkaid0/tools/tools/trace"
 	"gorm.io/gorm"
 )
 
@@ -174,6 +176,8 @@ func RequestBody(chatID uint32, modelID int32, agentCode string, toolsList *[]*p
 
 	// 生成 messages
 	responseDeltaList := list.New()
+	// 记录每条 DB 消息记录 push 后的链表元素，供事件内容块按锚点插入（见 insertEventContentBlocks）。
+	dbIDToElement := make(map[uint64]*list.Element)
 	exitFlag := false
 	for offsetPage := range maxPage {
 		var obj []structs.Messages
@@ -360,7 +364,7 @@ func RequestBody(chatID uint32, modelID int32, agentCode string, toolsList *[]*p
 			if skipMsg {
 				continue
 			}
-			responseDeltaList.PushFront(msg)
+			dbIDToElement[v.ID] = responseDeltaList.PushFront(msg)
 			if exitFlag {
 				break
 			}
@@ -372,11 +376,24 @@ func RequestBody(chatID uint32, modelID int32, agentCode string, toolsList *[]*p
 
 	// 放置全局信息
 	// 放置额外动态信息
-	if addUserPrompt != "" {
-		responseDeltaList.PushFront(reqStruct.Message{
+	// trace/@task 内容块按最近 read/edit 事件插入历史；不可锚定的事件内容作为顶部 fallback。
+	var fallbackTop string
+	if chatLn.TemporyDataOfSession != nil {
+		if em, ok := chatLn.TemporyDataOfSession[structs.TempKeyTraceEvents].(map[string]*structs.TraceEvent); ok && len(em) > 0 {
+			fallbackTop = insertEventContentBlocks(responseDeltaList, dbIDToElement, em, chatLn, nativeMode)
+		}
+	}
+	if addUserPrompt != "" || fallbackTop != "" {
+		el := responseDeltaList.PushFront(reqStruct.Message{
 			Role:    "user",
 			Content: addUserPrompt,
 		})
+		if fallbackTop != "" {
+			responseDeltaList.InsertAfter(reqStruct.Message{
+				Role:    "user",
+				Content: fallbackTop,
+			}, el)
+		}
 	}
 
 	// 合并所有 system 消息
@@ -567,6 +584,200 @@ func parseStoredToolResults(payload string) ([]storedToolResult, error) {
 		return nil, err
 	}
 	return items, nil
+}
+
+// DetectTraceEvents 从新到旧扫描消息历史，为每个被 read/edit 交互过的路径记录最近一次事件。
+// 结果写入 session.TemporyDataOfSession[TempKeyTraceEvents]（map[string]*structs.TraceEvent）。
+// 从新到旧扫描，先扫到的即最近事件，天然满足"只留最新"。
+func DetectTraceEvents(db *gorm.DB, session *structs.Chats, agentCode string) error {
+	eventMap := make(map[string]*structs.TraceEvent)
+	recentTurns := 0
+scan:
+	for offsetPage := range maxPage {
+		var obj []structs.Messages
+		if agentCode == "" {
+			db.Where("`chat_id` = ? AND (`agent_id` = \"\" OR `agent_id` IS NULL)", session.ID).Order("id DESC").Offset(offsetPage * readPageSize).Limit(readPageSize).Find(&obj)
+		} else {
+			db.Where("`chat_id` = ? AND `agent_id` = ?", session.ID, agentCode).Order("id DESC").Offset(offsetPage * readPageSize).Limit(readPageSize).Find(&obj)
+		}
+		if len(obj) == 0 {
+			break
+		}
+		for _, v := range obj {
+			if v.Summary != "" {
+				break scan
+			}
+			if v.Type != structs.MessagesRoleAgent || v.ToolCallingJSONString == "" {
+				continue
+			}
+			var items []storedToolCall
+			if err := json.Unmarshal([]byte(v.ToolCallingJSONString), &items); err != nil || len(items) == 0 {
+				continue
+			}
+			inRecent := recentTurns < 5
+			recentTurns++
+			for _, c := range items {
+				if c.Name != "read" && c.Name != "edit" {
+					continue
+				}
+				path := toolCallPath(c)
+				if path == "" {
+					continue
+				}
+				if _, exists := eventMap[path]; exists {
+					continue // 只留最新：先扫到的是最近的
+				}
+				eventMap[path] = &structs.TraceEvent{
+					MsgID:      v.ID,
+					ToolCallID: c.ID,
+					IsEdit:     c.Name == "edit",
+					IsTask:     path == "@task",
+					InRecent:   inRecent,
+				}
+			}
+		}
+	}
+	if session.TemporyDataOfSession == nil {
+		session.TemporyDataOfSession = make(map[string]any)
+	}
+	session.TemporyDataOfSession[structs.TempKeyTraceEvents] = eventMap
+	return nil
+}
+
+// toolCallPath 从存储层工具调用参数中提取 path。
+// 不能复用 parseStoredToolCalls：其回放时把参数屏蔽为占位符，仅失败调用才带真实参数。
+func toolCallPath(c storedToolCall) string {
+	if len(c.Parameters) == 0 {
+		return ""
+	}
+	var args map[string]any
+	if err := json.Unmarshal(c.Parameters, &args); err != nil {
+		return ""
+	}
+	p, _ := args["path"].(string)
+	return p
+}
+
+// eventInsertGroup 同一事件（一条 assistant 消息）内多个文件的内容块合并为一条 user 消息。
+type eventInsertGroup struct {
+	anchor *list.Element
+	paths  []string
+}
+
+// insertEventContentBlocks 按事件把 trace/@task 内容块插入历史（紧跟最近 read/edit 事件之后），
+// 返回不可锚定事件的顶部 fallback 内容（独立 user 消息，插在 addUserPrompt 之后）。
+// 内容块在 PreHook 阶段已渲染并暂存于 chatLn.TemporyDataOfSession，此处只做拼装插入，不重复读盘。
+func insertEventContentBlocks(l *list.List, dbIDToElement map[uint64]*list.Element,
+	eventMap map[string]*structs.TraceEvent, chatLn *structs.Chats, nativeMode bool) string {
+
+	fileBlocks, _ := chatLn.TemporyDataOfSession[structs.TempKeyTraceFileBlocks].(map[string]trace.FileBlock)
+	taskBlock, _ := chatLn.TemporyDataOfSession[structs.TempKeyTaskEventBlock].(string)
+
+	groups := make(map[uint64]*eventInsertGroup)
+	fallbackPaths := make([]string, 0)
+	for path, ev := range eventMap {
+		if !ev.IsTask {
+			if _, ok := fileBlocks[path]; !ok {
+				continue // 事件文件不在 Traces 表（如事后 untrace）→ 跳过
+			}
+		} else if taskBlock == "" {
+			continue
+		}
+		anchor := findEventAnchor(l, dbIDToElement, ev, nativeMode)
+		if anchor == nil {
+			fallbackPaths = append(fallbackPaths, path) // 不可锚定 → 顶部 fallback
+			continue
+		}
+		g := groups[ev.MsgID]
+		if g == nil {
+			g = &eventInsertGroup{anchor: anchor}
+			groups[ev.MsgID] = g
+		} else if elementAfter(g.anchor, anchor) {
+			g.anchor = anchor // 同一事件多工具调用时取最靠后的锚点
+		}
+		g.paths = append(g.paths, path)
+	}
+	for _, g := range groups {
+		sort.Strings(g.paths)
+		var frags []trace.FileBlock
+		var extra strings.Builder
+		for _, p := range g.paths {
+			if p == "@task" {
+				extra.WriteString(taskBlock)
+				extra.WriteString("\n\n")
+			} else if fb, ok := fileBlocks[p]; ok {
+				frags = append(frags, fb)
+			}
+		}
+		content, err := trace.RenderTraceBlock(frags)
+		if err != nil {
+			logger.Error("render trace event block error: %v", err)
+			content = ""
+		}
+		if content != "" && extra.Len() > 0 {
+			content += "\n\n"
+		}
+		content += strings.TrimSpace(extra.String())
+		if content == "" {
+			continue
+		}
+		l.InsertAfter(reqStruct.Message{Role: "user", Content: content}, g.anchor)
+	}
+	// 不可锚定事件 → 顶部 fallback
+	sort.Strings(fallbackPaths)
+	var fb []string
+	for _, p := range fallbackPaths {
+		if p == "@task" {
+			if taskBlock != "" {
+				fb = append(fb, taskBlock)
+			}
+			continue
+		}
+		if blk, ok := fileBlocks[p]; ok {
+			if s, err := trace.RenderTraceBlock([]trace.FileBlock{blk}); err == nil {
+				fb = append(fb, s)
+			}
+		}
+	}
+	return strings.Join(fb, "\n\n")
+}
+
+// findEventAnchor 返回事件内容块的插入锚点（内容块插到该元素之后）。
+// 原生模式 + 最近 5 轮完整回放：事件 assistant 消息之后、最后一条 ToolCallID 匹配的
+// role:tool 结果消息（覆盖正常结果/终止占位/一个 assistant 多结果拆分）；遇到首个非
+// tool 消息即停止扫描。否则（提示词模式 / 非 recent 原生降级文本）：事件 assistant 消息本身。
+// 消息被 skip 或超出分页范围（dbIDToElement 无记录）→ 返回 nil（不可锚定）。
+func findEventAnchor(l *list.List, dbIDToElement map[uint64]*list.Element, ev *structs.TraceEvent, nativeMode bool) *list.Element {
+	msgEl := dbIDToElement[ev.MsgID]
+	if msgEl == nil {
+		return nil
+	}
+	if nativeMode && ev.InRecent && ev.ToolCallID != "" {
+		var last *list.Element
+		for e := msgEl.Next(); e != nil; e = e.Next() {
+			m := e.Value.(reqStruct.Message)
+			if m.Role != reqStruct.RoleTool {
+				break
+			}
+			if m.ToolCallID == ev.ToolCallID {
+				last = e
+			}
+		}
+		if last != nil {
+			return last
+		}
+	}
+	return msgEl
+}
+
+// elementAfter 判断元素 b 是否在元素 a 之后（链表顺序）。
+func elementAfter(a, b *list.Element) bool {
+	for e := a; e != nil; e = e.Next() {
+		if e == b {
+			return true
+		}
+	}
+	return false
 }
 
 // getEffectiveAutoApprove 获取用户配置的 AutoApprove 规则（不含内置规则合并）

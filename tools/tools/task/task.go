@@ -30,19 +30,45 @@ func init() {
 	taskTempate = prompts.Load("tools:task:task", taskPrompt)
 }
 
-// buildGlobalPrompt 注入 @task 任务列表到 AI 上下文（全局 PreHook，Priority 100）
+// buildGlobalPrompt 注入 @task 任务列表到 AI 上下文（全局 PreHook，Priority 100）。
+// @task 有最近 edit 事件时顶部不放，内容块改由 build 包按事件插入（见 TempKeyTaskEventBlock）；
+// 否则顶部聚合（现状）。
 func buildGlobalPrompt(session *structs.Chats) (string, error) {
+	if isTaskEvent(session) {
+		block := renderTaskBlock(session)
+		if session.TemporyDataOfSession == nil {
+			session.TemporyDataOfSession = make(map[string]any)
+		}
+		session.TemporyDataOfSession[structs.TempKeyTaskEventBlock] = block
+		return "", nil
+	}
+	return renderTaskBlock(session), nil
+}
+
+// renderTaskBlock 渲染 @task 任务列表内容块；空任务返回引导语（避免 ToolPrehookTemplate 渲染多余空行）。
+func renderTaskBlock(session *structs.Chats) string {
 	if session.Task == "" {
-		// 空任务：返回一句短提示引导 AI 创建任务。
-		// 返回空串会让 ToolPrehookTemplate 渲染出多余空行。
-		return "Virtual object `@task` is empty. You can create a task plan by editing `@task` with the `edit` tool (`- [X] taskName: taskDetails`, 2-space indent per level).", nil
+		return "Virtual object `@task` is empty. You can create a task plan by editing `@task` with the `edit` tool (`- [X] taskName: taskDetails`, 2-space indent per level)."
 	}
 	rendered, err := prompts.Render(taskTempate, session.Task)
 	if err != nil {
 		logger.Warn("task prompt render error: %v", err)
-		return "", err
+		return ""
 	}
-	return rendered, nil
+	return rendered
+}
+
+// isTaskEvent 判断 @task 在本轮是否有最近 edit 事件。
+func isTaskEvent(session *structs.Chats) bool {
+	if session.TemporyDataOfSession == nil {
+		return false
+	}
+	m, ok := session.TemporyDataOfSession[structs.TempKeyTraceEvents].(map[string]*structs.TraceEvent)
+	if !ok {
+		return false
+	}
+	ev, ok := m["@task"]
+	return ok && ev.IsTask
 }
 
 // buildPrompt 注入 @task 操作规范到 edit 工具 Description（edit PreHook，Priority 90）
