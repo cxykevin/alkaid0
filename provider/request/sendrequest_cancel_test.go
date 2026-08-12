@@ -3,6 +3,7 @@ package request
 import (
 	"context"
 	"errors"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -12,6 +13,7 @@ import (
 	cfgStruct "github.com/cxykevin/alkaid0/config/structs"
 	"github.com/cxykevin/alkaid0/mock/openai"
 	"github.com/cxykevin/alkaid0/provider/request/structs"
+	"github.com/cxykevin/alkaid0/stats"
 	storageStructs "github.com/cxykevin/alkaid0/storage/structs"
 	u "github.com/cxykevin/alkaid0/utils"
 	"github.com/glebarez/sqlite"
@@ -34,6 +36,9 @@ func setupCancelTestConfig(modelID int32, modelName string) {
 //  1. 取消后 SendRequest 立即返回 context.Canceled
 //  2. 取消前收到的内容被正确持久化到数据库
 func TestSendRequest_ContextCancel_ContentPersisted(t *testing.T) {
+	// 隔离全局 token 用量统计
+	stats.ResetForTest()
+	stats.SetFilePath(filepath.Join(t.TempDir(), "usage.json"))
 	openai.StartServerTask()
 	setupCancelTestConfig(1, "test-chat")
 
@@ -172,6 +177,9 @@ func TestSendRequest_ContextCancel_ContentPersisted(t *testing.T) {
 
 // TestSendRequest_ContextCancel_ImmediateReturn 测试预取消 context 下 SendRequest 立即返回
 func TestSendRequest_ContextCancel_ImmediateReturn(t *testing.T) {
+	// 隔离全局 token 用量统计
+	stats.ResetForTest()
+	stats.SetFilePath(filepath.Join(t.TempDir(), "usage.json"))
 	openai.StartServerTask()
 	setupCancelTestConfig(1, "test-chat-flash")
 

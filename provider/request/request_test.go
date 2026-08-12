@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -13,6 +14,7 @@ import (
 	"github.com/cxykevin/alkaid0/library/chancall"
 	"github.com/cxykevin/alkaid0/provider/request/agents/actions"
 	"github.com/cxykevin/alkaid0/provider/request/structs"
+	"github.com/cxykevin/alkaid0/stats"
 	storageStructs "github.com/cxykevin/alkaid0/storage/structs"
 	"github.com/cxykevin/alkaid0/ui/state"
 	u "github.com/cxykevin/alkaid0/utils"
@@ -47,6 +49,10 @@ func initAgentsConsumer() {
 func setupTestDB(t *testing.T) *gorm.DB {
 	// 初始化 agents 消费者
 	initAgentsConsumer()
+
+	// 隔离全局 token 用量统计，避免测试向真实配置目录写入 usage.json
+	stats.ResetForTest()
+	stats.SetFilePath(filepath.Join(t.TempDir(), "usage.json"))
 
 	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
 	if err != nil {

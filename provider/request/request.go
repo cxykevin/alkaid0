@@ -20,6 +20,7 @@ import (
 	"github.com/cxykevin/alkaid0/provider/request/classifier"
 	"github.com/cxykevin/alkaid0/provider/request/structs"
 	"github.com/cxykevin/alkaid0/provider/response"
+	"github.com/cxykevin/alkaid0/stats"
 	storageStructs "github.com/cxykevin/alkaid0/storage/structs"
 	"github.com/cxykevin/alkaid0/tools"
 	"github.com/cxykevin/alkaid0/ui/state"
@@ -843,6 +844,15 @@ func SendRequest(ctx context.Context, session *storageStructs.Chats, callback fu
 	var totalUsage uint32
 	var cachedUsage uint32
 
+	// 全局 token 用量统计：defer + 标志位保证所有 return 路径至多累计一次，
+	// 并跳过模型不存在/构建失败/native、legacy 打回等不应计数的路径。
+	var usageRecorded bool
+	defer func() {
+		if usageRecorded {
+			stats.AddUsage(modelID, modelCfg.ModelName, promptUsage, completionUsage, cachedUsage)
+		}
+	}()
+
 	// solveFunc 是 SimpleOpenAIRequest 的回调函数，每次收到流式响应体时调用。
 	// 内部处理：增量解析 token → 累积内容 → 达到阈值时写库 → 实时推送到 UI
 	solveFunc := func(body structs.ChatCompletionResponse) error {
@@ -981,6 +991,9 @@ func SendRequest(ctx context.Context, session *storageStructs.Chats, callback fu
 		}
 		return false, nil
 	}
+
+	// 请求已真正发出且未被打回：后续正常完成、用户取消、其他错误都算一次真实对话调用。
+	usageRecorded = true
 
 	isCancel := requestErr != nil && errors.Is(requestErr, context.Canceled)
 

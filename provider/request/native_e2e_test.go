@@ -15,6 +15,7 @@ import (
 	cfgStruct "github.com/cxykevin/alkaid0/config/structs"
 	"github.com/cxykevin/alkaid0/provider/parser"
 	"github.com/cxykevin/alkaid0/provider/request/structs"
+	"github.com/cxykevin/alkaid0/stats"
 	storageStructs "github.com/cxykevin/alkaid0/storage/structs"
 	"github.com/cxykevin/alkaid0/tools/actions"
 	"github.com/cxykevin/alkaid0/tools/toolobj"
@@ -375,6 +376,15 @@ func TestNativeSendRequest_LegacyRejection(t *testing.T) {
 	}
 	if !strings.Contains(last.Delta, "native function-calling API") {
 		t.Errorf("correction message should mention native function-calling, got: %q", last.Delta)
+	}
+
+	// 打回响应不进入全局 token 用量统计（usageRecorded 未置位）
+	snap := stats.Snapshot()
+	if snap.Total.Requests != 0 {
+		t.Errorf("rejected response should not be counted in global stats, got requests=%d", snap.Total.Requests)
+	}
+	if len(snap.Models) != 0 {
+		t.Errorf("rejected response should not add model stats, got %+v", snap.Models)
 	}
 }
 

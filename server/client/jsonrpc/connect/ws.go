@@ -16,6 +16,7 @@ import (
 	"github.com/cxykevin/alkaid0/library/chancall"
 	"github.com/cxykevin/alkaid0/log"
 	"github.com/cxykevin/alkaid0/product"
+	"github.com/cxykevin/alkaid0/stats"
 	u "github.com/cxykevin/alkaid0/utils"
 	"github.com/gorilla/websocket"
 )
@@ -128,6 +129,7 @@ func StartWs(handler func(string, func(string) error, uint64) (returnString stri
 				"sessions": ss,
 				"dbs":      db,
 			},
+			"usage": stats.Snapshot(),
 		})
 	})
 

@@ -1041,6 +1041,8 @@ func UpdateToolPathDesp() {
 	seCfg := onCfg
 	v := paras["path"]
 	v.Description = pathDesp + strings.Join(searchengine.EnabledProviders(&seCfg), ",")
+	// map 取值是值拷贝，必须写回，否则描述始终停留在占位符 <will_be_replaced_desp>
+	paras["path"] = v
 }
 
 func load() string {
