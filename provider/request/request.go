@@ -765,6 +765,80 @@ func ExecuteToolCalls(session *storageStructs.Chats, toolCallingJSON string) (bo
 	return ok, err
 }
 
+// toolCallTerminatedPlaceholder 与 build.toolCallTerminatedMsg 语义相同的占位结果文本。
+// splitMultiToolCalls 拆分多工具调用历史时，若某调用缺失对应结果则补占位，
+// 保证拆分出的每条 assistant 都有响应。
+const toolCallTerminatedPlaceholder = "[Tool call terminated] This call was cancelled before execution and did not run."
+
+// emptyAssistantToolCallContent 拆分多工具调用历史时，拆分出的后续 assistant 消息
+// 使用该占位正文。Anthropic 校验拒绝空 text content block，故不能留空串；此占位
+// 同时向模型表明该消息仅承载工具调用结构。
+const emptyAssistantToolCallContent = "[tool call]"
+
+// splitMultiToolCalls 把"一个 assistant 携带多个 tool_calls + 多条 role:tool 结果"的历史
+// 重排为"逐条 assistant(单 tool_call) + 紧邻对应结果"的形式。
+//
+// 背景：部分 OpenAI→Anthropic 转换代理会把每条 role:tool 消息逐条转换为独立的
+// user(tool_result) 消息。Anthropic 校验要求每条 tool_use 块必须在紧邻的下一条消息中
+// 找到对应 tool_result——因此 assistant 一次携带多个 tool_calls 时，除第一个外其余
+// tool_use 都会在校验中缺失，报错形如：
+//   "`tool_use` ids were found without `tool_result` blocks immediately after: call_xx_..."
+//
+// 拆分后每条 assistant 只带一个 tool_call，其后紧邻该调用的结果（真实结果按 id 匹配，
+// 缺失则补终止占位），任意转换策略（逐条/合并）均可正确配对，同时顺带修复了
+// 占位结果排在真实结果之前导致的顺序错乱。
+func splitMultiToolCalls(messages []structs.Message) []structs.Message {
+	out := make([]structs.Message, 0, len(messages))
+	for i := 0; i < len(messages); i++ {
+		msg := messages[i]
+		if msg.Role != structs.RoleAssistant || len(msg.ToolCalls) <= 1 {
+			out = append(out, msg)
+			continue
+		}
+		// 收集该 assistant 之后连续的 role:tool 结果消息（占位/真实均在内）
+		j := i + 1
+		var tools []structs.Message
+		for j < len(messages) && messages[j].Role == structs.RoleTool {
+			tools = append(tools, messages[j])
+			j++
+		}
+		consumed := make([]bool, len(tools))
+		for k, tc := range msg.ToolCalls {
+			m := msg
+			m.ToolCalls = []structs.StreamToolCall{tc}
+			if k > 0 {
+				// 后续拆分出的 assistant 不重复正文与思考内容，只保留 tool_call 结构；
+				// 正文用非空占位（Anthropic 校验拒绝空 text block，不能用空串）。
+				m.Content = emptyAssistantToolCallContent
+				m.ReasoningContent = nil
+			}
+			out = append(out, m)
+			// 为该调用按 id 匹配对应结果（不依赖原始顺序，规避占位错位）
+			found := false
+			for ti, tm := range tools {
+				if consumed[ti] || tm.ToolCallID == "" {
+					continue
+				}
+				if tm.ToolCallID == tc.ID {
+					out = append(out, tm)
+					consumed[ti] = true
+					found = true
+					break
+				}
+			}
+			if !found {
+				out = append(out, structs.Message{
+					Role:       structs.RoleTool,
+					Content:    toolCallTerminatedPlaceholder,
+					ToolCallID: tc.ID,
+				})
+			}
+		}
+		i = j - 1 // 跳过已处理的 tool 结果
+	}
+	return out
+}
+
 // SendRequest 发送 LLM 请求并处理流式响应。
 // 流程：设置状态 → 构建请求体 → 发送请求 → 流式解析 → 持久化 → 处理工具调用。
 // token 使用阈值刷写策略（每 256 字符批量写库）平衡实时性与 I/O 性能。
@@ -867,6 +941,14 @@ func SendRequest(ctx context.Context, session *storageStructs.Chats, callback fu
 			totalUsage = max(totalUsage, body.Usage.TotalTokens)
 			cachedUsage = max(cachedUsage, body.Usage.CachedTokens)
 			cachedUsage = max(cachedUsage, body.Usage.DeepseekCachedToken)
+			// OpenAI 标准嵌套（OpenRouter/CCR 等网关透传 Anthropic usage 时填充）
+			if body.Usage.PromptTokensDetails != nil {
+				cachedUsage = max(cachedUsage, body.Usage.PromptTokensDetails.CachedTokens)
+			}
+			// CCR 等网关保留的 Anthropic 原生计费明细
+			if body.Usage.BillingUsage != nil && body.Usage.BillingUsage.ClaudeUsage != nil {
+				cachedUsage = max(cachedUsage, body.Usage.BillingUsage.ClaudeUsage.CacheReadInputTokens)
+			}
 		}
 		if len(body.Choices) == 0 {
 			return nil
@@ -954,6 +1036,14 @@ func SendRequest(ctx context.Context, session *storageStructs.Chats, callback fu
 	}
 
 	session.State = state.StateRequesting
+
+	// 历史回放兼容（可选）：拆分一个 assistant 携带多个 tool_calls 的消息为逐条
+	// "单 tool_call + 对应结果"形式，保证 OpenAI→Anthropic 转换代理下每条 tool_use
+	// 都能在紧邻下一条消息找到 tool_result（否则多工具调用历史会触发 400 校验错误）。
+	// 默认关闭；仅对会逐条转换 role:tool 消息的代理开启（模型级 EnableToolCallingCompat）。
+	if modelCfg.ProviderSpecificConfig.EnableToolCallingCompat {
+		obj.Messages = splitMultiToolCalls(obj.Messages)
+	}
 
 	// 创建安全 key 上下文引擎：请求出站脱敏 + 响应流式还原（未启用时返回 nil，零行为变化）
 	eng := mask.NewEngine(session.DB)

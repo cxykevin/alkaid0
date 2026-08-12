@@ -20,6 +20,7 @@ type ProviderSpecificConfig struct {
 	EnableUsage            bool   `default:"true"`
 	Dimension              int    `default:"0"`    // Embedding 模型维度, 嵌入模型必填
 	ToolPromptEnhance      string `default:"auto"` // 工具提示词增强: auto(默认,启用) / on(强制启用) / off(强制关闭)
+	EnableToolCallingCompat bool  `default:"false"` // 历史回放兼容模式：把"一个 assistant 携带多个 tool_calls"的消息拆分为逐条"单 tool_call + 结果"，适配逐条转换 role:tool 消息的 OpenAI→Anthropic 代理（默认关闭）
 }
 
 // ModelConfig 单个模型配置结构

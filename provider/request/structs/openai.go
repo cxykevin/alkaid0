@@ -104,11 +104,31 @@ type Choice struct {
 
 // Usage 令牌使用统计
 type Usage struct {
-	PromptTokens        uint32 `json:"prompt_tokens"`
-	CompletionTokens    uint32 `json:"completion_tokens"`
-	TotalTokens         uint32 `json:"total_tokens"`
-	CachedTokens        uint32 `json:"cached_tokens"`
-	DeepseekCachedToken uint32 `json:"prompt_cache_hit_tokens,omitempty"`
+	PromptTokens        uint32               `json:"prompt_tokens"`
+	CompletionTokens    uint32               `json:"completion_tokens"`
+	TotalTokens         uint32               `json:"total_tokens"`
+	CachedTokens        uint32               `json:"cached_tokens"`
+	DeepseekCachedToken uint32               `json:"prompt_cache_hit_tokens,omitempty"`
+	PromptTokensDetails *PromptTokensDetails `json:"prompt_tokens_details,omitempty"`
+	BillingUsage        *BillingUsage        `json:"billing_usage,omitempty"`
+}
+
+// PromptTokensDetails OpenAI 标准嵌套的输入 token 明细，
+// 缓存命中 token 位于 prompt_tokens_details.cached_tokens
+// （OpenRouter、claude-code-router 等网关透传 Anthropic usage 时填充此字段）。
+type PromptTokensDetails struct {
+	CachedTokens uint32 `json:"cached_tokens"`
+}
+
+// BillingUsage claude-code-router 等网关透传的 Anthropic 计费明细，
+// 缓存命中 token 位于 billing_usage.claude_usage.cache_read_input_tokens。
+type BillingUsage struct {
+	ClaudeUsage *ClaudeUsage `json:"claude_usage,omitempty"`
+}
+
+// ClaudeUsage Anthropic 原生 usage 明细。
+type ClaudeUsage struct {
+	CacheReadInputTokens uint32 `json:"cache_read_input_tokens"`
 }
 
 // ChatCompletionStream 流式响应块

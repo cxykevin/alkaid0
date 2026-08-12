@@ -99,6 +99,7 @@ C:\ProgramData\alkaid0\config.json
                     "EnableTopK": false,
                     "EnableTemperature": false,
                     "EnableUsage": true,
+                    "EnableToolCallingCompat": false,
                     "Dimension": 0
                 }
             },
