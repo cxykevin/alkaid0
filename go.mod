@@ -5,7 +5,7 @@ go 1.26.5
 require (
 	github.com/BurntSushi/toml v1.6.0
 	github.com/cxykevin/alkaid0-prompt-splitter v0.0.5
-	github.com/cxykevin/alkaid0-search-engine v0.0.2
+	github.com/cxykevin/alkaid0-search-engine v0.0.3
 	github.com/cxykevin/feederback v0.0.0-20260804093139-1b929c4bcce5
 	github.com/expr-lang/expr v1.17.8
 	github.com/glebarez/go-sqlite v1.22.0

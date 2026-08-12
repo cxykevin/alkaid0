@@ -17,6 +17,11 @@ func AddTool(tool *toolobj.Tools) {
 	toolobj.SetTool(tool)
 }
 
+// SearchTool 找工具
+func SearchTool(name string, scope string) *toolobj.Tools {
+	return toolobj.SearchTool(name, scope)
+}
+
 // HookTool 为工具添加钩子
 func HookTool(name string, hook *toolobj.Hook) error {
 	if ok := toolobj.AppendToolHook(name, *hook); !ok {

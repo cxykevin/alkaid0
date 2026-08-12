@@ -79,3 +79,13 @@ func AppendToolHook(name string, hook Hook) bool {
 	ToolsMu.Unlock()
 	return true
 }
+
+// SearchTool 搜索工具
+func SearchTool(name string, scope string) *Tools {
+	for _, tool := range ToolsList {
+		if tool.Name == name && tool.Scope == scope {
+			return tool
+		}
+	}
+	return nil
+}

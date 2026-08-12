@@ -35,6 +35,8 @@ var SummaryPrompt string
 
 var logger = log.New("tools:search")
 
+const pathDesp = "Search path (directory) when online=false Defaults to workspace root if empty. It will be used as set providers when online=true(Comma-separated list of search providers to use for online search (e.g., 'bing,tavily,github')). If not specified, all providers will be used. Available providers: "
+
 var paras = map[string]parser.ToolParameters{
 	"query": {
 		Type:        parser.ToolTypeString,
@@ -44,22 +46,22 @@ var paras = map[string]parser.ToolParameters{
 	"online": {
 		Type:        parser.ToolTypeBoolean,
 		Required:    true,
-		Description: "Whether to search online. If true, searches the internet via configured search engines (Bing/GitHub/arXiv/Tavily) and summarizes results via LLM. Must Be Second Parameter",
+		Description: "Whether to search online. If true, searches the internet via configured search engines (Bing/GitHub/arXiv/Tavily/...) and summarizes results via LLM. Must Be Second Parameter",
 	},
 	"path": {
 		Type:        parser.ToolTypeString,
 		Required:    false,
-		Description: "Search path (directory). Defaults to workspace root if empty",
+		Description: "<will_be_replaced_desp>",
 	},
 	"recursive": {
 		Type:        parser.ToolTypeBoolean,
 		Required:    false,
-		Description: "Whether to search recursively into subdirectories. Default is true",
+		Description: "Whether to search recursively into subdirectories. Default is true. Only when online=false",
 	},
-	"include_gitignored": {
+	"include_ignored": {
 		Type:        parser.ToolTypeBoolean,
 		Required:    false,
-		Description: "Whether to also search files matching .gitignore patterns. Default is false",
+		Description: "Whether to also search files matching .gitignore patterns. Default is false. Only when online=false",
 	},
 	"max_results": {
 		Type:        parser.ToolTypeNumber,
@@ -408,7 +410,7 @@ func runSearch(session *structs.Chats, mp map[string]*any, cross []*any) (bool, 
 		return runOnlineSearch(session, mp, cross)
 	}
 
-	includeGitignored, _ := getBoolParamDefault(mp, "include_gitignored", false)
+	includeGitignored, _ := getBoolParamDefault(mp, "include_ignored", false)
 	maxResults, _ := getIntParamDefault(mp, "max_results", 10)
 	recursive, _ := getBoolParamDefault(mp, "recursive", true)
 
@@ -593,6 +595,9 @@ func grepFile(path, relPath, query string, re *regexp.Regexp, maxResults int) []
 	scanner.Buffer(make([]byte, 1024*1024), 1024*1024) // 1MB buffer
 	lineNum := 0
 	for scanner.Scan() {
+		if scanner.Err() != nil {
+			break
+		}
 		lineNum++
 		line := scanner.Text()
 		match := false
@@ -956,7 +961,14 @@ func runOnlineSearch(_ *structs.Chats, mp map[string]*any, cross []*any) (bool, 
 	searchCtx, cancel := context.WithTimeout(context.Background(), time.Duration(onCfg.Timeout)*time.Second)
 	defer cancel()
 
-	rawResult, err := searchengine.Search(searchCtx, query, &seCfg)
+	// 提取 path 参数并构建搜索选项
+	var searchOpts []searchengine.Option
+	if providersStr, _ := getStringParamDefault(mp, "path", ""); providersStr != "" {
+		logger.Info("using specified providers: %s", providersStr)
+		searchOpts = append(searchOpts, searchengine.WithProviders(providersStr))
+	}
+
+	rawResult, err := searchengine.Search(searchCtx, query, &seCfg, searchOpts...)
 	if err != nil {
 		logger.Error("online search failed: %v", err)
 		return errResult(fmt.Sprintf("online search failed: %v", err), cross)
@@ -1023,7 +1035,17 @@ func runOnlineSearch(_ *structs.Chats, mp map[string]*any, cross []*any) (bool, 
 // 工具注册
 // ---------------------------------------------------------------------------
 
+// UpdateToolPathDesp 更新工具描述
+func UpdateToolPathDesp() {
+	onCfg := config.GlobalConfig.Context.OnlineSearch
+	seCfg := onCfg
+	v := paras["path"]
+	v.Description = pathDesp + strings.Join(searchengine.EnabledProviders(&seCfg), ",")
+}
+
 func load() string {
+	config.AddReloadHook(UpdateToolPathDesp)
+	UpdateToolPathDesp()
 	actions.AddTool(&toolobj.Tools{
 		Scope:           "", // Global Tools
 		Name:            toolName,

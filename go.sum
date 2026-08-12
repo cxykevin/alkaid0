@@ -8,8 +8,8 @@ github.com/andybalholm/cascadia v1.3.3 h1:AG2YHrzJIm4BZ19iwJ/DAua6Btl3IwJX+VI4kk
 github.com/andybalholm/cascadia v1.3.3/go.mod h1:xNd9bqTn98Ln4DwST8/nG+H0yuB8Hmgu1YHNnWw0GeA=
 github.com/cxykevin/alkaid0-prompt-splitter v0.0.5 h1:2K+BEw3Eei3VQhjzIRxFfjnOPz+kWBynJuJpF/CbdjQ=
 github.com/cxykevin/alkaid0-prompt-splitter v0.0.5/go.mod h1:BY1f5IxrorB6ynj2GWXNVH9+g9LbPI50+AR8qEwb70A=
-github.com/cxykevin/alkaid0-search-engine v0.0.2 h1:uIySGgHlUC0Spk8s6r1bVBluvv3LRwFvMJcqeQymkKY=
-github.com/cxykevin/alkaid0-search-engine v0.0.2/go.mod h1:dpSLptWYgAQfhgqrqPB0iz+WEXck6ldqcMGgS+u+g6g=
+github.com/cxykevin/alkaid0-search-engine v0.0.3 h1:gsuGKwXoEl7e48/liximB2J844WX6yTre2HtYFhfSpo=
+github.com/cxykevin/alkaid0-search-engine v0.0.3/go.mod h1:lyVARKl2hIh721c/ZTRvP7AiCP0p/bLI/3cxsvlXbyk=
 github.com/cxykevin/feederback v0.0.0-20260804093139-1b929c4bcce5 h1:DMS0bshNkaPz8ixwf/VIF2DYXD8uO8v0ADNhv47pV30=
 github.com/cxykevin/feederback v0.0.0-20260804093139-1b929c4bcce5/go.mod h1:7cWAW5ApKDnpC4Lyd/q11mp7+8vVqAndmGluUhW4FIM=
 github.com/davecgh/go-spew v1.1.1 h1:vj9j/u1bqnvCEfJOwUhtlOARqs3+rkHYY13jYWTU97c=
