@@ -336,26 +336,24 @@ func CleanSymbols(directory, filePath string, activeSymbols []string) error {
 			return fmt.Errorf("delete orphan items: %w", err)
 		}
 	} else {
-		maxInt := int(^uint(0) >> 1)
-		if n > maxInt-1 {
-			return fmt.Errorf("activeSymbols too large: %d", n)
-		}
-
-		// 构建 IN 占位符
-		placeholders := make([]string, n)
-		args := make([]any, 0, n+1)
-		args = append(args, filePath)
+		// 构建 IN 占位符。符号数量来自代码库扫描，属不可信输入：
+		// 不做基于 n 的容量预分配（make([]string, n) / make([]any, 0, n+1) 的
+		// 大小计算在 n 极大时可能溢出，CodeQL: allocation size overflow），
+		// 改用 strings.Builder 动态拼接 + append 自动扩容，无算术运算。
+		var inClause strings.Builder
+		args := []any{filePath}
 		for i, s := range activeSymbols {
-			placeholders[i] = "?"
+			if i > 0 {
+				inClause.WriteByte(',')
+			}
+			inClause.WriteByte('?')
 			args = append(args, s)
 		}
-
-		inClause := joinPlaceholders(placeholders)
 
 		// 先查需要删除的 ID
 		query := fmt.Sprintf(
 			"SELECT id FROM codebase_items WHERE file_path=? AND symbol!='' AND symbol NOT IN (%s)",
-			inClause,
+			inClause.String(),
 		)
 		rows, err := tx.Query(query, args...)
 		if err != nil {
@@ -371,7 +369,7 @@ func CleanSymbols(directory, filePath string, activeSymbols []string) error {
 		// 删除 orphan items
 		delQuery := fmt.Sprintf(
 			"DELETE FROM codebase_items WHERE file_path=? AND symbol!='' AND symbol NOT IN (%s)",
-			inClause,
+			inClause.String(),
 		)
 		if _, err := tx.Exec(delQuery, args...); err != nil {
 			return fmt.Errorf("delete orphan items: %w", err)
@@ -790,16 +788,4 @@ func writeMeta(db *sql.DB, key, value string) error {
 		key, value,
 	)
 	return err
-}
-
-// joinPlaceholders 拼接 SQL IN 子句的占位符
-func joinPlaceholders(ps []string) string {
-	var result strings.Builder
-	for i, p := range ps {
-		if i > 0 {
-			result.WriteString(",")
-		}
-		result.WriteString(p)
-	}
-	return result.String()
 }
