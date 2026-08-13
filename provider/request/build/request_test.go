@@ -306,6 +306,76 @@ func TestRequestBody_WithThinking(t *testing.T) {
 	}
 }
 
+// TestRequestBody_ThinkingEmptyKeepsField 回归：DeepSeek thinking 模式下，assistant 历史消息
+// 即使 ThinkingDelta 为空，回放时也必须保留 reasoning_content 字段（空串占位即可通过校验），
+// 否则 OpenAI→Anthropic 转换代理端 400 "The content[].thinking in the thinking mode must be passed back to the API"。
+func TestRequestBody_ThinkingEmptyKeepsField(t *testing.T) {
+	setupTestConfig()
+	db := setupTestDB(t)
+
+	// ThinkingDelta 为空但带工具调用历史的 assistant 消息（如历史 thinking 未落库/被清空）
+	message := structs.Messages{
+		ChatID:                77,
+		Type:                  structs.MessagesRoleAgent,
+		Delta:                 "调用工具",
+		ToolCallingJSONString: `[{"name":"read","id":"call_a","parameters":{"path":"/tmp/x"}}]`,
+	}
+	if err := db.Create(&message).Error; err != nil {
+		t.Fatalf("Failed to create test message: %v", err)
+	}
+
+	toolsList := []*parser.ToolsDefine{}
+	request, err := RequestBody(77, 1, "", &toolsList, db, "", "", cfgStruct.AgentConfig{}, &structs.Chats{})
+	if err != nil {
+		t.Fatalf("RequestBody failed: %v", err)
+	}
+
+	var asst *reqStruct.Message
+	for i := range request.Messages {
+		if request.Messages[i].Role == reqStruct.RoleAssistant && len(request.Messages[i].ToolCalls) > 0 {
+			asst = &request.Messages[i]
+			break
+		}
+	}
+	if asst == nil {
+		t.Fatal("expected an assistant message with tool_calls")
+	}
+	if asst.ReasoningContent == nil {
+		t.Error("thinking 模式下 assistant 消息必须携带 reasoning_content 字段（空串占位），当前为 nil")
+	} else if *asst.ReasoningContent != "" {
+		t.Errorf("expected empty placeholder reasoning_content, got %q", *asst.ReasoningContent)
+	}
+}
+
+// TestRequestBody_EmptyThinkingPlaceholderSkipped thinking 模式下 ThinkingDelta 为空的
+// 纯空 assistant（无正文、无工具调用）应被跳过，不残留仅含空 reasoning_content 占位的消息。
+func TestRequestBody_EmptyThinkingPlaceholderSkipped(t *testing.T) {
+	setupTestConfig()
+	db := setupTestDB(t)
+
+	message := structs.Messages{
+		ChatID: 78,
+		Type:   structs.MessagesRoleAgent,
+		Delta:  "",
+		// ThinkingDelta 为空
+	}
+	if err := db.Create(&message).Error; err != nil {
+		t.Fatalf("Failed to create test message: %v", err)
+	}
+
+	toolsList := []*parser.ToolsDefine{}
+	request, err := RequestBody(78, 1, "", &toolsList, db, "", "", cfgStruct.AgentConfig{}, &structs.Chats{})
+	if err != nil {
+		t.Fatalf("RequestBody failed: %v", err)
+	}
+
+	for _, m := range request.Messages {
+		if m.Role == reqStruct.RoleAssistant {
+			t.Errorf("空 assistant 消息不应被回放（skip），实际出现: %+v", m)
+		}
+	}
+}
+
 // TestRequestBody_WithSummary 测试包含摘要的情况
 func TestRequestBody_WithSummary(t *testing.T) {
 	setupTestConfig()

@@ -344,6 +344,45 @@ func TestSendRequest_ToolCallingCompatFlag(t *testing.T) {
 	}
 }
 
+// TestSplitMultiToolCalls_KeepsThinking 回归：thinking 模式下拆分多工具调用时，
+// 拆分出的每条 assistant 消息都必须保留 reasoning_content（thinking 模式要求每条
+// assistant 都携带该字段，OpenAI 端点）/ content[].thinking 块（Anthropic 端点），
+// 否则转换代理端 400 "The content[].thinking in the thinking mode must be passed back to the API"。
+func TestSplitMultiToolCalls_KeepsThinking(t *testing.T) {
+	thinking := "thinking content"
+	in := []structs.Message{
+		{
+			Role:             structs.RoleAssistant,
+			Content:          "ok",
+			ReasoningContent: &thinking,
+			ToolCalls: []structs.StreamToolCall{
+				{ID: "call_a", Type: "function", Function: &structs.StreamToolCallFunc{Name: "run", Arguments: "{}"}},
+				{ID: "call_b", Type: "function", Function: &structs.StreamToolCallFunc{Name: "run", Arguments: "{}"}},
+				{ID: "call_c", Type: "function", Function: &structs.StreamToolCallFunc{Name: "run", Arguments: "{}"}},
+			},
+		},
+		toolMsg("call_a", "r_a"),
+		toolMsg("call_b", "r_b"),
+		toolMsg("call_c", "r_c"),
+	}
+	out := splitMultiToolCalls(in)
+	asstN := 0
+	for _, m := range out {
+		if m.Role != structs.RoleAssistant {
+			continue
+		}
+		asstN++
+		if m.ReasoningContent == nil {
+			t.Errorf("拆分后的 assistant #%d 丢失 reasoning_content（thinking 模式必须保留字段）", asstN)
+		} else if *m.ReasoningContent != thinking {
+			t.Errorf("assistant #%d reasoning_content 被篡改：got %q want %q", asstN, *m.ReasoningContent, thinking)
+		}
+	}
+	if asstN != 3 {
+		t.Fatalf("expected 3 assistant messages after split, got %d", asstN)
+	}
+}
+
 func TestSplitMultiToolCalls_Noop(t *testing.T) {
 	// 无 tool_call / 单 tool_call / 非 assistant 消息：保持不变
 	inputs := [][]structs.Message{

@@ -807,10 +807,13 @@ func splitMultiToolCalls(messages []structs.Message) []structs.Message {
 			m := msg
 			m.ToolCalls = []structs.StreamToolCall{tc}
 			if k > 0 {
-				// 后续拆分出的 assistant 不重复正文与思考内容，只保留 tool_call 结构；
+				// 后续拆分出的 assistant 不重复正文，只保留 tool_call 结构；
 				// 正文用非空占位（Anthropic 校验拒绝空 text block，不能用空串）。
+				// 注意：不能清空 ReasoningContent——thinking 模式下拆分出的每条 assistant 都必须
+				// 携带 reasoning_content（OpenAI）/ content[].thinking 块（Anthropic），否则转换代理
+				// 报 400 "The content[].thinking in the thinking mode must be passed back to the API"。
+				// 若原始消息未开启 thinking（ReasoningContent 为 nil），拆分后保持 nil 即可。
 				m.Content = emptyAssistantToolCallContent
-				m.ReasoningContent = nil
 			}
 			out = append(out, m)
 			// 为该调用按 id 匹配对应结果（不依赖原始顺序，规避占位错位）

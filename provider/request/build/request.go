@@ -212,10 +212,14 @@ func RequestBody(chatID uint32, modelID int32, agentCode string, toolsList *[]*p
 					// 与当前轮请求的 tools 参数/响应解析同一种格式，不再出现 <tools> 文本段。
 					msg.Role = reqStruct.RoleAssistant
 					thinkingWrap := ""
-					if modelConfig.EnableThinking && v.ThinkingDelta != "" {
+					if modelConfig.EnableThinking {
+						// thinking 模式：历史中一旦出现工具调用，此后每条 assistant 消息都必须携带
+						// reasoning_content 字段（OpenAI 兼容）/ content[].thinking 块（Anthropic 兼容），
+						// 空内容也须保留字段占位（空串即可通过 DeepSeek 校验），否则转换代理端
+						// 报 400 "The content[].thinking in the thinking mode must be passed back to the API"。
 						thinkingString := v.ThinkingDelta
 						msg.ReasoningContent = &thinkingString
-					} else if !modelConfig.EnableThinking {
+					} else if v.ThinkingDelta != "" {
 						thinkingWrap = v.ThinkingDelta
 					}
 					msg.Content = v.Delta
@@ -257,8 +261,10 @@ func RequestBody(chatID uint32, modelID int32, agentCode string, toolsList *[]*p
 						}
 						// 解析失败容错为普通文本消息（Content 已保留），不中断回放
 					}
-					// 降级后无文本内容（纯工具调用轮次）：跳过空 assistant 消息
-					if len(msg.ToolCalls) == 0 && msg.Content == "" && msg.ReasoningContent == nil {
+					// 降级后无文本内容（纯工具调用轮次）：跳过空 assistant 消息。
+					// thinking 模式下 ThinkingDelta 为空时仅保留空 reasoning_content 占位，
+					// 同样跳过；有真实思考内容（非空）的消息即使无正文也保留。
+					if len(msg.ToolCalls) == 0 && msg.Content == "" && (msg.ReasoningContent == nil || *msg.ReasoningContent == "") {
 						skipMsg = true
 					}
 				} else if v.Type == structs.MessagesRoleUser {
