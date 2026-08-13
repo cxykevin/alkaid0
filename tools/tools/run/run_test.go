@@ -931,12 +931,27 @@ func TestRunTaskOutputTruncated(t *testing.T) {
 	if !strings.Contains(out, "(truncated, full output at @temp/run/") {
 		t.Errorf("截断提示应指向完整路径，实际 %q", out)
 	}
+
+	// 进 trace 表的内容也应被 AddTempObject 截断（后 2000 行），不超限
+	var files []storageStructs.ReferFiles
+	if err := session.DB.Where("chat_id = ?", session.ID).Find(&files).Error; err != nil {
+		t.Fatalf("query refer files: %v", err)
+	}
+	if len(files) != 1 {
+		t.Fatalf("期望 1 条 ReferFiles 记录，实际 %d", len(files))
+	}
+	if !strings.HasPrefix(files[0].Content, "(omitted)") {
+		t.Errorf("trace 内容超过 2000 行时应以 (omitted) 截断，实际 %q", files[0].Content)
+	}
+	if ln := strings.Count(files[0].Content, "\n"); ln > 2000 {
+		t.Errorf("trace 内容行数应 ≤ 2000，实际 %d", ln)
+	}
 }
 
-// TestRunTaskDoesNotTrace 验证 run 工具不再写入 Traces（不进 <tracedFiles> topBlock，
-// 避免上下文顶部被大量 run 输出聚合污染），但 @temp 文件仍保存在 ReferFiles，
-// AI 可按工具结果里的 path 用 read 读完整输出。
-func TestRunTaskDoesNotTrace(t *testing.T) {
+// TestRunTaskWritesTrace 验证 run 结果全部进 trace 表（截断后）：Traces 表应有
+// @temp/run/ 记录，ReferFiles 保存命令输出，AI 可经 <tracedFiles> topBlock 与
+// output 字段看到本次调用结果。
+func TestRunTaskWritesTrace(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("跳过 Windows")
 	}
@@ -947,20 +962,22 @@ func TestRunTaskDoesNotTrace(t *testing.T) {
 	session := runOutputSession(t)
 	mp := map[string]*any{
 		"type":    ptrAny("shell"),
-		"reason":  ptrAny("test no trace"),
-		"command": ptrAny("echo alkaid0-notraced"),
+		"reason":  ptrAny("test trace"),
+		"command": ptrAny("echo alkaid0-traced"),
 	}
 	if _, _, _, err := runTask(session, mp, []*any{}); err != nil {
 		t.Fatalf("runTask: %v", err)
 	}
 
-	var traceCount int64
-	if err := session.DB.Model(&storageStructs.Traces{}).
-		Where("chat_id = ?", session.ID).Count(&traceCount).Error; err != nil {
-		t.Fatalf("count traces: %v", err)
+	var traces []storageStructs.Traces
+	if err := session.DB.Where("chat_id = ?", session.ID).Find(&traces).Error; err != nil {
+		t.Fatalf("query traces: %v", err)
 	}
-	if traceCount != 0 {
-		t.Errorf("run 输出不应写入 Traces（不进 topBlock），实际 %d 条", traceCount)
+	if len(traces) != 1 {
+		t.Fatalf("期望 run 结果写入 1 条 Traces，实际 %d", len(traces))
+	}
+	if !strings.HasPrefix(traces[0].Path, "@temp/run/") {
+		t.Errorf("Traces path 应为 @temp/run/ 前缀，实际 %s", traces[0].Path)
 	}
 
 	var files []storageStructs.ReferFiles
@@ -968,12 +985,9 @@ func TestRunTaskDoesNotTrace(t *testing.T) {
 		t.Fatalf("query refer files: %v", err)
 	}
 	if len(files) != 1 {
-		t.Fatalf("期望 1 条 @temp 文件记录（可读完整输出），实际 %d", len(files))
+		t.Fatalf("期望 1 条 ReferFiles 记录，实际 %d", len(files))
 	}
-	if !strings.HasPrefix(files[0].Path, "run/") {
-		t.Errorf("@temp 文件 path 应为 run/ 前缀，实际 %s", files[0].Path)
-	}
-	if !strings.Contains(files[0].Content, "alkaid0-notraced") {
+	if !strings.Contains(files[0].Content, "alkaid0-traced") {
 		t.Errorf("ReferFiles 应保存命令输出，实际 %q", files[0].Content)
 	}
 }
