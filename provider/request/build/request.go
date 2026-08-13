@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"sort"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/cxykevin/alkaid0/config"
 	cfgStruct "github.com/cxykevin/alkaid0/config/structs"
@@ -112,20 +113,15 @@ func RequestBody(chatID uint32, modelID int32, agentCode string, toolsList *[]*p
 	// 预扫描（原生模式）：收集回放范围内
 	//   toolCallIDs    — 所有 assistant 工具调用 id（用于工具结果配对，丢弃孤立幽灵结果）
 	//   resultIDs      — 所有工具结果 id（用于判断哪些调用结果缺失、需补终止占位）
-	//   failedResultIDs— 失败调用 id（其真实参数在回放时不再省略，供模型自我修正）
-	//   recentIDs      — 最近 5 轮工具调用 assistant 的调用 id（只对最近 5 轮完整回放，
-	//                     更旧的工具调用轮次降级为纯文本，避免历史堆叠过长）
 	// 回放是倒序查询 + PushFront，结果消息先于其 assistant 被处理，无法边扫边配，
-	// 因此在主循环前先倒序分页扫描一次。倒序即最新在前，故前 5 条带工具调用的
-	// assistant 消息即"最近 5 轮"。id 全局唯一、结果紧跟调用，不会误配。
+	// 因此在主循环前先倒序分页扫描一次。截断点（Summary）之后的所有工具调用轮次
+	// 全部完整回放 tool_calls 结构——同一条消息的渲染不再随轮次推移变化，
+	// 前缀缓存才不被破坏。id 全局唯一、结果紧跟调用，不会误配。
 	// 与主循环一致：遇到 summary（历史截断点）即停止。
-	var toolCallIDs, resultIDs, failedResultIDs, recentIDs map[string]struct{}
+	var toolCallIDs, resultIDs map[string]struct{}
 	if nativeMode {
 		toolCallIDs = make(map[string]struct{})
 		resultIDs = make(map[string]struct{})
-		failedResultIDs = make(map[string]struct{})
-		recentIDs = make(map[string]struct{})
-		recentTurns := 0
 	scan:
 		for offsetPage := range maxPage {
 			var obj []structs.Messages
@@ -147,26 +143,15 @@ func RequestBody(chatID uint32, modelID int32, agentCode string, toolsList *[]*p
 						for _, r := range results {
 							if r.ID != "" {
 								resultIDs[r.ID] = struct{}{}
-								if isFailedToolResult(r.Return) {
-									failedResultIDs[r.ID] = struct{}{}
-								}
 							}
 						}
 					}
 				} else if v.Type == structs.MessagesRoleAgent && v.ToolCallingJSONString != "" {
-					calls, err := parseStoredToolCalls(v.ToolCallingJSONString, nil)
+					calls, err := parseStoredToolCalls(v.ToolCallingJSONString)
 					if err == nil {
 						for _, c := range calls {
 							if c.ID != "" {
 								toolCallIDs[c.ID] = struct{}{}
-							}
-						}
-						if recentTurns < 5 {
-							recentTurns++
-							for _, c := range calls {
-								if c.ID != "" {
-									recentIDs[c.ID] = struct{}{}
-								}
 							}
 						}
 					}
@@ -227,35 +212,26 @@ func RequestBody(chatID uint32, modelID int32, agentCode string, toolsList *[]*p
 						msg.Content = "<think>\n" + thinkingWrap + "\n</think>\n" + v.Delta
 					}
 					if v.ToolCallingJSONString != "" {
-						toolCalls, err := parseStoredToolCalls(v.ToolCallingJSONString, failedResultIDs)
+						toolCalls, err := parseStoredToolCalls(v.ToolCallingJSONString)
 						if err == nil && len(toolCalls) > 0 {
-							// 仅对最近 5 轮工具调用完整回放（带 tool_calls + 结果/终止占位）；
-							// 更旧的工具调用轮次降级为纯文本，不再携带 tool_calls（其调用/结果也不回放）。
-							inRecent := true
-							for _, c := range toolCalls {
-								if _, ok := recentIDs[c.ID]; !ok {
-									inRecent = false
-									break
+							// 截断点之后的所有工具调用轮次均完整回放（带 tool_calls + 结果/终止占位），
+							// 同一条消息渲染确定，前缀缓存才不被破坏。
+							msg.ToolCalls = toolCalls
+							// 为被终止（无对应结果消息）的调用补发占位 role:"tool" 消息，
+							// 保证 assistant 的每个 tool_call_id 都有响应，满足 API 校验
+							// "assistant with tool_calls must be followed by tool messages"。
+							// 倒序 PushFront：占位按 toolCalls 顺序排在 assistant 之后。
+							for i := len(toolCalls) - 1; i >= 0; i-- {
+								c := toolCalls[i]
+								if c.ID == "" {
+									continue
 								}
-							}
-							if inRecent {
-								msg.ToolCalls = toolCalls
-								// 为被终止（无对应结果消息）的调用补发占位 role:"tool" 消息，
-								// 保证 assistant 的每个 tool_call_id 都有响应，满足 API 校验
-								// "assistant with tool_calls must be followed by tool messages"。
-								// 倒序 PushFront：占位按 toolCalls 顺序排在 assistant 之后。
-								for i := len(toolCalls) - 1; i >= 0; i-- {
-									c := toolCalls[i]
-									if c.ID == "" {
-										continue
-									}
-									if _, ok := resultIDs[c.ID]; !ok {
-										responseDeltaList.PushFront(reqStruct.Message{
-											Role:       reqStruct.RoleTool,
-											Content:    toolCallTerminatedMsg,
-											ToolCallID: c.ID,
-										})
-									}
+								if _, ok := resultIDs[c.ID]; !ok {
+									responseDeltaList.PushFront(reqStruct.Message{
+										Role:       reqStruct.RoleTool,
+										Content:    toolCallTerminatedMsg,
+										ToolCallID: c.ID,
+									})
 								}
 							}
 						}
@@ -345,17 +321,14 @@ func RequestBody(chatID uint32, modelID int32, agentCode string, toolsList *[]*p
 			}
 			if nativeMode && v.Type == structs.MessagesRoleTool {
 				// 原生模式：工具结果按 id 拆分为多条 role:"tool" 消息，严格配对——
-				// 结果 id 必须命中最近 5 轮 assistant 工具调用集合（丢弃更旧调用结果与
-				// 孤立的幽灵结果）。被终止调用的占位结果由 assistant 分支补齐。
+				// 结果 id 必须命中全部回放轮次的 assistant 工具调用集合（丢弃孤立的
+				// 幽灵结果）。被终止调用的占位结果由 assistant 分支补齐。
 				// PushFront 正序：多条需倒序 push。
 				results, err := parseStoredToolResults(v.Delta)
 				if err == nil && len(results) > 0 {
 					for i := len(results) - 1; i >= 0; i-- {
 						r := results[i]
 						if _, ok := toolCallIDs[r.ID]; !ok {
-							continue
-						}
-						if _, ok := recentIDs[r.ID]; !ok {
 							continue
 						}
 						responseDeltaList.PushFront(reqStruct.Message{
@@ -521,13 +494,15 @@ type storedToolCall struct {
 	Parameters json.RawMessage `json:"parameters"`
 }
 
+// maxReplayArgRunes 历史回放工具调用参数的最大字符数（rune）。
+// 超过阈值的参数统一截断为 "..."，防 edit 等大参数（如完整文件内容）导致上下文膨胀。
+const maxReplayArgRunes = 100
+
 // parseStoredToolCalls 解析存储层工具调用 JSON 为原生 tool_calls 消息。
 // 返回 nil（空 payload/解析失败）时表示无工具调用。
-// 历史回放默认不携带具体参数内容：arguments 统一以 "..." 占位，只保留调用结构
-// （id/type/function.name），避免把完整命令与参数重复发给模型。
-// 例外：failedIDs 中命中的调用（对应工具结果含 success:false / error，即调用失败）
-// 回放真实参数（Parameters 原样填入 arguments），让模型看到自己上次传错的参数名以自我修正。
-func parseStoredToolCalls(payload string, failedIDs map[string]struct{}) ([]reqStruct.StreamToolCall, error) {
+// 历史回放携带参数内容：非空参数 ≤maxReplayArgRunes 字符回放真实 JSON、超过截断为 "..."；
+// 空参数保留占位符。渲染只依赖 DB 存储内容（确定性），跨请求稳定，不破坏前缀缓存。
+func parseStoredToolCalls(payload string) ([]reqStruct.StreamToolCall, error) {
 	if strings.TrimSpace(payload) == "" {
 		return nil, nil
 	}
@@ -538,8 +513,10 @@ func parseStoredToolCalls(payload string, failedIDs map[string]struct{}) ([]reqS
 	calls := make([]reqStruct.StreamToolCall, 0, len(items))
 	for _, it := range items {
 		args := "(omit successed tool call arguments)"
-		if failedIDs != nil && len(it.Parameters) > 0 {
-			if _, failed := failedIDs[it.ID]; failed {
+		if len(it.Parameters) > 0 {
+			if utf8.RuneCount(it.Parameters) > maxReplayArgRunes {
+				args = "..."
+			} else {
 				args = string(it.Parameters)
 			}
 		}
@@ -553,27 +530,6 @@ func parseStoredToolCalls(payload string, failedIDs map[string]struct{}) ([]reqS
 		})
 	}
 	return calls, nil
-}
-
-// isFailedToolResult 判定工具结果是否表示调用失败。
-// 内置工具失败时返回 map 序列化为含 "success":false 或 "error" 键的 JSON。
-// 判定规则：success 键优先——存在且为 false 即失败；为 true 时不判失败（即使带 error 键，
-// 防误判）；success 键缺失时回退检查 error 键是否存在。返回空/非 JSON 对象一律视为成功。
-func isFailedToolResult(returnJSON string) bool {
-	if strings.TrimSpace(returnJSON) == "" {
-		return false
-	}
-	var obj map[string]any
-	if err := json.Unmarshal([]byte(returnJSON), &obj); err != nil {
-		return false
-	}
-	if success, ok := obj["success"]; ok {
-		if b, isBool := success.(bool); isBool {
-			return !b
-		}
-	}
-	_, hasError := obj["error"]
-	return hasError
 }
 
 // storedToolResult 存储层工具结果项（MessagesRoleTool.Delta 内部格式 [{"name","id","return"}]）。
@@ -662,7 +618,8 @@ scan:
 }
 
 // toolCallPath 从存储层工具调用参数中提取 path。
-// 不能复用 parseStoredToolCalls：其回放时把参数屏蔽为占位符，仅失败调用才带真实参数。
+// 不能复用 parseStoredToolCalls：其回放时参数可能被截断为 "..."（超 maxReplayArgRunes 字符），
+// 此处需要完整 path。
 func toolCallPath(c storedToolCall) string {
 	if len(c.Parameters) == 0 {
 		return ""
@@ -778,20 +735,20 @@ func insertEventContentBlocks(l *list.List, dbIDToElement map[uint64]*list.Eleme
 }
 
 // findEventAnchor 返回事件内容块的插入锚点（内容块插到该元素之后）。
-// 原生模式 + 最近 5 轮完整回放：事件 assistant 消息之后、连续 role:tool 结果消息的
+// 原生模式 + 全部工具调用轮次完整回放：事件 assistant 消息之后、连续 role:tool 结果消息的
 // 「最后一个」（不区分 ToolCallID）。一个 assistant 可并行携带多个 tool_calls，其多个
 // tool_result 必须彼此紧邻——若按单个 ToolCallID 匹配锚点，内容块会插进 tool_result 序列
 // 中间，使后续 tool_result 与其 tool_use 被内容块隔开，OpenAI→Anthropic 代理会 400
 // （tool_result must have a corresponding tool_use block in the previous message）。
 // 锚定结果序列末尾可保证内容块永不夹在多个 tool_result 之间。遇到首个非 tool 消息即停止扫描。
-// 否则（提示词模式 / 非 recent 原生降级文本）：事件 assistant 消息本身。
+// 否则（提示词模式 / 原生无 tool_calls 的纯文本 assistant）：事件 assistant 消息本身。
 // 消息被 skip 或超出分页范围（dbIDToElement 无记录）→ 返回 nil（不可锚定）。
 func findEventAnchor(l *list.List, dbIDToElement map[uint64]*list.Element, ev *structs.TraceEvent, nativeMode bool) *list.Element {
 	msgEl := dbIDToElement[ev.MsgID]
 	if msgEl == nil {
 		return nil
 	}
-	if nativeMode && ev.InRecent && ev.ToolCallID != "" {
+	if nativeMode && ev.ToolCallID != "" {
 		var last *list.Element
 		for e := msgEl.Next(); e != nil; e = e.Next() {
 			m := e.Value.(reqStruct.Message)

@@ -8,7 +8,9 @@ type TraceEvent struct {
 	ToolCallID string // 原生模式下工具调用 id（用于定位 role:tool 结果消息）
 	IsEdit     bool   // true=edit，false=read
 	IsTask     bool   // path == "@task"
-	InRecent   bool   // 是否位于最近 5 轮完整回放范围内
+	// 保留字段：由 DetectTraceEvents 写入（是否位于最近 5 轮）；findEventAnchor 已不再消费——
+	// 全部工具调用轮次完整回放后，锚定不再依赖该标记。
+	InRecent bool
 }
 
 // session.TemporyDataOfSession 临时键（跨 build 链路传递事件信息与内容块）。

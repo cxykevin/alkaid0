@@ -2,6 +2,7 @@ package build
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/cxykevin/alkaid0/prompts"
@@ -32,20 +33,23 @@ func map2Slice[sliceType any, originMapKeyType comparable, originMapValType any]
 // Tools 构建工具(scopes, tool traces, tools)
 // 渲染失败时返回请求级错误而非 panic，避免拖垮整个进程
 func Tools(session *structs.Chats) (string, string, *[]*parser.ToolsDefine, error) {
+	// 按 scope ID 排序再渲染，保证 system 中 <scopes> 段字节稳定，不破坏前缀缓存
+	scopes := map2Slice(toolobj.Scopes, func(k string, v string) *scopeInfo {
+		enabled := false
+		if val, ok := session.EnableScopes[k]; ok {
+			enabled = val
+		}
+		return &scopeInfo{
+			ID:          k,
+			Description: v,
+			Enable:      enabled,
+		}
+	})
+	sort.Slice(scopes, func(i, j int) bool { return scopes[i].ID < scopes[j].ID })
 	toolScopesRendered, err := prompts.Render(prompts.ToolScopesTemplate, struct {
 		Scopes []scopeInfo
 	}{
-		Scopes: map2Slice(toolobj.Scopes, func(k string, v string) *scopeInfo {
-			enabled := false
-			if val, ok := session.EnableScopes[k]; ok {
-				enabled = val
-			}
-			return &scopeInfo{
-				ID:          k,
-				Description: v,
-				Enable:      enabled,
-			}
-		}),
+		Scopes: scopes,
 	})
 	if err != nil {
 		return "", "", &[]*parser.ToolsDefine{}, err
@@ -67,8 +71,15 @@ func Tools(session *structs.Chats) (string, string, *[]*parser.ToolsDefine, erro
 	globalToolTraceStr := globalToolTraceRendered
 
 	toolsDef := make([]*parser.ToolsDefine, 0)
+	// 收集工具 key 并排序，保证 toolsDef 顺序确定（map 随机迭代会破坏前缀缓存）
+	toolKeys := make([]string, 0, len(toolobj.ToolsList))
 	toolobj.ToolsMu.RLock()
-	for k, v := range toolobj.ToolsList {
+	for k := range toolobj.ToolsList {
+		toolKeys = append(toolKeys, k)
+	}
+	sort.Strings(toolKeys)
+	for _, k := range toolKeys {
+		v := toolobj.ToolsList[k]
 		// Global 工具不包含在总工具表中，但 hooks 已通过 globalToolTraceStr 处理
 		if k == "" {
 			continue

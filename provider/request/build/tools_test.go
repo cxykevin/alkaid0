@@ -1,6 +1,7 @@
 package build
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/cxykevin/alkaid0/provider/parser"
@@ -666,5 +667,86 @@ func BenchmarkTools(b *testing.B) {
 			},
 		}
 		Tools(testChat)
+	}
+}
+
+// TestTools_DeterministicOrder 工具与 scopes 顺序确定：两次构建结果一致且按字典序，
+// 消除 map 随机迭代对前缀缓存的影响。
+func TestTools_DeterministicOrder(t *testing.T) {
+	// 保存原始值
+	originalScopes := toolobj.Scopes
+	originalToolsList := toolobj.ToolsList
+	defer func() {
+		toolobj.Scopes = originalScopes
+		toolobj.ToolsList = originalToolsList
+	}()
+
+	toolobj.Scopes = map[string]string{
+		"":      "Global",
+		"zeta":  "作用域 z",
+		"alpha": "作用域 a",
+		"mike":  "作用域 m",
+	}
+	toolobj.ToolsList = map[string]*toolobj.Tools{
+		"": {
+			Name: "Global", ID: "", Hooks: make([]toolobj.Hook, 0),
+		},
+		"z_tool": {Scope: "zeta", Name: "z_tool", ID: "z_tool", Hooks: make([]toolobj.Hook, 0)},
+		"a_tool": {Scope: "alpha", Name: "a_tool", ID: "a_tool", Hooks: make([]toolobj.Hook, 0)},
+		"m_tool": {Scope: "mike", Name: "m_tool", ID: "m_tool", Hooks: make([]toolobj.Hook, 0)},
+	}
+	makeSession := func() *structs.Chats {
+		return &structs.Chats{
+			ID:          1,
+			LastModelID: 1,
+			EnableScopes: map[string]bool{
+				"": true, "alpha": true, "mike": true, "zeta": true,
+			},
+		}
+	}
+
+	scopeStr1, _, toolsDef1, err := Tools(makeSession())
+	if err != nil {
+		t.Fatalf("Tools: %v", err)
+	}
+	scopeStr2, _, toolsDef2, err := Tools(makeSession())
+	if err != nil {
+		t.Fatalf("Tools: %v", err)
+	}
+
+	// scopes 渲染按 id 字典序（alpha < mike < zeta）
+	ai, mi, zi := strings.Index(scopeStr1, `<scope id="alpha"`), strings.Index(scopeStr1, `<scope id="mike"`), strings.Index(scopeStr1, `<scope id="zeta"`)
+	if ai < 0 || mi < 0 || zi < 0 {
+		t.Fatalf("scopes missing in rendered string: %q", scopeStr1)
+	}
+	if !(ai < mi && mi < zi) {
+		t.Errorf("scopes not sorted: alpha=%d mike=%d zeta=%d", ai, mi, zi)
+	}
+	if scopeStr1 != scopeStr2 {
+		t.Error("scope string not deterministic across builds")
+	}
+
+	// 工具按 Name 字典序（a_tool < m_tool < z_tool），两次构建一致
+	names := func(defs *[]*parser.ToolsDefine) []string {
+		out := make([]string, 0, len(*defs))
+		for _, td := range *defs {
+			out = append(out, td.Name)
+		}
+		return out
+	}
+	names1, names2 := names(toolsDef1), names(toolsDef2)
+	if len(names1) != 3 {
+		t.Fatalf("expected 3 tools, got %d", len(names1))
+	}
+	want := []string{"a_tool", "m_tool", "z_tool"}
+	for i := range want {
+		if names1[i] != want[i] {
+			t.Errorf("expected %q at index %d, got %q", want[i], i, names1[i])
+		}
+	}
+	for i := range names1 {
+		if names1[i] != names2[i] {
+			t.Errorf("tool order differs between builds at %d: %q vs %q", i, names1[i], names2[i])
+		}
 	}
 }

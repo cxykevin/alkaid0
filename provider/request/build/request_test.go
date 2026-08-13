@@ -707,7 +707,7 @@ func TestRequestBody_NativeHistoryReplay(t *testing.T) {
 			if len(msg.ToolCalls) > 0 {
 				tc := msg.ToolCalls[0]
 				if tc.ID == "call_1" && tc.Type == "function" && tc.Function != nil &&
-					tc.Function.Name == "edit" && tc.Function.Arguments == "(omit successed tool call arguments)" {
+					tc.Function.Name == "edit" && tc.Function.Arguments == `{"path":"a.txt","text":"hi"}` {
 					assistantWithTools = true
 					asstIdx = i
 				}
@@ -836,7 +836,10 @@ func TestRequestBody_TerminatedToolCall(t *testing.T) {
 
 // TestRequestBody_RecentFiveToolTurns 只对最近 5 轮工具调用完整回放：
 // 更旧的工具调用轮次（assistant 带 tool_calls）降级为纯文本，其调用与结果均不回放。
-func TestRequestBody_RecentFiveToolTurns(t *testing.T) {
+// TestRequestBody_AllToolTurnsReplayed 截断点之后所有工具调用轮次完整回放 tool_calls：
+// 6 轮历史全部携带 tool_calls 结构、无纯文本降级、结果全部配对回放——同一条消息的
+// 渲染不再随轮次推移变化，前缀缓存才不被破坏。
+func TestRequestBody_AllToolTurnsReplayed(t *testing.T) {
 	db := setupTestDB(t)
 	toolsList := []*parser.ToolsDefine{}
 
@@ -868,7 +871,7 @@ func TestRequestBody_RecentFiveToolTurns(t *testing.T) {
 	}
 
 	asstWithTools := 0   // 携带 tool_calls 的 assistant 数
-	asstTextOnly := 0    // 降级为纯文本的 assistant 数
+	asstTextOnly := 0    // 无 tool_calls 的 assistant 数
 	toolResults := 0     // role:"tool" 结果数
 	hasOldest, hasNewest := false, false
 	for _, msg := range req.Messages {
@@ -881,7 +884,7 @@ func TestRequestBody_RecentFiveToolTurns(t *testing.T) {
 				if msg.ToolCalls[0].ID == "call_6" {
 					hasNewest = true
 				}
-			} else if strings.Contains(msg.Content, "turn 1") {
+			} else {
 				asstTextOnly++
 			}
 		}
@@ -889,20 +892,20 @@ func TestRequestBody_RecentFiveToolTurns(t *testing.T) {
 			toolResults++
 		}
 	}
-	if asstWithTools != 5 {
-		t.Errorf("expected 5 recent assistant turns with tool_calls, got %d", asstWithTools)
+	if asstWithTools != 6 {
+		t.Errorf("expected all 6 turns with tool_calls, got %d", asstWithTools)
 	}
-	if asstTextOnly != 1 {
-		t.Errorf("expected oldest turn (call_1) downgraded to text-only, got %d", asstTextOnly)
+	if asstTextOnly != 0 {
+		t.Errorf("expected no text-only downgrade, got %d", asstTextOnly)
 	}
-	if hasOldest {
-		t.Error("oldest turn (call_1) should NOT carry tool_calls")
+	if !hasOldest {
+		t.Error("oldest turn (call_1) should carry tool_calls")
 	}
 	if !hasNewest {
 		t.Error("newest turn (call_6) should carry tool_calls")
 	}
-	if toolResults != 5 {
-		t.Errorf("expected 5 recent tool results replayed, got %d", toolResults)
+	if toolResults != 6 {
+		t.Errorf("expected all 6 tool results replayed, got %d", toolResults)
 	}
 }
 
@@ -939,10 +942,10 @@ func replayArguments(t *testing.T, chatID uint32, msgs []structs.Messages, callI
 	return ""
 }
 
-// TestRequestBody_FailedToolCallReplayRealArgs 失败的调用回放真实参数：
-// 模型曾以错误参数名（"paht"）调用 edit，工具结果 success:false —— 历史回放时
-// arguments 应为当初传入的真实 JSON（非 "..." 占位），让模型看到自己传错的参数名。
-func TestRequestBody_FailedToolCallReplayRealArgs(t *testing.T) {
+// TestRequestBody_ShortArgsReplayedReal 短参数（≤maxReplayArgRunes 字符）历史回放真实 JSON：
+// 模型曾以错误参数名（"paht"）调用 edit —— 回放时 arguments 为当初传入的真实 JSON，
+// 让模型看到自己传错的参数名（仅超阈值的长参数才截断为 "..."）。
+func TestRequestBody_ShortArgsReplayedReal(t *testing.T) {
 	args := replayArguments(t, 12, []structs.Messages{
 		{ChatID: 12, Type: structs.MessagesRoleUser, Delta: "edit a.txt"},
 		{ChatID: 12, Type: structs.MessagesRoleAgent, Delta: "", ToolCallingJSONString: `[{"name":"edit","id":"call_fail","parameters":{"paht":"a.txt","text":"hi"}}]`},
@@ -954,8 +957,9 @@ func TestRequestBody_FailedToolCallReplayRealArgs(t *testing.T) {
 	}
 }
 
-// TestRequestBody_MixedSuccessFailureReplay 同一轮内成功调用占位、失败调用真实参数。
-func TestRequestBody_MixedSuccessFailureReplay(t *testing.T) {
+// TestRequestBody_AllShortArgsReplayed 同一轮内所有短参数（不分成功/失败）均回放真实 JSON：
+// 参数统一规则，不再区分调用成败。
+func TestRequestBody_AllShortArgsReplayed(t *testing.T) {
 	msgs := []structs.Messages{
 		{ChatID: 13, Type: structs.MessagesRoleUser, Delta: "two calls"},
 		{ChatID: 13, Type: structs.MessagesRoleAgent, Delta: "", ToolCallingJSONString: `[{"name":"edit","id":"call_ok","parameters":{"path":"a.txt"}},{"name":"edit","id":"call_fail","parameters":{"paht":"b.txt"}}]`},
@@ -994,70 +998,52 @@ func TestRequestBody_MixedSuccessFailureReplay(t *testing.T) {
 			}
 		}
 	}
-	if gotOK != "(omit successed tool call arguments)" {
-		t.Errorf("successful call should keep placeholder, got %q", gotOK)
+	if gotOK != `{"path":"a.txt"}` {
+		t.Errorf("short args should replay real JSON regardless of success, got %q", gotOK)
 	}
 	if gotFail != `{"paht":"b.txt"}` {
-		t.Errorf("failed call should replay real arguments, got %q", gotFail)
+		t.Errorf("short args should replay real JSON regardless of failure, got %q", gotFail)
 	}
 }
 
-// TestRequestBody_SuccessWithErrorKeyNotFailed success:true 即使带 error 键也不判失败（防误判）。
-func TestRequestBody_SuccessWithErrorKeyNotFailed(t *testing.T) {
-	args := replayArguments(t, 14, []structs.Messages{
-		{ChatID: 14, Type: structs.MessagesRoleUser, Delta: "do something"},
-		{ChatID: 14, Type: structs.MessagesRoleAgent, Delta: "", ToolCallingJSONString: `[{"name":"run","id":"call_warn","parameters":{"command":"ls"}}]`},
-		{ChatID: 14, Type: structs.MessagesRoleTool, Delta: `[{"name":"run","id":"call_warn","return":"{\"success\":true,\"error\":\"warning text\"}"}]`},
-	}, "call_warn")
-	if args != "(omit successed tool call arguments)" {
-		t.Errorf("success:true result should keep placeholder, got %q", args)
-	}
-}
+// TestParseStoredToolCalls_AllArgsTruncated parseStoredToolCalls（单参数签名）统一参数截断：
+// 非空参数 >maxReplayArgRunes 字符（rune）→ "..."；≤ 阈值 → 真实 JSON；空参数 → 占位符。
+func TestParseStoredToolCalls_AllArgsTruncated(t *testing.T) {
+	// call_long：长参数（>100 rune）→ "..."；call_short：短参数 → 真实 JSON；call_empty：空参数 → 占位符
+	longJSON := `{"path":"` + strings.Repeat("a", 200) + `"}`
+	payload := `[{"name":"edit","id":"call_long","parameters":` + longJSON + `},{"name":"edit","id":"call_short","parameters":{"path":"b.txt"}},{"name":"edit","id":"call_empty"}]`
 
-// TestRequestBody_ErrorKeyOnlyTreatedAsFailed 无 success 键、仅 error 键判定为失败。
-func TestRequestBody_ErrorKeyOnlyTreatedAsFailed(t *testing.T) {
-	args := replayArguments(t, 15, []structs.Messages{
-		{ChatID: 15, Type: structs.MessagesRoleUser, Delta: "do something"},
-		{ChatID: 15, Type: structs.MessagesRoleAgent, Delta: "", ToolCallingJSONString: `[{"name":"edit","id":"call_err","parameters":{"path":"c.txt"}}]`},
-		{ChatID: 15, Type: structs.MessagesRoleTool, Delta: `[{"name":"edit","id":"call_err","return":"{\"error\":\"boom\"}"}]`},
-	}, "call_err")
-	if args != `{"path":"c.txt"}` {
-		t.Errorf("error-only result should replay real arguments, got %q", args)
-	}
-}
-
-// TestParseStoredToolCalls_WithFailedIDs parseStoredToolCalls 三态单测：
-// failedIDs 命中 → 真实参数；未命中/nil failedIDs/无 parameters → "..."。
-func TestParseStoredToolCalls_WithFailedIDs(t *testing.T) {
-	payload := `[{"name":"edit","id":"call_1","parameters":{"path":"a.txt"}},{"name":"edit","id":"call_2","parameters":{"path":"b.txt"}},{"name":"edit","id":"call_3"}]`
-
-	// failedIDs 命中 call_2
-	calls, err := parseStoredToolCalls(payload, map[string]struct{}{"call_2": {}})
+	calls, err := parseStoredToolCalls(payload)
 	if err != nil {
-		t.Fatalf("parse with failedIDs: %v", err)
+		t.Fatalf("parse: %v", err)
 	}
 	if len(calls) != 3 {
 		t.Fatalf("expected 3 calls, got %d", len(calls))
 	}
-	if got := calls[0].Function.Arguments; got != "(omit successed tool call arguments)" {
-		t.Errorf("call_1 (not failed) should keep placeholder, got %q", got)
+	if got := calls[0].Function.Arguments; got != "..." {
+		t.Errorf("long args should be truncated to \"...\", got %q", got)
 	}
 	if got := calls[1].Function.Arguments; got != `{"path":"b.txt"}` {
-		t.Errorf("call_2 (failed) should replay real arguments, got %q", got)
+		t.Errorf("short args should replay real JSON, got %q", got)
 	}
 	if got := calls[2].Function.Arguments; got != "(omit successed tool call arguments)" {
-		t.Errorf("call_3 (no parameters) should keep placeholder, got %q", got)
+		t.Errorf("empty args should keep placeholder, got %q", got)
 	}
 
-	// nil failedIDs —— 全部占位
-	callsNil, err := parseStoredToolCalls(payload, nil)
+	// 中文按字符（rune）而非字节计数：80 汉字（240 字节，rune 数 91≤100）回放真实；
+	// 100 汉字（300 字节，rune 数 111>100）截断为 "..."
+	cnShort := strings.Repeat("汉", 80)
+	cnLong := strings.Repeat("汉", 100)
+	payload2 := `[{"name":"edit","id":"cn_short","parameters":{"text":"` + cnShort + `"}},{"name":"edit","id":"cn_long","parameters":{"text":"` + cnLong + `"}}]`
+	calls2, err := parseStoredToolCalls(payload2)
 	if err != nil {
-		t.Fatalf("parse with nil failedIDs: %v", err)
+		t.Fatalf("parse cn: %v", err)
 	}
-	for i, c := range callsNil {
-		if c.Function.Arguments != "(omit successed tool call arguments)" {
-			t.Errorf("call %d with nil failedIDs should keep placeholder, got %q", i, c.Function.Arguments)
-		}
+	if got := calls2[0].Function.Arguments; got == "..." {
+		t.Error("80 汉字（≤100 rune）参数不应被截断")
+	}
+	if got := calls2[1].Function.Arguments; got != "..." {
+		t.Errorf("100 汉字（>100 rune）参数应被截断为 \"...\"，got %q", got)
 	}
 }
 
@@ -1068,6 +1054,85 @@ func eventTestChatLn(events map[string]*structs.TraceEvent, fileBlocks map[strin
 			structs.TempKeyTraceEvents:     events,
 			structs.TempKeyTraceFileBlocks: fileBlocks,
 		},
+	}
+}
+
+// TestRequestBody_OldTurnEventBlockAfterResults 旧轮次（InRecent=false）的事件内容块
+// 也必须锚定到该轮 assistant 之后的所有 role:tool 结果之后，而非 assistant 与结果之间。
+// 去掉 findEventAnchor 的 InRecent 门控后，全部工具调用轮次均完整回放 tool_calls。
+func TestRequestBody_OldTurnEventBlockAfterResults(t *testing.T) {
+	db := setupTestDB(t)
+	toolsList := []*parser.ToolsDefine{}
+
+	setupTestConfig()
+	cfg := *config.GlobalConfig
+	m := cfg.Model.Models[cfg.Model.DefaultModelID]
+	m.EnableToolCalling = true
+	cfg.Model.Models[cfg.Model.DefaultModelID] = m
+	config.GlobalConfigSwap(cfg)
+
+	// 6 轮 read 工具调用，事件指向最旧一轮 call_1（模拟 DetectTraceEvents 只给最近 5 轮
+	// 标 InRecent=true，故 call_1 为 InRecent=false）
+	var msgs []structs.Messages
+	for i := 1; i <= 6; i++ {
+		id := fmt.Sprintf("call_%d", i)
+		msgs = append(msgs,
+			structs.Messages{ChatID: 30, Type: structs.MessagesRoleUser, Delta: fmt.Sprintf("turn %d", i)},
+			structs.Messages{ChatID: 30, Type: structs.MessagesRoleAgent, Delta: "", ToolCallingJSONString: `[{"name":"read","id":"` + id + `","parameters":{"path":"a.txt"}}]`},
+			structs.Messages{ChatID: 30, Type: structs.MessagesRoleTool, Delta: `[{"name":"read","id":"` + id + `","return":"data"}]`},
+		)
+	}
+	for _, mm := range msgs {
+		if err := db.Create(&mm).Error; err != nil {
+			t.Fatalf("create msg: %v", err)
+		}
+	}
+	var call1Asst structs.Messages
+	if err := db.Where("chat_id = 30 AND type = ?", structs.MessagesRoleAgent).Order("id ASC").First(&call1Asst).Error; err != nil {
+		t.Fatalf("find call_1 assistant: %v", err)
+	}
+
+	chatLn := eventTestChatLn(
+		map[string]*structs.TraceEvent{
+			"a.txt": {MsgID: call1Asst.ID, ToolCallID: "call_1", IsEdit: false, InRecent: false},
+		},
+		map[string]trace.FileBlock{
+			"a.txt": {Name: "a.txt", Size: "4", Length: 4, Text: "1|data\n"},
+		},
+	)
+
+	req, err := RequestBody(30, 1, "", &toolsList, db, "", "", cfgStruct.AgentConfig{}, chatLn)
+	if err != nil {
+		t.Fatalf("RequestBody failed: %v", err)
+	}
+
+	call1AsstIdx, call1ResultIdx, blockIdx := -1, -1, -1
+	for i, msg := range req.Messages {
+		if msg.Role == reqStruct.RoleAssistant {
+			for _, tc := range msg.ToolCalls {
+				if tc.ID == "call_1" {
+					call1AsstIdx = i
+				}
+			}
+		}
+		if msg.Role == reqStruct.RoleTool && msg.ToolCallID == "call_1" {
+			call1ResultIdx = i
+		}
+		if msg.Role == "user" && strings.Contains(msg.Content, `path="a.txt"`) {
+			blockIdx = i
+		}
+	}
+	if call1AsstIdx < 0 {
+		t.Fatal("expected call_1 assistant message")
+	}
+	if call1ResultIdx < 0 {
+		t.Fatal("expected call_1 tool result")
+	}
+	if blockIdx < 0 {
+		t.Fatal("expected trace content block")
+	}
+	if !(blockIdx > call1ResultIdx) {
+		t.Errorf("old-turn content block must come AFTER call_1 tool result (not between assistant and result): asstIdx=%d resultIdx=%d blockIdx=%d", call1AsstIdx, call1ResultIdx, blockIdx)
 	}
 }
 
