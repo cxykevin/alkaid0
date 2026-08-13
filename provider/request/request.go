@@ -726,6 +726,137 @@ func ApplyToolOnHooks(session *storageStructs.Chats, toolCallingJSON string) err
 	return nil
 }
 
+// toolCallLoopThreshold 相同工具调用循环触发阈值：连续 N 次完全一致
+//（name + 参数）的工具调用判定为循环，注入纠正消息打断而非继续执行。
+// AI 在命令已成功执行且结果已返回后仍反复重试同一调用（如 go test 返回
+// cached 结果后仍坚持重试）时，此机制在第二次重复后即截断。
+const toolCallLoopThreshold = 3
+
+// toolCallLoopMaxHistory 循环检测回溯的带工具调用 assistant 消息条数上限。
+const toolCallLoopMaxHistory = 8
+
+// shellNumRe 归一化命令中的数字 token，覆盖改 tail -n 行数 / 超时秒数等微调重试。
+var shellNumRe = regexp.MustCompile(`\d+`)
+
+// normalizeShellCommand 归一化 shell 命令用于循环签名：数字 token 统一替换为 #，
+// 连续空白压缩为单空格。使"同一测试命令仅 tail -n 行数不同"的重复调用签名一致
+//（AI 陷入循环时常通过改 tail -n 等数字绕过精确匹配）。
+func normalizeShellCommand(cmd string) string {
+	s := shellNumRe.ReplaceAllString(cmd, "#")
+	return strings.Join(strings.Fields(s), " ")
+}
+
+// extractToolCallString 从参数指针提取字符串值（nil / 非字符串返回 ""）。
+func extractToolCallString(p *any) string {
+	if p == nil {
+		return ""
+	}
+	if s, ok := (*p).(string); ok {
+		return s
+	}
+	return ""
+}
+
+// toolCallSignature 计算工具调用的稳定签名（name + 规范化参数），用于循环检测。
+//   - run 工具：仅用「归一化后的 command」作签名——reason/type/sandbox/timeout 等
+//     每次都会变化的噪音参数不参与比较，shell 命令做数字归一化。这样 AI 反复运行
+//     同一测试命令、只改 reason 文案或 tail -n 行数时，签名仍一致，可被识别为循环。
+//     wait 的 command 是后台 runid（唯一标识）、sleep 的 command 是秒数，均用精确值
+//     避免不同后台任务/不同等待秒数被误判。
+//   - 其他工具：参数 map 按键排序序列化（stdjson 对 map 自动排序键），精确匹配。
+//     序列化失败返回 ""（该调用不参与循环判定，保守不误伤）。
+func toolCallSignature(t ToolCall) string {
+	if t.Name == "run" {
+		runType := extractToolCallString(t.Parameters["type"])
+		cmd := extractToolCallString(t.Parameters["command"])
+		switch runType {
+		case "wait", "sleep":
+			return "run:" + runType + "|" + cmd
+		default: // shell
+			return "run|" + normalizeShellCommand(cmd)
+		}
+	}
+	params, err := stdjson.Marshal(t.Parameters)
+	if err != nil {
+		return ""
+	}
+	return t.Name + "|" + string(params)
+}
+
+// sameToolCalls 判断两次工具调用列表是否完全一致（数量相同且逐个 name+参数相同）。
+func sameToolCalls(a, b []ToolCall) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if toolCallSignature(a[i]) != toolCallSignature(b[i]) {
+			return false
+		}
+	}
+	return true
+}
+
+// detectToolCallLoop 检测相同工具调用循环：本次调用与最近连续
+// toolCallLoopThreshold-1 条带工具调用的 assistant 消息完全一致时判定循环。
+// 命中返回本次被命中的调用列表（供注入警告配对），否则返回 nil。
+// 任何查询/解析异常都保守返回 nil（不打断正常多轮工具调用）。
+func detectToolCallLoop(session *storageStructs.Chats, toolCallingJSON string) []ToolCall {
+	tools, err := ParseToolsFromJSON(toolCallingJSON)
+	if err != nil || len(tools) == 0 || session.DB == nil {
+		return nil
+	}
+	var msgs []storageStructs.Messages
+	if err := session.DB.Where("chat_id = ? AND type = ? AND tool_calling_json_string != ''",
+		session.ID, storageStructs.MessagesRoleAgent).
+		Order("id DESC").Limit(toolCallLoopMaxHistory).Find(&msgs).Error; err != nil {
+		return nil
+	}
+	count := 0
+	for _, m := range msgs {
+		prev, err := ParseToolsFromJSON(m.ToolCallingJSONString)
+		if err != nil || len(prev) == 0 || !sameToolCalls(tools, prev) {
+			break
+		}
+		count++
+		if count >= toolCallLoopThreshold-1 {
+			break
+		}
+	}
+	if count < toolCallLoopThreshold-1 {
+		return nil
+	}
+	return tools
+}
+
+// injectToolCallLoopWarning 写入 role:tool 循环警告消息（格式与 Solver 工具结果一致，
+// 保证 build 回放时与 assistant 的 tool_call 正确配对）。警告表明该工具调用已连续重复
+// 执行且结果未变，引导模型停止重复、改用其他策略。该消息落库，模型在下一轮可见。
+func injectToolCallLoopWarning(session *storageStructs.Chats, calls []ToolCall) error {
+	if session.DB == nil {
+		return errors.New("db not initialized")
+	}
+	items := make([]map[string]any, 0, len(calls))
+	for _, c := range calls {
+		items = append(items, map[string]any{
+			"name": c.Name,
+			"id":   c.ID,
+			"return": fmt.Sprintf(
+				`{"success":false,"error":"[System] Tool call loop detected: you have called %s with the same arguments %d times consecutively and the result has not changed. Stop repeating this call and take a different approach instead."}`,
+				c.Name, toolCallLoopThreshold),
+		})
+	}
+	buf, err := stdjson.Marshal(items)
+	if err != nil {
+		return err
+	}
+	return session.DB.Create(&storageStructs.Messages{
+		ChatID:  session.ID,
+		Delta:   string(buf),
+		Type:    storageStructs.MessagesRoleTool,
+		AgentID: &session.CurrentAgentID,
+	}).Error
+}
+
 // ExecuteToolCalls 执行工具调用并持久化结果。
 // 流程：设置状态为 ToolCalling → 逐工具执行 OnHook → 通过 Solver 解析并保存工具响应 → 恢复 Idle 状态。
 // 任一环节失败都会回滚到 Idle 并返回错误。
@@ -735,6 +866,21 @@ func ExecuteToolCalls(session *storageStructs.Chats, toolCallingJSON string) (bo
 	}
 	if session.DB == nil {
 		return true, errors.New("db not initialized")
+	}
+	// 相同工具调用循环检测：AI 已连续多次以相同参数调用同一工具且结果未变时，
+	// 注入纠正消息打断（不执行工具），避免无限循环重试。此机制优先于一切执行逻辑，
+	// 任何非循环的正常工具调用不受影响。
+	if loopCalls := detectToolCallLoop(session, toolCallingJSON); len(loopCalls) > 0 {
+		if err := injectToolCallLoopWarning(session, loopCalls); err != nil {
+			return true, err
+		}
+		logger.Warn("tool call loop detected in chat %d: %d identical %s call(s), injecting loop warning and skipping execution",
+			session.ID, len(loopCalls), loopCalls[0].Name)
+		session.State = state.StateIdle
+		if saveErr := session.DB.Save(session).Error; saveErr != nil {
+			return true, saveErr
+		}
+		return true, nil
 	}
 	session.State = state.StateToolCalling
 	if err := session.DB.Save(session).Error; err != nil {
