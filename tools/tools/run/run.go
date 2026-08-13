@@ -213,6 +213,11 @@ func errResult(msg string, cross []*any) (bool, []*any, map[string]*any, error) 
 // maxSleepSeconds sleep 类型允许的最大等待秒数，防止 AI 让会话无限等待
 const maxSleepSeconds = 3600
 
+// maxRunOutputChars 直接随工具结果返回给 AI 的命令输出最大字符数。
+// 超出部分截断并提示完整 @temp 路径。让 AI 无需依赖 trace 注入即可直接看到
+// 本次调用的命令输出，避免"结果已返回但 AI 看不到、只能反复重试同一命令"的循环。
+const maxRunOutputChars = 2000
+
 // sleepTask 处理 run 工具的 "sleep" 类型：让 agent 等待指定秒数，不执行实际命令。
 func sleepTask(session *structs.Chats, mp map[string]*any, cross []*any) (bool, []*any, map[string]*any, error) {
 	reasonObj, ok := mp["reason"]
@@ -532,13 +537,15 @@ func runTask(session *structs.Chats, mp map[string]*any, cross []*any) (bool, []
 	boolx := result.Success
 	success := any(boolx)
 
-	// 非沙盒降级路径：输出直接作为 path/error 字段，不写 trace（与原行为一致）
+	// 非沙盒降级路径：输出直接作为 path/output 字段，不写 trace（与原行为一致；
+	// output 字段与主路径对齐，保证 AI 在任意路径下都能直接从工具结果看到命令输出）
 	if result.Fallback {
 		outStr := result.ErrString + result.Output
 		outAny := any(outStr)
 		res := map[string]*any{
 			"success": &success,
 			"path":    &outAny,
+			"output":  &outAny,
 		}
 		if !boolx {
 			res["error"] = &outAny
@@ -555,16 +562,25 @@ func runTask(session *structs.Chats, mp map[string]*any, cross []*any) (bool, []
 	outPth := "@temp/" + tracePath
 	outAny := any(outPth)
 	reasonAny := any(reason)
+	// 命令输出直接随工具结果返回（截断到 maxRunOutputChars），AI 在 role:tool 消息里
+	// 第一眼就能看到本次调用结果，不必从 trace 聚合块（可能数百 KB、几十条 run 记录）
+	// 中大海捞针地定位最新输出。完整内容仍保存在 @temp 路径可读。
+	output := outStr
+	if len(output) > maxRunOutputChars {
+		output = output[:maxRunOutputChars] + "\n...(truncated, full output at " + outPth + ")"
+	}
+	outputAny := any(output)
 	msg := "The file has been traced and injected into the top of the context."
 	msgAny := any(msg)
 	res := map[string]*any{
 		"success": &success,
 		"reason":  &reasonAny,
 		"path":    &outAny,
+		"output":  &outputAny,
 		"message": &msgAny,
 	}
 	if !boolx {
-		res["error"] = &outAny
+		res["error"] = &outputAny
 	}
 	return false, cross, res, nil
 

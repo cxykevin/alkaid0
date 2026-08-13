@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/cxykevin/alkaid0/config"
 	"github.com/cxykevin/alkaid0/library/json"
 	storageStructs "github.com/cxykevin/alkaid0/storage/structs"
 	"github.com/cxykevin/alkaid0/terminal/sandbox"
@@ -833,6 +834,102 @@ func TestSleepTaskStringCommand(t *testing.T) {
 	// 验证 string "1" 被正确转为 1 秒并实际等待
 	if elapsed < 900*time.Millisecond {
 		t.Errorf("Expected sleep ~1s, got %v", elapsed)
+	}
+}
+
+// runOutputSession 构造带测试 DB 的会话（主路径写 trace 需要 ReferFiles/Traces 表）。
+func runOutputSession(t *testing.T) *storageStructs.Chats {
+	t.Helper()
+	db := setupTestDB(t)
+	return &storageStructs.Chats{
+		DB:                   db,
+		Root:                 t.TempDir(),
+		CurrentActivatePath:  "",
+		TemporyDataOfRequest: make(map[string]any),
+	}
+}
+
+// TestRunTaskReturnsOutputField 验证 run 工具把命令输出直接放进工具结果的 output 字段，
+// AI 在 role:tool 消息里第一眼就能看到本次调用结果，不必从 trace 聚合块（可能数百 KB、
+// 几十条 run 记录）中大海捞针地定位最新输出。非沙盒执行保证测试确定性、不依赖 unshare。
+func TestRunTaskReturnsOutputField(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("跳过 Windows")
+	}
+	oldDisable := config.GlobalConfig.Agent.DisableSandbox
+	config.GlobalConfig.Agent.DisableSandbox = true
+	defer func() { config.GlobalConfig.Agent.DisableSandbox = oldDisable }()
+
+	session := runOutputSession(t)
+	mp := map[string]*any{
+		"type":    ptrAny("shell"),
+		"reason":  ptrAny("test output field"),
+		"command": ptrAny("echo alkaid0-run-output-test"),
+	}
+
+	pass, _, res, err := runTask(session, mp, []*any{})
+	if err != nil {
+		t.Fatalf("runTask: %v", err)
+	}
+	if pass {
+		t.Error("Expected pass to be false")
+	}
+	outPtr, ok := res["output"]
+	if !ok || outPtr == nil {
+		t.Fatalf("期望结果含 output 字段，实际 %v", res)
+	}
+	out, ok := (*outPtr).(string)
+	if !ok {
+		t.Fatalf("output 应为字符串，实际 %T", *outPtr)
+	}
+	if !strings.Contains(out, "alkaid0-run-output-test") {
+		t.Errorf("output 应包含命令输出，实际 %q", out)
+	}
+	// 小输出不截断，不应带截断提示
+	if strings.Contains(out, "(truncated, full output at ") {
+		t.Errorf("小输出不应截断，实际 %q", out)
+	}
+	// path 字段仍指向完整输出所在 trace 路径
+	if p, ok := res["path"]; ok && p != nil {
+		if ps, ok := (*p).(string); !ok || !strings.HasPrefix(ps, "@temp/run/") {
+			t.Errorf("path 应为 @temp/run/ 前缀，实际 %v", *p)
+		}
+	}
+}
+
+// TestRunTaskOutputTruncated 验证大输出被截断到 maxRunOutputChars，并提示完整路径可读。
+func TestRunTaskOutputTruncated(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("跳过 Windows")
+	}
+	oldDisable := config.GlobalConfig.Agent.DisableSandbox
+	config.GlobalConfig.Agent.DisableSandbox = true
+	defer func() { config.GlobalConfig.Agent.DisableSandbox = oldDisable }()
+
+	session := runOutputSession(t)
+	mp := map[string]*any{
+		"type":    ptrAny("shell"),
+		"reason":  ptrAny("test truncate"),
+		"command": ptrAny("seq 1 3000"),
+	}
+
+	_, _, res, err := runTask(session, mp, []*any{})
+	if err != nil {
+		t.Fatalf("runTask: %v", err)
+	}
+	outPtr, ok := res["output"]
+	if !ok || outPtr == nil {
+		t.Fatalf("期望结果含 output 字段，实际 %v", res)
+	}
+	out, ok := (*outPtr).(string)
+	if !ok {
+		t.Fatalf("output 应为字符串，实际 %T", *outPtr)
+	}
+	if len(out) <= maxRunOutputChars {
+		t.Errorf("seq 1 3000 输出应超过 %d 字符并被截断，实际 output len=%d", maxRunOutputChars, len(out))
+	}
+	if !strings.Contains(out, "(truncated, full output at @temp/run/") {
+		t.Errorf("截断提示应指向完整路径，实际 %q", out)
 	}
 }
 
