@@ -184,6 +184,11 @@
                                         "type": "boolean",
                                         "description": "历史回放兼容模式：把\"一个 assistant 携带多个 tool_calls\"的消息拆分为逐条\"单 tool_call + 结果\"，适配逐条转换 role:tool 消息的 OpenAI→Anthropic 代理（默认关闭）",
                                         "default": false
+                                    },
+                                    "EnableTrailingUserMessage": {
+                                        "type": "boolean",
+                                        "description": "收尾消息兼容模式：请求以 role:\"tool\"（tool_result）结果消息结尾时追加一条 user 收尾消息，适配拒绝以 tool_result 结尾请求的 OpenAI→Anthropic 转换代理（默认关闭）",
+                                        "default": false
                                     }
                                 }
                             }
