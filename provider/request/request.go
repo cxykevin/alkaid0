@@ -1074,12 +1074,29 @@ func SendRequest(ctx context.Context, session *storageStructs.Chats, callback fu
 	var totalUsage uint32
 	var cachedUsage uint32
 
-	// 全局 token 用量统计：defer + 标志位保证所有 return 路径至多累计一次，
+	// pushFinalUsage 向客户端推送当前累积的最终 usage（幂等，失败仅告警）。
+	// 流式过程每 chunk 已带 usage 推送，此函数供流结束后的最终兜底，
+	// 覆盖纯 usage 帧、WaitApprove、取消与错误等不再走常规最终 callback 的路径，
+	// 保证每次请求完毕客户端都能收到一次完整的 usage_update。
+	pushFinalUsage := func() {
+		if err := callback("", "", msgID, structs.Usage{
+			PromptTokens:     promptUsage,
+			CompletionTokens: completionUsage,
+			TotalTokens:      totalUsage,
+			CachedTokens:     cachedUsage,
+		}, &session.CurrentAgentID); err != nil {
+			logger.Warn("push final usage: %v", err)
+		}
+	}
+
+	// 全局 token 用量统计与最终 usage 推送：defer + 标志位保证所有 return 路径
+	// 至多累计一次并至多推送一次最终 usage，
 	// 并跳过模型不存在/构建失败/native、legacy 打回等不应计数的路径。
 	var usageRecorded bool
 	defer func() {
 		if usageRecorded {
 			stats.AddUsage(modelID, modelCfg.ModelName, promptUsage, completionUsage, cachedUsage)
+			pushFinalUsage()
 		}
 	}()
 
@@ -1095,6 +1112,9 @@ func SendRequest(ctx context.Context, session *storageStructs.Chats, callback fu
 			promptUsage = max(promptUsage, body.Usage.PromptTokens)
 			completionUsage = max(completionUsage, body.Usage.CompletionTokens)
 			totalUsage = max(totalUsage, body.Usage.TotalTokens)
+			// 兜底：部分 OpenAI 兼容代理不返回 total_tokens，用 prompt+completion 补全，
+			// 避免客户端 usage_update 的 used 恒为 0、自动压缩判断失效。
+			totalUsage = max(totalUsage, promptUsage+completionUsage)
 			cachedUsage = max(cachedUsage, body.Usage.CachedTokens)
 			cachedUsage = max(cachedUsage, body.Usage.DeepseekCachedToken)
 			// OpenAI 标准嵌套（OpenRouter/CCR 等网关透传 Anthropic usage 时填充）
@@ -1222,6 +1242,12 @@ func SendRequest(ctx context.Context, session *storageStructs.Chats, callback fu
 	// 向 LLM 发送请求，solveFunc 会在每个流式 chunk 到达时被调用
 	requestErr := SimpleOpenAIRequest(ctx, modelCfg.ProviderURL, modelCfg.ProviderKey, modelCfg.ModelID, *obj, eng, solveFunc)
 
+	// 请求已发出：无论后续正常完成、工具调用预解析、用户取消、其他错误，
+	// 还是 native/legacy 格式打回，都算一次真实对话调用——本次 token 花费计入总库
+	// 并向客户端推送最终 usage。请求未真正发出的失败（连接失败/非200/marshal 失败）
+	// 时 promptUsage 等全为 0，stats.AddUsage 内部忽略全 0，不会产生记录。
+	usageRecorded = true
+
 	// 打回：模型输出了原生 tool calling 格式（而非 <tools> 标签），本次响应不被采用。
 	// 删除占位消息并注入格式纠正消息，返回 (false, nil) 让 loop 重新发起请求，
 	// 模型将在下一轮看到纠正反馈并改用 <tools> 标签。
@@ -1252,9 +1278,6 @@ func SendRequest(ctx context.Context, session *storageStructs.Chats, callback fu
 		}
 		return false, nil
 	}
-
-	// 请求已真正发出且未被打回：后续正常完成、用户取消、其他错误都算一次真实对话调用。
-	usageRecorded = true
 
 	isCancel := requestErr != nil && errors.Is(requestErr, context.Canceled)
 
