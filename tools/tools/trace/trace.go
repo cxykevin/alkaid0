@@ -520,15 +520,18 @@ func RenderTraceBlocks(session *structs.Chats) (topBlock string, eventBlocks map
 		if !ok {
 			continue
 		}
-		// 内容变化时写回 LastContent，供下次生成 diff；@temp 内容存于 ReferFiles，跳过
-		if traceObj.LastContent != newContent && !strings.HasPrefix(traceObj.Path, "@temp/") {
+		// 缓存决策：方案2（保留旧块+diff）记录到 diffPlans；eventBlocks 仍保留最新块作为退化 fallback
+		plan, keep := decideDiffPlan(traceObj.Path, traceObj.LastContent, newContent, timeout, mult)
+		// LastContent 是方案2 diff 的「旧端存档」= 上次以完整块注入上下文的文件内容。
+		// 只在方案1（注入完整块）/首次/无变化/@temp 时推进；方案2 候选不推进——
+		// 否则现场盘面每轮变化会把 diff 旧端带跑，下次旧块用推进后的内容渲染成
+		// 模型从未见过的字节，前缀缓存恰在旧块处断裂（连续编辑缓存率下跌的根因）。
+		if keep {
+			diffPlans[traceObj.Path] = plan
+		} else if traceObj.LastContent != newContent && !strings.HasPrefix(traceObj.Path, "@temp/") {
 			session.DB.Model(&structs.Traces{}).
 				Where("chat_id = ? AND path = ? AND agent_id = ?", session.ID, traceObj.Path, session.NowAgent).
 				Update("last_content", newContent)
-		}
-		// 缓存决策：方案2（保留旧块+diff）记录到 diffPlans；eventBlocks 仍保留最新块作为退化 fallback
-		if plan, keep := decideDiffPlan(traceObj.Path, traceObj.LastContent, newContent, timeout, mult); keep {
-			diffPlans[traceObj.Path] = plan
 		}
 		frag, ok := renderContentBlock(traceObj.Path, newContent)
 		if !ok {

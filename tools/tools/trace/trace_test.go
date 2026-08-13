@@ -1228,3 +1228,66 @@ func TestRenderTraceBlock_SingleAndMulti(t *testing.T) {
 		t.Errorf("multi block missing files: %q", multi)
 	}
 }
+
+// TestRenderTraceBlocks_LastContentAdvance 验证 LastContent 存档语义：
+//   - 方案1/首次（无 diff 候选）→ 推进 LastContent = 当前内容（作为下次 diff 的旧端基准）
+//   - 方案2 候选（Keep=true）→ 不推进，保持「上次注入的完整块」内容，
+//     保证下次旧块字节稳定、前缀缓存不被连续编辑破坏（缓存率下降的根因修复）
+func TestRenderTraceBlocks_LastContentAdvance(t *testing.T) {
+	t.Run("first_trace_advances", func(t *testing.T) {
+		db := setupTestDB(t)
+		defer u.Unwrap(db.DB()).Close()
+		tmpDir := t.TempDir()
+		content := "line A1\nline A2\n"
+		if err := os.WriteFile(filepath.Join(tmpDir, "a.txt"), []byte(content), 0644); err != nil {
+			t.Fatalf("write a.txt: %v", err)
+		}
+		if err := db.Create(&structs.Traces{ChatID: 1, Path: "a.txt", TraceID: 1, AgentID: "test_agent"}).Error; err != nil {
+			t.Fatalf("create trace: %v", err)
+		}
+		session := &structs.Chats{ID: 1, DB: db, NowAgent: "test_agent", Root: tmpDir}
+		if _, _, err := RenderTraceBlocks(session); err != nil {
+			t.Fatalf("RenderTraceBlocks: %v", err)
+		}
+		var tr structs.Traces
+		if err := db.Where("chat_id = 1 AND path = 'a.txt'").First(&tr).Error; err != nil {
+			t.Fatalf("reload trace: %v", err)
+		}
+		if tr.LastContent != content {
+			t.Errorf("first trace should advance LastContent to %q, got %q", content, tr.LastContent)
+		}
+	})
+
+	t.Run("diff_candidate_keeps", func(t *testing.T) {
+		db := setupTestDB(t)
+		defer u.Unwrap(db.DB()).Close()
+		tmpDir := t.TempDir()
+		var oldContent strings.Builder
+		for i := 0; i < 100; i++ {
+			fmt.Fprintf(&oldContent, "line %d\n", i)
+		}
+		newContent := oldContent.String() + "line 100 appended\n"
+		if err := os.WriteFile(filepath.Join(tmpDir, "a.txt"), []byte(newContent), 0644); err != nil {
+			t.Fatalf("write a.txt: %v", err)
+		}
+		if err := db.Create(&structs.Traces{ChatID: 1, Path: "a.txt", TraceID: 1, AgentID: "test_agent", LastContent: oldContent.String()}).Error; err != nil {
+			t.Fatalf("create trace: %v", err)
+		}
+		session := &structs.Chats{ID: 1, DB: db, NowAgent: "test_agent", Root: tmpDir}
+		if _, _, err := RenderTraceBlocks(session); err != nil {
+			t.Fatalf("RenderTraceBlocks: %v", err)
+		}
+		// 确认确实产生了方案2 候选
+		plans, ok := session.TemporyDataOfSession[structs.TempKeyTraceDiffPlan].(map[string]DiffPlan)
+		if !ok || !plans["a.txt"].Keep {
+			t.Fatal("expected a.txt diff plan candidate (Keep=true)")
+		}
+		var tr structs.Traces
+		if err := db.Where("chat_id = 1 AND path = 'a.txt'").First(&tr).Error; err != nil {
+			t.Fatalf("reload trace: %v", err)
+		}
+		if tr.LastContent != oldContent.String() {
+			t.Errorf("diff candidate should NOT advance LastContent, got %q", tr.LastContent)
+		}
+	})
+}

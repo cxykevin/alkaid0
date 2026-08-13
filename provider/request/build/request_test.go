@@ -1067,6 +1067,72 @@ func TestRequestBody_TraceFollowsEvent_Native(t *testing.T) {
 	}
 }
 
+// TestRequestBody_ParallelToolCalls_BlockAfterAllResults 同一 assistant 并行输出多个 edit
+// tool_calls（一条消息两个 tool_use、两条 tool_result）时，trace 内容块必须插在「所有」
+// role:tool 结果之后，不得夹在结果序列中间。否则后续 tool_result 与其 tool_use 被内容块隔开，
+// OpenAI→Anthropic 代理会 400（tool_result must have a corresponding tool_use in previous message）。
+func TestRequestBody_ParallelToolCalls_BlockAfterAllResults(t *testing.T) {
+	db := setupTestDB(t)
+	toolsList := []*parser.ToolsDefine{}
+
+	setupTestConfig()
+	cfg := *config.GlobalConfig
+	m := cfg.Model.Models[cfg.Model.DefaultModelID]
+	m.EnableToolCalling = true
+	cfg.Model.Models[cfg.Model.DefaultModelID] = m
+	config.GlobalConfigSwap(cfg)
+
+	msgs := []structs.Messages{
+		{ChatID: 25, Type: structs.MessagesRoleUser, Delta: "edit a.txt twice"},
+		{ChatID: 25, Type: structs.MessagesRoleAgent, Delta: "", ToolCallingJSONString: `[{"name":"edit","id":"call_1","parameters":{"path":"a.txt","text":"x"}},{"name":"edit","id":"call_2","parameters":{"path":"a.txt","text":"y"}}]`},
+		{ChatID: 25, Type: structs.MessagesRoleTool, Delta: `[{"name":"edit","id":"call_1","return":"{\"ok\":true}"}]`},
+		{ChatID: 25, Type: structs.MessagesRoleTool, Delta: `[{"name":"edit","id":"call_2","return":"{\"ok\":true}"}]`},
+		{ChatID: 25, Type: structs.MessagesRoleUser, Delta: "continue"},
+	}
+	for i := range msgs {
+		if err := db.Create(&msgs[i]).Error; err != nil {
+			t.Fatalf("create msg: %v", err)
+		}
+	}
+	asstID := msgs[1].ID
+
+	// 事件：a.txt 最新 edit 事件（DetectTraceEvents 记录同条 assistant 首个 tool_call call_1）。
+	// 修复前 findEventAnchor 只匹配 ToolCallID==call_1 的结果 → 内容块插在 call_1 与 call_2 结果之间；
+	// 修复后锚定该 assistant 之后最后一个 role:tool 结果 → 内容块位于全部结果之后。
+	chatLn := eventTestChatLn(
+		map[string]*structs.TraceEvent{
+			"a.txt": {MsgID: asstID, ToolCallID: "call_1", IsEdit: true, InRecent: true},
+		},
+		map[string]trace.FileBlock{
+			"a.txt": {Name: "a.txt", Size: "5", Length: 5, Text: "1|hi\n"},
+		},
+	)
+
+	req, err := RequestBody(25, 1, "", &toolsList, db, "", "", cfgStruct.AgentConfig{}, chatLn)
+	if err != nil {
+		t.Fatalf("RequestBody failed: %v", err)
+	}
+
+	lastToolIdx, blockIdx := -1, -1
+	for i, msg := range req.Messages {
+		if msg.Role == reqStruct.RoleTool {
+			lastToolIdx = i
+		}
+		if msg.Role == "user" && strings.Contains(msg.Content, `path="a.txt"`) {
+			blockIdx = i
+		}
+	}
+	if lastToolIdx < 0 {
+		t.Fatal("expected tool result messages")
+	}
+	if blockIdx < 0 {
+		t.Fatal("expected trace content block after event")
+	}
+	if !(blockIdx > lastToolIdx) {
+		t.Errorf("content block must come AFTER all tool results (not between them): lastToolIdx=%d blockIdx=%d", lastToolIdx, blockIdx)
+	}
+}
+
 // TestRequestBody_TraceFollowsEvent_Prompt 提示词模式：内容块紧跟事件 assistant 消息之后。
 func TestRequestBody_TraceFollowsEvent_Prompt(t *testing.T) {
 	db := setupTestDB(t)
@@ -1298,11 +1364,13 @@ func TestRequestBody_NoEventFile_Top(t *testing.T) {
 func TestDetectTraceEvents(t *testing.T) {
 	db := setupTestDB(t)
 
-	// 消息按 id 递增（旧→新）：最后两条为 read a.txt / edit a.txt，a.txt 最新事件应为 read（最新一次）。
+	// 消息按 id 递增（旧→新）：a.txt 有 3 次事件（最新 read call_1、次新 edit call_2、最早 edit call_0）。
+	// prevMap 应记录「最早事件」（call_0）而非次新（call_2）——旧块锚定最早位置，连续编辑才不漂移。
 	msgs := []structs.Messages{
 		{ChatID: 30, Type: structs.MessagesRoleUser, Delta: "u1"},
 		{ChatID: 30, Type: structs.MessagesRoleAgent, Delta: "", Summary: "sum", ToolCallingJSONString: `[{"name":"edit","id":"call_9","parameters":{"path":"z.txt"}}]`},
 		{ChatID: 30, Type: structs.MessagesRoleAgent, Delta: "", ToolCallingJSONString: `[{"name":"edit","id":"call_3","parameters":{"path":"@task"}}]`},
+		{ChatID: 30, Type: structs.MessagesRoleAgent, Delta: "", ToolCallingJSONString: `[{"name":"edit","id":"call_0","parameters":{"path":"a.txt"}}]`},
 		{ChatID: 30, Type: structs.MessagesRoleAgent, Delta: "", ToolCallingJSONString: `[{"name":"edit","id":"call_2","parameters":{"path":"a.txt"}}]`},
 		{ChatID: 30, Type: structs.MessagesRoleAgent, Delta: "", ToolCallingJSONString: `[{"name":"read","id":"call_1","parameters":{"path":"a.txt"}}]`},
 	}
@@ -1321,7 +1389,7 @@ func TestDetectTraceEvents(t *testing.T) {
 		t.Fatal("expected trace events in session")
 	}
 
-	// a.txt：从新到旧先扫到 read（call_1，最新），edit 被"只留最新"覆盖
+	// a.txt：从新到旧先扫到 read（call_1，最新）
 	evA, ok := em["a.txt"]
 	if !ok {
 		t.Fatal("expected a.txt event")
@@ -1329,8 +1397,8 @@ func TestDetectTraceEvents(t *testing.T) {
 	if evA.ToolCallID != "call_1" || evA.IsEdit {
 		t.Errorf("a.txt latest event should be read call_1, got %+v", evA)
 	}
-	if evA.MsgID != msgs[4].ID {
-		t.Errorf("a.txt event MsgID should be %d, got %d", msgs[4].ID, evA.MsgID)
+	if evA.MsgID != msgs[5].ID {
+		t.Errorf("a.txt event MsgID should be %d, got %d", msgs[5].ID, evA.MsgID)
 	}
 	// @task 识别
 	taskEv, ok := em["@task"]
@@ -1342,7 +1410,7 @@ func TestDetectTraceEvents(t *testing.T) {
 		t.Error("z.txt event should be truncated by summary")
 	}
 
-	// 次新事件：a.txt 的 edit call_2 应为次新（方案2 旧块锚点）
+	// 最早事件：a.txt 应记录最早 edit call_0（方案2 旧块固定锚点），而非次新 call_2
 	pm, ok := session.TemporyDataOfSession[structs.TempKeyTracePrevEvents].(map[string]*structs.TraceEvent)
 	if !ok {
 		t.Fatal("expected prev events in session")
@@ -1351,13 +1419,13 @@ func TestDetectTraceEvents(t *testing.T) {
 	if !ok {
 		t.Fatal("expected a.txt prev event")
 	}
-	if prevA.ToolCallID != "call_2" || !prevA.IsEdit {
-		t.Errorf("a.txt prev event should be edit call_2, got %+v", prevA)
+	if prevA.ToolCallID != "call_0" || !prevA.IsEdit {
+		t.Errorf("a.txt prev event should be earliest edit call_0, got %+v", prevA)
 	}
 	if prevA.MsgID != msgs[3].ID {
 		t.Errorf("a.txt prev event MsgID should be %d, got %d", msgs[3].ID, prevA.MsgID)
 	}
-	// @task 只有一次事件，无次新
+	// @task 只有一次事件，无最早/次新
 	if _, ok := pm["@task"]; ok {
 		t.Error("@task should have no prev event")
 	}

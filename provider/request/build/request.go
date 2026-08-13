@@ -636,10 +636,11 @@ scan:
 					InRecent:   inRecent,
 				}
 				if _, exists := eventMap[path]; exists {
-					// 已记录最新事件，此处为更旧的事件：仅保留次新，供方案2 旧内容块锚定
-					if _, prev := prevMap[path]; !prev {
-						prevMap[path] = ev
-					}
+					// 已记录最新事件，此处为更旧的事件：保留最早一条，作为方案2 旧块的固定锚点。
+					// 从新到旧扫描，每次覆盖 prevMap，最后赋值即该 path 最早 read/edit 事件。
+					// 旧块锚定「最早事件」位置，连续编辑时锚点不随次新事件漂移，前缀缓存才不被破坏
+					// （此前锚定次新事件，连续 edit 每轮旧块位置前移、上轮 diff 块被同位置新块替换而断裂）。
+					prevMap[path] = ev
 					continue
 				}
 				eventMap[path] = ev
@@ -686,7 +687,7 @@ func insertEventContentBlocks(l *list.List, dbIDToElement map[uint64]*list.Eleme
 	groups := make(map[uint64]*eventInsertGroup)
 	fallbackPaths := make([]string, 0)
 	for path, ev := range eventMap {
-		// 方案2：旧块（次新锚点）+ diff 块（最新锚点）都可锚定时，跳过常规最新块插入
+		// 方案2：旧块（最早锚点，内容=LastContent 存档、字节稳定命中前缀）+ diff 块（最新锚点）都可锚定时，跳过常规最新块插入
 		if plan, ok := diffPlans[path]; ok && plan.Keep {
 			if prev, ok := prevMap[path]; ok {
 				prevAnchor := findEventAnchor(l, dbIDToElement, prev, nativeMode)
@@ -771,9 +772,13 @@ func insertEventContentBlocks(l *list.List, dbIDToElement map[uint64]*list.Eleme
 }
 
 // findEventAnchor 返回事件内容块的插入锚点（内容块插到该元素之后）。
-// 原生模式 + 最近 5 轮完整回放：事件 assistant 消息之后、最后一条 ToolCallID 匹配的
-// role:tool 结果消息（覆盖正常结果/终止占位/一个 assistant 多结果拆分）；遇到首个非
-// tool 消息即停止扫描。否则（提示词模式 / 非 recent 原生降级文本）：事件 assistant 消息本身。
+// 原生模式 + 最近 5 轮完整回放：事件 assistant 消息之后、连续 role:tool 结果消息的
+// 「最后一个」（不区分 ToolCallID）。一个 assistant 可并行携带多个 tool_calls，其多个
+// tool_result 必须彼此紧邻——若按单个 ToolCallID 匹配锚点，内容块会插进 tool_result 序列
+// 中间，使后续 tool_result 与其 tool_use 被内容块隔开，OpenAI→Anthropic 代理会 400
+// （tool_result must have a corresponding tool_use block in the previous message）。
+// 锚定结果序列末尾可保证内容块永不夹在多个 tool_result 之间。遇到首个非 tool 消息即停止扫描。
+// 否则（提示词模式 / 非 recent 原生降级文本）：事件 assistant 消息本身。
 // 消息被 skip 或超出分页范围（dbIDToElement 无记录）→ 返回 nil（不可锚定）。
 func findEventAnchor(l *list.List, dbIDToElement map[uint64]*list.Element, ev *structs.TraceEvent, nativeMode bool) *list.Element {
 	msgEl := dbIDToElement[ev.MsgID]
@@ -787,9 +792,7 @@ func findEventAnchor(l *list.List, dbIDToElement map[uint64]*list.Element, ev *s
 			if m.Role != reqStruct.RoleTool {
 				break
 			}
-			if m.ToolCallID == ev.ToolCallID {
-				last = e
-			}
+			last = e
 		}
 		if last != nil {
 			return last
@@ -808,7 +811,7 @@ func elementAfter(a, b *list.Element) bool {
 	return false
 }
 
-// betweenTokens 估算两个锚点之间（含 diff 锚点、不含 prev 锚点）消息的 token 总量。
+// betweenTokens 估算旧块锚点（最早事件）与 diff 锚点（最新事件）之间（含 diff 锚点、不含 prev 锚点）消息的 token 总量。
 // 用于方案2 软条件复核：这段内容在方案1 因前缀失效全价重算，在方案2 命中缓存。
 func betweenTokens(prev, diff *list.Element) int {
 	total := 0

@@ -179,6 +179,11 @@
                                         "description": "工具调用反幻觉增强提示词开关：auto(默认,启用；模型id命中 gpt/sol/luna/terra/claude/fable/sonnet/haiku/opus 时自动免增强) / on(强制启用) / off(强制关闭)",
                                         "enum": ["auto", "on", "off"],
                                         "default": "auto"
+                                    },
+                                    "EnableToolCallingCompat": {
+                                        "type": "boolean",
+                                        "description": "历史回放兼容模式：把\"一个 assistant 携带多个 tool_calls\"的消息拆分为逐条\"单 tool_call + 结果\"，适配逐条转换 role:tool 消息的 OpenAI→Anthropic 代理（默认关闭）",
+                                        "default": false
                                     }
                                 }
                             }

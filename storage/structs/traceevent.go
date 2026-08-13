@@ -15,8 +15,9 @@ type TraceEvent struct {
 const (
 	// TempKeyTraceEvents 有事件的 path → 最近一次 read/edit 事件（map[string]*TraceEvent）。
 	TempKeyTraceEvents = "trace:events"
-	// TempKeyTracePrevEvents 有事件的 path → 次新一次 read/edit 事件（map[string]*TraceEvent）。
-	// 方案2（保留旧块+diff）时旧内容块的插入锚点。
+	// TempKeyTracePrevEvents 有事件的 path → 最早一次 read/edit 事件（map[string]*TraceEvent）。
+	// 方案2（保留旧块+diff）时旧内容块的插入锚点。锚定最早事件使旧块位置固定、
+	// 连续编辑不漂移，前缀缓存才能被保住。
 	TempKeyTracePrevEvents = "trace:prevevents"
 	// TempKeyTraceFileBlocks 有事件的 traced 文件 → 渲染好的内容块（map[string]trace.FileBlock）。
 	TempKeyTraceFileBlocks = "trace:fileblocks"
