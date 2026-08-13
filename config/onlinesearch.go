@@ -15,7 +15,9 @@ import (
 // 或配置缺失时 config/get 返回全零（Bing.Enable=false 等），且 search.Search 仅在
 // cfg==nil 时套用 secconfig.DefaultConfig()，非 nil 的全零配置同样一个搜索源都不
 // 启用（在线搜索直接报 "no search sources enabled"）。因此这里定义产品期望的默认
-// 值：Bing 默认启用（无需密钥），GitHub/arXiv/Tavily 默认关闭。
+// 值：Bing 默认启用（无需密钥），其余 provider（GitHub/arXiv/Tavily 及 v0.0.3 新增的
+// Context7/Zread/Brave/Test/GrepApp/Sourcegraph/StackOverflow/HackerNews/Devto/LibrariesIO）
+// 默认关闭，仅补齐与库 DefaultConfig 对齐的非零默认字段。
 func defaultOnlineSearch() secconfig.Config {
 	return secconfig.Config{
 		Timeout:    30,
@@ -38,6 +40,31 @@ func defaultOnlineSearch() secconfig.Config {
 			Enable:      false,
 			SearchDepth: "basic",
 			MaxResults:  10,
+		},
+		Zread: secconfig.ZreadConfig{
+			Locale:    "zh",
+			UserAgent: secconfig.DefaultUserAgent,
+			MinDelay:  2,
+			MaxDelay:  5,
+		},
+		Brave: secconfig.BraveConfig{
+			Country:    "US",
+			SearchLang: "en",
+			UILang:     "en-US",
+			Safesearch: "moderate",
+			MaxResults: 10,
+		},
+		StackOverflow: secconfig.StackOverflowConfig{
+			MaxResults: 10,
+		},
+		HackerNews: secconfig.HackerNewsConfig{
+			MaxResults: 10,
+		},
+		Devto: secconfig.DevtoConfig{
+			MaxResults: 10,
+		},
+		LibrariesIO: secconfig.LibrariesIOConfig{
+			MaxResults: 10,
 		},
 	}
 }
@@ -69,6 +96,16 @@ func EnsureOnlineSearchDefaults(cfg *structs.Config, raw json.RawMessage) {
 	fillGithub(&on.Github, d.Github, seen["github"])
 	fillArxiv(&on.Arxiv, d.Arxiv, seen["arxiv"])
 	fillTavily(&on.Tavily, d.Tavily, seen["tavily"])
+	fillContext7(&on.Context7, d.Context7, seen["context7"])
+	fillZread(&on.Zread, d.Zread, seen["zread"])
+	fillBrave(&on.Brave, d.Brave, seen["brave"])
+	fillTest(&on.Test, d.Test, seen["test"])
+	fillGrepApp(&on.GrepApp, d.GrepApp, seen["grepapp"])
+	fillSourcegraph(&on.Sourcegraph, d.Sourcegraph, seen["sourcegraph"])
+	fillStackOverflow(&on.StackOverflow, d.StackOverflow, seen["stackoverflow"])
+	fillHackerNews(&on.HackerNews, d.HackerNews, seen["hackernews"])
+	fillDevto(&on.Devto, d.Devto, seen["devto"])
+	fillLibrariesIO(&on.LibrariesIO, d.LibrariesIO, seen["libraries_io"])
 	cfg.Context.OnlineSearch = on
 }
 
@@ -170,6 +207,122 @@ func fillTavily(dst *secconfig.TavilyConfig, d secconfig.TavilyConfig, seen map[
 	}
 	if !seen["search_depth"] {
 		dst.SearchDepth = d.SearchDepth
+	}
+	if !seen["max_results"] {
+		dst.MaxResults = d.MaxResults
+	}
+}
+
+// fillContext7 填充 Context7 缺失字段。默认值均为零值（Enable=false、MaxResults=0），
+// 仅处理"整个 provider 未出现时套用默认对象"；出现时保留用户值。
+func fillContext7(dst *secconfig.Context7Config, d secconfig.Context7Config, seen map[string]bool) {
+	if len(seen) == 0 {
+		*dst = d
+	}
+}
+
+// fillZread 填充 Zread 缺失字段（默认 Enable=false，补 Locale/UserAgent/MinDelay/MaxDelay）。
+func fillZread(dst *secconfig.ZreadConfig, d secconfig.ZreadConfig, seen map[string]bool) {
+	if len(seen) == 0 {
+		*dst = d
+		return
+	}
+	if !seen["locale"] {
+		dst.Locale = d.Locale
+	}
+	if !seen["user_agent"] {
+		dst.UserAgent = d.UserAgent
+	}
+	if !seen["min_delay"] {
+		dst.MinDelay = d.MinDelay
+	}
+	if !seen["max_delay"] {
+		dst.MaxDelay = d.MaxDelay
+	}
+}
+
+// fillBrave 填充 Brave 缺失字段（默认 Enable=false，补 Country/SearchLang/UILang/Safesearch/MaxResults）。
+func fillBrave(dst *secconfig.BraveConfig, d secconfig.BraveConfig, seen map[string]bool) {
+	if len(seen) == 0 {
+		*dst = d
+		return
+	}
+	if !seen["country"] {
+		dst.Country = d.Country
+	}
+	if !seen["search_lang"] {
+		dst.SearchLang = d.SearchLang
+	}
+	if !seen["ui_lang"] {
+		dst.UILang = d.UILang
+	}
+	if !seen["safesearch"] {
+		dst.Safesearch = d.Safesearch
+	}
+	if !seen["max_results"] {
+		dst.MaxResults = d.MaxResults
+	}
+}
+
+// fillTest 填充 Test 缺失字段（默认值均为零值），仅处理整体套用。
+func fillTest(dst *secconfig.TestConfig, d secconfig.TestConfig, seen map[string]bool) {
+	if len(seen) == 0 {
+		*dst = d
+	}
+}
+
+// fillGrepApp 填充 grep.app 缺失字段（默认值均为零值），仅处理整体套用。
+func fillGrepApp(dst *secconfig.GrepAppConfig, d secconfig.GrepAppConfig, seen map[string]bool) {
+	if len(seen) == 0 {
+		*dst = d
+	}
+}
+
+// fillSourcegraph 填充 Sourcegraph 缺失字段（默认值均为零值），仅处理整体套用。
+func fillSourcegraph(dst *secconfig.SourcegraphConfig, d secconfig.SourcegraphConfig, seen map[string]bool) {
+	if len(seen) == 0 {
+		*dst = d
+	}
+}
+
+// fillStackOverflow 填充 Stack Overflow 缺失字段（默认 Enable=false，补 MaxResults）。
+func fillStackOverflow(dst *secconfig.StackOverflowConfig, d secconfig.StackOverflowConfig, seen map[string]bool) {
+	if len(seen) == 0 {
+		*dst = d
+		return
+	}
+	if !seen["max_results"] {
+		dst.MaxResults = d.MaxResults
+	}
+}
+
+// fillHackerNews 填充 Hacker News 缺失字段（默认 Enable=false，补 MaxResults）。
+func fillHackerNews(dst *secconfig.HackerNewsConfig, d secconfig.HackerNewsConfig, seen map[string]bool) {
+	if len(seen) == 0 {
+		*dst = d
+		return
+	}
+	if !seen["max_results"] {
+		dst.MaxResults = d.MaxResults
+	}
+}
+
+// fillDevto 填充 dev.to 缺失字段（默认 Enable=false，补 MaxResults）。
+func fillDevto(dst *secconfig.DevtoConfig, d secconfig.DevtoConfig, seen map[string]bool) {
+	if len(seen) == 0 {
+		*dst = d
+		return
+	}
+	if !seen["max_results"] {
+		dst.MaxResults = d.MaxResults
+	}
+}
+
+// fillLibrariesIO 填充 libraries.io 缺失字段（默认 Enable=false，补 MaxResults）。
+func fillLibrariesIO(dst *secconfig.LibrariesIOConfig, d secconfig.LibrariesIOConfig, seen map[string]bool) {
+	if len(seen) == 0 {
+		*dst = d
+		return
 	}
 	if !seen["max_results"] {
 		dst.MaxResults = d.MaxResults

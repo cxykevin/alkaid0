@@ -185,6 +185,47 @@ C:\ProgramData\alkaid0\config.json
                 "include_answer": false,
                 "include_raw_content": false,
                 "max_results": 10
+            },
+            "context7": {
+                "enable": false,
+                "api_key": "",
+                "max_results": 5
+            },
+            "zread": {
+                "enable": false,
+                "locale": "zh",
+                "max_results": 5
+            },
+            "brave": {
+                "enable": false,
+                "api_key": "BSA-xxx",
+                "safesearch": "moderate",
+                "max_results": 10
+            },
+            "test": {
+                "enable": false
+            },
+            "grepapp": {
+                "enable": false,
+                "max_results": 10
+            },
+            "sourcegraph": {
+                "enable": false,
+                "token": ""
+            },
+            "stackoverflow": {
+                "enable": false,
+                "api_key": ""
+            },
+            "hackernews": {
+                "enable": false
+            },
+            "devto": {
+                "enable": false
+            },
+            "libraries_io": {
+                "enable": false,
+                "api_key": ""
             }
         },
         "Codebase": {

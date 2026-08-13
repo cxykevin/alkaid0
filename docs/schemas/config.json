@@ -440,7 +440,469 @@
                 },
                 "OnlineSearch": {
                     "type": "object",
-                    "description": "在线搜索配置项"
+                    "description": "在线搜索配置项（alkaid0-search-engine）。全部 provider 默认关闭，仅 Bing 默认启用（无需密钥）。search 工具 online=true 时可通过 path 参数用 provider id（bing/github/arxiv/tavily/context7/zread/brave/grepapp/sourcegraph/stackoverflow/hackernews/devto/librariesio）限定搜索源",
+                    "properties": {
+                        "timeout": {
+                            "type": "integer",
+                            "description": "请求超时（秒）",
+                            "minimum": 1,
+                            "default": 30
+                        },
+                        "proxy_url": {
+                            "type": "string",
+                            "description": "HTTP 代理地址，支持 http/https/socks5，为空不使用代理",
+                            "default": ""
+                        },
+                        "retry_count": {
+                            "type": "integer",
+                            "description": "请求重试次数",
+                            "minimum": 0,
+                            "default": 3
+                        },
+                        "bing": {
+                            "type": "object",
+                            "description": "Bing 搜索（SERP 抓取，无需密钥，utls 反指纹绕过 Cloudflare），默认启用",
+                            "properties": {
+                                "enable": {
+                                    "type": "boolean",
+                                    "description": "是否启用该搜索源",
+                                    "default": true
+                                },
+                                "user_agent": {
+                                    "type": "string",
+                                    "description": "浏览器 User-Agent",
+                                    "default": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"
+                                },
+                                "proxy_url": {
+                                    "type": "string",
+                                    "description": "代理地址，为空时降级到全局 proxy_url"
+                                },
+                                "min_delay": {
+                                    "type": "integer",
+                                    "description": "请求最小间隔（秒）",
+                                    "minimum": 0,
+                                    "default": 2
+                                },
+                                "max_delay": {
+                                    "type": "integer",
+                                    "description": "请求最大间隔（秒）",
+                                    "minimum": 0,
+                                    "default": 5
+                                },
+                                "market": {
+                                    "type": "string",
+                                    "description": "市场代码，如 \"en-US\"、\"zh-CN\""
+                                },
+                                "set_lang": {
+                                    "type": "string",
+                                    "description": "UI 语言，如 \"en-US\"、\"zh-Hans\""
+                                },
+                                "country": {
+                                    "type": "string",
+                                    "description": "国家代码，如 \"US\"、\"CN\""
+                                },
+                                "safe_search": {
+                                    "type": "string",
+                                    "description": "安全搜索级别",
+                                    "enum": ["Off", "Moderate", "Strict"]
+                                },
+                                "freshness": {
+                                    "type": "string",
+                                    "description": "时间筛选",
+                                    "enum": ["Day", "Week", "Month"]
+                                },
+                                "max_results": {
+                                    "type": "integer",
+                                    "description": "最大返回结果数（0 表示不限制）",
+                                    "minimum": 0,
+                                    "default": 10
+                                }
+                            }
+                        },
+                        "github": {
+                            "type": "object",
+                            "description": "GitHub 搜索（REST API v3，需 Personal Access Token），默认关闭",
+                            "properties": {
+                                "enable": {
+                                    "type": "boolean",
+                                    "description": "是否启用该搜索源",
+                                    "default": false
+                                },
+                                "token": {
+                                    "type": "string",
+                                    "description": "GitHub personal access token"
+                                },
+                                "proxy_url": {
+                                    "type": "string",
+                                    "description": "代理地址，为空时降级到全局 proxy_url"
+                                },
+                                "max_results": {
+                                    "type": "integer",
+                                    "description": "每页最大结果数（1-100，0 表示不限制）",
+                                    "minimum": 0,
+                                    "default": 5
+                                }
+                            }
+                        },
+                        "arxiv": {
+                            "type": "object",
+                            "description": "arXiv 学术论文搜索（无需密钥），默认关闭",
+                            "properties": {
+                                "enable": {
+                                    "type": "boolean",
+                                    "description": "是否启用该搜索源",
+                                    "default": false
+                                },
+                                "proxy_url": {
+                                    "type": "string",
+                                    "description": "代理地址，为空时降级到全局 proxy_url"
+                                },
+                                "max_results": {
+                                    "type": "integer",
+                                    "description": "最大返回结果数（0 表示使用 API 默认值 10）",
+                                    "minimum": 0,
+                                    "default": 5
+                                }
+                            }
+                        },
+                        "tavily": {
+                            "type": "object",
+                            "description": "Tavily 通用 web 搜索（REST API，需 API Key），默认关闭",
+                            "properties": {
+                                "enable": {
+                                    "type": "boolean",
+                                    "description": "是否启用该搜索源",
+                                    "default": false
+                                },
+                                "api_key": {
+                                    "type": "string",
+                                    "description": "Tavily API key"
+                                },
+                                "proxy_url": {
+                                    "type": "string",
+                                    "description": "代理地址，为空时降级到全局 proxy_url"
+                                },
+                                "search_depth": {
+                                    "type": "string",
+                                    "description": "搜索深度",
+                                    "enum": ["basic", "advanced"],
+                                    "default": "basic"
+                                },
+                                "max_results": {
+                                    "type": "integer",
+                                    "description": "最大结果数",
+                                    "minimum": 0,
+                                    "default": 10
+                                },
+                                "include_answer": {
+                                    "type": "boolean",
+                                    "description": "是否包含 AI 摘要回答",
+                                    "default": false
+                                },
+                                "include_raw_content": {
+                                    "type": "boolean",
+                                    "description": "是否包含原始内容",
+                                    "default": false
+                                }
+                            }
+                        },
+                        "context7": {
+                            "type": "object",
+                            "description": "Context7 库/文档搜索（context7.com，API Key 选填，缺失时使用低速率限制），默认关闭",
+                            "properties": {
+                                "enable": {
+                                    "type": "boolean",
+                                    "description": "是否启用该搜索源",
+                                    "default": false
+                                },
+                                "api_key": {
+                                    "type": "string",
+                                    "description": "Context7 API key（选填）"
+                                },
+                                "proxy_url": {
+                                    "type": "string",
+                                    "description": "代理地址，为空时降级到全局 proxy_url"
+                                },
+                                "fast": {
+                                    "type": "boolean",
+                                    "description": "是否跳过 LLM 重排（true 更快但相关性略降）",
+                                    "default": false
+                                },
+                                "max_results": {
+                                    "type": "integer",
+                                    "description": "最大返回结果数（0 表示使用 API 默认值）",
+                                    "minimum": 0,
+                                    "default": 0
+                                }
+                            }
+                        },
+                        "zread": {
+                            "type": "object",
+                            "description": "Zread AI GitHub 仓库助手（zread.ai，无需密钥，utls + HTTP/2），默认关闭",
+                            "properties": {
+                                "enable": {
+                                    "type": "boolean",
+                                    "description": "是否启用该搜索源",
+                                    "default": false
+                                },
+                                "proxy_url": {
+                                    "type": "string",
+                                    "description": "代理地址，为空时降级到全局 proxy_url"
+                                },
+                                "locale": {
+                                    "type": "string",
+                                    "description": "结果描述语言",
+                                    "enum": ["zh", "en"],
+                                    "default": "zh"
+                                },
+                                "user_agent": {
+                                    "type": "string",
+                                    "description": "浏览器 User-Agent",
+                                    "default": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"
+                                },
+                                "min_delay": {
+                                    "type": "integer",
+                                    "description": "请求最小间隔（秒）",
+                                    "minimum": 0,
+                                    "default": 2
+                                },
+                                "max_delay": {
+                                    "type": "integer",
+                                    "description": "请求最大间隔（秒）",
+                                    "minimum": 0,
+                                    "default": 5
+                                },
+                                "max_results": {
+                                    "type": "integer",
+                                    "description": "最大返回结果数（0 表示不限制）",
+                                    "minimum": 0,
+                                    "default": 0
+                                }
+                            }
+                        },
+                        "brave": {
+                            "type": "object",
+                            "description": "Brave Search（api.search.brave.com，独立索引通用 web 搜索，需 API Key），默认关闭",
+                            "properties": {
+                                "enable": {
+                                    "type": "boolean",
+                                    "description": "是否启用该搜索源",
+                                    "default": false
+                                },
+                                "api_key": {
+                                    "type": "string",
+                                    "description": "Brave Search API 订阅令牌"
+                                },
+                                "proxy_url": {
+                                    "type": "string",
+                                    "description": "代理地址，为空时降级到全局 proxy_url"
+                                },
+                                "country": {
+                                    "type": "string",
+                                    "description": "2 字母国家码",
+                                    "default": "US"
+                                },
+                                "search_lang": {
+                                    "type": "string",
+                                    "description": "搜索内容语言",
+                                    "default": "en"
+                                },
+                                "ui_lang": {
+                                    "type": "string",
+                                    "description": "响应元数据语言",
+                                    "default": "en-US"
+                                },
+                                "safesearch": {
+                                    "type": "string",
+                                    "description": "安全搜索级别",
+                                    "enum": ["off", "moderate", "strict"],
+                                    "default": "moderate"
+                                },
+                                "freshness": {
+                                    "type": "string",
+                                    "description": "时间过滤，如 pd/pw/pm/py 或 YYYY-MM-DDtoYYYY-MM-DD"
+                                },
+                                "result_filter": {
+                                    "type": "string",
+                                    "description": "逗号分隔类型过滤: web,news,videos,discussions,faq,infobox,locations"
+                                },
+                                "max_results": {
+                                    "type": "integer",
+                                    "description": "结果数（1-20）",
+                                    "minimum": 1,
+                                    "default": 10
+                                },
+                                "extra_snippets": {
+                                    "type": "boolean",
+                                    "description": "是否附加最多 5 条替代摘要（付费/高级订阅）",
+                                    "default": false
+                                }
+                            }
+                        },
+                        "test": {
+                            "type": "object",
+                            "description": "测试 mock 搜索源（不依赖外部服务），默认关闭",
+                            "properties": {
+                                "enable": {
+                                    "type": "boolean",
+                                    "description": "是否启用 mock 搜索源",
+                                    "default": false
+                                },
+                                "max_results": {
+                                    "type": "integer",
+                                    "description": "最大返回结果数（0 表示不限制）",
+                                    "minimum": 0,
+                                    "default": 0
+                                }
+                            }
+                        },
+                        "grepapp": {
+                            "type": "object",
+                            "description": "grep.app 公开 GitHub 仓库代码内容搜索（无需密钥），默认关闭",
+                            "properties": {
+                                "enable": {
+                                    "type": "boolean",
+                                    "description": "是否启用该搜索源",
+                                    "default": false
+                                },
+                                "proxy_url": {
+                                    "type": "string",
+                                    "description": "代理地址，为空时降级到全局 proxy_url"
+                                },
+                                "max_results": {
+                                    "type": "integer",
+                                    "description": "最大返回结果数（0 表示不限制）",
+                                    "minimum": 0,
+                                    "default": 0
+                                }
+                            }
+                        },
+                        "sourcegraph": {
+                            "type": "object",
+                            "description": "Sourcegraph 开源代码全文搜索（Token 选填，匿名可用），默认关闭",
+                            "properties": {
+                                "enable": {
+                                    "type": "boolean",
+                                    "description": "是否启用该搜索源",
+                                    "default": false
+                                },
+                                "token": {
+                                    "type": "string",
+                                    "description": "Sourcegraph access token（可到 sourcegraph.com/user/settings/tokens 免费生成）"
+                                },
+                                "proxy_url": {
+                                    "type": "string",
+                                    "description": "代理地址，为空时降级到全局 proxy_url"
+                                },
+                                "max_results": {
+                                    "type": "integer",
+                                    "description": "最大返回结果数（0 表示使用默认值）",
+                                    "minimum": 0,
+                                    "default": 0
+                                }
+                            }
+                        },
+                        "stackoverflow": {
+                            "type": "object",
+                            "description": "Stack Overflow 编程问答（Stack Exchange API，API Key 选填，缺失时匿名低配额），默认关闭",
+                            "properties": {
+                                "enable": {
+                                    "type": "boolean",
+                                    "description": "是否启用该搜索源",
+                                    "default": false
+                                },
+                                "api_key": {
+                                    "type": "string",
+                                    "description": "Stack Exchange API key（选填）"
+                                },
+                                "proxy_url": {
+                                    "type": "string",
+                                    "description": "代理地址，为空时降级到全局 proxy_url"
+                                },
+                                "max_results": {
+                                    "type": "integer",
+                                    "description": "最大返回结果数",
+                                    "minimum": 0,
+                                    "default": 10
+                                }
+                            }
+                        },
+                        "hackernews": {
+                            "type": "object",
+                            "description": "Hacker News 技术讨论/新闻（Algolia API，无需密钥），默认关闭",
+                            "properties": {
+                                "enable": {
+                                    "type": "boolean",
+                                    "description": "是否启用该搜索源",
+                                    "default": false
+                                },
+                                "proxy_url": {
+                                    "type": "string",
+                                    "description": "代理地址，为空时降级到全局 proxy_url"
+                                },
+                                "max_results": {
+                                    "type": "integer",
+                                    "description": "最大返回结果数",
+                                    "minimum": 0,
+                                    "default": 10
+                                }
+                            }
+                        },
+                        "devto": {
+                            "type": "object",
+                            "description": "dev.to 技术文章（Forem API，无需密钥），默认关闭",
+                            "properties": {
+                                "enable": {
+                                    "type": "boolean",
+                                    "description": "是否启用该搜索源",
+                                    "default": false
+                                },
+                                "api_key": {
+                                    "type": "string",
+                                    "description": "dev.to api key（选填）"
+                                },
+                                "proxy_url": {
+                                    "type": "string",
+                                    "description": "代理地址，为空时降级到全局 proxy_url"
+                                },
+                                "tag": {
+                                    "type": "string",
+                                    "description": "限定文章标签（如 go、rust）"
+                                },
+                                "max_results": {
+                                    "type": "integer",
+                                    "description": "最大返回结果数",
+                                    "minimum": 0,
+                                    "default": 10
+                                }
+                            }
+                        },
+                        "libraries_io": {
+                            "type": "object",
+                            "description": "libraries.io 依赖库搜索（跨 32+ 生态，需 API Key），默认关闭",
+                            "properties": {
+                                "enable": {
+                                    "type": "boolean",
+                                    "description": "是否启用该搜索源",
+                                    "default": false
+                                },
+                                "api_key": {
+                                    "type": "string",
+                                    "description": "libraries.io API key（可在 libraries.io/account 免费获取）"
+                                },
+                                "proxy_url": {
+                                    "type": "string",
+                                    "description": "代理地址，为空时降级到全局 proxy_url"
+                                },
+                                "max_results": {
+                                    "type": "integer",
+                                    "description": "最大返回结果数",
+                                    "minimum": 0,
+                                    "default": 10
+                                }
+                            }
+                        }
+                    }
                 },
                 "Codebase": {
                     "type": "object",
