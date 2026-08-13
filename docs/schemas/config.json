@@ -331,6 +331,25 @@
                     "description": "fetch 工具的全局 HTTP 代理地址（支持 http/https/socks5），空为直连；hidden 伪装模式下同样生效",
                     "default": ""
                 },
+                "Fetch": {
+                    "type": "object",
+                    "description": "fetch 工具配置",
+                    "properties": {
+                        "RewriteHeaders": {
+                            "type": "object",
+                            "description": "URL 正则表达式 → 请求头映射。AI 调用 fetch 工具时，若 url 匹配某个正则（按 key 字母序依次匹配），则注入对应的 Headers；AI 在 headers 参数中显式提供的同名请求头会覆盖注入值",
+                            "additionalProperties": {
+                                "type": "object",
+                                "description": "匹配到该 URL 正则时注入的请求头",
+                                "additionalProperties": {
+                                    "type": "string"
+                                }
+                            },
+                            "default": {}
+                        }
+                    },
+                    "default": {}
+                },
                 "TerminalEnvs": {
                     "type": "object",
                     "description": "终端启动时注入的环境变量",

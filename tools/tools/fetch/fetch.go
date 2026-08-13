@@ -11,6 +11,8 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"regexp"
+	"sort"
 	"strings"
 	"time"
 
@@ -205,6 +207,9 @@ func fetchURL(session *structs.Chats, mp map[string]*any, cross []*any) (bool, [
 		return errResult(fmt.Sprintf("invalid request: %v", err), cross)
 	}
 
+	// 注入配置的 RewriteHeaders（URL 正则匹配），AI 自定义 headers 随后覆盖注入值
+	injectRewriteHeaders(req, urlStr)
+
 	// 用户自定义 headers（多行 "Key: Value"），优先于默认 headers
 	if err := parseHeaders(req, headerRaw); err != nil {
 		return errResult(err.Error(), cross)
@@ -307,6 +312,34 @@ func fetchURL(session *structs.Chats, mp map[string]*any, cross []*any) (bool, [
 func intAny(v int) *any {
 	a := any(v)
 	return &a
+}
+
+// injectRewriteHeaders 注入 Agent.Fetch.RewriteHeaders 中 URL 匹配的请求头。
+// map 遍历无序，按键排序保证确定性；同一 URL 命中多个正则时按 key 顺序依次注入，
+// 后注入的覆盖先注入的。AI 在 headers 参数显式提供的同名头随后覆盖注入值。
+func injectRewriteHeaders(req *http.Request, urlStr string) {
+	headers := config.GlobalConfig.Agent.Fetch.RewriteHeaders
+	if len(headers) == 0 {
+		return
+	}
+	keys := make([]string, 0, len(headers))
+	for k := range headers {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, pattern := range keys {
+		re, err := regexp.Compile(pattern)
+		if err != nil {
+			logger.Warn("invalid RewriteHeaders pattern %q: %v, skipping", pattern, err)
+			continue
+		}
+		if !re.MatchString(urlStr) {
+			continue
+		}
+		for k, v := range headers[pattern] {
+			req.Header.Set(k, v)
+		}
+	}
 }
 
 // parseHeaders 解析多行 "Key: Value" 请求头。

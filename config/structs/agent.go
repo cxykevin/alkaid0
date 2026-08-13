@@ -13,6 +13,14 @@ type AgentConfig struct {
 	DisableSandbox        bool   `default:"false"`                       // 禁用沙盒
 }
 
+// FetchConfig fetch 工具配置
+type FetchConfig struct {
+	// RewriteHeaders URL 正则表达式 → 请求头映射。
+	// AI 调用 fetch 工具时，若 url 匹配某个正则，则注入对应的 Headers；
+	// AI 在 headers 参数中显式提供的同名请求头会覆盖注入值。
+	RewriteHeaders map[string]map[string]string
+}
+
 // AgentsConfig 代理配置结构
 type AgentsConfig struct {
 	Agents                  map[string]AgentConfig
@@ -31,4 +39,6 @@ type AgentsConfig struct {
 	// TerminalEnvs 终端启动时注入的环境变量
 	TerminalEnvs   map[string]string
 	DisableSandbox bool `default:"false"`
+	// Fetch fetch 工具配置
+	Fetch FetchConfig
 }

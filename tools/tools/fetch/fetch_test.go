@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -414,6 +415,88 @@ func TestFetchMissingParams(t *testing.T) {
 	if msg, ok := (*res["error"]).(string); !ok || !strings.Contains(msg, "missing required parameter: method") {
 		t.Errorf("expected missing method error, got %v", *res["error"])
 	}
+}
+
+// TestFetchRewriteHeaders 验证 Agent.Fetch.RewriteHeaders 按 URL 正则注入请求头。
+func TestFetchRewriteHeaders(t *testing.T) {
+	var gotUA, gotAuth, gotXToken string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotUA = r.Header.Get("User-Agent")
+		gotAuth = r.Header.Get("Authorization")
+		gotXToken = r.Header.Get("X-Token")
+		w.Write([]byte("ok"))
+	}))
+	defer srv.Close()
+
+	oldHeaders := config.GlobalConfig.Agent.Fetch.RewriteHeaders
+	config.GlobalConfig.Agent.Fetch.RewriteHeaders = map[string]map[string]string{
+		`.*example\.com.*`: {"User-Agent": "RewriteUA/1.0", "X-Token": "injected"},
+	}
+	defer func() { config.GlobalConfig.Agent.Fetch.RewriteHeaders = oldHeaders }()
+
+	session := newTestSession(t)
+	mp := map[string]*any{
+		"method": strPtr("GET"),
+		"url":    strPtr(srv.URL), // 不匹配 example.com
+		"_id":    strPtr("rh1"),
+	}
+	pass, _, res, _ := fetchURL(session, mp, []*any{})
+	assertSuccessPath(t, pass, res)
+	if gotUA != product.UserAgent {
+		t.Errorf("non-matching URL should not inject UA, got %q", gotUA)
+	}
+
+	// 匹配 URL：注入配置 headers（正则精确匹配本地 srv.URL）
+	config.GlobalConfig.Agent.Fetch.RewriteHeaders = map[string]map[string]string{
+		regexp.QuoteMeta(srv.URL): {"User-Agent": "RewriteUA/1.0", "X-Token": "injected"},
+	}
+	mp["_id"] = strPtr("rh2")
+	pass, _, res, _ = fetchURL(session, mp, []*any{})
+	assertSuccessPath(t, pass, res)
+	if gotUA != "RewriteUA/1.0" {
+		t.Errorf("matching URL should inject UA, got %q", gotUA)
+	}
+	if gotXToken != "injected" {
+		t.Errorf("matching URL should inject X-Token, got %q", gotXToken)
+	}
+	if gotAuth != "" {
+		t.Errorf("unconfigured header should not be set, got %q", gotAuth)
+	}
+
+	// AI 显式 headers 覆盖注入值
+	mp["headers"] = strPtr("User-Agent: AIUA/2.0")
+	mp["_id"] = strPtr("rh3")
+	pass, _, res, _ = fetchURL(session, mp, []*any{})
+	assertSuccessPath(t, pass, res)
+	if gotUA != "AIUA/2.0" {
+		t.Errorf("AI explicit headers should override injected UA, got %q", gotUA)
+	}
+	if gotXToken != "injected" {
+		t.Errorf("AI headers should not remove injected X-Token, got %q", gotXToken)
+	}
+}
+
+// TestFetchRewriteHeadersInvalidPattern 验证无效正则在日志告警后被跳过，不影响请求。
+func TestFetchRewriteHeadersInvalidPattern(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte("ok"))
+	}))
+	defer srv.Close()
+
+	oldHeaders := config.GlobalConfig.Agent.Fetch.RewriteHeaders
+	config.GlobalConfig.Agent.Fetch.RewriteHeaders = map[string]map[string]string{
+		`[invalid`: {"X-Token": "should-not-set"},
+	}
+	defer func() { config.GlobalConfig.Agent.Fetch.RewriteHeaders = oldHeaders }()
+
+	session := newTestSession(t)
+	mp := map[string]*any{
+		"method": strPtr("GET"),
+		"url":    strPtr(srv.URL),
+		"_id":    strPtr("rh4"),
+	}
+	pass, _, res, _ := fetchURL(session, mp, []*any{})
+	assertSuccessPath(t, pass, res)
 }
 
 // startConnectProxy 起一个转发 CONNECT 的假 HTTP 代理。

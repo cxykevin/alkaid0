@@ -143,6 +143,13 @@ C:\ProgramData\alkaid0\config.json
         "TerminalEnvs": {
             "LANG": "zh_CN.UTF-8"
         },
+        "Fetch": {
+            "RewriteHeaders": {
+                "https://api\\.example\\.com/.*": {
+                    "Authorization": "Bearer sk-xxx"
+                }
+            }
+        },
         "DisableSandbox": false
     },
     "ignoreSignals": false,
