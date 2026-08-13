@@ -494,8 +494,10 @@ func runTask(session *structs.Chats, mp map[string]*any, cross []*any) (bool, []
 	}
 
 	if backgroundFlag {
-		// 先创建 temp obj 并立即返回其路径作为 runid（命令在后台执行）
-		_ = trace.AddTempObject(session, runid, bgInitialContent(command), true)
+		// 先创建 temp obj 并立即返回其路径作为 runid（命令在后台执行）。
+		// 用 StoreTempObject：只写 ReferFiles（read 可读完整输出），不写 Traces，
+		// 避免 run 输出注入 <tracedFiles> topBlock 污染上下文顶部。
+		_ = trace.StoreTempObject(session, runid, bgInitialContent(command), true)
 		if _, err := Default.Submit(context.Background(), req); err != nil {
 			return false, cross, nil, err
 		}
@@ -553,11 +555,14 @@ func runTask(session *structs.Chats, mp map[string]*any, cross []*any) (bool, []
 		return false, cross, res, nil
 	}
 
-	// 主路径：保存到 trace 供 AI 读取
+	// 主路径：保存到 @temp 文件供 AI 用 read 读完整输出。
+	// 用 StoreTempObject：只写 ReferFiles，不写 Traces——run 输出不再进 <tracedFiles>
+	// topBlock（此前聚合可达数百 KB、几十条 run 记录，AI 难以定位本次结果）。
+	// 本次输出摘要直接随工具结果返回（output 字段），完整内容按 path 可读。
 	outStr := "[agent execute] $ " + command + "\n\n" + result.ErrString + result.Output
 	timeStr := time.Now().Format("20060102-150405")
 	tracePath := "run/" + toolID + "-" + timeStr
-	trace.AddTempObject(session, tracePath, outStr, true)
+	_ = trace.StoreTempObject(session, tracePath, outStr, true)
 	logger.Info("command execution finished, output saved to: %s", tracePath)
 	outPth := "@temp/" + tracePath
 	outAny := any(outPth)
