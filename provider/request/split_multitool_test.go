@@ -402,3 +402,72 @@ func TestSplitMultiToolCalls_Noop(t *testing.T) {
 		}
 	}
 }
+
+// TestSendRequest_TrailingToolAppendsUser 回归：历史以 role:"tool" 结果消息结尾时，
+// SendRequest 必须在请求末尾追加一条 user 消息收尾——30881 转换代理 / DeepSeek 兼容端点
+// 拒绝以 tool_result 结尾的请求（400 "The content[].thinking in the thinking mode must be
+// passed back to the API"，文案误导，实为结尾消息类型校验）。
+// 工具执行后自动继续时历史最后一条正是工具结果（无尾部 user），此场景必然触发。
+func TestSendRequest_TrailingToolAppendsUser(t *testing.T) {
+	initAgentsConsumer()
+	stats.ResetForTest()
+	stats.SetFilePath(filepath.Join(t.TempDir(), "usage.json"))
+
+	var mu sync.Mutex
+	var bodies []structs.ChatCompletionRequest
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		payload, _ := io.ReadAll(r.Body)
+		var req structs.ChatCompletionRequest
+		if err := json.Unmarshal(payload, &req); err != nil {
+			t.Errorf("unmarshal request: %v", err)
+		}
+		mu.Lock()
+		bodies = append(bodies, req)
+		mu.Unlock()
+		w.Header().Set("Content-Type", "text/event-stream")
+		emitTextSSE(w, "done ok")
+		fmt.Fprintf(w, "data: %s\n\n", SSEDoneMarker)
+	}))
+	defer srv.Close()
+	setupNativeE2EConfig(srv.URL)
+
+	db := setupTestDB(t)
+	defer u.Unwrap(db.DB()).Close()
+	chat := storageStructs.Chats{ID: 6002, LastModelID: 1}
+	if err := db.Create(&chat).Error; err != nil {
+		t.Fatalf("create chat: %v", err)
+	}
+	// 历史以工具结果（tool）结尾，无尾部 user 消息 —— 工具执行后自动继续的真实场景
+	msgs := []storageStructs.Messages{
+		{ChatID: 6002, Type: storageStructs.MessagesRoleUser, Delta: "do it"},
+		{ChatID: 6002, Type: storageStructs.MessagesRoleAgent, Delta: "ok", ToolCallingJSONString: `[{"name":"run","id":"call_a","parameters":{}}]`},
+		{ChatID: 6002, Type: storageStructs.MessagesRoleTool, Delta: `[{"name":"run","id":"call_a","return":"a"}]`},
+	}
+	for _, mm := range msgs {
+		if err := db.Create(&mm).Error; err != nil {
+			t.Fatalf("create msg: %v", err)
+		}
+	}
+
+	session := &storageStructs.Chats{ID: 6002, DB: db, LastModelID: 1, CurrentAgentID: "", EnableScopes: make(map[string]bool)}
+	if _, err := SendRequest(context.Background(), session, noopCallback); err != nil {
+		t.Fatalf("SendRequest: %v", err)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(bodies) == 0 {
+		t.Fatal("no request captured")
+	}
+	req := bodies[0]
+	if len(req.Messages) == 0 {
+		t.Fatal("request has no messages")
+	}
+	last := req.Messages[len(req.Messages)-1]
+	if last.Role != structs.RoleUser {
+		t.Errorf("期望请求以 user 消息结尾（避免 400），实际最后一条 role=%q", last.Role)
+	}
+	if last.Content != toolResultContinuePrompt {
+		t.Errorf("期望收尾 user 内容为 toolResultContinuePrompt，实际 %q", last.Content)
+	}
+}

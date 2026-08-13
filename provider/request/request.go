@@ -770,6 +770,13 @@ func ExecuteToolCalls(session *storageStructs.Chats, toolCallingJSON string) (bo
 // 保证拆分出的每条 assistant 都有响应。
 const toolCallTerminatedPlaceholder = "[Tool call terminated] This call was cancelled before execution and did not run."
 
+// toolResultContinuePrompt 工具结果回放后请求若以 role:"tool" 消息结尾时，
+// SendRequest 追加的收尾 user 消息内容。30881 转换代理 / DeepSeek 兼容端点
+// 要求请求以 user 消息结尾（否则 400 "The content[].thinking in the thinking mode
+// must be passed back to the API"，文案误导，实为结尾消息类型校验）。
+// 该消息仅存在于本次请求，不写入数据库。
+const toolResultContinuePrompt = "[Tool call results are complete. Please continue with the next step.]"
+
 // emptyAssistantToolCallContent 拆分多工具调用历史时，拆分出的后续 assistant 消息
 // 使用该占位正文。Anthropic 校验拒绝空 text content block，故不能留空串；此占位
 // 同时向模型表明该消息仅承载工具调用结构。
@@ -1046,6 +1053,18 @@ func SendRequest(ctx context.Context, session *storageStructs.Chats, callback fu
 	// 默认关闭；仅对会逐条转换 role:tool 消息的代理开启（模型级 EnableToolCallingCompat）。
 	if modelCfg.ProviderSpecificConfig.EnableToolCallingCompat {
 		obj.Messages = splitMultiToolCalls(obj.Messages)
+	}
+
+	// 请求不能以 role:"tool"（tool_result）消息结尾：工具执行后自动继续时历史最后一条
+	// 通常是工具结果，30881 转换代理 / DeepSeek 兼容端点会拒绝此类请求并 400
+	// "The content[].thinking in the thinking mode must be passed back to the API"
+	// （文案误导，实为结尾消息类型校验——追加 user 收尾即通过，与 thinking 字段无关）。
+	// 末尾补一条 user 消息触发模型继续；该消息仅存在于本次请求，不写入数据库。
+	if n := len(obj.Messages); n > 0 && obj.Messages[n-1].Role == structs.RoleTool {
+		obj.Messages = append(obj.Messages, structs.Message{
+			Role:    structs.RoleUser,
+			Content: toolResultContinuePrompt,
+		})
 	}
 
 	// 创建安全 key 上下文引擎：请求出站脱敏 + 响应流式还原（未启用时返回 nil，零行为变化）
