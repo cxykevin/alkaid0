@@ -14,6 +14,7 @@ import (
 	"github.com/cxykevin/alkaid0/storage/structs"
 	storageStructs "github.com/cxykevin/alkaid0/storage/structs"
 	"github.com/cxykevin/alkaid0/tools/tools/trace"
+	u "github.com/cxykevin/alkaid0/utils"
 	"gorm.io/gorm"
 )
 
@@ -380,7 +381,9 @@ func RequestBody(chatID uint32, modelID int32, agentCode string, toolsList *[]*p
 	var fallbackTop string
 	if chatLn.TemporyDataOfSession != nil {
 		if em, ok := chatLn.TemporyDataOfSession[structs.TempKeyTraceEvents].(map[string]*structs.TraceEvent); ok && len(em) > 0 {
-			fallbackTop = insertEventContentBlocks(responseDeltaList, dbIDToElement, em, chatLn, nativeMode)
+			prevEm, _ := chatLn.TemporyDataOfSession[structs.TempKeyTracePrevEvents].(map[string]*structs.TraceEvent)
+			diffPlans, _ := chatLn.TemporyDataOfSession[structs.TempKeyTraceDiffPlan].(map[string]trace.DiffPlan)
+			fallbackTop = insertEventContentBlocks(responseDeltaList, dbIDToElement, em, prevEm, diffPlans, chatLn, nativeMode)
 		}
 	}
 	if addUserPrompt != "" || fallbackTop != "" {
@@ -591,6 +594,7 @@ func parseStoredToolResults(payload string) ([]storedToolResult, error) {
 // 从新到旧扫描，先扫到的即最近事件，天然满足"只留最新"。
 func DetectTraceEvents(db *gorm.DB, session *structs.Chats, agentCode string) error {
 	eventMap := make(map[string]*structs.TraceEvent)
+	prevMap := make(map[string]*structs.TraceEvent)
 	recentTurns := 0
 scan:
 	for offsetPage := range maxPage {
@@ -624,16 +628,21 @@ scan:
 				if path == "" {
 					continue
 				}
-				if _, exists := eventMap[path]; exists {
-					continue // 只留最新：先扫到的是最近的
-				}
-				eventMap[path] = &structs.TraceEvent{
+				ev := &structs.TraceEvent{
 					MsgID:      v.ID,
 					ToolCallID: c.ID,
 					IsEdit:     c.Name == "edit",
 					IsTask:     path == "@task",
 					InRecent:   inRecent,
 				}
+				if _, exists := eventMap[path]; exists {
+					// 已记录最新事件，此处为更旧的事件：仅保留次新，供方案2 旧内容块锚定
+					if _, prev := prevMap[path]; !prev {
+						prevMap[path] = ev
+					}
+					continue
+				}
+				eventMap[path] = ev
 			}
 		}
 	}
@@ -641,6 +650,7 @@ scan:
 		session.TemporyDataOfSession = make(map[string]any)
 	}
 	session.TemporyDataOfSession[structs.TempKeyTraceEvents] = eventMap
+	session.TemporyDataOfSession[structs.TempKeyTracePrevEvents] = prevMap
 	return nil
 }
 
@@ -668,7 +678,7 @@ type eventInsertGroup struct {
 // 返回不可锚定事件的顶部 fallback 内容（独立 user 消息，插在 addUserPrompt 之后）。
 // 内容块在 PreHook 阶段已渲染并暂存于 chatLn.TemporyDataOfSession，此处只做拼装插入，不重复读盘。
 func insertEventContentBlocks(l *list.List, dbIDToElement map[uint64]*list.Element,
-	eventMap map[string]*structs.TraceEvent, chatLn *structs.Chats, nativeMode bool) string {
+	eventMap, prevMap map[string]*structs.TraceEvent, diffPlans map[string]trace.DiffPlan, chatLn *structs.Chats, nativeMode bool) string {
 
 	fileBlocks, _ := chatLn.TemporyDataOfSession[structs.TempKeyTraceFileBlocks].(map[string]trace.FileBlock)
 	taskBlock, _ := chatLn.TemporyDataOfSession[structs.TempKeyTaskEventBlock].(string)
@@ -676,6 +686,24 @@ func insertEventContentBlocks(l *list.List, dbIDToElement map[uint64]*list.Eleme
 	groups := make(map[uint64]*eventInsertGroup)
 	fallbackPaths := make([]string, 0)
 	for path, ev := range eventMap {
+		// 方案2：旧块（次新锚点）+ diff 块（最新锚点）都可锚定时，跳过常规最新块插入
+		if plan, ok := diffPlans[path]; ok && plan.Keep {
+			if prev, ok := prevMap[path]; ok {
+				prevAnchor := findEventAnchor(l, dbIDToElement, prev, nativeMode)
+				diffAnchor := findEventAnchor(l, dbIDToElement, ev, nativeMode)
+				// 锚点都可用且软条件（含 betweenTok 连锁成本）满足 → 方案2
+				if prevAnchor != nil && diffAnchor != nil && trace.KeepDiffPlan(plan, betweenTokens(prevAnchor, diffAnchor)) {
+					if oldContent, err := trace.RenderTraceBlock([]trace.FileBlock{plan.OldBlock}); err == nil && oldContent != "" {
+						l.InsertAfter(reqStruct.Message{Role: "user", Content: oldContent}, prevAnchor)
+					}
+					if diffContent, err := trace.RenderTraceBlock([]trace.FileBlock{plan.DiffBlock}); err == nil && diffContent != "" {
+						l.InsertAfter(reqStruct.Message{Role: "user", Content: diffContent}, diffAnchor)
+					}
+					continue
+				}
+				// 锚点不可用或软条件不满足 → 退化为方案1
+			}
+		}
 		if !ev.IsTask {
 			if _, ok := fileBlocks[path]; !ok {
 				continue // 事件文件不在 Traces 表（如事后 untrace）→ 跳过
@@ -778,6 +806,21 @@ func elementAfter(a, b *list.Element) bool {
 		}
 	}
 	return false
+}
+
+// betweenTokens 估算两个锚点之间（含 diff 锚点、不含 prev 锚点）消息的 token 总量。
+// 用于方案2 软条件复核：这段内容在方案1 因前缀失效全价重算，在方案2 命中缓存。
+func betweenTokens(prev, diff *list.Element) int {
+	total := 0
+	for e := prev.Next(); e != nil; e = e.Next() {
+		if m, ok := e.Value.(reqStruct.Message); ok {
+			total += u.EstimateTokens(m.Content)
+		}
+		if e == diff {
+			break
+		}
+	}
+	return total
 }
 
 // getEffectiveAutoApprove 获取用户配置的 AutoApprove 规则（不含内置规则合并）

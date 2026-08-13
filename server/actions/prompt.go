@@ -67,17 +67,8 @@ func SessionPrompt(req SessionPromptRequest, call func(string, any, *string) err
 	isCommand := strings.HasPrefix(text, "/")
 
 	if isCommand {
-		// 命令轮：广播 user_message（合成 messageId）+ running，分发命令，立即返回
-		broadcastSessionUpdate(req.SessionID, SessionUpdate{
-			SessionID: req.SessionID,
-			Update: SessionUpdateUpdate{
-				SessionUpdate: "user_message",
-				MessageID:     cmdMsgID(sessObj),
-				Content:       []u.H{{"type": "text", "text": text}},
-			},
-		}, 0)
-		broadcastStateUpdate(req.SessionID, "running", "", "")
-
+		// 命令轮：解析命令；除 NoCmdMessage 命令（如 /s 自行广播短语 user_message）外，
+		// 广播命令文本 user_message（合成 messageId）+ running，分发命令，立即返回
 		cmds := strings.SplitN(text, " ", 2)
 		cmdArgs := ""
 		if len(cmds) == 2 {
@@ -88,6 +79,18 @@ func SessionPrompt(req SessionPromptRequest, call func(string, any, *string) err
 			broadcastStateUpdate(req.SessionID, "idle", "refusal", "invalid command")
 			return SessionPromptResponse{}, fmt.Errorf("invalid command")
 		}
+		if !obj.NoCmdMessage {
+			broadcastSessionUpdate(req.SessionID, SessionUpdate{
+				SessionID: req.SessionID,
+				Update: SessionUpdateUpdate{
+					SessionUpdate: "user_message",
+					MessageID:     cmdMsgID(sessObj),
+					Content:       []u.H{{"type": "text", "text": text}},
+				},
+			}, 0)
+		}
+		broadcastStateUpdate(req.SessionID, "running", "", "")
+
 		wait, err := obj.Function(sessObj, cmdArgs)
 		if wait && err == nil {
 			return SessionPromptResponse{}, nil // 异步命令：callback 负责发 idle

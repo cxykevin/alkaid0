@@ -111,7 +111,18 @@ func AddUsage(modelID uint32, modelName string, promptTokens, completionTokens, 
 	data.Total.CachedTokens += uint64(cachedTokens)
 	data.Total.Requests++
 	data.UpdatedAt = time.Now()
-	persistLocked()
+	_ = persistLocked()
+}
+
+// Reset 清零全局 token 统计并写盘，供 /usage reset 使用。
+// 返回写盘错误（若有）；内存统计无论写盘成败均已清零。
+func Reset() error {
+	ensureLoaded()
+	dataMu.Lock()
+	defer dataMu.Unlock()
+	data = newFileData()
+	data.UpdatedAt = time.Now()
+	return persistLocked()
 }
 
 // Snapshot 返回当前统计的深拷贝快照，可安全并发调用。
@@ -193,28 +204,30 @@ func newFileData() *fileData {
 }
 
 // persistLocked 原子写盘（临时文件 + 重命名），调用方必须已持有 dataMu.Lock()。
-// 写盘失败只记录日志，不阻塞对话请求。
-func persistLocked() {
+// 写盘失败记录日志并返回错误，由调用方决定是否忽略（对话路径忽略，Reset 上报）。
+func persistLocked() error {
 	path := usagePath()
 	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		logger.Error("create usage dir %s: %v", dir, err)
-		return
+		return err
 	}
 	b, err := json.MarshalIndent(data, "", "  ")
 	if err != nil {
 		logger.Error("marshal usage data: %v", err)
-		return
+		return err
 	}
 	tmp := path + ".tmp"
 	if err := os.WriteFile(tmp, b, 0600); err != nil {
 		logger.Error("write usage tmp file %s: %v", tmp, err)
-		return
+		return err
 	}
 	if err := os.Rename(tmp, path); err != nil {
 		logger.Error("rename usage file %s: %v", path, err)
 		_ = os.Remove(tmp)
+		return err
 	}
+	return nil
 }
 
 // usagePath 返回持久化文件路径：优先测试覆写的 filePath，否则取配置文件同目录。

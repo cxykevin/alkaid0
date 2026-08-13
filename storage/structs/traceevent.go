@@ -15,8 +15,14 @@ type TraceEvent struct {
 const (
 	// TempKeyTraceEvents 有事件的 path → 最近一次 read/edit 事件（map[string]*TraceEvent）。
 	TempKeyTraceEvents = "trace:events"
+	// TempKeyTracePrevEvents 有事件的 path → 次新一次 read/edit 事件（map[string]*TraceEvent）。
+	// 方案2（保留旧块+diff）时旧内容块的插入锚点。
+	TempKeyTracePrevEvents = "trace:prevevents"
 	// TempKeyTraceFileBlocks 有事件的 traced 文件 → 渲染好的内容块（map[string]trace.FileBlock）。
 	TempKeyTraceFileBlocks = "trace:fileblocks"
+	// TempKeyTraceDiffPlan 每个 traced 文件的缓存决策结果（map[string]trace.DiffPlan）。
+	// 由 trace.RenderTraceBlocks 决策写入，供 build 包按方案拼装旧块/diff 块/新块。
+	TempKeyTraceDiffPlan = "trace:diffplan"
 	// TempKeyTaskEventBlock @task 有最近 edit 事件时的任务列表内容块（string）。
 	TempKeyTaskEventBlock = "task:eventblock"
 )

@@ -128,6 +128,18 @@
                                 ],
                                 "default": ""
                             },
+                            "CachePriceMultiplier": {
+                                "type": "number",
+                                "description": "缓存命中 token 相对输入价格的倍率（用于 trace 保留/破坏缓存成本决策）",
+                                "minimum": 0,
+                                "default": 0.2
+                            },
+                            "CacheRetentionMinutes": {
+                                "type": "integer",
+                                "description": "缓存保留时间（分钟），从会话最后活动时间起算，超过则强制清除 trace",
+                                "minimum": 0,
+                                "default": 180
+                            },
                             "ProviderSpecificConfig": {
                                 "type": "object",
                                 "description": "供应商特定功能开关（可选，省略时使用以下默认值）",

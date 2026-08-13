@@ -26,7 +26,7 @@ The following are snippets of files currently being **traced**. These files are 
 
 <tracedFiles>
 {{range .}}
-    <file path="{{.Name}}" size="{{.Size}}" linecount="{{(string .Length)}}"><![CDATA[
+    <file path="{{.Name}}" size="{{.Size}}" linecount="{{(string .Length)}}"{{if .Type}} type="{{.Type}}"{{end}}><![CDATA[
 {{.Text}}
 ]]></file>
 {{end}}

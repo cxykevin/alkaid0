@@ -40,6 +40,8 @@ type ModelConfig struct {
 	CompressSize           uint32                 `default:"128000"`                        // 压缩大小
 	Hide                   bool                   `default:"false"`                         // 在列表中隐藏
 	Type                   ModelType              `default:""`                              // 模型类型
+	CachePriceMultiplier   float32                `default:"0.2"`                           // 缓存命中 token 相对输入价格的倍率（仅按模型，用于 trace 保留/破坏缓存成本决策）
+	CacheRetentionMinutes  int32                  `default:"180"`                          // 缓存保留时间（分钟），从会话最后活动时间起算，超过则强制清除 trace
 	ProviderSpecificConfig ProviderSpecificConfig // 特定模型提供方配置
 }
 

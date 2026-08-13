@@ -16,6 +16,8 @@ import (
 	"github.com/cxykevin/alkaid0/prompts"
 	"github.com/cxykevin/alkaid0/provider/mask"
 	"github.com/cxykevin/alkaid0/provider/phrase"
+	"github.com/cxykevin/alkaid0/stats"
+	"github.com/cxykevin/alkaid0/ui/funcs"
 	u "github.com/cxykevin/alkaid0/utils"
 )
 
@@ -23,7 +25,28 @@ import (
 type cmdObj struct {
 	Description string
 	Hint        string
-	Function    func(*sessionObj, string) (bool, error)
+	// NoCmdMessage 为 true 时，命令轮不广播命令文本 user_message（命令 Function 内部自行
+	// 以更有意义的内容广播 user_message，如 /s 把短语展开文本作为用户消息广播）。
+	NoCmdMessage bool
+	Function     func(*sessionObj, string) (bool, error)
+}
+
+// broadcastCmdText 广播命令回复文本，携带独立 cmd_ messageId。
+// 前端按 messageId 关联消息：缺 messageId 的命令回复会被合并进之前的消息，
+// 补上独立 messageId 后作为一条新消息展示（协议 cmd_<chatID>_<seq> 格式）。
+func broadcastCmdText(obj *sessionObj, text string) {
+	sessionID := cwd2SessionID(obj.cwd, obj.id)
+	_ = broadcastSessionUpdate(sessionID, SessionUpdate{
+		SessionID: sessionID,
+		Update: SessionUpdateUpdate{
+			SessionUpdate: "agent_message_chunk",
+			MessageID:     cmdMsgID(obj),
+			Content: u.H{
+				"type": "text",
+				"text": text,
+			},
+		},
+	}, 0)
 }
 
 // commandMaps 存储所有聊天命令及其对应处理函数
@@ -86,16 +109,7 @@ var commandMaps = map[string]*cmdObj{
 				return false, nil
 			case "lsp-reset":
 				lsp.ResetLSPFailures()
-				_ = broadcastSessionUpdate(sessionID, SessionUpdate{
-					SessionID: sessionID,
-					Update: SessionUpdateUpdate{
-						SessionUpdate: "agent_message_chunk",
-						Content: u.H{
-							"type": "text",
-							"text": "LSP failure counters reset.",
-						},
-					},
-				}, 0)
+				broadcastCmdText(obj, "LSP failure counters reset.")
 				return false, nil
 			case "status":
 				status := codebase.GetIndexStatus(obj.cwd)
@@ -111,32 +125,14 @@ var commandMaps = map[string]*cmdObj{
 							status.Status, status.Processed, status.Total, status.Remaining, status.CurrentFile)
 					}
 				}
-				_ = broadcastSessionUpdate(sessionID, SessionUpdate{
-					SessionID: sessionID,
-					Update: SessionUpdateUpdate{
-						SessionUpdate: "agent_message_chunk",
-						Content: u.H{
-							"type": "text",
-							"text": r,
-						},
-					},
-				}, 0)
+				broadcastCmdText(obj, r)
 				return false, nil
 			case "cancel":
 				lsp.ResetLSPFailures()
 				if err := codebase.CancelIndex(obj.cwd); err != nil {
 					return false, fmt.Errorf("cancel index: %w", err)
 				}
-				_ = broadcastSessionUpdate(sessionID, SessionUpdate{
-					SessionID: sessionID,
-					Update: SessionUpdateUpdate{
-						SessionUpdate: "agent_message_chunk",
-						Content: u.H{
-							"type": "text",
-							"text": "Index cancelled.",
-						},
-					},
-				}, 0)
+				broadcastCmdText(obj, "Index cancelled.")
 				return false, nil
 			default:
 				lsp.ResetLSPFailures()
@@ -184,7 +180,6 @@ var commandMaps = map[string]*cmdObj{
 		Description: "Manage custom mask values — add <value> masks a value outbound and restores it in the response, del <value> stops masking it",
 		Hint:        "add <value> | del <value>",
 		Function: func(obj *sessionObj, arg string) (bool, error) {
-			sessionID := cwd2SessionID(obj.cwd, obj.id)
 			parts := strings.SplitN(strings.TrimSpace(arg), " ", 2)
 			if len(parts) != 2 {
 				return false, fmt.Errorf("Usage: /mask add <value> | /mask del <value>")
@@ -214,16 +209,7 @@ var commandMaps = map[string]*cmdObj{
 			if err != nil {
 				return false, err
 			}
-			_ = broadcastSessionUpdate(sessionID, SessionUpdate{
-				SessionID: sessionID,
-				Update: SessionUpdateUpdate{
-					SessionUpdate: "agent_message_chunk",
-					Content: u.H{
-						"type": "text",
-						"text": msg,
-					},
-				},
-			}, 0)
+			broadcastCmdText(obj, msg)
 			return false, nil
 		},
 	},
@@ -235,52 +221,64 @@ var commandMaps = map[string]*cmdObj{
 		},
 	},
 	"/s": {
-		Description: "Send a configured phrase — /s <short> expands the phrase to its full text and sends it to the model; /s with no args lists all configured phrases",
-		Hint:        "[short]",
+		Description:  "Send a configured phrase — /s <short> expands the phrase to its full text and sends it to the model; /s with no args lists all configured phrases",
+		Hint:         "[short]",
+		NoCmdMessage: true, // 命令文本不广播 user_message，Function 内部广播短语展开内容
 		Function: func(obj *sessionObj, arg string) (bool, error) {
-			sessionID := cwd2SessionID(obj.cwd, obj.id)
 			arg = strings.TrimSpace(arg)
 			if arg == "" {
 				// 无参数：列出所有短语
-				_ = broadcastSessionUpdate(sessionID, SessionUpdate{
-					SessionID: sessionID,
-					Update: SessionUpdateUpdate{
-						SessionUpdate: "agent_message_chunk",
-						Content: u.H{
-							"type": "text",
-							"text": phrase.ListText(),
-						},
-					},
-				}, 0)
+				broadcastCmdText(obj, phrase.ListText())
 				return false, nil
 			}
 			p, ok := phrase.Lookup(arg)
 			if !ok {
 				return false, fmt.Errorf("unknown phrase %q — use /s to list configured phrases", arg)
 			}
-			// 广播展开后的长内容，让用户确认实际发送的文本
+			// 翻译为一条用户消息（user_message）+ 正常 AI 回复：
+			// 持久化获取 DB msgID（回放/直播一致），广播 user_message（短语展开文本），
+			// 再 ChatWithID 入队触发 AI（loop 据 MsgID 跳过重复插入）。
+			sessionID := cwd2SessionID(obj.cwd, obj.id)
+			userMsgID, err := funcs.UserAddMsgWithID(obj.session, p.Text, nil)
+			if err != nil {
+				return false, fmt.Errorf("failed to add user message: %v", err)
+			}
 			_ = broadcastSessionUpdate(sessionID, SessionUpdate{
 				SessionID: sessionID,
 				Update: SessionUpdateUpdate{
-					SessionUpdate: "agent_message_chunk",
-					Content: u.H{
-						"type": "text",
-						"text": fmt.Sprintf("**phrase `%s` expanded** — 已作为用户消息发送。\n\n%s", p.Short, p.Text),
-					},
+					SessionUpdate: "user_message",
+					MessageID:     msgID(userMsgID),
+					Content:       []u.H{{"type": "text", "text": p.Text}},
 				},
 			}, 0)
-			// 实际发送长内容给 AI，并等待响应
-			if err := obj.loop.Chat(p.Text, nil); err != nil {
+			if err := obj.loop.ChatWithID(p.Text, userMsgID, nil); err != nil {
 				return false, err
 			}
 			return true, nil
+		},
+	},
+	"/usage": {
+		Description: "Show global token usage statistics, or reset them",
+		Hint:        "(no args) | reset",
+		Function: func(obj *sessionObj, arg string) (bool, error) {
+			if strings.TrimSpace(arg) == "reset" {
+				// 无论写盘成败都广播确认：内存统计已清零，写盘失败仅警告（避免前端静默无反馈）
+				resetErr := stats.Reset()
+				msg := "Token usage reset."
+				if resetErr != nil {
+					msg = fmt.Sprintf("Token usage reset (in-memory). ⚠️ 持久化写盘失败: %v", resetErr)
+				}
+				broadcastCmdText(obj, msg)
+				return false, nil
+			}
+			broadcastCmdText(obj, formatUsage(stats.Snapshot()))
+			return false, nil
 		},
 	},
 	"/version": {
 		Description: "Show Alkaid0 version information",
 		Hint:        "(no args)",
 		Function: func(obj *sessionObj, arg string) (bool, error) {
-			sessionID := cwd2SessionID(obj.cwd, obj.id)
 			versionInfo := fmt.Sprintf(`**Version:**
   - Version: **%s** (Number %d)
   - Commit ID: %s
@@ -300,16 +298,7 @@ var commandMaps = map[string]*cmdObj{
 				runtime.GOARCH,
 				time.Now().Unix(),
 			)
-			_ = broadcastSessionUpdate(sessionID, SessionUpdate{
-				SessionID: sessionID,
-				Update: SessionUpdateUpdate{
-					SessionUpdate: "agent_message_chunk",
-					Content: u.H{
-						"type": "text",
-						"text": versionInfo,
-					},
-				},
-			}, 0)
+			broadcastCmdText(obj, versionInfo)
 			return false, nil
 		},
 	},
@@ -320,7 +309,6 @@ func init() {
 		Description: "Show this help message",
 		Hint:        "(no args)",
 		Function: func(obj *sessionObj, arg string) (bool, error) {
-			sessionID := cwd2SessionID(obj.cwd, obj.id)
 			var b strings.Builder
 			b.WriteString("**Available commands:**\n\n")
 			type cmdEntry struct {
@@ -336,16 +324,7 @@ func init() {
 			for _, e := range entries {
 				b.WriteString(fmt.Sprintf("  **%s** %s\n  > %s\n", e.name, e.hint, e.desc))
 			}
-			_ = broadcastSessionUpdate(sessionID, SessionUpdate{
-				SessionID: sessionID,
-				Update: SessionUpdateUpdate{
-					SessionUpdate: "agent_message_chunk",
-					Content: u.H{
-						"type": "text",
-						"text": b.String(),
-					},
-				},
-			}, 0)
+			broadcastCmdText(obj, b.String())
 			return false, nil
 		},
 	}

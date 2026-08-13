@@ -1341,4 +1341,24 @@ func TestDetectTraceEvents(t *testing.T) {
 	if _, ok := em["z.txt"]; ok {
 		t.Error("z.txt event should be truncated by summary")
 	}
+
+	// 次新事件：a.txt 的 edit call_2 应为次新（方案2 旧块锚点）
+	pm, ok := session.TemporyDataOfSession[structs.TempKeyTracePrevEvents].(map[string]*structs.TraceEvent)
+	if !ok {
+		t.Fatal("expected prev events in session")
+	}
+	prevA, ok := pm["a.txt"]
+	if !ok {
+		t.Fatal("expected a.txt prev event")
+	}
+	if prevA.ToolCallID != "call_2" || !prevA.IsEdit {
+		t.Errorf("a.txt prev event should be edit call_2, got %+v", prevA)
+	}
+	if prevA.MsgID != msgs[3].ID {
+		t.Errorf("a.txt prev event MsgID should be %d, got %d", msgs[3].ID, prevA.MsgID)
+	}
+	// @task 只有一次事件，无次新
+	if _, ok := pm["@task"]; ok {
+		t.Error("@task should have no prev event")
+	}
 }

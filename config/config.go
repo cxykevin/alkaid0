@@ -148,6 +148,7 @@ func Load() {
 	globalConfigMu.Lock()
 	*GlobalConfig = *tempConfig
 	EnsureOnlineSearchDefaults(GlobalConfig, json.RawMessage(data))
+	EnsureCacheDefaults(GlobalConfig, json.RawMessage(data))
 	globalConfigMu.Unlock()
 
 	// 加载完成后检查密钥，为空则自动生成

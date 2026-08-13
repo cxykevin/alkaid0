@@ -182,3 +182,26 @@ func TestSnapshot_Ordered(t *testing.T) {
 		}
 	}
 }
+
+func TestReset(t *testing.T) {
+	setup(t)
+	AddUsage(1, "Kimi", 100, 50, 30)
+	AddUsage(2, "DeepSeek", 200, 100, 80)
+	if err := Reset(); err != nil {
+		t.Fatalf("reset failed: %v", err)
+	}
+	snap := Snapshot()
+	if snap.Total.Requests != 0 || snap.Total.PromptTokens != 0 ||
+		snap.Total.CompletionTokens != 0 || snap.Total.CachedTokens != 0 {
+		t.Fatalf("reset should clear totals: %+v", snap.Total)
+	}
+	if len(snap.Models) != 0 {
+		t.Fatalf("reset should clear models: %+v", snap.Models)
+	}
+	// 模拟重启：清空状态应已持久化，重新加载仍为空
+	ResetForTest()
+	snap = Snapshot()
+	if snap.Total.Requests != 0 || len(snap.Models) != 0 {
+		t.Fatalf("reset should persist empty state: %+v", snap)
+	}
+}

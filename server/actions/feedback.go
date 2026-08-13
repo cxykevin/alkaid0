@@ -13,7 +13,6 @@ import (
 	"github.com/cxykevin/alkaid0/config"
 	"github.com/cxykevin/alkaid0/log"
 	"github.com/cxykevin/alkaid0/product"
-	u "github.com/cxykevin/alkaid0/utils"
 )
 
 // feedbackMaxContent SDK 对 content 的字节上限。
@@ -68,14 +67,7 @@ func feedbackDisabled() bool {
 // feedbackCommand 处理 /feedback <内容>：异步提交反馈到反馈服务端。
 func feedbackCommand(obj *sessionObj, arg string) (bool, error) {
 	if feedbackDisabled() {
-		sessionID := cwd2SessionID(obj.cwd, obj.id)
-		_ = broadcastSessionUpdate(sessionID, SessionUpdate{
-			SessionID: sessionID,
-			Update: SessionUpdateUpdate{
-				SessionUpdate: "agent_message_chunk",
-				Content:       u.H{"type": "text", "text": "Feedback is disabled in debug mode."},
-			},
-		}, 0)
+		broadcastCmdText(obj, "Feedback is disabled in debug mode.")
 		return false, nil
 	}
 
@@ -85,16 +77,8 @@ func feedbackCommand(obj *sessionObj, arg string) (bool, error) {
 	}
 	content = truncateBytes(content, feedbackMaxContent)
 
-	sessionID := cwd2SessionID(obj.cwd, obj.id)
-
 	// 同步广播"正在提交"，保证先于 prompt.go 的 idle state_update 到达客户端。
-	_ = broadcastSessionUpdate(sessionID, SessionUpdate{
-		SessionID: sessionID,
-		Update: SessionUpdateUpdate{
-			SessionUpdate: "agent_message_chunk",
-			Content:       u.H{"type": "text", "text": "Submitting feedback…"},
-		},
-	}, 0)
+	broadcastCmdText(obj, "Submitting feedback…")
 
 	osInfo := buildFeedbackOSInfo()
 
@@ -111,13 +95,7 @@ func feedbackCommand(obj *sessionObj, arg string) (bool, error) {
 		} else {
 			logger.Error("feedback submit failed: %v", err)
 		}
-		_ = broadcastSessionUpdate(sessionID, SessionUpdate{
-			SessionID: sessionID,
-			Update: SessionUpdateUpdate{
-				SessionUpdate: "agent_message_chunk",
-				Content:       u.H{"type": "text", "text": msg},
-			},
-		}, 0)
+		broadcastCmdText(obj, msg)
 	}()
 
 	return false, nil

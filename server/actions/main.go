@@ -23,6 +23,8 @@ func InitFuncs(srv *jsonrpc.Server) {
 		jsonrpc.Set(srv, "alk.cxykevin.top/config/set", ConfigSet)
 		jsonrpc.Set(srv, "alk.cxykevin.top/config/reload", reloadFunc)
 		jsonrpc.Set(srv, "alk.cxykevin.top/reload_config", reloadFunc)
+
+		jsonrpc.Set(srv, "alk.cxykevin.top/usage", Usage)
 	}
 
 	{ // 会话
