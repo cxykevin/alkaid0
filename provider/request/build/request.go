@@ -554,6 +554,42 @@ func parseStoredToolResults(payload string) ([]storedToolResult, error) {
 // DetectTraceEvents 从新到旧扫描消息历史，为每个被 read/edit 交互过的路径记录最近一次事件。
 // 结果写入 session.TemporyDataOfSession[TempKeyTraceEvents]（map[string]*structs.TraceEvent）。
 // 从新到旧扫描，先扫到的即最近事件，天然满足"只留最新"。
+// CollectTracePathsAfter 收集 summary 边界之后仍发生过 read/edit 的 trace 路径。
+// afterMsgID 是已写入 Summary 的消息 ID；只扫描 ID 更大的消息，避免把已压缩历史
+// 中的工具调用重新带回当前上下文。@task 是虚拟任务对象，不属于 Traces 表。
+func CollectTracePathsAfter(db *gorm.DB, chatID uint32, agentID string, afterMsgID uint64) (map[string]struct{}, error) {
+	paths := make(map[string]struct{})
+	var messages []structs.Messages
+	query := db.Where("chat_id = ? AND id > ?", chatID, afterMsgID)
+	if agentID == "" {
+		query = query.Where("(agent_id = '' OR agent_id IS NULL)")
+	} else {
+		query = query.Where("agent_id = ?", agentID)
+	}
+	if err := query.Order("id ASC").Find(&messages).Error; err != nil {
+		return nil, err
+	}
+	for _, message := range messages {
+		if message.Type != structs.MessagesRoleAgent || message.ToolCallingJSONString == "" {
+			continue
+		}
+		var calls []storedToolCall
+		if err := json.Unmarshal([]byte(message.ToolCallingJSONString), &calls); err != nil {
+			continue
+		}
+		for _, call := range calls {
+			if call.Name != "read" && call.Name != "edit" {
+				continue
+			}
+			path := toolCallPath(call)
+			if path != "" && path != "@task" {
+				paths[path] = struct{}{}
+			}
+		}
+	}
+	return paths, nil
+}
+
 func DetectTraceEvents(db *gorm.DB, session *structs.Chats, agentCode string) error {
 	eventMap := make(map[string]*structs.TraceEvent)
 	prevMap := make(map[string]*structs.TraceEvent)
@@ -671,6 +707,10 @@ func insertEventContentBlocks(l *list.List, dbIDToElement map[uint64]*list.Eleme
 		if !ev.IsTask {
 			if _, ok := fileBlocks[path]; !ok {
 				continue // 事件文件不在 Traces 表（如事后 untrace）→ 跳过
+			}
+			if plan, ok := diffPlans[path]; ok && plan.Keep {
+				// 方案2在上方未能实际插入，下面将发送完整当前块；同步完整块缓存基线。
+				trace.AdvanceTraceCache(chatLn, path)
 			}
 		} else if taskBlock == "" {
 			continue

@@ -64,6 +64,8 @@ func setupTestDB(t *testing.T) *gorm.DB {
 		&storageStructs.Chats{},
 		&storageStructs.Messages{},
 		&storageStructs.SubAgents{},
+		&storageStructs.Traces{},
+		&storageStructs.ReferFiles{},
 	); err != nil {
 		t.Fatalf("Failed to migrate: %v", err)
 	}

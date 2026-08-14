@@ -586,6 +586,22 @@ func writeFile(session *structs.Chats, mp map[string]*any, cross []*any) (bool, 
 		content = strings.Join(lines, "\n")
 	}
 
+	currentContent := content
+	if fileExists {
+		if raw, err := os.ReadFile(path); err == nil {
+			currentContent = string(raw)
+		}
+	}
+	if err := trace.CheckEditContent(session, origRelPath, currentContent); err != nil {
+		boolx := false
+		success := any(boolx)
+		errMsg := any(err.Error())
+		return false, cross, map[string]*any{
+			"success": &success,
+			"error":   &errMsg,
+		}, nil
+	}
+
 	logger.Info("edit file \"%s\" mode \"%s\" in ID=%d,agentID=%s", path, target, session.ID, session.CurrentAgentID)
 	newContent, err := ProcessString(content, target, text, fileExists)
 	if err == nil {
@@ -652,6 +668,7 @@ func writeFile(session *structs.Chats, mp map[string]*any, cross []*any) (bool, 
 	if fb, err := os.ReadFile(path); err == nil {
 		finalContent = string(fb)
 	}
+	trace.ConfirmEditContent(session, origRelPath, finalContent)
 	respObj := buildRespObj(session, mp)
 	if diffObj := buildDiffContent(path, oldContentRaw, finalContent, !fileExists); diffObj != nil {
 		respObj = append(respObj, diffObj)

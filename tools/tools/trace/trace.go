@@ -33,7 +33,7 @@ var traceTempate *template.Template
 var logger = log.New("tools:trace")
 
 // MaxFileLine 最大文件行数
-const MaxFileLine = 2000
+const MaxFileLine = 5000
 
 // MaxFileSize 最大文件大小
 const MaxFileSize = 50 * 1024 // 50KB
@@ -301,10 +301,11 @@ func Trace(session *structs.Chats, mp map[string]*any, push []*any) (bool, []*an
 			session.TraceID++
 			// 写数据库
 			trace := structs.Traces{
-				ChatID:  session.ID,
-				Path:    path,
-				TraceID: session.TraceID,
-				AgentID: session.NowAgent,
+				ChatID:      session.ID,
+				Path:        path,
+				TraceID:     session.TraceID,
+				AgentID:     session.NowAgent,
+				LastContent: str,
 			}
 			err = session.DB.Save(&trace).Error
 			if err != nil {
@@ -392,6 +393,80 @@ type FileBlock = templateStruct
 
 type traceCache map[string]([]structs.Traces)
 
+type traceExpectedContent map[string]string
+
+// confirmTraceContent 记录本轮请求或 Agent 编辑后确认过的文件内容。
+// edit 在实际写盘前以此检查请求构建后的外部修改，避免覆盖用户的新内容。
+func confirmTraceContent(session *structs.Chats, path, content string) {
+	if session.TemporyDataOfSession == nil {
+		session.TemporyDataOfSession = make(map[string]any)
+	}
+	confirmed, _ := session.TemporyDataOfSession[structs.TempKeyTraceConfirmedContent].(traceExpectedContent)
+	if confirmed == nil {
+		confirmed = make(traceExpectedContent)
+		session.TemporyDataOfSession[structs.TempKeyTraceConfirmedContent] = confirmed
+	}
+	confirmed[path] = content
+}
+
+// advanceTraceCache 将实际退化为完整内容块时的内容写回 trace 缓存。
+// 方案2只在旧块和 diff 都成功插入时保留 LastContent；请求构建阶段若锚点或成本复核失败，
+// 模型收到的是完整当前块，缓存也必须同步到该内容，避免下一轮重复生成同一份 diff。
+func AdvanceTraceCache(session *structs.Chats, path string) {
+	if session == nil || session.DB == nil || strings.HasPrefix(path, "@temp/") {
+		return
+	}
+	confirmed, _ := session.TemporyDataOfSession[structs.TempKeyTraceConfirmedContent].(traceExpectedContent)
+	content, ok := confirmed[path]
+	if !ok {
+		return
+	}
+	session.DB.Model(&structs.Traces{}).
+		Where("chat_id = ? AND path = ? AND agent_id = ?", session.ID, path, session.NowAgent).
+		Update("last_content", content)
+	if cache, ok := session.TemporyDataOfSession["tools:trace"].(traceCache); ok {
+		if traces, ok := cache[session.NowAgent]; ok {
+			for i := range traces {
+				if traces[i].ChatID == session.ID && traces[i].Path == path && traces[i].AgentID == session.NowAgent {
+					traces[i].LastContent = content
+				}
+			}
+			cache[session.NowAgent] = traces
+		}
+	}
+}
+
+// ConfirmEditContent 记录 Agent 编辑完成后的最终磁盘内容，供同一轮后续 edit 校验。
+func ConfirmEditContent(session *structs.Chats, path, content string) {
+	confirmTraceContent(session, path, content)
+}
+
+// CheckEditContent 确认本轮请求使用的 traced 文件内容在 edit 前没有被外部改写。
+// 未进入本轮 trace 上下文的文件保持既有 edit 语义。
+func CheckEditContent(session *structs.Chats, path, content string) error {
+	if session == nil || strings.HasPrefix(path, "@temp/") || session.TemporyDataOfSession == nil {
+		return nil
+	}
+	confirmed, _ := session.TemporyDataOfSession[structs.TempKeyTraceConfirmedContent].(traceExpectedContent)
+	if expected, ok := confirmed[path]; ok && expected != content {
+		return fmt.Errorf("file changed outside the agent after the current trace sync; call read for %q before editing", path)
+	}
+	return nil
+}
+
+// InvalidateTraceCache 清理 summary 后不能继续使用的会话级 trace 派生缓存。
+// 数据库事务提交后调用，下一次构建会从数据库重新加载剩余 trace 和事件。
+func InvalidateTraceCache(session *structs.Chats) {
+	if session == nil || session.TemporyDataOfSession == nil {
+		return
+	}
+	delete(session.TemporyDataOfSession, "tools:trace")
+	delete(session.TemporyDataOfSession, structs.TempKeyTraceEvents)
+	delete(session.TemporyDataOfSession, structs.TempKeyTracePrevEvents)
+	delete(session.TemporyDataOfSession, structs.TempKeyTraceFileBlocks)
+	delete(session.TemporyDataOfSession, structs.TempKeyTraceDiffPlan)
+}
+
 // readTraceFileContent 读取被追踪文件的原始内容（@temp 读 ReferFiles，普通文件读磁盘），
 // 返回编码转换后的字符串内容；失败返回 ok=false。
 func readTraceFileContent(session *structs.Chats, nowpath string, traceObj structs.Traces) (string, bool) {
@@ -468,6 +543,20 @@ func isEventFile(session *structs.Chats, path string) bool {
 	return ok
 }
 
+// canKeepEventDiff 只有存在稳定旧块锚点时才允许事件路径保留旧块并插入增量。
+// 否则必须退化为最新完整块并推进缓存，避免 DiffPlan 在插入阶段无法消费。
+func canKeepEventDiff(session *structs.Chats, path string) bool {
+	if !isEventFile(session, path) {
+		return true
+	}
+	prev, ok := session.TemporyDataOfSession[structs.TempKeyTracePrevEvents].(map[string]*structs.TraceEvent)
+	if !ok {
+		return false
+	}
+	_, ok = prev[path]
+	return ok
+}
+
 // RenderTraceBlocks 读取当前 agent 的 Traces 列表，按事件映射分区渲染内容块：
 //   - 有最近 read/edit 事件的文件 → 存入 eventBlocks（map[path]FileBlock）并写入
 //     session.TemporyDataOfSession[TempKeyTraceFileBlocks]，供 build 包按事件插入；
@@ -522,6 +611,9 @@ func RenderTraceBlocks(session *structs.Chats) (topBlock string, eventBlocks map
 		}
 		// 缓存决策：方案2（保留旧块+diff）记录到 diffPlans；eventBlocks 仍保留最新块作为退化 fallback
 		plan, keep := decideDiffPlan(traceObj.Path, traceObj.LastContent, newContent, timeout, mult)
+		if keep && !canKeepEventDiff(session, traceObj.Path) {
+			keep = false
+		}
 		// LastContent 是方案2 diff 的「旧端存档」= 上次以完整块注入上下文的文件内容。
 		// 只在方案1（注入完整块）/首次/无变化/@temp 时推进；方案2 候选不推进——
 		// 否则现场盘面每轮变化会把 diff 旧端带跑，下次旧块用推进后的内容渲染成
@@ -539,9 +631,13 @@ func RenderTraceBlocks(session *structs.Chats) (topBlock string, eventBlocks map
 		}
 		if isEventFile(session, traceObj.Path) {
 			eventBlocks[traceObj.Path] = frag
+		} else if keep {
+			// 无历史事件可锚定时，仍将稳定旧块和增量 diff 放入顶部，不能静默丢失外部修改。
+			topFrags = append(topFrags, plan.OldBlock, plan.DiffBlock)
 		} else {
 			topFrags = append(topFrags, frag)
 		}
+		confirmTraceContent(session, traceObj.Path, newContent)
 	}
 	// 始终渲染（含空 slice）：trace.md 有固定 intro 头部，空文件列表也应输出该说明，保持与原 buildTrace 一致
 	topBlock, err = prompts.Render(traceTempate, topFrags)
@@ -614,9 +710,9 @@ func init() {
 
 // AddTempObject 添加临时文件
 func AddTempObject(session *structs.Chats, path string, content string, ro bool) error {
-	// 截取ctn后2000行
-	if ln := len(strings.Split(content, "\n")); ln > 2000 {
-		content = "(omitted)\n" + strings.Join(strings.Split(content, "\n")[ln-1998:], "\n")
+	// 截取内容末尾 MaxFileLine 行，避免临时对象超过 trace 注入上限。
+	if ln := len(strings.Split(content, "\n")); ln > MaxFileLine {
+		content = "(omitted)\n" + strings.Join(strings.Split(content, "\n")[ln-(MaxFileLine-2):], "\n")
 	}
 	err := session.DB.Create(structs.ReferFiles{
 		ChatID:   session.ID,

@@ -25,6 +25,8 @@ func setupSummaryTestDB(t *testing.T) *gorm.DB {
 		&structs.Chats{},
 		&structs.Messages{},
 		&structs.SubAgents{},
+		&structs.Traces{},
+		&structs.ReferFiles{},
 	); err != nil {
 		t.Fatalf("Failed to migrate: %v", err)
 	}

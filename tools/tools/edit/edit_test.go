@@ -7,12 +7,23 @@ import (
 	"testing"
 
 	"github.com/cxykevin/alkaid0/storage/structs"
+	"github.com/cxykevin/alkaid0/tools/tools/trace"
 	u "github.com/cxykevin/alkaid0/utils"
 )
 
 //go:fix inline
 func ptr(v any) *any { return new(v) }
 
+func TestCheckEditContentRejectsExternalChange(t *testing.T) {
+	session := &structs.Chats{}
+	trace.ConfirmEditContent(session, "a.txt", "agent snapshot\n")
+	if err := trace.CheckEditContent(session, "a.txt", "external change\n"); err == nil {
+		t.Fatal("expected external change to be rejected")
+	}
+	if err := trace.CheckEditContent(session, "a.txt", "agent snapshot\n"); err != nil {
+		t.Fatalf("agent snapshot should remain editable: %v", err)
+	}
+}
 func TestCheckPath(t *testing.T) {
 	okMp := map[string]*any{"path": new(any("src/file.txt"))}
 	p, err := CheckPath(okMp)

@@ -26,6 +26,9 @@ const (
 	// TempKeyTraceDiffPlan 每个 traced 文件的缓存决策结果（map[string]trace.DiffPlan）。
 	// 由 trace.RenderTraceBlocks 决策写入，供 build 包按方案拼装旧块/diff 块/新块。
 	TempKeyTraceDiffPlan = "trace:diffplan"
+	// TempKeyTraceConfirmedContent 保存当前会话中 Agent 最近一次确认/写入的内容，
+	// 用于 edit 在写盘前区分 Agent 自身后续编辑与外部修改。
+	TempKeyTraceConfirmedContent = "trace:confirmed_content"
 	// TempKeyTaskEventBlock @task 有最近 edit 事件时的任务列表内容块（string）。
 	TempKeyTaskEventBlock = "task:eventblock"
 )

@@ -14,6 +14,7 @@ import (
 	"github.com/cxykevin/alkaid0/provider/request/build"
 	"github.com/cxykevin/alkaid0/provider/request/structs"
 	storageStructs "github.com/cxykevin/alkaid0/storage/structs"
+	"github.com/cxykevin/alkaid0/tools/tools/trace"
 )
 
 // SummaryTimeout 获取总结超时时间
@@ -57,20 +58,46 @@ func Summary(ctx context.Context, db *gorm.DB, chatID uint32, agentID string) (s
 	}
 
 	respStr := resp.String()
-
-	// 写db
-	err = db.
-		Model(&storageStructs.Messages{}).
-		Where("id = ?", msgID).
-		Select("summary").
-		Updates(&storageStructs.Messages{Summary: respStr}).
-		Error
-
+	paths, err := build.CollectTracePathsAfter(db, chatID, agentID, msgID)
 	if err != nil {
-		logger.Error("failed to save summary to db: %v", err)
 		return respStr, err
 	}
-	logger.Info("summary saved successfully for chatID=%d", chatID)
+
+	// 摘要边界和过期 trace 必须在同一事务中提交，避免只写入摘要或只删除 trace。
+	err = db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Model(&storageStructs.Messages{}).
+			Where("id = ?", msgID).
+			Select("summary").
+			Updates(&storageStructs.Messages{Summary: respStr}).Error; err != nil {
+			return err
+		}
+
+		query := tx.Where("chat_id = ?", chatID)
+		if agentID == "" {
+			query = query.Where("(agent_id = '' OR agent_id IS NULL)")
+		} else {
+			query = query.Where("agent_id = ?", agentID)
+		}
+		var traces []storageStructs.Traces
+		if err := query.Find(&traces).Error; err != nil {
+			return err
+		}
+		for _, traceObj := range traces {
+			if _, keep := paths[traceObj.Path]; keep {
+				continue
+			}
+			if err := tx.Where("chat_id = ? AND path = ? AND agent_id = ?", chatID, traceObj.Path, traceObj.AgentID).
+				Delete(&storageStructs.Traces{}).Error; err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		logger.Error("failed to save summary and clean traces: %v", err)
+		return respStr, err
+	}
+	logger.Info("summary saved and traces cleaned successfully for chatID=%d", chatID)
 
 	return respStr, nil
 
@@ -81,5 +108,9 @@ func SummarySession(ctx context.Context, session *storageStructs.Chats) (string,
 	db := session.DB
 	chatID := session.ID
 	agentID := session.CurrentAgentID
-	return Summary(ctx, db, chatID, agentID)
+	resp, err := Summary(ctx, db, chatID, agentID)
+	if err == nil {
+		trace.InvalidateTraceCache(session)
+	}
+	return resp, err
 }

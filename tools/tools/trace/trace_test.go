@@ -985,9 +985,9 @@ func TestAddTempObjectLongContent(t *testing.T) {
 		TraceID:              0,
 	}
 
-	// 创建超过2000行的内容
+	// 创建超过 MaxFileLine 行的内容
 	var longContent strings.Builder
-	for i := range 2010 {
+	for i := range MaxFileLine + 10 {
 		longContent.WriteString(fmt.Sprintf("line %d\n", i))
 	}
 
@@ -1003,8 +1003,8 @@ func TestAddTempObjectLongContent(t *testing.T) {
 	}
 
 	lines := strings.Split(referFile.Content, "\n")
-	if len(lines) > 2000 {
-		t.Errorf("Expected content to be truncated to <=2000 lines, got %d lines", len(lines))
+	if len(lines) > MaxFileLine {
+		t.Errorf("Expected content to be truncated to <=%d lines, got %d lines", MaxFileLine, len(lines))
 	}
 
 	if !strings.Contains(referFile.Content, "(omitted)") {
@@ -1274,8 +1274,12 @@ func TestRenderTraceBlocks_LastContentAdvance(t *testing.T) {
 			t.Fatalf("create trace: %v", err)
 		}
 		session := &structs.Chats{ID: 1, DB: db, NowAgent: "test_agent", Root: tmpDir}
-		if _, _, err := RenderTraceBlocks(session); err != nil {
+		topBlock, _, err := RenderTraceBlocks(session)
+		if err != nil {
 			t.Fatalf("RenderTraceBlocks: %v", err)
+		}
+		if !strings.Contains(topBlock, "line 99") || !strings.Contains(topBlock, "line 100 appended") || !strings.Contains(topBlock, `type="diff"`) {
+			t.Fatalf("top fallback should include stable old block and current diff, got %q", topBlock)
 		}
 		// 确认确实产生了方案2 候选
 		plans, ok := session.TemporyDataOfSession[structs.TempKeyTraceDiffPlan].(map[string]DiffPlan)
@@ -1290,4 +1294,52 @@ func TestRenderTraceBlocks_LastContentAdvance(t *testing.T) {
 			t.Errorf("diff candidate should NOT advance LastContent, got %q", tr.LastContent)
 		}
 	})
+}
+
+func TestAdvanceTraceCache(t *testing.T) {
+	db := setupTestDB(t)
+	defer u.Unwrap(db.DB()).Close()
+
+	oldContent := "old\n"
+	newContent := "new\n"
+	if err := db.Create(&structs.Traces{
+		ChatID:      1,
+		Path:        "a.txt",
+		AgentID:     "test_agent",
+		LastContent: oldContent,
+	}).Error; err != nil {
+		t.Fatalf("create trace: %v", err)
+	}
+	session := &structs.Chats{
+		ID:                   1,
+		DB:                   db,
+		NowAgent:             "test_agent",
+		TemporyDataOfSession: make(map[string]any),
+	}
+	confirmTraceContent(session, "a.txt", newContent)
+	AdvanceTraceCache(session, "a.txt")
+
+	var got structs.Traces
+	if err := db.Where("chat_id = 1 AND path = 'a.txt'").First(&got).Error; err != nil {
+		t.Fatalf("reload trace: %v", err)
+	}
+	if got.LastContent != newContent {
+		t.Fatalf("expected cache to advance to %q, got %q", newContent, got.LastContent)
+	}
+}
+
+func TestRenderContentBlockLineLimit(t *testing.T) {
+	var exact, over strings.Builder
+	for i := 0; i < MaxFileLine-1; i++ {
+		fmt.Fprintf(&exact, "line %d\n", i)
+	}
+	for i := 0; i < MaxFileLine; i++ {
+		fmt.Fprintf(&over, "line %d\n", i)
+	}
+	if _, ok := renderContentBlock("exact.txt", exact.String()); !ok {
+		t.Fatal("exactly MaxFileLine lines should render")
+	}
+	if _, ok := renderContentBlock("over.txt", over.String()); ok {
+		t.Fatal("MaxFileLine+1 logical lines should be rejected")
+	}
 }

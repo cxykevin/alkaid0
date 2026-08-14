@@ -13,6 +13,7 @@ import (
 	"github.com/cxykevin/alkaid0/library/json"
 	storageStructs "github.com/cxykevin/alkaid0/storage/structs"
 	"github.com/cxykevin/alkaid0/terminal/sandbox"
+	"github.com/cxykevin/alkaid0/tools/tools/trace"
 )
 
 func TestAsInt32(t *testing.T) {
@@ -910,7 +911,7 @@ func TestRunTaskOutputTruncated(t *testing.T) {
 	mp := map[string]*any{
 		"type":    ptrAny("shell"),
 		"reason":  ptrAny("test truncate"),
-		"command": ptrAny("seq 1 3000"),
+		"command": ptrAny(fmt.Sprintf("seq 1 %d", trace.MaxFileLine+100)),
 	}
 
 	_, _, res, err := runTask(session, mp, []*any{})
@@ -932,7 +933,7 @@ func TestRunTaskOutputTruncated(t *testing.T) {
 		t.Errorf("截断提示应指向完整路径，实际 %q", out)
 	}
 
-	// 进 trace 表的内容也应被 AddTempObject 截断（后 2000 行），不超限
+	// 进 trace 表的内容也应被 AddTempObject 截断（后 MaxFileLine 行），不超限
 	var files []storageStructs.ReferFiles
 	if err := session.DB.Where("chat_id = ?", session.ID).Find(&files).Error; err != nil {
 		t.Fatalf("query refer files: %v", err)
@@ -940,11 +941,12 @@ func TestRunTaskOutputTruncated(t *testing.T) {
 	if len(files) != 1 {
 		t.Fatalf("期望 1 条 ReferFiles 记录，实际 %d", len(files))
 	}
+	// 进 trace 表的内容也应被 AddTempObject 截断（后 MaxFileLine 行），不超限
 	if !strings.HasPrefix(files[0].Content, "(omitted)") {
-		t.Errorf("trace 内容超过 2000 行时应以 (omitted) 截断，实际 %q", files[0].Content)
+		t.Errorf("trace 内容超过 %d 行时应以 (omitted) 截断，实际 %q", trace.MaxFileLine, files[0].Content)
 	}
-	if ln := strings.Count(files[0].Content, "\n"); ln > 2000 {
-		t.Errorf("trace 内容行数应 ≤ 2000，实际 %d", ln)
+	if ln := strings.Count(files[0].Content, "\n"); ln > trace.MaxFileLine {
+		t.Errorf("trace 内容行数应 ≤ %d，实际 %d", trace.MaxFileLine, ln)
 	}
 }
 

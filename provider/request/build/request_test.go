@@ -175,6 +175,18 @@ func TestRequestBody_Basic(t *testing.T) {
 	if !strings.Contains(content, "You are a helpful assistant") {
 		t.Errorf("System message should contain global prompt, got: %s", content)
 	}
+	if strings.Count(content, "Use the native function schema supplied by the API") != 1 {
+		t.Errorf("System message should include the native tool protocol exactly once, got: %s", content)
+	}
+	if strings.Contains(content, "DO NOT CALL TOOLS WITHOUT EMPTY OBJECT OR NOTHING!") {
+		t.Errorf("System message should not contain the deprecated native tool protocol, got: %s", content)
+	}
+	if len(request.Tools) != 1 || request.Tools[0].Function.Name != "test_tool" {
+		t.Errorf("Expected native tool schema for test_tool, got: %#v", request.Tools)
+	}
+	if request.ToolChoice != "auto" {
+		t.Errorf("Expected native tool choice auto, got %q", request.ToolChoice)
+	}
 }
 
 // TestRequestBody_Real 测试真实api
@@ -870,9 +882,9 @@ func TestRequestBody_AllToolTurnsReplayed(t *testing.T) {
 		t.Fatalf("RequestBody failed: %v", err)
 	}
 
-	asstWithTools := 0   // 携带 tool_calls 的 assistant 数
-	asstTextOnly := 0    // 无 tool_calls 的 assistant 数
-	toolResults := 0     // role:"tool" 结果数
+	asstWithTools := 0 // 携带 tool_calls 的 assistant 数
+	asstTextOnly := 0  // 无 tool_calls 的 assistant 数
+	toolResults := 0   // role:"tool" 结果数
 	hasOldest, hasNewest := false, false
 	for _, msg := range req.Messages {
 		if msg.Role == reqStruct.RoleAssistant {
@@ -1136,7 +1148,76 @@ func TestRequestBody_OldTurnEventBlockAfterResults(t *testing.T) {
 	}
 }
 
-// TestRequestBody_TraceFollowsEvent_Native 原生模式：trace/edit 文件内容块紧跟最近事件
+func TestRequestBody_DiffPlanFallbackAdvancesCache(t *testing.T) {
+	db := setupTestDB(t)
+	if err := db.AutoMigrate(&structs.Traces{}); err != nil {
+		t.Fatalf("migrate traces: %v", err)
+	}
+	toolsList := []*parser.ToolsDefine{}
+
+	setupTestConfig()
+	cfg := *config.GlobalConfig
+	m := cfg.Model.Models[cfg.Model.DefaultModelID]
+	m.EnableToolCalling = true
+	cfg.Model.Models[cfg.Model.DefaultModelID] = m
+	config.GlobalConfigSwap(cfg)
+
+	msgs := []structs.Messages{
+		{ChatID: 31, Type: structs.MessagesRoleUser, Delta: "read a.txt"},
+		{ChatID: 31, Type: structs.MessagesRoleAgent, Delta: "", ToolCallingJSONString: `[{"name":"read","id":"call_1","parameters":{"path":"a.txt"}}]`},
+		{ChatID: 31, Type: structs.MessagesRoleTool, Delta: `[{"name":"read","id":"call_1","return":"data"}]`},
+	}
+	for i := range msgs {
+		if err := db.Create(&msgs[i]).Error; err != nil {
+			t.Fatalf("create message: %v", err)
+		}
+	}
+	if err := db.Create(&structs.Traces{ChatID: 31, Path: "a.txt", AgentID: "agent", LastContent: "old\n"}).Error; err != nil {
+		t.Fatalf("create trace: %v", err)
+	}
+
+	chatLn := eventTestChatLn(
+		map[string]*structs.TraceEvent{
+			// 没有 prev event，方案2 无法插入稳定旧块，必须退化成完整块。
+			"a.txt": {MsgID: msgs[1].ID, ToolCallID: "call_1", IsEdit: false},
+		},
+		map[string]trace.FileBlock{
+			"a.txt": {Name: "a.txt", Size: "4", Length: 4, Text: "1|new\n"},
+		},
+	)
+	chatLn.ID = 31
+	chatLn.DB = db
+	chatLn.NowAgent = "agent"
+	chatLn.TemporyDataOfSession[structs.TempKeyTraceDiffPlan] = map[string]trace.DiffPlan{
+		"a.txt": {Keep: true},
+	}
+	// RenderTraceBlocks 已在本轮确认当前磁盘内容；请求构建退化时据此推进完整块基线。
+	trace.ConfirmEditContent(chatLn, "a.txt", "new\n")
+
+	req, err := RequestBody(31, 1, "", &toolsList, db, "", "", cfgStruct.AgentConfig{}, chatLn)
+	if err != nil {
+		t.Fatalf("RequestBody failed: %v", err)
+	}
+	if !strings.Contains(messagesContent(req.Messages), "1|new") {
+		t.Fatal("fallback should inject the current full file block")
+	}
+	var got structs.Traces
+	if err := db.Where("chat_id = 31 AND path = 'a.txt'").First(&got).Error; err != nil {
+		t.Fatalf("reload trace: %v", err)
+	}
+	if got.LastContent != "new\n" {
+		t.Fatalf("fallback must advance LastContent to full block content, got %q", got.LastContent)
+	}
+}
+
+func messagesContent(messages []reqStruct.Message) string {
+	var builder strings.Builder
+	for _, message := range messages {
+		builder.WriteString(message.Content)
+	}
+	return builder.String()
+}
+
 // （assistant 调用 + 其 role:tool 结果）之后，事件之前不出现该内容。
 func TestRequestBody_TraceFollowsEvent_Native(t *testing.T) {
 	db := setupTestDB(t)
@@ -1495,7 +1576,36 @@ func TestRequestBody_NoEventFile_Top(t *testing.T) {
 	}
 }
 
-// TestDetectTraceEvents 验证事件检测：path 提取、只留最新、@task 识别、Summary 截断。
+func TestCollectTracePathsAfter(t *testing.T) {
+	db := setupTestDB(t)
+	msgs := []structs.Messages{
+		{ChatID: 40, Type: structs.MessagesRoleAgent, ToolCallingJSONString: `[{"name":"edit","parameters":{"path":"old.txt"}}]`},
+		{ChatID: 40, Type: structs.MessagesRoleAgent, AgentID: stringPtr("child"), ToolCallingJSONString: `[{"name":"read","parameters":{"path":"child.txt"}}]`},
+		{ChatID: 40, Type: structs.MessagesRoleAgent, ToolCallingJSONString: `[{"name":"read","parameters":{"path":"new.txt"}},{"name":"edit","parameters":{"path":"@temp/run"}},{"name":"edit","parameters":{"path":"@task"}}]`},
+	}
+	for i := range msgs {
+		if err := db.Create(&msgs[i]).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+	paths, err := CollectTracePathsAfter(db, 40, "", msgs[0].ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{"new.txt", "@temp/run"} {
+		if _, ok := paths[path]; !ok {
+			t.Errorf("expected %q to be retained", path)
+		}
+	}
+	for _, path := range []string{"old.txt", "child.txt", "@task"} {
+		if _, ok := paths[path]; ok {
+			t.Errorf("did not expect %q to be retained", path)
+		}
+	}
+}
+
+func stringPtr(value string) *string { return &value }
+
 func TestDetectTraceEvents(t *testing.T) {
 	db := setupTestDB(t)
 
