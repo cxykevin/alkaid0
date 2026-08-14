@@ -727,7 +727,7 @@ func ApplyToolOnHooks(session *storageStructs.Chats, toolCallingJSON string) err
 }
 
 // toolCallLoopThreshold 相同工具调用循环触发阈值：连续 N 次完全一致
-//（name + 参数）的工具调用判定为循环，注入纠正消息打断而非继续执行。
+// （name + 参数）的工具调用判定为循环，注入纠正消息打断而非继续执行。
 // AI 在命令已成功执行且结果已返回后仍反复重试同一调用（如 go test 返回
 // cached 结果后仍坚持重试）时，此机制在第二次重复后即截断。
 const toolCallLoopThreshold = 3
@@ -740,7 +740,7 @@ var shellNumRe = regexp.MustCompile(`\d+`)
 
 // normalizeShellCommand 归一化 shell 命令用于循环签名：数字 token 统一替换为 #，
 // 连续空白压缩为单空格。使"同一测试命令仅 tail -n 行数不同"的重复调用签名一致
-//（AI 陷入循环时常通过改 tail -n 等数字绕过精确匹配）。
+// （AI 陷入循环时常通过改 tail -n 等数字绕过精确匹配）。
 func normalizeShellCommand(cmd string) string {
 	s := shellNumRe.ReplaceAllString(cmd, "#")
 	return strings.Join(strings.Fields(s), " ")
@@ -935,7 +935,8 @@ const emptyAssistantToolCallContent = "[tool call]"
 // user(tool_result) 消息。Anthropic 校验要求每条 tool_use 块必须在紧邻的下一条消息中
 // 找到对应 tool_result——因此 assistant 一次携带多个 tool_calls 时，除第一个外其余
 // tool_use 都会在校验中缺失，报错形如：
-//   "`tool_use` ids were found without `tool_result` blocks immediately after: call_xx_..."
+//
+//	"`tool_use` ids were found without `tool_result` blocks immediately after: call_xx_..."
 //
 // 拆分后每条 assistant 只带一个 tool_call，其后紧邻该调用的结果（真实结果按 id 匹配，
 // 缺失则补终止占位），任意转换策略（逐条/合并）均可正确配对，同时顺带修复了
@@ -1074,6 +1075,8 @@ func SendRequest(ctx context.Context, session *storageStructs.Chats, callback fu
 	var totalUsage uint32
 	var cachedUsage uint32
 
+	var finishReason string
+
 	// pushFinalUsage 向客户端推送当前累积的最终 usage（幂等，失败仅告警）。
 	// 流式过程每 chunk 已带 usage 推送，此函数供流结束后的最终兜底，
 	// 覆盖纯 usage 帧、WaitApprove、取消与错误等不再走常规最终 callback 的路径，
@@ -1125,6 +1128,9 @@ func SendRequest(ctx context.Context, session *storageStructs.Chats, callback fu
 			if body.Usage.BillingUsage != nil && body.Usage.BillingUsage.ClaudeUsage != nil {
 				cachedUsage = max(cachedUsage, body.Usage.BillingUsage.ClaudeUsage.CacheReadInputTokens)
 			}
+		}
+		if len(body.Choices) > 0 && body.Choices[0].FinishReason != "" {
+			finishReason = body.Choices[0].FinishReason
 		}
 		if len(body.Choices) == 0 {
 			return nil
@@ -1366,6 +1372,16 @@ func SendRequest(ctx context.Context, session *storageStructs.Chats, callback fu
 	// 请求发生其他错误时，内容已持久化完毕，只需将错误向上传递
 	if requestErr != nil {
 		return true, requestErr
+	}
+
+	// 协议已明确结束且没有工具调用时，不应依赖 solver 的内部状态继续请求。
+	// solver 的 ok 仅表示解析器是否发现工具，不能替代 finish_reason。
+	if len(tools) == 0 && finishReason != "" && finishReason != "tool_calls" && finishReason != "function_call" {
+		// 对未知但非工具调用的结束原因也按终态处理，避免兼容层新增原因时静默续环。
+		ok = true
+	}
+	if len(tools) == 0 && (finishReason == "tool_calls" || finishReason == "function_call") {
+		return true, errors.New("model declared tool calls but no complete tool call was parsed")
 	}
 
 	// 有工具调用时转入审批等待状态，暂停回复处理直到用户或自动规则做出决定
