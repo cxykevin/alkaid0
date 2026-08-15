@@ -1,44 +1,31 @@
 ### Tool: `fetch`
 
-#### Description:
+Make an HTTP request to a remote URL and save the response in a temporary read-only object. Use `read` to inspect the returned `path`. Use `read` for local files and `search` for codebase searches; never use this tool with `file://` or local paths.
 
-Make HTTP requests to arbitrary URLs and return the response. Useful for calling REST/debug APIs, fetching web pages, and checking endpoints. The response is written to a temp file (`@temp/fetch/...`) whose content is returned via the `path` field — the file head shows the original request (method, URL, status) so you can recognize what it corresponds to.
+#### Parameters
 
-#### Parameters:
+- `method` (string, required): HTTP method, case-insensitive. Supported values include `GET`, `POST`, `PUT`, `DELETE`, `PATCH`, and `HEAD`.
+- `url` (string, required): A remote HTTP(S) URL.
+- `headers` (string, optional): One `Key: Value` header per line. Explicit headers override tool defaults. Do not put secrets in a prompt or expose them in output unless the request is authorized.
+- `body` (string, optional): Raw request body, usually for `POST`, `PUT`, or `PATCH`. A body on `GET` is allowed by the implementation but is unusual.
+- `hidden` (boolean, optional, default `false`): Use Chrome-compatible TLS and browser-style headers. This changes request fingerprinting; use only when the target and purpose authorize it. It does not bypass authentication, authorization, or access controls.
+- `summary` (string, optional): If non-empty and a summary model is configured, replace the stored response body with an LLM-generated Markdown summary following this instruction. Prefer it for large HTML pages when raw markup is not needed; omit it when exact API/debug output is required.
+- `timeout` (number, optional, default `30`): Request timeout in seconds. Values above 30 are capped at 30; zero or negative values use 30.
 
-- `method` (string, **required**): HTTP method, use UPPERCASE: `GET` / `POST` / `PUT` / `DELETE` / `PATCH` / `HEAD`.
-- `url` (string, **required**): The URL to request, e.g. `https://example.com/api`.
-- `headers` (string, optional): Request headers, one `Key: Value` per line. Example:
-  ```
-  Content-Type: application/json
-  Authorization: Bearer xxx
-  ```
-- `body` (string, optional): Raw request body string (mainly for `POST`/`PUT`). Not recommended for `GET`.
-- `hidden` (boolean, optional, default `false`): If `true`, disguise the request as a real Chrome browser: utls Chrome TLS fingerprint + browser-style headers (User-Agent, Sec-Fetch-\*, Referer, DNT). Use this when a target site blocks non-browser clients. `false` uses the built-in Alkaid0 user agent.
-- `summary` (string, optional): If non-empty, the fetched content is summarized into markdown via LLM using this text as the summary instruction, and the markdown summary is written to the temp file instead of the raw body. **When fetching a web page (HTML content) — not a debug/JSON API — you SHOULD always set this parameter** so the response stays concise and readable.
-- `timeout` (number, optional, default `30`): Timeout in seconds. Values above `30` are truncated to `30`.
+#### Return value
 
-#### Return:
+- `success`: `true` when an HTTP response was received, including 4xx/5xx; `false` for request, DNS, TLS, timeout, body-read, or storage errors.
+- `path`: The read-only `@temp/fetch/...` object containing request metadata, status, and raw content or the summary. Use `read` on this path to inspect it.
+- `status_code`: HTTP status code when a response was received.
+- `truncated`: Present as `true` when the raw body exceeded 64 KiB and was truncated before optional summarization.
+- `error`: Present when `success` is `false`.
 
-Returns a JSON object:
-- `success` (boolean): `true` when the HTTP round-trip completed (even for 4xx/5xx). `false` only on transport errors (timeout / DNS / TLS / network), in which case `error` contains the message.
-- `path` (string): The `@temp/fetch/...` path of the response temp file. Read this path to get the content. The file head includes the request info (`[fetch] METHOD url`, `Status: code`, request headers/body if any) followed by the response body (or the LLM markdown summary when `summary` is set).
-- `status_code` (number): HTTP status code of the response (e.g. `200`, `404`, `403`).
-- `truncated` (boolean, optional): present and `true` when the raw body exceeded the 64KB limit and was truncated.
-- On transport errors only: `success` is `false` and `error` contains the message.
+An HTTP error status is not a transport failure: inspect `status_code` and the body before deciding what to do next. A summary failure falls back to the raw response when possible.
 
-#### Behavior:
+#### Authorization and examples
 
-- `method` is case-insensitive (sent uppercase internally). Use uppercase to match the auto-approval rule (`GET` is auto-approved, other methods require manual approval).
-- User-supplied `headers` always override the defaults set by the tool.
-- For `hidden=true`, a Chrome TLS fingerprint is used even when the global `Agent.FetchProxy` proxy is configured (manual CONNECT/socks5 tunnel + utls).
-- GET with a body is allowed but unusual; prefer POST/PUT when sending a body.
+GET is commonly safe to approve, but all non-GET methods can change remote state and require the applicable approval. Do not send credentials, destructive requests, or private data without explicit authorization.
 
-DO NOT use this tool to fetch "file://" or any local files! Instead of using `read` tool.
-
-#### Quick Examples:
-
-- Fetch a web page (summarized): `{"method":"GET","url":"https://example.com","summary":"Summarize this page in markdown"}`
-- Call a REST API: `{"method":"POST","url":"https://api.example.com/data","headers":"Content-Type: application/json","body":"{\"key\":\"value\"}"}`
-- Disguise as browser: `{"method":"GET","url":"https://blocked-site.com","hidden":true}`
-- Long request timeout: `{"method":"GET","url":"https://example.com/slow","timeout":30}`
+- Summarize a page: `{"method":"GET","url":"https://example.com","summary":"Summarize the main facts with source links"}`
+- Call an API: `{"method":"POST","url":"https://api.example.com/data","headers":"Content-Type: application/json","body":"{\"key\":\"value\"}"}`
+- Use browser-compatible transport: `{"method":"GET","url":"https://example.com","hidden":true}`

@@ -15,8 +15,8 @@ import (
 	"github.com/cxykevin/alkaid0/log"
 )
 
-// CodebaseDB 单个目录的向量数据库实例
-type CodebaseDB struct {
+// DB 单个目录的向量数据库实例
+type DB struct {
 	directory string
 	db        *sql.DB
 
@@ -268,6 +268,9 @@ func RemoveFile(directory, filePath string) error {
 	if err != nil {
 		return fmt.Errorf("query ids: %w", err)
 	}
+	if rows.Err() != nil {
+		return fmt.Errorf("query orphan ids: %w", rows.Err())
+	}
 	var ids []int64
 	for rows.Next() {
 		var id int64
@@ -291,7 +294,7 @@ func RemoveFile(directory, filePath string) error {
 	return tx.Commit()
 }
 
-// symbol=""（整个文件）的记录不会被删除；同时清理对应的 vec0 向量
+// CleanSymbols symbol=""（整个文件）的记录不会被删除；同时清理对应的 vec0 向量
 func CleanSymbols(directory, filePath string, activeSymbols []string) error {
 	cdb, err := getOrCreateDB(directory)
 	if err != nil {
@@ -321,6 +324,9 @@ func CleanSymbols(directory, filePath string, activeSymbols []string) error {
 		)
 		if err != nil {
 			return fmt.Errorf("query orphan ids: %w", err)
+		}
+		if rows.Err() != nil {
+			return fmt.Errorf("query orphan ids: %w", rows.Err())
 		}
 		for rows.Next() {
 			var id int64
@@ -358,6 +364,9 @@ func CleanSymbols(directory, filePath string, activeSymbols []string) error {
 		rows, err := tx.Query(query, args...)
 		if err != nil {
 			return fmt.Errorf("query orphan ids: %w", err)
+		}
+		if rows.Err() != nil {
+			return fmt.Errorf("query orphan ids: %w", rows.Err())
 		}
 		for rows.Next() {
 			var id int64
@@ -399,7 +408,7 @@ func CleanSymbols(directory, filePath string, activeSymbols []string) error {
 // ---------------------------------------------------------------------------
 
 // getOrCreateDB 获取或创建指定目录的 CodebaseDB 实例
-func getOrCreateDB(directory string) (*CodebaseDB, error) {
+func getOrCreateDB(directory string) (*DB, error) {
 	VecDBsLock.Lock()
 	if cdb, ok := VecDBs[directory]; ok {
 		VecDBsLock.Unlock()
@@ -428,7 +437,7 @@ func getOrCreateDB(directory string) (*CodebaseDB, error) {
 		dim = DefaultDim
 	}
 
-	cdb := &CodebaseDB{
+	cdb := &DB{
 		directory:   directory,
 		modelName:   modelName,
 		modelID:     modelID,
@@ -509,7 +518,7 @@ func closeDirectory(directory string) error {
 }
 
 // openDB 打开目录对应的 .alkaid0/codebase.sqlite
-func (cdb *CodebaseDB) openDB() error {
+func (cdb *DB) openDB() error {
 	dbPath := filepath.Join(cdb.directory, ".alkaid0", "codebase.sqlite")
 	if err := os.MkdirAll(filepath.Dir(dbPath), 0755); err != nil {
 		return fmt.Errorf("create db dir: %w", err)
@@ -549,7 +558,7 @@ func (cdb *CodebaseDB) openDB() error {
 }
 
 // ensureDBOpen 确保数据库连接可用，在持有 mu 锁时调用
-func (cdb *CodebaseDB) ensureDBOpen() error {
+func (cdb *DB) ensureDBOpen() error {
 	if cdb.db != nil {
 		return nil
 	}
@@ -557,7 +566,7 @@ func (cdb *CodebaseDB) ensureDBOpen() error {
 }
 
 // ensureSchema 创建或迁移数据库 schema
-func (cdb *CodebaseDB) ensureSchema() error {
+func (cdb *DB) ensureSchema() error {
 	// 检查 meta 表是否存在
 	var tableName string
 	err := cdb.db.QueryRow(
@@ -597,7 +606,7 @@ func (cdb *CodebaseDB) ensureSchema() error {
 }
 
 // createTables 创建所有表和 FTS 触发器
-func (cdb *CodebaseDB) createTables() error {
+func (cdb *DB) createTables() error {
 	// vec0 虚拟表（维度在 DDL 中固定）
 	vecSQL := fmt.Sprintf(
 		`CREATE VIRTUAL TABLE IF NOT EXISTS codebase_vec USING vec0(
@@ -692,7 +701,7 @@ func (cdb *CodebaseDB) createTables() error {
 }
 
 // dropTables 删除 vec0、FTS5 和 items 表（保留 meta 表用于校验）
-func (cdb *CodebaseDB) dropTables() error {
+func (cdb *DB) dropTables() error {
 	if _, err := cdb.db.Exec("DROP TABLE IF EXISTS codebase_fts"); err != nil {
 		return fmt.Errorf("drop fts table: %w", err)
 	}
@@ -706,7 +715,7 @@ func (cdb *CodebaseDB) dropTables() error {
 }
 
 // ensureFTSSchema 检查 FTS5 表是否存在，不存在则创建并重建索引（迁移路径）
-func (cdb *CodebaseDB) ensureFTSSchema() error {
+func (cdb *DB) ensureFTSSchema() error {
 	// 检查 FTS 表是否已存在
 	var tableName string
 	err := cdb.db.QueryRow(

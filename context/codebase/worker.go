@@ -13,7 +13,7 @@ import (
 )
 
 // startWorker 启动当前目录的 worker goroutine（如果尚未运行）
-func (cdb *CodebaseDB) startWorker() {
+func (cdb *DB) startWorker() {
 	cdb.mu.Lock()
 	defer cdb.mu.Unlock()
 
@@ -29,7 +29,7 @@ func (cdb *CodebaseDB) startWorker() {
 }
 
 // stopWorker 停止当前目录的 worker，等待当前任务完成
-func (cdb *CodebaseDB) stopWorker() {
+func (cdb *DB) stopWorker() {
 	cdb.mu.Lock()
 	cancel := cdb.workerCancel
 	cdb.mu.Unlock()
@@ -46,7 +46,7 @@ func (cdb *CodebaseDB) stopWorker() {
 }
 
 // worker 单个目录的嵌入任务处理 goroutine
-func (cdb *CodebaseDB) worker(ctx context.Context) {
+func (cdb *DB) worker(ctx context.Context) {
 	defer func() {
 		if r := recover(); r != nil {
 			cdb.logger.Error("worker panic: %v", r)
@@ -87,7 +87,7 @@ func (cdb *CodebaseDB) worker(ctx context.Context) {
 }
 
 // embedAndStore 执行嵌入计算并存储结果到数据库
-func (cdb *CodebaseDB) embedAndStore(ctx context.Context, task *EmbedTask) error {
+func (cdb *DB) embedAndStore(ctx context.Context, task *EmbedTask) error {
 	hash := embedHash(task.EmbedText)
 
 	// 检查是否已有相同 hash 的记录，避免重复嵌入
@@ -182,7 +182,7 @@ func (cdb *CodebaseDB) embedAndStore(ctx context.Context, task *EmbedTask) error
 
 // upsertItem 插入或更新 codebase_items 记录（FTS5 触发器自动同步全文索引），返回记录 ID。
 // 供 BM25-only 模式（无 embedding 模型）与完整嵌入流程共用。
-func (cdb *CodebaseDB) upsertItem(task *EmbedTask, hash string) (int64, error) {
+func (cdb *DB) upsertItem(task *EmbedTask, hash string) (int64, error) {
 	cdb.mu.Lock()
 	defer cdb.mu.Unlock()
 
@@ -214,7 +214,7 @@ func (cdb *CodebaseDB) upsertItem(task *EmbedTask, hash string) (int64, error) {
 }
 
 // checkExistingHash 检查指定文件+符号是否已存在并返回其 hash
-func (cdb *CodebaseDB) checkExistingHash(filePath, symbol string) (string, error) {
+func (cdb *DB) checkExistingHash(filePath, symbol string) (string, error) {
 	if err := cdb.ensureDBOpen(); err != nil {
 		return "", err
 	}
@@ -232,7 +232,7 @@ func (cdb *CodebaseDB) checkExistingHash(filePath, symbol string) (string, error
 }
 
 // updateMetadata 更新指定文件+符号的元数据和更新时间戳（hash 未变时调用）
-func (cdb *CodebaseDB) updateMetadata(filePath, symbol, fullContent string, tags []string) error {
+func (cdb *DB) updateMetadata(filePath, symbol, fullContent string, tags []string) error {
 	cdb.mu.Lock()
 	defer cdb.mu.Unlock()
 

@@ -88,7 +88,7 @@ func TestUpdateInfo(t *testing.T) {
 	}
 }
 
-func TestUpdateInfoWithUntrace(t *testing.T) {
+func TestUpdateInfoWithUnread(t *testing.T) {
 	session := &structs.Chats{
 		TemporyDataOfRequest: make(map[string]any),
 		ToolCallingContext:   make(map[string]any),
@@ -96,8 +96,8 @@ func TestUpdateInfoWithUntrace(t *testing.T) {
 	}
 
 	mp := map[string]*any{
-		"path":    func() *any { s := any("test.txt"); return &s }(),
-		"untrace": func() *any { b := any(true); return &b }(),
+		"path":   func() *any { s := any("test.txt"); return &s }(),
+		"unread": func() *any { b := any(true); return &b }(),
 	}
 
 	pass, _, err := updateInfo(session, mp, []*any{}, "")
@@ -345,7 +345,7 @@ func TestTraceFileTooLarge(t *testing.T) {
 	}
 }
 
-func TestUntraceSuccess(t *testing.T) {
+func TestUnreadSuccess(t *testing.T) {
 	db := setupTestDB(t)
 	defer u.Unwrap(db.DB()).Close()
 
@@ -376,8 +376,8 @@ func TestUntraceSuccess(t *testing.T) {
 	session.TemporyDataOfSession["tools:trace"] = traceCache{}
 
 	mp := map[string]*any{
-		"path":    func() *any { s := any("test.txt"); return &s }(),
-		"untrace": func() *any { b := any(true); return &b }(),
+		"path":   func() *any { s := any("test.txt"); return &s }(),
+		"unread": func() *any { b := any(true); return &b }(),
 	}
 
 	pass, _, result, err := Trace(session, mp, []*any{})
@@ -388,7 +388,7 @@ func TestUntraceSuccess(t *testing.T) {
 		t.Error("Expected pass to be false")
 	}
 
-	// 检查结果 - untrace可能会失败如果记录不存在
+	// 检查结果 - unread 可能会失败如果记录不存在
 	if successPtr, ok := result["success"]; ok && successPtr != nil {
 		success, _ := (*successPtr).(bool)
 		// 只要有结果就可以，不强制要求成功
@@ -402,7 +402,7 @@ func TestUntraceSuccess(t *testing.T) {
 	_ = count
 }
 
-func TestUntraceNotFound(t *testing.T) {
+func TestUnreadNotFound(t *testing.T) {
 	db := setupTestDB(t)
 	defer u.Unwrap(db.DB()).Close()
 
@@ -421,8 +421,8 @@ func TestUntraceNotFound(t *testing.T) {
 	session.TemporyDataOfSession["tools:trace"] = traceCache{}
 
 	mp := map[string]*any{
-		"path":    func() *any { s := any("nonexistent.txt"); return &s }(),
-		"untrace": func() *any { b := any(true); return &b }(),
+		"path":   func() *any { s := any("nonexistent.txt"); return &s }(),
+		"unread": func() *any { b := any(true); return &b }(),
 	}
 
 	pass, _, result, err := Trace(session, mp, []*any{})
@@ -1221,8 +1221,8 @@ func TestRenderTraceBlock_SingleAndMulti(t *testing.T) {
 	if err != nil {
 		t.Fatalf("multi render: %v", err)
 	}
-	if strings.Count(multi, "### Traced read Files") != 1 {
-		t.Errorf("expected exactly one intro, got %d", strings.Count(multi, "### Traced read Files"))
+	if strings.Count(multi, "### Read Files") != 1 {
+		t.Errorf("expected exactly one intro, got %d", strings.Count(multi, "### Read Files"))
 	}
 	if !strings.Contains(multi, "a.txt") || !strings.Contains(multi, "b.txt") {
 		t.Errorf("multi block missing files: %q", multi)

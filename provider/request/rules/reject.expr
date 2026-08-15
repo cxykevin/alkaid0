@@ -1,7 +1,7 @@
 (
     (
         ToolCall.Name == "edit" ||
-        ToolCall.Name == "trace"
+        ToolCall.Name == "read"
     ) && regex(
         "(^|/)(\\.env($|\\.)|\\.npmrc$|\\.pypirc$|\\.netrc$|\\.git-credentials$|\\.aws/credentials$|\\.kube/config$|\\.ssh/|id_rsa$|id_dsa$|id_ed25519$|authorized_keys$|known_hosts$|\\.(pem|key|crt|p12|pfx|der|jks|keystore)$|\\.alkaid0/)",
         param(ToolCall, "path")

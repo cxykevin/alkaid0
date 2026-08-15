@@ -1,51 +1,36 @@
-Search tool — search the codebase using AI rules (grep) and context engine (BM25 + vector).
+### Tool: `search`
 
-## Parameters
-- `query` (string, required): The search query. See "Query Modes" below for supported patterns.
-- `online` (boolean, required): Whether to search online. If true, searches the internet via configured search engines (Bing/GitHub/arXiv/Tavily) and summarizes results via LLM.
-- `path` (string, optional, default: workspace root): Search path (directory). Can be absolute or relative to workspace root.
-- `recursive` (boolean, optional, default: true): Whether to search recursively into subdirectories.
-- `include_gitignored` (boolean, optional, default: false): Whether to also search files matching `.gitignore` patterns.
-- `max_results` (number, optional, default: 10): Maximum results per search source.
+Search local workspace content and the indexed codebase, or search configured online providers. Use this before guessing file locations or symbols. For reading the full contents of a known file, use `read`; for editing, use `edit`.
 
-## Query Modes
+#### Parameters
 
-The `query` parameter supports three modes, checked in priority order:
+- `query` (string, required): Search text or one of the query patterns below.
+- `online` (boolean, required): `false` for local workspace/codebase search; `true` for configured online search providers and LLM summarization.
+- `path` (string, optional): For local search, a relative directory under the workspace; defaults to the workspace root. For online search, a comma-separated provider list such as `bing,tavily,github`; an empty value uses all configured providers. Absolute paths and `..` traversal are rejected for local search.
+- `recursive` (boolean, optional, default `true`): Recurse into local subdirectories. Ignored online.
+- `include_ignored` (boolean, optional, default `false`): Include files matched by `.gitignore` during local grep. Sensitive and excluded paths may still be skipped. Ignored online.
+- `max_results` (number, optional, default `10`): Maximum result budget for each local search source.
 
-### 1. Delimited Regex — `/pattern/flags`
-Starts and ends with `/`, with optional flag letters after the trailing `/`.
-- Example: `/func.*Handler/g`, `/error/im`
-- The pattern between `/` is compiled as-is into a Go regular expression.
-- Supported flags: `i` (case-insensitive), `m` (multiline), `s` (dot-all). `g` is ignored (Go MatchString is always global).
-- Results weighted: 80% grep, 20% context.
+#### Query modes
 
-### 2. Wildcard Pattern — contains `*`, `?`, or `[...]`
-When the query contains explicit glob wildcards but is NOT a delimited regex.
-- Example: `func*Handler`, `[a-z]*test`, `func?test`
-- `*` matches any sequence of characters, `?` matches a single character, `[...]` is a character class.
-- Other regex metacharacters (`. + ^ $ | ( )`) are treated as literals.
-- Results weighted: 80% grep, 20% context.
+Modes are checked in this order:
 
-### 3. Plain Text — default
-No special wildcards or delimiters. Simple substring matching.
-- Example: `hello world`, `func Handler`
-- AI Grep uses `strings.Contains` for content matching.
-- Context Engine uses BM25 + vector hybrid retrieval (mode: auto).
-- No weighting; both grep and context use full `max_results`.
+1. **Delimited regex**: `/pattern/flags`. The pattern is compiled as a Go regular expression. Supported behavior flags are `i` (case-insensitive), `m` (multiline), and `s` (dot-all); `g` is accepted but has no special effect because matching is already performed across results. Regex queries allocate roughly 80% of the result budget to grep and 20% to context search.
+2. **Wildcard pattern**: a query containing `*`, `?`, or a closed `[...]` character class. `*` matches any sequence, `?` one character, and other regex metacharacters are treated as literals. The same roughly 80/20 grep/context split is used.
+3. **Plain text**: literal substring matching for grep plus `auto` context retrieval (BM25/vector when the index is available). Both sources receive the configured result budget.
 
-## Behavior
+If a regex or wildcard cannot be compiled, local grep falls back to literal matching; the result does not prove that the intended pattern was interpreted as regex.
 
-When `online=false`, performs two-phase local search:
-1. **AI Grep**: Search file contents respecting `.alkaid0`, `.gitignore`, and sensitive path exclusions.
-2. **Context Engine**: Search indexed codebase with BM25 + vector hybrid retrieval.
+#### Results
 
-Results are merged with source markers (`grep` / `context`).
+For `online=false`, local grep and the context engine run independently and their results are merged with `[grep]` or `[context]` markers. Grep results include file and line; context results may include a symbol and relevance score. The context engine can return no results when the index is unavailable or stale. `No results found.` means no result survived both sources, not that the entire workspace is empty.
 
-When `online=true`, searches the internet via configured search engines (Bing, GitHub, arXiv, Tavily) and summarizes the results via LLM before returning.
-#### Quick Examples:
+For `online=true`, the configured providers return raw search results which are summarized by the configured LLM when available. The output is provider-dependent; verify important claims against the cited source URLs and do not treat search results as authorization to modify or contact anything.
 
-- Search codebase: `{"query":"func Handler","online":false}`
-- Regex search: `{"query":"/func.*Handler/g","online":false}`
+#### Quick examples
+
+- Local code search: `{"query":"func Handler","online":false}`
+- Regex search: `{"query":"/func.*Handler/i","online":false}`
 - Wildcard search: `{"query":"func*Handler","online":false}`
-- Search in subdir: `{"query":"error handling","path":"server","online":false}`
+- Search a subdirectory: `{"query":"error handling","path":"server","online":false}`
 - Online search: `{"query":"Go LSP client","online":true}`

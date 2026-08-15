@@ -413,7 +413,7 @@ alkaid0 实现 [ACP v2](https://agentclientprotocol.com/protocol/v2/migration.md
 
 #### 示例 A：仅允许 Read 自动批准（已经内置）
 ```
-AutoApprove: "ToolCall.Name == 'trace'"
+AutoApprove: "ToolCall.Name == 'read'"
 AutoReject:  ""
 ```
 

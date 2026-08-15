@@ -1,49 +1,36 @@
 ### Tool: `run`
 
-#### Description:
+Use only the `run` tool for execution and timing; use `read` for file content, `edit` for file changes, `search` for code search, and `fetch` for HTTP requests.
 
-Start a task to run something likes code, command, and so on.
+#### Parameters
 
-#### Parameters:
+- `type` (string, required): One of `shell`, `sleep`, or `wait`.
+- `reason` (string, required): A short reason for the operation (20 words or fewer).
+- `command` (string, required): The shell command for `shell`, an integer number of seconds for `sleep`, or the `run_id` returned by a background `shell` for `wait`.
+- `timeout` (number, optional): For `shell` only. Defaults to 60 seconds for foreground runs. Foreground values must be less than 300 seconds; a background run defaults to no timeout. A non-positive foreground value falls back to 60 seconds.
+- `sandbox` (boolean, optional): For `shell` only; defaults to `true`. The effective setting can still be restricted by project configuration or platform support.
+- `background` (boolean, optional): For `shell` only; defaults to `false`. When true, return immediately with a `run_id` and update its temporary result while the command runs.
 
-- `type` (required): A Enum decided which type of task want to do. Must Be First Parameter. Enum: ["shell", "sleep", "wait"]
-- `reason` (required): A short(<=20 words) reason of this task. Must Be Second Parameter.
-- `command` (required): Command or program will be run. For `"sleep"` type, it must be an int number representing seconds to wait. For `"wait"` type, it must be the run id returned by a background run. Must Be Third Parameter.
-- `timeout` (optional): Timeout of the command. Default is 60(seconds). If it will not be run in background(default), it must less than 300(seconds). If run in background, default is no timeout and no limit. Only available in `"shell"` type.
-- `sandbox` (optional): Whether run in sandbox. Some type don't support this parameter. Default is true. Only available in `"shell"` type.
-- `background` (optional): Whether run in background. Default is false. Only available in `"shell"` type. If true, the command runs asynchronously: a temp object is created immediately and its path returned as `run_id`, the temp object is updated every 60 seconds until the command finishes, and updated once more with the final output.
+#### Types
 
-#### Type parameters (which type of task you want to run):
+- `shell`: Execute the command in the configured shell and workspace. Use the smallest command that directly verifies or performs the requested execution.
+- `sleep`: Wait for `command` seconds without executing a process. The maximum is 3600 seconds. Use it only when a real time delay is required, not to guess whether another task has finished.
+- `wait`: Block until the background job identified by `command` finishes. The returned result identifies the same temporary output path; it does not start the job again.
 
-- `"shell"`: Start a system command.
-- `"sleep"`: Wait for specified seconds. `command` must be an int number (seconds). No command is executed.
-- `"wait"`: Block until a background run finishes. `command` must be the `run_id` returned by a previous background run. The background task keeps running; you can also read the `run_id` temp object with `trace` at any time to check progress.
+#### Background jobs
 
-#### Background usage:
+Set `background: true` for a command that may outlive the current request. The tool returns a `run_id`/`@temp` path immediately. Use `wait` when you need a definitive completion or failure result; use `read` to inspect progress without waiting. Do not infer completion from elapsed time or repeat the same command. Background jobs may continue after the session stops and are governed by their timeout and process lifecycle.
 
-For a long-running command, set `"background":true`. The tool returns immediately with `"run_id"` (the temp object path). Use `{"type":"wait","command":"<run_id>"}` to block until it finishes, or `trace` the `run_id` path to inspect current status/output at any time. Background commands are not bound to the session: they survive session stop and run until timeout or completion.
+#### Safety and scope
 
-#### Default shell of `"shell"` type in different OS:
+- Do not use `run` as a substitute for a dedicated tool.
+- Review commands before execution. Avoid destructive or externally visible commands unless the user has authorized them; do not expose credentials in commands or output.
+- Prefer sandboxed execution. Disable the sandbox only when the operation genuinely requires it and the authorization and environment make that appropriate.
+- Treat stdout, stderr, exit status, and temporary output as evidence. A successful tool call does not imply the command itself succeeded; inspect the result and run follow-up verification when needed.
 
-- `"bash"`: Linux.
-- `"zsh"`: MacOS.
-- `"powershell"`: Windows.
+#### Quick examples
 
-#### Rules:
-
-DO NOT use the `run` tools or bash cmds to perform ANY tasks that belong to other tools!!!
-DO NOT use the `run` tools or bash cmds to perform ANY tasks that belong to other tools!!!
-DO NOT use the `run` tools or bash cmds to perform ANY tasks that belong to other tools!!!
-
-NEVER read file by `run` tools, instead, use `trace` tools!
-NEVER write file by `run` tools, instead, use `edit` tools!
-NEVER fetch page by `run` tools, instead, use `fetch` tools!
-
-#### Quick Examples:
-
-- Run a command: `{"type":"shell","reason":"check git status","command":"git status"}`
-- Sleep briefly: `{"type":"sleep","reason":"wait for build to finish","command":"5"}`
-- Wait for background job: `{"type":"wait","reason":"wait for server start","command":"run/run-20260101-120000"}`
-- Run in background: `{"type":"shell","reason":"start dev server","command":"go run .","background":true}`
-- Disable sandbox: `{"type":"shell","reason":"list workspace files","command":"ls -la","sandbox":false}`
-- Custom timeout: `{"type":"shell","reason":"run slow tests","command":"go test -v ./...","timeout":120}`
+- Foreground command: `{"type":"shell","reason":"run package tests","command":"go test ./..."}`
+- Delayed check: `{"type":"sleep","reason":"wait before retry","command":"5"}`
+- Definitive background wait: `{"type":"wait","reason":"await build completion","command":"run/run-20260101-120000"}`
+- Background server: `{"type":"shell","reason":"start development server","command":"go run .","background":true}`

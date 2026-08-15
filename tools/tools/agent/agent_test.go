@@ -578,7 +578,7 @@ func TestUnuseAgent_MissingPrompt(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unuseAgent with missing prompt: %v", err)
 	}
-	if result["error"] == nil {
-		t.Error("Expected error for missing prompt")
+	if result == nil || result["error"] == nil {
+		t.Fatal("unuseAgent should return an error result")
 	}
 }

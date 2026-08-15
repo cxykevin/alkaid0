@@ -414,7 +414,7 @@ scan:
 		systemContent += "\n[Prompt Preprocessing]\n"
 		systemContent += "When user input contains large code blocks or logs, they are extracted and saved to temporary files.\n"
 		systemContent += "The user message will show [path:@temp/prompt/code-...] (for code) or [path:@temp/prompt/log-...] (for log) instead.\n"
-		systemContent += "Use `trace` tool with this path to read the full content if needed.\n"
+		systemContent += "Use `read` tool with this path to read the full content if needed.\n"
 		systemContent += "Make sure to use the full path including @temp/prompt/ prefix.\n\n"
 	}
 
@@ -656,7 +656,7 @@ func insertEventContentBlocks(l *list.List, dbIDToElement map[uint64]*list.Eleme
 		}
 		if !ev.IsTask {
 			if _, ok := fileBlocks[path]; !ok {
-				continue // 事件文件不在 Traces 表（如事后 untrace）→ 跳过
+				continue // 事件文件不在 Traces 表（如事后 unread）→ 跳过
 			}
 			if plan, ok := diffPlans[path]; ok && plan.Keep {
 				// 方案2在上方未能实际插入，下面将发送完整当前块；同步完整块缓存基线。

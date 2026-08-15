@@ -9,6 +9,7 @@ import (
 	"github.com/cxykevin/alkaid0/log"
 	"github.com/cxykevin/alkaid0/prompts"
 	"github.com/cxykevin/alkaid0/provider/parser"
+	"github.com/cxykevin/alkaid0/tools/index"
 	u "github.com/cxykevin/alkaid0/utils"
 
 	agents "github.com/cxykevin/alkaid0/provider/request/agents/actions"
@@ -370,8 +371,6 @@ func useAgent(session *structs.Chats, mp map[string]*any, cross []*any) (bool, [
 
 // unuseAgent 停用当前会话的子代理实例
 func unuseAgent(session *structs.Chats, mp map[string]*any, cross []*any) (bool, []*any, map[string]*any, error) {
-	logger.Info("deactivate agent \"%s\" in ID=%d", session.CurrentAgentID, session.ID)
-
 	prompt, err := CheckPrompt(mp)
 	if err != nil {
 		boolx := false
@@ -383,8 +382,18 @@ func unuseAgent(session *structs.Chats, mp map[string]*any, cross []*any) (bool,
 		}, nil
 	}
 
-	err = agents.DeactivateAgent(session, prompt)
-	if err != nil {
+	// A stale tool call may arrive after the previous deactivation already
+	// cleared the session. Treat it as an idempotent success and do not write
+	// another communication message or start another summary.
+	if session.CurrentAgentID == "" && session.NowAgent == "" {
+		boolx := true
+		success := any(boolx)
+		return false, cross, map[string]*any{
+			"success": &success,
+		}, nil
+	}
+
+	if err := agents.DeactivateAgent(session, prompt); err != nil {
 		boolx := false
 		success := any(boolx)
 		errMsg := any(err.Error())
@@ -557,5 +566,5 @@ func load() string {
 }
 
 func init() {
-	// index.AddIndex(load)
+	index.AddIndex(load)
 }

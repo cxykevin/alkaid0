@@ -105,7 +105,7 @@ func useScope(session *structs.Chats, mp map[string]*any, cross []*any) (bool, [
 		}, nil
 	}
 
-	// 检查并获取untrace参数
+	// 检查并获取disable参数
 	disablePtr, ok := mp["disable"]
 	var disable bool
 	if ok && disablePtr != nil {

@@ -174,6 +174,25 @@ func mergeAutoRuleExpr(userExpr string, builtinExpr string) string {
 	return "truthy(" + userExpr + ") || truthy(" + builtinExpr + ")"
 }
 
+// isRuleExemptTool 判断是否跳过自动审批/拒绝规则的工具。
+// deactivate_agent 是生命周期收尾操作，必须能够在任意 Agent 规则下执行，
+// 否则 Agent 自身的宽泛 AutoReject 可能阻止它退出。
+func isRuleExemptTool(name string) bool {
+	return name == "deactivate_agent"
+}
+
+func allRuleExemptTools(toolCalls []ToolCall) bool {
+	if len(toolCalls) == 0 {
+		return false
+	}
+	for _, call := range toolCalls {
+		if !isRuleExemptTool(call.Name) {
+			return false
+		}
+	}
+	return true
+}
+
 func hasParam(call ToolCall, key string) bool {
 	if call.Parameters == nil {
 		return false
@@ -293,6 +312,19 @@ func EvaluateApprovalRules(session *storageStructs.Chats, toolCalls []ToolCall) 
 		return ApprovalResult{Decision: DecisionManual}, nil
 	}
 
+	// deactivate_agent 是生命周期收尾操作，不能被当前 Agent 的拒绝规则阻断。
+	// 整批调用只有在全部为该工具时才可直接放行；混合调用仍需对其他工具执行规则。
+	if allRuleExemptTools(toolCalls) {
+		logger.Info("EvaluateRules: all tool calls are rule-exempt -> DecisionApproved")
+		return ApprovalResult{Decision: DecisionApproved}, nil
+	}
+	ruleToolCalls := make([]ToolCall, 0, len(toolCalls))
+	for _, call := range toolCalls {
+		if !isRuleExemptTool(call.Name) {
+			ruleToolCalls = append(ruleToolCalls, call)
+		}
+	}
+
 	// 先读取 Agent 级别的配置，作为最高优先级。
 	// CurrentAgentConfig 仅在子代理活跃时有效；主会话必须直接使用全局规则。
 	autoApprove := ""
@@ -353,15 +385,15 @@ func EvaluateApprovalRules(session *storageStructs.Chats, toolCalls []ToolCall) 
 		}
 	}
 
-	// 将所有工具调用转为 map 形式供表达式引擎求值
-	callsMap := make([]map[string]any, len(toolCalls))
-	for i, c := range toolCalls {
+	// 将需要规则评估的工具调用转为 map 形式供表达式引擎求值
+	callsMap := make([]map[string]any, len(ruleToolCalls))
+	for i, c := range ruleToolCalls {
 		callsMap[i] = c.AsMap()
 	}
 
 	// 第 1 层：拒绝检查（安全优先）
 	if rejectProgram != nil {
-		for _, call := range toolCalls {
+		for _, call := range ruleToolCalls {
 			result, runErr := expr.Run(rejectProgram, map[string]any{
 				"ToolCalls": callsMap,
 				"ToolCall":  call.AsMap(),
@@ -386,7 +418,7 @@ func EvaluateApprovalRules(session *storageStructs.Chats, toolCalls []ToolCall) 
 	}
 
 	// 第 3 层：全量审批检查
-	for _, call := range toolCalls {
+	for _, call := range ruleToolCalls {
 		result, runErr := expr.Run(approveProgram, map[string]any{
 			"ToolCalls": callsMap,
 			"ToolCall":  call.AsMap(),
@@ -794,6 +826,12 @@ func ExecuteToolCalls(session *storageStructs.Chats, toolCallingJSON string) (bo
 	}
 	if session.DB == nil {
 		return true, errors.New("db not initialized")
+	}
+	// 一轮响应只能进行一次子代理生命周期切换。多个 activate_agent/
+	// deactivate_agent 会让同一轮后续调用依据过期的会话状态执行，导致激活、
+	// 停用顺序和回传内容不确定；在任何 OnHook 执行前拒绝整批调用。
+	if err := validateAgentLifecycleCalls(toolCallingJSON); err != nil {
+		return true, err
 	}
 	// 相同工具调用循环检测：AI 已连续多次以相同参数调用同一工具且结果未变时，
 	// 注入纠正消息打断（不执行工具），避免无限循环重试。此机制优先于一切执行逻辑，
@@ -1318,4 +1356,28 @@ func SendRequest(ctx context.Context, session *storageStructs.Chats, callback fu
 
 	logger.Debug("[tool body] %s", solver.GetToolsOrigin())
 	return ok, nil
+}
+
+// validateAgentLifecycleCalls rejects a batch containing more than one
+// activate_agent or deactivate_agent call. Lifecycle changes mutate the shared
+// session state, so executing multiple changes from one model response is
+// ambiguous and can lose the subagent handoff.
+func validateAgentLifecycleCalls(payload string) error {
+	var calls []struct {
+		Name string `json:"name"`
+	}
+	if err := stdjson.Unmarshal([]byte(payload), &calls); err != nil {
+		return err
+	}
+	count := 0
+	for _, call := range calls {
+		if call.Name != "activate_agent" && call.Name != "deactivate_agent" {
+			continue
+		}
+		count++
+		if count > 1 {
+			return fmt.Errorf("only one activate_agent or deactivate_agent call is allowed per response")
+		}
+	}
+	return nil
 }

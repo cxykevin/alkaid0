@@ -56,7 +56,7 @@ type SearchResult struct {
 // limit 控制最大返回条数（默认 10）。
 // 返回按 BM25 相关性得分排序的结果（得分越低越相关）。
 // ctx 取消时，查询会立即中止并返回 context.Canceled。
-func (cdb *CodebaseDB) BM25Search(ctx context.Context, query string, limit int) ([]BM25Result, error) {
+func (cdb *DB) BM25Search(ctx context.Context, query string, limit int) ([]BM25Result, error) {
 	cdb.mu.RLock()
 	defer cdb.mu.RUnlock()
 
@@ -122,7 +122,7 @@ func (cdb *CodebaseDB) BM25Search(ctx context.Context, query string, limit int) 
 // limit 控制最大返回条数（默认 10）。
 // 返回按向量距离升序排列的结果（距离越小越相似）。
 // ctx 取消时，搜索会立即中止并返回 context.Canceled。
-func (cdb *CodebaseDB) VectorSearch(ctx context.Context, query string, limit int) ([]VectorSearchResult, error) {
+func (cdb *DB) VectorSearch(ctx context.Context, query string, limit int) ([]VectorSearchResult, error) {
 	if limit <= 0 {
 		limit = 10
 	}
@@ -199,7 +199,7 @@ const (
 //
 // limit 控制最大返回条数（默认 10）。
 // ctx 取消时搜索立即中止。
-func (cdb *CodebaseDB) Search(ctx context.Context, searchType SearchType, query string, limit int) ([]SearchResult, error) {
+func (cdb *DB) Search(ctx context.Context, searchType SearchType, query string, limit int) ([]SearchResult, error) {
 	if limit <= 0 {
 		limit = 10
 	}
@@ -228,7 +228,7 @@ func Search(ctx context.Context, directory string, searchType SearchType, query 
 }
 
 // searchBM25Only 仅 BM25 检索
-func (cdb *CodebaseDB) searchBM25Only(ctx context.Context, query string, limit int) ([]SearchResult, error) {
+func (cdb *DB) searchBM25Only(ctx context.Context, query string, limit int) ([]SearchResult, error) {
 	results, err := cdb.BM25Search(ctx, query, limit)
 	if err != nil {
 		return nil, err
@@ -252,7 +252,7 @@ func (cdb *CodebaseDB) searchBM25Only(ctx context.Context, query string, limit i
 }
 
 // searchVectorOnly 仅向量相似度搜索
-func (cdb *CodebaseDB) searchVectorOnly(ctx context.Context, query string, limit int) ([]SearchResult, error) {
+func (cdb *DB) searchVectorOnly(ctx context.Context, query string, limit int) ([]SearchResult, error) {
 	results, err := cdb.VectorSearch(ctx, query, limit)
 	if err != nil {
 		return nil, err
@@ -283,7 +283,7 @@ func (cdb *CodebaseDB) searchVectorOnly(ctx context.Context, query string, limit
 //   - BM25Weight: BM25 权重（默认 0.7），向量权重 = 1-BM25Weight
 //   - VectorMinSimilarity: 向量最小余弦相似度保留阈值（默认 0.5）
 //   - BM25RetentionScore: BM25 保留阈值（0 不限制）
-func (cdb *CodebaseDB) searchHybrid(ctx context.Context, query string, limit int) ([]SearchResult, error) {
+func (cdb *DB) searchHybrid(ctx context.Context, query string, limit int) ([]SearchResult, error) {
 	// 加载搜索引擎配置
 	cfg := config.GlobalConfigSafe()
 	ec := cfg.Context.Codebase
@@ -490,7 +490,7 @@ func (cdb *CodebaseDB) searchHybrid(ctx context.Context, query string, limit int
 }
 
 // asHybridResult 将向量结果直接包装为 SearchResult
-func (cdb *CodebaseDB) asHybridResult(results []VectorSearchResult) ([]SearchResult, error) {
+func (cdb *DB) asHybridResult(results []VectorSearchResult) ([]SearchResult, error) {
 	if len(results) == 0 {
 		return nil, nil
 	}
@@ -510,7 +510,7 @@ func (cdb *CodebaseDB) asHybridResult(results []VectorSearchResult) ([]SearchRes
 }
 
 // bm25ResultsToHybrid 将 BM25 结果直接包装为 SearchResult
-func (cdb *CodebaseDB) bm25ResultsToHybrid(results []BM25Result) ([]SearchResult, error) {
+func (cdb *DB) bm25ResultsToHybrid(results []BM25Result) ([]SearchResult, error) {
 	if len(results) == 0 {
 		return nil, nil
 	}
@@ -545,7 +545,7 @@ func clampWeight(v, def float64) float64 {
 // ---------------------------------------------------------------------------
 
 // embedQuery 调用嵌入 API 将查询文本转为向量
-func (cdb *CodebaseDB) embedQuery(ctx context.Context, query string) ([]float32, error) {
+func (cdb *DB) embedQuery(ctx context.Context, query string) ([]float32, error) {
 	req := reqstructs.EmbeddingRequest{
 		Input: []string{query},
 		Model: cdb.modelID,

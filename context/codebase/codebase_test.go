@@ -367,6 +367,9 @@ func TestSchemaCreate(t *testing.T) {
 		t.Fatalf("query tables: %v", err)
 	}
 	defer rows.Close()
+	if rows.Err() != nil {
+		t.Fatalf("query tables: %v", rows.Err())
+	}
 
 	for rows.Next() {
 		var name string
@@ -694,6 +697,9 @@ func TestCleanSymbols(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer rows.Close()
+	if rows.Err() != nil {
+		t.Fatal(rows.Err())
+	}
 
 	var remaining []string
 	for rows.Next() {
@@ -927,7 +933,7 @@ func TestBM25SearchEmpty(t *testing.T) {
 }
 
 // insertTestItem 直接向数据库插入一条 codebase_items 记录（绕过 worker/API）
-func insertTestItem(t *testing.T, cdb *CodebaseDB, filePath, symbol, embedText, fullContent string, tags string) int64 {
+func insertTestItem(t *testing.T, cdb *DB, filePath, symbol, embedText, fullContent string, tags string) int64 {
 	t.Helper()
 
 	// 先删除同 file_path+symbol 的记录（避免冲突）

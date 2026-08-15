@@ -1,22 +1,16 @@
-###### Virtual Object: `@memory`
+### Virtual objects: `@memory` and `@memory/global`
 
-The `@memory` and `@memory/global` are persistent markdown memory files, editable via the `edit` tool.
+These are persistent Markdown notes edited through `edit`:
 
-- `@memory` (project-level): saved to `.alkaid0/MEMORY.md` in the project root (git-ignored, not tracked).
-- `@memory/global` (global): saved to `MEMORY.md` in the same directory as the alkaid0 config file.
+Use memory for durable architecture decisions, constraints, coding conventions, user preferences, and project facts that will help future sessions. The files are loaded into later prompts, so write only concise, factual, non-redundant notes.
 
-Use them to store and recall:
-- Architecture decisions and design constraints.
-- Coding conventions and standards.
-- User preferences and project-specific knowledge.
-- Notes that must survive across sessions.
+#### Editing
 
-#### Operational Rules
+- Append with `target: ""`.
+- Replace the whole file or create it with `target: "@all"`.
+- Use `@ln:`, `@insert:`, `@regex:`, or an exact substring only after reading the current content. A missing file cannot be edited by a target that assumes existing lines.
+- Preserve Markdown and unrelated notes. Do not add display line numbers.
 
-1. Append a note: `path: "@memory"` (or `"@memory/global"`), `target: ""`, `text: "<new note>"`.
-2. Replace the whole file: `target: "@all"` (also for creating a new memory file).
-3. Modify a specific line/substring: use `@ln:`, `@insert:`, `@regex:`, or a substring target.
-4. Keep notes concise, factual, and non-redundant. Do not duplicate what is already written.
-5. When a memory file does not exist yet, use `target: "@all"` (or `""`), never `@ln:`/`@insert:` targeting lines above 1.
+#### Privacy and quality
 
-**DO NOT INCLUDE LINE NUMBERS IN EDITING!**
+Do not store passwords, API keys, tokens, session contents, private personal data, transient progress, or unverified assumptions. Do not duplicate repository documentation or existing memory. Project memory is not a replacement for the user's current request or the checked-in project instructions.

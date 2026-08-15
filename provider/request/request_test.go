@@ -723,10 +723,10 @@ func TestEvaluateApprovalRules_BuiltinRules(t *testing.T) {
 		t.Errorf("Expected DecisionApproved for agent (builtin rule), got %v", result.Decision)
 	}
 
-	// 内置 approve 规则应批准 trace 工具
-	result, _ = EvaluateApprovalRules(session, []ToolCall{{Name: "trace", ID: "3"}})
+	// 内置 approve 规则应批准 read 工具
+	result, _ = EvaluateApprovalRules(session, []ToolCall{{Name: "read", ID: "3"}})
 	if result.Decision != DecisionApproved {
-		t.Errorf("Expected DecisionApproved for trace (builtin rule), got %v", result.Decision)
+		t.Errorf("Expected DecisionApproved for read (builtin rule), got %v", result.Decision)
 	}
 
 	// 内置 approve 规则应批准 edit @task（虚拟任务对象）
@@ -987,6 +987,57 @@ func TestUserAddMsg_WaitApprove_AgentActive(t *testing.T) {
 }
 
 // TestEvaluateApprovalRules_ErrorPropagation 测试错误不会被静默吞咽
+func TestEvaluateApprovalRules_DeactivateAgentAlwaysApproved(t *testing.T) {
+	db := setupTestDB(t)
+	defer u.Unwrap(db.DB()).Close()
+
+	session := &storageStructs.Chats{
+		ID:             1,
+		DB:             db,
+		CurrentAgentID: "explore-agent",
+		NowAgent:       "explore-agent",
+		CurrentAgentConfig: cfgStruct.AgentConfig{
+			AutoApprove: "false",
+			AutoReject:  "true",
+		},
+	}
+
+	result, err := EvaluateApprovalRules(session, []ToolCall{{Name: "deactivate_agent", ID: "1"}})
+	if err != nil {
+		t.Fatalf("EvaluateApprovalRules failed: %v", err)
+	}
+	if result.Decision != DecisionApproved {
+		t.Fatalf("deactivate_agent should always be approved, got %v", result.Decision)
+	}
+}
+
+func TestEvaluateApprovalRules_DeactivateAgentExemptFromMixedRules(t *testing.T) {
+	db := setupTestDB(t)
+	defer u.Unwrap(db.DB()).Close()
+
+	session := &storageStructs.Chats{
+		ID:             1,
+		DB:             db,
+		CurrentAgentID: "explore-agent",
+		NowAgent:       "explore-agent",
+		CurrentAgentConfig: cfgStruct.AgentConfig{
+			AutoApprove: `ToolCall.Name == "safe_tool"`,
+			AutoReject:  `ToolCall.Name == "safe_tool"`,
+		},
+	}
+
+	result, err := EvaluateApprovalRules(session, []ToolCall{
+		{Name: "deactivate_agent", ID: "1"},
+		{Name: "safe_tool", ID: "2"},
+	})
+	if err != nil {
+		t.Fatalf("EvaluateApprovalRules failed: %v", err)
+	}
+	if result.Decision != DecisionRejected {
+		t.Fatalf("non-exempt tool should still be rejected, got %v", result.Decision)
+	}
+}
+
 func TestEvaluateApprovalRules_ErrorPropagation(t *testing.T) {
 	db := setupTestDB(t)
 	defer u.Unwrap(db.DB()).Close()

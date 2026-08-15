@@ -14,6 +14,12 @@ import (
 
 // ActivateAgent 激活Agent
 func ActivateAgent(session *structs.Chats, agentCode string, prompt string) error {
+	if session == nil || session.DB == nil {
+		return errors.New("activate agent: nil session or db")
+	}
+	session.AgentLifecycleLock()
+	defer session.AgentLifecycleUnlock()
+
 	logger.Info("activating agent: %s", agentCode)
 	// 取agent表
 	obj := structs.SubAgents{}
@@ -60,8 +66,30 @@ func ActivateAgent(session *structs.Chats, agentCode string, prompt string) erro
 
 // DeactivateAgent 取消激活Agent
 func DeactivateAgent(session *structs.Chats, prompt string) error {
+	if session == nil || session.DB == nil {
+		return errors.New("deactivate agent: nil session or db")
+	}
+	session.AgentLifecycleLock()
+	defer session.AgentLifecycleUnlock()
+
 	logger.Info("deactivating agent: %s", session.NowAgent)
 	oldAgent := session.NowAgent
+	if oldAgent == "" {
+		oldAgent = session.CurrentAgentID
+	}
+	if oldAgent == "" {
+		// A repeated/stale call is already complete and must not write another
+		// prompt or start another summary.
+		return nil
+	}
+	hadActiveAgent := true
+	// 先在内存中清空激活状态，避免工具调用重入时再次把当前会话识别为活跃子代理。
+	// 总结过程可能耗时，状态必须在执行总结前完成切换。
+	session.NowAgent = ""
+	session.CurrentAgentID = ""
+	session.CurrentActivatePath = ""
+	session.CurrentAgentConfig = cfgStruct.AgentConfig{}
+
 	// 更新当前Agent
 	err := session.DB.Model(&structs.Chats{}).Where("id = ?", session.ID).Update("now_agent", "").Error
 	if err != nil {
@@ -82,14 +110,29 @@ func DeactivateAgent(session *structs.Chats, prompt string) error {
 		}
 	}
 
-	// 计算summary：改用会话可取消的 context，避免异步 goroutine 脱离会话生命周期
-	// 无限存活、在会话销毁后仍写库。
+	// 先完成子代理总结，再把总结写入主代理消息流。
+	// 不能异步执行：调用方会在停用成功后立即构建主代理请求，异步总结可能尚未
+	// 写入数据库，导致主代理看不到子代理的回传内容。
 	session.NowAgent = ""
 	sumCtx := session.GetContext()
 	if sumCtx == nil {
 		sumCtx = context.Background()
 	}
-	go request.Summary(sumCtx, session.DB, session.ID, oldAgent)
+	if hadActiveAgent {
+		if summary, summaryErr := request.Summary(sumCtx, session.DB, session.ID, oldAgent); summaryErr != nil {
+			logger.Warn("failed to summarize deactivated agent %q: %v", oldAgent, summaryErr)
+		} else if summary != "" {
+			mainAgentID := ""
+			if err := session.DB.Create(&structs.Messages{
+				ChatID:  session.ID,
+				Delta:   summary,
+				AgentID: &mainAgentID,
+				Type:    structs.MessagesRoleCommunicate,
+			}).Error; err != nil {
+				logger.Warn("failed to persist deactivated agent %q summary: %v", oldAgent, err)
+			}
+		}
+	}
 
 	session.CurrentActivatePath = ""
 	session.CurrentAgentID = ""

@@ -1,24 +1,23 @@
-###### Virtual Object: `@task`
+### Virtual object: `@task`
 
-The `@task` is a markdown task list. Edit it by calling the `edit` tool with `path: "@task"`.
+`@task` is the current persistent task plan. Edit it through the `edit` tool with `path: "@task"`; it is not a shell file path.
 
-#### Data Syntax
+#### Format
 
-1. Each line: `- [X] taskName: taskDetails` (only `-` bullet, no `*`/`+`/numbers).
-2. Status: `[ ]` (waiting), `[-]` (doing), `[X]` (done).
-3. Nesting: exactly **2 spaces** per level.
-4. `taskName` and `taskDetails` are separated by the **first** `:`.
+- Each task is one line: `- [ ] taskName: taskDetails`.
+- Status is `[ ]` waiting, `[-]` doing, or `[X]` done.
+- Use only the `-` bullet. Do not use `*`, `+`, or numbered lists.
+- Separate the task name and details at the first `:`.
+- Indent child tasks by exactly 2 spaces per level.
 
-#### Operational Rules
+#### Editing rules
 
-1. Toggle status: replace the bracket char (`[ ]`→`[X]`, etc.).
-2. Add a task: insert a new line with correct indentation.
-3. Delete a task: remove the line (and all its indented children).
-4. Sub-task: indent exactly 2 spaces per level under its parent.
-
-**KEEP THE SAME INDENT LEVELS AS THE PARENT NODE.**
-**KEEP THE SAME INDENT LEVELS AS THE PARENT NODE.**
-
+- Toggle only the intended status or text; preserve unrelated tasks, ordering, and indentation.
+- Add a task as a new correctly indented line. Remove a task together with its indented children when the whole branch is deleted.
+- Keep details factual and actionable. Do not record credentials, private data, or speculative work as completed.
+- Do not include display line-number prefixes in the virtual object content.
+- **DO NOT INCLUDE LINE NUMBERS IN EDITING!**
+- 
 Indent: `2 spaces`
 
-**DO NOT INCLUDE LINE NUMBERS IN EDITING!**
+Example: `{"path":"@task","target":"- [ ] run tests","text":"- [X] run tests"}`

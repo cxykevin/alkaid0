@@ -43,15 +43,15 @@ func init() {
 }
 
 var paras = map[string]parser.ToolParameters{
-	"untrace": {
+	"unread": {
 		Type:        parser.ToolTypeBoolean,
 		Required:    false,
-		Description: "Whether to untrace the file. Default is false.",
+		Description: "Whether to remove the file from the read context. Default is false.",
 	},
 	"path": {
 		Type:        parser.ToolTypeString,
 		Required:    true,
-		Description: "The path of the file will be traced or untraced. **must be a RELATIVE path**. '..' is not allowed.",
+		Description: "The relative path of the file to read or remove from the read context. '..' is not allowed.",
 	},
 }
 
@@ -68,17 +68,17 @@ func updateInfo(session *structs.Chats, mp map[string]*any, cross []*any, toolID
 	toolCallID := fmt.Sprintf("call_%d_%d_%s", session.ID, session.CurrentMessageID, toolID)
 	respString := ""
 	var pathVal *string
-	var untraceVal *bool
+	var unreadVal *bool
 	if pathPtr, ok := mp["path"]; ok && pathPtr != nil {
 		if path, ok := (*pathPtr).(string); ok {
 			respString += "Path: " + path + "\n"
 			pathVal = &path
 		}
 	}
-	if untracePtr, ok := mp["untrace"]; ok && untracePtr != nil {
-		if untrace, ok := (*untracePtr).(bool); ok {
-			respString += "Untrace: " + u.Ternary(untrace, "true", "false") + "\n"
-			untraceVal = &untrace
+	if unreadPtr, ok := mp["unread"]; ok && unreadPtr != nil {
+		if unread, ok := (*unreadPtr).(bool); ok {
+			respString += "Unread: " + u.Ternary(unread, "true", "false") + "\n"
+			unreadVal = &unread
 		}
 	}
 	respObj := []u.H{{
@@ -92,8 +92,8 @@ func updateInfo(session *structs.Chats, mp map[string]*any, cross []*any, toolID
 		"name":      toolName,
 		"messageID": session.CurrentMessageID,
 		"args": u.H{
-			"name":    pathVal,
-			"untrace": untraceVal,
+			"name":   pathVal,
+			"unread": unreadVal,
 		},
 	}}
 	session.SetToolCalling(toolCallID, respObj, "trace")
@@ -134,13 +134,13 @@ func Trace(session *structs.Chats, mp map[string]*any, push []*any) (bool, []*an
 		}, nil
 	}
 
-	// 检查并获取untrace参数
-	untracePtr, ok := mp["untrace"]
-	var untrace bool
-	if ok && untracePtr != nil {
-		untrace, ok = (*untracePtr).(bool)
+	// 检查并获取unread参数
+	unreadPtr, ok := mp["unread"]
+	var unread bool
+	if ok && unreadPtr != nil {
+		unread, ok = (*unreadPtr).(bool)
 		if !ok || path == "" {
-			untrace = false
+			unread = false
 		}
 	}
 
@@ -177,12 +177,12 @@ func Trace(session *structs.Chats, mp map[string]*any, push []*any) (bool, []*an
 	}
 
 	traceStr := "trace"
-	if untrace {
-		traceStr = "untrace"
+	if unread {
+		traceStr = "unread"
 	}
 	logger.Info("%s file \"%s\" in ID=%d,agentID=%s", traceStr, path, session.ID, session.NowAgent)
 
-	if untrace {
+	if unread {
 		// 删数据库
 		tx := session.DB.Where("chat_id = ? AND path = ? AND agent_id = ?", session.ID, path, session.NowAgent).Delete(&structs.Traces{})
 		err := tx.Error
@@ -370,7 +370,7 @@ func Trace(session *structs.Chats, mp map[string]*any, push []*any) (bool, []*an
 
 	boolx := true
 	success := any(boolx)
-	msg := "The file has been traced and injected into the top of the context."
+	msg := "The file has been read and injected into the top of the context."
 	msgAny := any(msg)
 	pathAny := any(path)
 	return false, push, map[string]*any{

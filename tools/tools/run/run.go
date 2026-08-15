@@ -573,7 +573,7 @@ func runTask(session *structs.Chats, mp map[string]*any, cross []*any) (bool, []
 		output = output[:maxRunOutputChars] + "\n...(truncated, full output at " + outPth + ")"
 	}
 	outputAny := any(output)
-	msg := "The file has been traced and injected into the top of the context."
+	msg := "The file has been read and injected into the top of the context."
 	msgAny := any(msg)
 	res := map[string]*any{
 		"success": &success,

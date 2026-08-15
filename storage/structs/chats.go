@@ -43,6 +43,8 @@ type Chats struct {
 	// 会话任何落库变更（消息写入、标题更新等）都会刷新它，用于 session/list 按活动时间倒序展示。
 	UpdatedAt time.Time
 	// === 会话过程参数 ===
+	// agentLifecycleMu 串行化激活/停用，避免并发工具调用重复改变会话状态。
+	agentLifecycleMu         sync.Mutex          `gorm:"-" json:"-"`
 	contextHolder            *contextHolder      `gorm:"-" json:"-"`
 	Stop                     bool                `gorm:"-" json:"-"`
 	DB                       *gorm.DB            `gorm:"-" json:"-"`
@@ -86,6 +88,22 @@ type PlanEntry struct {
 	Content  string `json:"content"`  // 人类可读描述，此处只展示 taskName（嵌套带缩进）
 	Priority string `json:"priority"` // high | medium | low，此处固定 "medium"
 	Status   string `json:"status"`   // pending | in_progress | completed
+}
+
+// AgentLifecycleLock 串行化子代理激活/停用操作。
+func (c *Chats) AgentLifecycleLock() {
+	if c == nil {
+		return
+	}
+	c.agentLifecycleMu.Lock()
+}
+
+// AgentLifecycleUnlock 释放子代理激活/停用操作锁。
+func (c *Chats) AgentLifecycleUnlock() {
+	if c == nil {
+		return
+	}
+	c.agentLifecycleMu.Unlock()
 }
 
 // SetContext 线程安全地设置会话上下文

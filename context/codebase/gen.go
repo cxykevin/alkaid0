@@ -20,7 +20,7 @@ func init() {
 }
 
 // VecDBs 向量数据库集合，按目录路径索引
-var VecDBs = make(map[string]*CodebaseDB)
+var VecDBs = make(map[string]*DB)
 
 // VecDBsLock 保护 VecDBs map
 var VecDBsLock sync.Mutex
