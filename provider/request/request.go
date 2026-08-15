@@ -26,79 +26,7 @@ import (
 	"github.com/cxykevin/alkaid0/ui/state"
 	"github.com/expr-lang/expr"
 	"github.com/expr-lang/expr/vm"
-	"gorm.io/gorm"
 )
-
-// errNativeToolCallFormat 标记模型绕过 <tools> 标签、直接输出原生 tool calling 格式。
-// 该错误由 solveFunc 在流式检测到原生格式时返回，SimpleOpenAIRequest 会包装为
-// "callback error: ..." 传回，SendRequest 据此判定"打回"（拒绝本次响应并重试）。
-var errNativeToolCallFormat = errors.New("native tool calling format detected, reject response")
-
-// 打回注入的格式纠正消息模板。消息以 user 角色插入，模型下一轮请求时
-// 会通过 UserWrapTemplate 渲染为 <user_prompt> 看到，从而改用 <tools> 标签。
-const nativeFormatCorrectionMsg = `[System: Tool call format rejected]
-
-Your last reply used the native function-calling format (e.g. {"tool_calls":[...]} or {"name":"...","arguments":"..."}). This system does NOT parse that format, so no tool executed and the task failed.
-
-All tool calls must be written as a JSON array wrapped in a <tools> tag, placed at the very end of your reply:
-<tools>
-[{"name":"tool_name","id":"unique_id","parameters":{...}}]
-</tools>
-
-Requirements:
-1. "name" must match one of the tool names provided by the system;
-2. "id" is any unique string;
-3. "parameters" must be a real JSON object (key-value pairs), never a string or escaped text;
-4. Nothing may follow </tools>.
-
-Please re-emit your tool calls.`
-
-// injectNativeFormatCorrection 打回时向对话历史注入一条格式纠正消息，
-// 使模型在下一轮请求中收到明确反馈并改用 <tools> 标签。
-// AgentID 跟随当前会话（子代理场景下子代理按 agent_id 过滤消息，
-// 若不设置则子代理读不到纠正反馈，会再次输出原生格式造成重复打回）。
-func injectNativeFormatCorrection(db *gorm.DB, session *storageStructs.Chats) error {
-	agent := session.CurrentAgentID
-	return db.Create(&storageStructs.Messages{
-		ChatID:  session.ID,
-		Delta:   nativeFormatCorrectionMsg,
-		Type:    storageStructs.MessagesRoleUser,
-		AgentID: &agent,
-		Refers:  storageStructs.MessagesReferList{},
-	}).Error
-}
-
-// errLegacyToolCallFormat 原生模式下模型仍输出 <tools> 标签的哨兵错误。
-// 该错误由 solveFunc 在流式检测到 <tools> 时返回，SendRequest 据此"打回"并重试。
-var errLegacyToolCallFormat = errors.New("legacy <tools> format detected in native mode, reject response")
-
-// nativeLegacyFormatCorrectionMsg 原生模式打回时注入的格式纠正消息（与 tool_native.md 呼应）。
-const nativeLegacyFormatCorrectionMsg = `[System: Tool call format rejected]
-
-Your last reply used a <tools> tag, but this system currently uses the native function-calling API: tools are declared through the API tools parameter, and calls are made via native tool_calls. <tools> tags are not parsed, so no tool executed.
-
-Note: the <tools> / <tools_return> text blocks in the conversation history are read-only archives of your past calls (already executed). Do NOT imitate them — from this turn on, every new call must be a native tool_calls entry.
-
-Requirements:
-1. Emit native tool_calls; each call carries its own unique id (conventional call_ prefix, e.g. call_ab12cd);
-2. function.name must match a tool name declared in the tools parameter;
-3. function.arguments must be a JSON object string conforming to the declared schema;
-4. If no <tools_return> block with your call's result arrives, the tool did not run — re-emit that same call once.
-
-Please re-emit your tool calls.`
-
-// injectLegacyFormatCorrection 原生模式打回时向对话历史注入一条格式纠正消息，
-// 使模型在下一轮请求中改用原生 tool_calls。AgentID 跟随当前会话（同 injectNativeFormatCorrection）。
-func injectLegacyFormatCorrection(db *gorm.DB, session *storageStructs.Chats) error {
-	agent := session.CurrentAgentID
-	return db.Create(&storageStructs.Messages{
-		ChatID:  session.ID,
-		Delta:   nativeLegacyFormatCorrectionMsg,
-		Type:    storageStructs.MessagesRoleUser,
-		AgentID: &agent,
-		Refers:  storageStructs.MessagesReferList{},
-	}).Error
-}
 
 // UserAddMsg 处理用户发送的消息，更新数据库并处理子代理和审批状态
 // 当 session 处于 WaitApprove 状态时，用户消息会被同时作为拒绝原因（写入
@@ -1028,14 +956,8 @@ func SendRequest(ctx context.Context, session *storageStructs.Chats, callback fu
 	// 	}
 	// }
 
-	// 选择解析模式：EnableToolCalling=true 走原生 tool_calls（NewNativeSolver），
-	// 否则走提示词 <think>/<tools> 标签解析（NewSolver）
-	var solver *response.Solver
-	if modelCfg.EnableToolCalling {
-		solver = response.NewNativeSolver(db, session)
-	} else {
-		solver = response.NewSolver(db, session)
-	}
+	// 统一使用原生 tool_calls 解析器；原生调用增量通过 Delta.ToolCalls 回放。
+	solver := response.NewNativeSolver(db, session)
 	agent := session.CurrentAgentID
 	// 在数据库中创建一条空的 Messages 记录作为本次请求的占位符
 	// 后续流式响应内容会逐步更新该记录的各个字段
@@ -1148,18 +1070,7 @@ func SendRequest(ctx context.Context, session *storageStructs.Chats, callback fu
 		pendingDelta.WriteString(delta)
 		pendingThinkingDelta.WriteString(thinkingDelta)
 		if err != nil {
-			// 原生模式反向打回：模型仍输出 <tools> 标签，转 errLegacyToolCallFormat
-			if errors.Is(err, response.ErrLegacyToolsDetected) {
-				return errLegacyToolCallFormat
-			}
 			return err
-		}
-		// 打回检测：模型绕过 <tools> 标签直接输出原生 tool calling 格式时，
-		// 立即中止本次流式响应。该响应不会被采用，SendRequest 会删除占位消息、
-		// 注入格式纠正消息并重试。检测放在 AddToken 之后、flush 之前，
-		// 保证检测到原生格式时占位消息尚未被写入数据库。
-		if solver.DetectNativeToolCall() {
-			return errNativeToolCallFormat
 		}
 
 		// 达到阈值时执行数据库更新（批量刷写，减少 I/O 次数）
@@ -1253,37 +1164,6 @@ func SendRequest(ctx context.Context, session *storageStructs.Chats, callback fu
 	// 并向客户端推送最终 usage。请求未真正发出的失败（连接失败/非200/marshal 失败）
 	// 时 promptUsage 等全为 0，stats.AddUsage 内部忽略全 0，不会产生记录。
 	usageRecorded = true
-
-	// 打回：模型输出了原生 tool calling 格式（而非 <tools> 标签），本次响应不被采用。
-	// 删除占位消息并注入格式纠正消息，返回 (false, nil) 让 loop 重新发起请求，
-	// 模型将在下一轮看到纠正反馈并改用 <tools> 标签。
-	if errors.Is(requestErr, errNativeToolCallFormat) {
-		logger.Warn("native tool calling format detected, rejecting response in chat %d", session.ID)
-		session.ClearToolCalling()
-		if delErr := db.Delete(&storageStructs.Messages{}, msgID).Error; delErr != nil {
-			logger.Error("delete placeholder message %d: %v", msgID, delErr)
-		}
-		if injErr := injectNativeFormatCorrection(db, session); injErr != nil {
-			logger.Error("inject native format correction: %v", injErr)
-			return true, injErr
-		}
-		return false, nil
-	}
-
-	// 反向打回（原生模式）：模型绕过原生 tool_calls、仍输出 <tools> 标签，本次响应不被采用。
-	// 删除占位消息并注入原生格式纠正消息，返回 (false, nil) 让 loop 重新发起请求。
-	if errors.Is(requestErr, errLegacyToolCallFormat) {
-		logger.Warn("legacy <tools> format detected in native mode, rejecting response in chat %d", session.ID)
-		session.ClearToolCalling()
-		if delErr := db.Delete(&storageStructs.Messages{}, msgID).Error; delErr != nil {
-			logger.Error("delete placeholder message %d: %v", msgID, delErr)
-		}
-		if injErr := injectLegacyFormatCorrection(db, session); injErr != nil {
-			logger.Error("inject legacy format correction: %v", injErr)
-			return true, injErr
-		}
-		return false, nil
-	}
 
 	isCancel := requestErr != nil && errors.Is(requestErr, context.Canceled)
 

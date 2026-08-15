@@ -3,7 +3,6 @@ package response
 import (
 	"bytes"
 	"encoding/json"
-	"errors"
 	"strings"
 
 	"github.com/cxykevin/alkaid0/log"
@@ -15,10 +14,6 @@ import (
 	storageStructs "github.com/cxykevin/alkaid0/storage/structs"
 	"gorm.io/gorm"
 )
-
-// ErrLegacyToolsDetected 原生模式下模型仍输出 <tools> 标签时返回的哨兵错误。
-// 上层（SendRequest）据此打回本次响应并注入纠正消息后重试。
-var ErrLegacyToolsDetected = errors.New("legacy <tools> format detected, reject response")
 
 // toolSaveStruct 工具响应持久化结构
 type toolSaveStruct struct {
@@ -38,13 +33,13 @@ func init() {
 // 支持两种模式：提示词模式（parser 状态机解析 <think>/<tools> 标签）与
 // 原生 tool_calls 模式（nativeAcc 累积 delta.tool_calls，原生模式下 parser 仅处理 <think>）。
 type Solver struct {
-	parser        *parser.Parser                  // JSON 解析器（提示词模式 + <think>）
+	parser        *parser.Parser                    // JSON 解析器（提示词模式 + <think>）
 	nativeAcc     *parser.NativeToolCallAccumulator // 原生 tool_calls 累积器（原生模式）
-	nativeMode    bool                             // 是否原生 tool_calls 模式
-	toolResponses []toolSaveStruct                 // 工具调用响应缓存
-	chatID        uint32                           // 当前会话 ID
-	db            *gorm.DB                         // 数据库连接
-	session       *structs.Chats                   // 当前会话信息
+	nativeMode    bool                              // 是否原生 tool_calls 模式
+	toolResponses []toolSaveStruct                  // 工具调用响应缓存
+	chatID        uint32                            // 当前会话 ID
+	db            *gorm.DB                          // 数据库连接
+	session       *structs.Chats                    // 当前会话信息
 }
 
 // saveToolResponse 将工具调用响应序列化后存入缓存列表
@@ -73,12 +68,8 @@ func (p *Solver) saveToolResponse(toolName string, toolID string, response map[s
 
 // AddToken 向解析器添加一个 token 进行流式解析。
 // 返回过滤掉特殊标签后的增量响应文本和思考内容。
-// 原生模式下若检测到 <tools> 标签则返回 ErrLegacyToolsDetected（打回）。
 func (p *Solver) AddToken(token string, thinkingToken string) (string, string, error) {
 	delta, reasoningDelta, _, err := p.parser.AddToken(token, thinkingToken)
-	if p.nativeMode && p.parser.LegacyToolsDetected {
-		return delta, reasoningDelta, ErrLegacyToolsDetected
-	}
 	return delta, reasoningDelta, err
 }
 
@@ -153,15 +144,6 @@ func (p *Solver) GetTools() []parser.AIToolsResponse {
 	return p.parser.ToolsSolved
 }
 
-// DetectNativeToolCall 检测模型是否绕过了 <tools> 标签、直接输出原生 tool calling 格式。
-// 仅提示词模式有意义；原生模式下原生格式是合法输出，恒返回 false。
-func (p *Solver) DetectNativeToolCall() bool {
-	if p.nativeMode {
-		return false
-	}
-	return p.parser.DetectNativeToolCall()
-}
-
 // GetToolsOrigin 获取工具调用的原始 JSON 字符串，用于调试和日志记录。
 // 原生模式下为内部格式 [{"name","id","parameters"}] 的重序列化结果（非模型原文）。
 func (p *Solver) GetToolsOrigin() string {
@@ -181,8 +163,7 @@ func NewSolver(db *gorm.DB, session *structs.Chats) *Solver {
 }
 
 // NewNativeSolver 创建原生 tool_calls 模式的 Solver。
-// 原生模式下 parser 仅处理 <think>/普通文本，tool_calls 走 nativeAcc 累积；
-// <tools> 标签被置 LegacyToolsDetected 标记，由 AddToken 返回 ErrLegacyToolsDetected 打回。
+// 原生模式下 parser 仅处理 <think>/普通文本，tool_calls 走 nativeAcc 累积。
 func NewNativeSolver(db *gorm.DB, session *structs.Chats) *Solver {
 	obj := NewSolver(db, session)
 	obj.nativeMode = true

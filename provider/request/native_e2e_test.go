@@ -15,7 +15,6 @@ import (
 	cfgStruct "github.com/cxykevin/alkaid0/config/structs"
 	"github.com/cxykevin/alkaid0/provider/parser"
 	"github.com/cxykevin/alkaid0/provider/request/structs"
-	"github.com/cxykevin/alkaid0/stats"
 	storageStructs "github.com/cxykevin/alkaid0/storage/structs"
 	"github.com/cxykevin/alkaid0/tools/actions"
 	"github.com/cxykevin/alkaid0/tools/toolobj"
@@ -311,14 +310,13 @@ func TestNativeSendRequest_ToolCalling(t *testing.T) {
 	}
 }
 
-// TestNativeSendRequest_LegacyRejection 原生模式下模型仍输出 <tools> 标签 → 打回：
-// 返回 (false, nil)、占位 assistant 消息被删除、注入原生格式纠正消息。
-func TestNativeSendRequest_LegacyRejection(t *testing.T) {
+// TestNativeSendRequest_LegacyTextAccepted 原生模式下不再拒绝模型输出的普通文本，
+// <tools> 文本不会触发格式打回或注入纠正消息。
+func TestNativeSendRequest_LegacyTextAccepted(t *testing.T) {
 	initAgentsConsumer()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
-		// 原生模式下模型错误输出 <tools> 标签（行首）→ 应被打回
-		emitTextSSE(w, "\n<tools>[{\"name\":\"e2e_tool\",\"id\":\"c\",\"parameters\":{\"input\":\"x\"}}]</tools>")
+		emitTextSSE(w, "plain text response")
 		fmt.Fprintf(w, "data: %s\n\n", SSEDoneMarker)
 	}))
 	defer srv.Close()
@@ -326,7 +324,6 @@ func TestNativeSendRequest_LegacyRejection(t *testing.T) {
 
 	db := setupTestDB(t)
 	defer u.Unwrap(db.DB()).Close()
-
 	chat := storageStructs.Chats{ID: 9002, LastModelID: 1}
 	if err := db.Create(&chat).Error; err != nil {
 		t.Fatalf("create chat: %v", err)
@@ -334,57 +331,31 @@ func TestNativeSendRequest_LegacyRejection(t *testing.T) {
 	if err := db.Create(&storageStructs.Messages{ChatID: chat.ID, Type: storageStructs.MessagesRoleUser, Delta: "please call a tool"}).Error; err != nil {
 		t.Fatalf("create user msg: %v", err)
 	}
-
-	// InTestFlag=true 跳过工具装载（打回发生在解析 <tools> 标签时，无需真实工具）
 	session := &storageStructs.Chats{
-		ID:             chat.ID,
-		DB:             db,
-		LastModelID:    1,
-		CurrentAgentID: "",
-		InTestFlag:     true,
-		EnableScopes:   make(map[string]bool),
+		ID: chat.ID, DB: db, LastModelID: 1, InTestFlag: true,
+		EnableScopes: make(map[string]bool),
 	}
 
 	ok, err := SendRequest(context.Background(), session, noopCallback)
 	if err != nil {
 		t.Fatalf("SendRequest: %v", err)
 	}
-	if ok {
-		t.Error("legacy <tools> response should be rejected (ok=false)")
+	if !ok {
+		t.Error("ordinary text response should not be rejected")
 	}
-
-	// 占位 assistant 消息被删除
 	var agentMsgs []storageStructs.Messages
 	if err := db.Where("chat_id = ? AND type = ?", chat.ID, storageStructs.MessagesRoleAgent).Find(&agentMsgs).Error; err != nil {
 		t.Fatalf("query agent msgs: %v", err)
 	}
-	if len(agentMsgs) != 0 {
-		t.Errorf("placeholder assistant message should be deleted, got %d", len(agentMsgs))
+	if len(agentMsgs) != 1 {
+		t.Fatalf("expected one retained assistant message, got %d", len(agentMsgs))
 	}
-
-	// 注入原生格式纠正消息（user 类型，含原生 function-calling 声明）
 	var msgs []storageStructs.Messages
-	if err := db.Where("chat_id = ?", chat.ID).Order("id ASC").Find(&msgs).Error; err != nil {
-		t.Fatalf("query msgs: %v", err)
+	if err := db.Where("chat_id = ? AND type = ?", chat.ID, storageStructs.MessagesRoleUser).Find(&msgs).Error; err != nil {
+		t.Fatalf("query user msgs: %v", err)
 	}
-	if len(msgs) != 2 { // 原 user + 纠正消息
-		t.Fatalf("expected 2 messages (user + correction), got %d", len(msgs))
-	}
-	last := msgs[len(msgs)-1]
-	if last.Type != storageStructs.MessagesRoleUser {
-		t.Errorf("correction message should be user type, got %d", last.Type)
-	}
-	if !strings.Contains(last.Delta, "native function-calling API") {
-		t.Errorf("correction message should mention native function-calling, got: %q", last.Delta)
-	}
-
-	// 打回响应不进入全局 token 用量统计（usageRecorded 未置位）
-	snap := stats.Snapshot()
-	if snap.Total.Requests != 0 {
-		t.Errorf("rejected response should not be counted in global stats, got requests=%d", snap.Total.Requests)
-	}
-	if len(snap.Models) != 0 {
-		t.Errorf("rejected response should not add model stats, got %+v", snap.Models)
+	if len(msgs) != 1 {
+		t.Errorf("no correction message should be injected, got %d user messages", len(msgs))
 	}
 }
 
