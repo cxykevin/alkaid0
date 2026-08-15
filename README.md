@@ -88,7 +88,6 @@ C:\ProgramData\alkaid0\config.json
                 "ProviderURL": "https://模型供应商/v1",
                 "ProviderKey": "sk-模型密钥",
                 "EnableThinking": true,
-                "EnableToolCalling": false,
                 "CompressSize": 128000,
                 "Hide": false,
                 "Type": "",
@@ -109,7 +108,6 @@ C:\ProgramData\alkaid0\config.json
                 "ProviderURL": "https://模型供应商/v1",
                 "ProviderKey": "sk-模型密钥",
                 "EnableThinking": true,
-                "EnableToolCalling": false,
                 "Hide": true,
                 "Type": "embedding",
                 "ProviderSpecificConfig": {

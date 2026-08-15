@@ -217,9 +217,26 @@ func (a *NativeToolCallAccumulator) DoneToken() error {
 	return nil
 }
 
-// GetTools 返回已解决的工具调用列表（内部格式语义，等同 parser.ToolsSolved）。
+// GetTools 返回按 delta index 顺序排列的已解决工具调用列表。
 func (a *NativeToolCallAccumulator) GetTools() []AIToolsResponse {
-	return a.solved
+	if len(a.solved) == 0 {
+		return nil
+	}
+	byID := make(map[string]AIToolsResponse, len(a.solved))
+	for _, tool := range a.solved {
+		byID[tool.ID] = tool
+	}
+	tools := make([]AIToolsResponse, 0, len(a.solved))
+	for _, index := range a.order {
+		state := a.calls[index]
+		if state == nil || !state.finalized {
+			continue
+		}
+		if tool, ok := byID[state.id]; ok {
+			tools = append(tools, tool)
+		}
+	}
+	return tools
 }
 
 // HasTools 是否产生过完整调用。

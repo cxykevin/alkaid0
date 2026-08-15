@@ -37,23 +37,17 @@ var msgRole = map[structs.MessagesRole]string{
 
 // RequestBody 构建请求
 func RequestBody(chatID uint32, modelID int32, agentCode string, toolsList *[]*parser.ToolsDefine, db *gorm.DB, addSystemPrompt string, addUserPrompt string, agentCfg cfgStruct.AgentConfig, chatLn *storageStructs.Chats) (*reqStruct.ChatCompletionRequest, error) {
-	toolsLst, err := json.Marshal(*toolsList)
-	if err != nil {
-		return nil, err
-	}
-
 	modelConfig, err := GetModelConfig(modelID)
 	if err != nil {
 		return nil, err
 	}
 
 	response := &reqStruct.ChatCompletionRequest{}
-	nativeMode := modelConfig.EnableToolCalling
 
 	// 配置模型信息
 	response.Model = modelConfig.ModelID
 	response.Stream = true
-	if nativeMode && toolsList != nil {
+	if toolsList != nil {
 		// 原生模式：工具定义通过 API tools 参数声明（而非注入提示词）
 		tools := make([]reqStruct.Tool, 0, len(*toolsList))
 		for _, td := range *toolsList {
@@ -110,7 +104,7 @@ func RequestBody(chatID uint32, modelID int32, agentCode string, toolsList *[]*p
 		}
 	}
 
-	// 预扫描（原生模式）：收集回放范围内
+	// 预扫描：收集回放范围内
 	//   toolCallIDs    — 所有 assistant 工具调用 id（用于工具结果配对，丢弃孤立幽灵结果）
 	//   resultIDs      — 所有工具结果 id（用于判断哪些调用结果缺失、需补终止占位）
 	// 回放是倒序查询 + PushFront，结果消息先于其 assistant 被处理，无法边扫边配，
@@ -119,40 +113,38 @@ func RequestBody(chatID uint32, modelID int32, agentCode string, toolsList *[]*p
 	// 前缀缓存才不被破坏。id 全局唯一、结果紧跟调用，不会误配。
 	// 与主循环一致：遇到 summary（历史截断点）即停止。
 	var toolCallIDs, resultIDs map[string]struct{}
-	if nativeMode {
-		toolCallIDs = make(map[string]struct{})
-		resultIDs = make(map[string]struct{})
-	scan:
-		for offsetPage := range maxPage {
-			var obj []structs.Messages
-			if agentCode == "" {
-				db.Where("`chat_id` = ? AND (`agent_id` = \"\" OR `agent_id` IS NULL)", chatID).Order("id DESC").Offset(offsetPage * readPageSize).Limit(readPageSize).Find(&obj)
-			} else {
-				db.Where("`chat_id` = ? AND `agent_id` = ?", chatID, agentCode).Order("id DESC").Offset(offsetPage * readPageSize).Limit(readPageSize).Find(&obj)
+	toolCallIDs = make(map[string]struct{})
+	resultIDs = make(map[string]struct{})
+scan:
+	for offsetPage := range maxPage {
+		var obj []structs.Messages
+		if agentCode == "" {
+			db.Where("`chat_id` = ? AND (`agent_id` = \"\" OR `agent_id` IS NULL)", chatID).Order("id DESC").Offset(offsetPage * readPageSize).Limit(readPageSize).Find(&obj)
+		} else {
+			db.Where("`chat_id` = ? AND `agent_id` = ?", chatID, agentCode).Order("id DESC").Offset(offsetPage * readPageSize).Limit(readPageSize).Find(&obj)
+		}
+		if len(obj) == 0 {
+			break
+		}
+		for _, v := range obj {
+			if v.Summary != "" {
+				break scan
 			}
-			if len(obj) == 0 {
-				break
-			}
-			for _, v := range obj {
-				if v.Summary != "" {
-					break scan
-				}
-				if v.Type == structs.MessagesRoleTool {
-					results, err := parseStoredToolResults(v.Delta)
-					if err == nil {
-						for _, r := range results {
-							if r.ID != "" {
-								resultIDs[r.ID] = struct{}{}
-							}
+			if v.Type == structs.MessagesRoleTool {
+				results, err := parseStoredToolResults(v.Delta)
+				if err == nil {
+					for _, r := range results {
+						if r.ID != "" {
+							resultIDs[r.ID] = struct{}{}
 						}
 					}
-				} else if v.Type == structs.MessagesRoleAgent && v.ToolCallingJSONString != "" {
-					calls, err := parseStoredToolCalls(v.ToolCallingJSONString)
-					if err == nil {
-						for _, c := range calls {
-							if c.ID != "" {
-								toolCallIDs[c.ID] = struct{}{}
-							}
+				}
+			} else if v.Type == structs.MessagesRoleAgent && v.ToolCallingJSONString != "" {
+				calls, err := parseStoredToolCalls(v.ToolCallingJSONString)
+				if err == nil {
+					for _, c := range calls {
+						if c.ID != "" {
+							toolCallIDs[c.ID] = struct{}{}
 						}
 					}
 				}
@@ -191,7 +183,7 @@ func RequestBody(chatID uint32, modelID int32, agentCode string, toolsList *[]*p
 				msg.Content = rendered
 				exitFlag = true
 			} else {
-				if nativeMode && v.Type == structs.MessagesRoleAgent {
+				if v.Type == structs.MessagesRoleAgent {
 					// 原生模式：assistant 历史消息回放原生 tool_calls —— content 保留文本 Delta，
 					// 工具调用解析 ToolCallingJSONString 为 msg.ToolCalls（tool_call_id + function.name/arguments），
 					// 与当前轮请求的 tools 参数/响应解析同一种格式，不再出现 <tools> 文本段。
@@ -255,17 +247,6 @@ func RequestBody(chatID uint32, modelID int32, agentCode string, toolsList *[]*p
 						return nil, err
 					}
 					msg.Content = rendered
-				} else if !nativeMode && v.Type == structs.MessagesRoleTool {
-					// 提示词模式：工具结果以 <tools_return> 文本段回放
-					toolRendered, err := prompts.Render(prompts.ToolResponseWrapTemplate, struct {
-						Prompt string
-					}{
-						Prompt: v.Delta,
-					})
-					if err != nil {
-						return nil, err
-					}
-					msg.Content = toolRendered
 				} else if v.Type == structs.MessagesRoleCommunicate {
 					renderAgentID := ""
 					if v.AgentID != nil {
@@ -319,7 +300,7 @@ func RequestBody(chatID uint32, modelID int32, agentCode string, toolsList *[]*p
 					msg.Content = v.Delta
 				}
 			}
-			if nativeMode && v.Type == structs.MessagesRoleTool {
+			if v.Type == structs.MessagesRoleTool {
 				// 原生模式：工具结果按 id 拆分为多条 role:"tool" 消息，严格配对——
 				// 结果 id 必须命中全部回放轮次的 assistant 工具调用集合（丢弃孤立的
 				// 幽灵结果）。被终止调用的占位结果由 assistant 分支补齐。
@@ -362,7 +343,7 @@ func RequestBody(chatID uint32, modelID int32, agentCode string, toolsList *[]*p
 		if em, ok := chatLn.TemporyDataOfSession[structs.TempKeyTraceEvents].(map[string]*structs.TraceEvent); ok && len(em) > 0 {
 			prevEm, _ := chatLn.TemporyDataOfSession[structs.TempKeyTracePrevEvents].(map[string]*structs.TraceEvent)
 			diffPlans, _ := chatLn.TemporyDataOfSession[structs.TempKeyTraceDiffPlan].(map[string]trace.DiffPlan)
-			fallbackTop = insertEventContentBlocks(responseDeltaList, dbIDToElement, em, prevEm, diffPlans, chatLn, nativeMode)
+			fallbackTop = insertEventContentBlocks(responseDeltaList, dbIDToElement, em, prevEm, diffPlans, chatLn)
 		}
 	}
 	if addUserPrompt != "" || fallbackTop != "" {
@@ -404,39 +385,10 @@ func RequestBody(chatID uint32, modelID int32, agentCode string, toolsList *[]*p
 		systemContent += prompts.DefaultAgent + "\n\n"
 	}
 
-	// 4. 工具使用指引（模式相关）：
-	//    提示词模式：prompts.Tools（永远拼接两次，第二次由增强开关决定）
-	//    原生模式：prompts.ToolNative + 反向增强段（ToolEnhanceNative，警告 <tools> 标签）
-	if nativeMode {
-		systemContent += prompts.ToolNative + "\n\n"
-		// 反幻觉增强段暂时禁用：调试原生 tool_calls 格式时保持提示词纯净，
-		// 待工具调用格式稳定后再按模型恢复。恢复时取消下面两行注释。
-		// if enhance := NativeToolPromptEnhanceBlock(modelConfig); enhance != "" {
-		// 	systemContent += enhance + "\n\n"
-		// }
-	} else {
-		systemContent += prompts.Tools + "\n\n"
-		// 4b. 反幻觉增强段（ProviderSpecificConfig.ToolPromptEnhance 控制；
-		// auto 下 GPT/Claude 系模型 id 命中免增强名单时回退为基础版）
-		if enhance := ToolPromptEnhanceBlock(modelConfig); enhance != "" {
-			systemContent += enhance + "\n\n"
-		} else {
-			systemContent += prompts.Tools + "\n\n"
-		}
-	}
+	// 4. 原生工具使用指引
+	systemContent += prompts.ToolNative + "\n\n"
 
-	// 5. 工具列表（仅提示词模式注入 <tools_input>；原生模式工具定义走 API tools 参数）
-	if !nativeMode {
-		toolsRendered, err := prompts.Render(prompts.ToolsWrapTemplate, struct {
-			Tools string
-		}{
-			Tools: string(toolsLst),
-		})
-		if err != nil {
-			return nil, err
-		}
-		systemContent += toolsRendered + "\n\n"
-	}
+	// 5. 工具列表（工具定义走 API tools 参数）
 
 	// 6. 自动审批规则说明 — 告知 AI 哪些工具会不经确认直接执行
 	autoApproveRules := getEffectiveAutoApprove(agentCfg)
@@ -499,9 +451,7 @@ type storedToolCall struct {
 const maxReplayArgRunes = 100
 
 // parseStoredToolCalls 解析存储层工具调用 JSON 为原生 tool_calls 消息。
-// 返回 nil（空 payload/解析失败）时表示无工具调用。
-// 历史回放携带参数内容：非空参数 ≤maxReplayArgRunes 字符回放真实 JSON、超过截断为 "..."；
-// 空参数保留占位符。渲染只依赖 DB 存储内容（确定性），跨请求稳定，不破坏前缀缓存。
+// 空参数使用兼容占位符；非空参数按长度限制回放。
 func parseStoredToolCalls(payload string) ([]reqStruct.StreamToolCall, error) {
 	if strings.TrimSpace(payload) == "" {
 		return nil, nil
@@ -678,7 +628,7 @@ type eventInsertGroup struct {
 // 返回不可锚定事件的顶部 fallback 内容（独立 user 消息，插在 addUserPrompt 之后）。
 // 内容块在 PreHook 阶段已渲染并暂存于 chatLn.TemporyDataOfSession，此处只做拼装插入，不重复读盘。
 func insertEventContentBlocks(l *list.List, dbIDToElement map[uint64]*list.Element,
-	eventMap, prevMap map[string]*structs.TraceEvent, diffPlans map[string]trace.DiffPlan, chatLn *structs.Chats, nativeMode bool) string {
+	eventMap, prevMap map[string]*structs.TraceEvent, diffPlans map[string]trace.DiffPlan, chatLn *structs.Chats) string {
 
 	fileBlocks, _ := chatLn.TemporyDataOfSession[structs.TempKeyTraceFileBlocks].(map[string]trace.FileBlock)
 	taskBlock, _ := chatLn.TemporyDataOfSession[structs.TempKeyTaskEventBlock].(string)
@@ -689,8 +639,8 @@ func insertEventContentBlocks(l *list.List, dbIDToElement map[uint64]*list.Eleme
 		// 方案2：旧块（最早锚点，内容=LastContent 存档、字节稳定命中前缀）+ diff 块（最新锚点）都可锚定时，跳过常规最新块插入
 		if plan, ok := diffPlans[path]; ok && plan.Keep {
 			if prev, ok := prevMap[path]; ok {
-				prevAnchor := findEventAnchor(l, dbIDToElement, prev, nativeMode)
-				diffAnchor := findEventAnchor(l, dbIDToElement, ev, nativeMode)
+				prevAnchor := findEventAnchor(l, dbIDToElement, prev)
+				diffAnchor := findEventAnchor(l, dbIDToElement, ev)
 				// 锚点都可用且软条件（含 betweenTok 连锁成本）满足 → 方案2
 				if prevAnchor != nil && diffAnchor != nil && trace.KeepDiffPlan(plan, betweenTokens(prevAnchor, diffAnchor)) {
 					if oldContent, err := trace.RenderTraceBlock([]trace.FileBlock{plan.OldBlock}); err == nil && oldContent != "" {
@@ -715,7 +665,7 @@ func insertEventContentBlocks(l *list.List, dbIDToElement map[uint64]*list.Eleme
 		} else if taskBlock == "" {
 			continue
 		}
-		anchor := findEventAnchor(l, dbIDToElement, ev, nativeMode)
+		anchor := findEventAnchor(l, dbIDToElement, ev)
 		if anchor == nil {
 			fallbackPaths = append(fallbackPaths, path) // 不可锚定 → 顶部 fallback
 			continue
@@ -783,12 +733,12 @@ func insertEventContentBlocks(l *list.List, dbIDToElement map[uint64]*list.Eleme
 // 锚定结果序列末尾可保证内容块永不夹在多个 tool_result 之间。遇到首个非 tool 消息即停止扫描。
 // 否则（提示词模式 / 原生无 tool_calls 的纯文本 assistant）：事件 assistant 消息本身。
 // 消息被 skip 或超出分页范围（dbIDToElement 无记录）→ 返回 nil（不可锚定）。
-func findEventAnchor(l *list.List, dbIDToElement map[uint64]*list.Element, ev *structs.TraceEvent, nativeMode bool) *list.Element {
+func findEventAnchor(l *list.List, dbIDToElement map[uint64]*list.Element, ev *structs.TraceEvent) *list.Element {
 	msgEl := dbIDToElement[ev.MsgID]
 	if msgEl == nil {
 		return nil
 	}
-	if nativeMode && ev.ToolCallID != "" {
+	if ev.ToolCallID != "" {
 		var last *list.Element
 		for e := msgEl.Next(); e != nil; e = e.Next() {
 			m := e.Value.(reqStruct.Message)

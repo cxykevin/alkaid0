@@ -822,14 +822,45 @@ func ExecuteToolCalls(session *storageStructs.Chats, toolCallingJSON string) (bo
 		return true, err
 	}
 
-	solver := response.NewSolver(session.DB, session)
-	_, _, err := solver.AddToken("<tools>"+toolCallingJSON+"</tools>", "")
-	if err != nil {
+	solver := response.NewNativeSolver(session.DB, session)
+	var calls []struct {
+		Name       string          `json:"name"`
+		ID         string          `json:"id"`
+		Parameters map[string]*any `json:"parameters"`
+	}
+	if err := stdjson.Unmarshal([]byte(toolCallingJSON), &calls); err != nil {
 		session.State = state.StateIdle
 		if saveErr := session.DB.Save(session).Error; saveErr != nil {
 			return true, saveErr
 		}
 		return true, err
+	}
+	for _, call := range calls {
+		parameters := call.Parameters
+		if parameters == nil {
+			parameters = make(map[string]*any)
+		}
+		arguments, err := stdjson.Marshal(parameters)
+		if err != nil {
+			session.State = state.StateIdle
+			if saveErr := session.DB.Save(session).Error; saveErr != nil {
+				return true, saveErr
+			}
+			return true, err
+		}
+		if err := solver.AddNativeToolCallDelta([]structs.StreamToolCall{{
+			ID: call.ID,
+			Function: &structs.StreamToolCallFunc{
+				Name:      call.Name,
+				Arguments: string(arguments),
+			},
+		}}); err != nil {
+			session.State = state.StateIdle
+			if saveErr := session.DB.Save(session).Error; saveErr != nil {
+				return true, saveErr
+			}
+			return true, err
+		}
 	}
 	ok, _, _, err := solver.DoneToken()
 	session.State = state.StateIdle
@@ -1016,7 +1047,7 @@ func SendRequest(ctx context.Context, session *storageStructs.Chats, callback fu
 
 	// 全局 token 用量统计与最终 usage 推送：defer + 标志位保证所有 return 路径
 	// 至多累计一次并至多推送一次最终 usage，
-	// 并跳过模型不存在/构建失败/native、legacy 打回等不应计数的路径。
+	// 并跳过模型不存在/构建失败等不应计数的路径。
 	var usageRecorded bool
 	defer func() {
 		if usageRecorded {
@@ -1057,7 +1088,7 @@ func SendRequest(ctx context.Context, session *storageStructs.Chats, callback fu
 		if len(body.Choices) == 0 {
 			return nil
 		}
-		// 原生 tool_calls 增量处理（原生模式；提示词模式 Delta.ToolCalls 恒为空）
+		// 原生 tool_calls 增量处理
 		if len(body.Choices[0].Delta.ToolCalls) > 0 {
 			if err := solver.AddNativeToolCallDelta(body.Choices[0].Delta.ToolCalls); err != nil {
 				return err
@@ -1159,7 +1190,7 @@ func SendRequest(ctx context.Context, session *storageStructs.Chats, callback fu
 	// 向 LLM 发送请求，solveFunc 会在每个流式 chunk 到达时被调用
 	requestErr := SimpleOpenAIRequest(ctx, modelCfg.ProviderURL, modelCfg.ProviderKey, modelCfg.ModelID, *obj, eng, solveFunc)
 
-	// 请求已发出：无论后续正常完成、工具调用预解析、用户取消、其他错误，
+	// 请求已发出：无论后续正常完成、工具调用预解析、用户取消或其他错误，都算一次真实对话调用——本次 token 花费计入总库
 	// 还是 native/legacy 格式打回，都算一次真实对话调用——本次 token 花费计入总库
 	// 并向客户端推送最终 usage。请求未真正发出的失败（连接失败/非200/marshal 失败）
 	// 时 promptUsage 等全为 0，stats.AddUsage 内部忽略全 0，不会产生记录。

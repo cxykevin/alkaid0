@@ -183,10 +183,10 @@ type StreamToolCallFunction struct {
 
 // Message 消息结构
 type Message struct {
-	Role        string           `json:"role"`
-	Content     string           `json:"content"`
-	ToolCallID  string           `json:"tool_call_id,omitempty"`
-	ToolCalls   []StreamToolCall `json:"tool_calls,omitempty"`
+	Role       string           `json:"role"`
+	Content    string           `json:"content"`
+	ToolCallID string           `json:"tool_call_id,omitempty"`
+	ToolCalls  []StreamToolCall `json:"tool_calls,omitempty"`
 }
 
 // ChatCompletionResponse 聊天补全响应
@@ -362,31 +362,10 @@ func handleStreamingChatCompletion(w http.ResponseWriter, _ *http.Request, req C
 		responseText = responseText + "<think> This is a CoT string. </think> "
 	}
 
-	if strings.Contains(req.Model, "toolcall") {
-		// 原生 tool_calls 模式：请求携带 tools 参数（模型 test-chat-toolcall-native）
-		if len(req.Tools) > 0 {
-			handleNativeToolCallStream(w, req, flusher)
-			return
-		}
-		// 提示词 <tools> 标签模式：增量工具调用流式响应
-		// `strings.Fields` 按空格把 JSON 拆成多个 chunk，
-		// 参数逐 token 增量到达，用于验证工具调用增量流式广播。
-		// 若请求已含工具返回（<tools_return>，即上一轮工具已执行），改回普通文本，
-		// 避免 auto-approve 场景下工具调用无限循环。
-		toolReturned := false
-		for _, m := range req.Messages {
-			// 工具结果以 user 角色消息回传（build 的 ToolResponseWrapTemplate 含 <tools_return> 标签）；
-			// 仅检查 user 消息，避免 system 提示词里的 <tools_return> 字样误判
-			if m.Role == "user" && strings.Contains(m.Content, "<tools_return>") {
-				toolReturned = true
-				break
-			}
-		}
-		if toolReturned {
-			responseText += fmt.Sprintf("This is a mock response from model %s. Tool executed.", req.Model)
-		} else {
-			responseText += `<tools> [ {"name": "edit", "id": "tid", "parameters": {"path": "a.txt", "target": "x", "text": "hello"}} ] </tools>`
-		}
+	if strings.Contains(req.Model, "toolcall") && len(req.Tools) > 0 {
+		// 原生 tool_calls 模式：请求携带 tools 参数。
+		handleNativeToolCallStream(w, req, flusher)
+		return
 	} else if strings.Contains(req.Model, "echo") && len(req.Messages) > 0 {
 		if strings.Contains(req.Messages[len(req.Messages)-1].Content, "<|show_full_messages|>") {
 			for _, v := range req.Messages {
@@ -474,12 +453,10 @@ func handleNativeToolCallStream(w http.ResponseWriter, req ChatCompletionRequest
 		promptTokens += calculateTokens(msg.Content)
 	}
 
-	// 原生模式下历史工具结果以 user 角色 + <tools_return> 文本段回传（与提示词模式一致，
-	// build 回放不引入 role:"tool" 消息），检测到即说明上一轮工具已执行，
-	// 返回普通文本避免 auto-approve 死循环
+	// 检测上一轮是否已执行工具；native 历史结果使用 role:"tool" 回放。
 	toolReturned := false
 	for _, m := range req.Messages {
-		if m.Role == "user" && strings.Contains(m.Content, "<tools_return>") {
+		if m.Role == "tool" {
 			toolReturned = true
 			break
 		}

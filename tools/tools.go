@@ -177,7 +177,7 @@ func ExecToolPostHook(session *structs.Chats, name string, args map[string]*any,
 			}
 			idAny := any(toolID)
 			// 克隆参数 map 再注入工具调用 ID，避免把内部 _id 写入共享参数表
-			// （args 与 parser 存入 ToolsSolved 的 map 是同一引用，直接写入会污染工具参数数据）
+			// （args 与 parser 存入参数表 是同一引用，直接写入会污染工具参数数据）
 			hookArgs := maps.Clone(args)
 			hookArgs["_id"] = &idAny
 			pass, passObj, ret, err := hook.PostHook.Func(session, hookArgs, passObjs)

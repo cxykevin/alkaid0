@@ -5,8 +5,3 @@
 </think>
 {{- end }}
 {{.Delta}}
-{{- if ne .ToolsCall ""}}
-<tools>
-{{.ToolsCall}}
-</tools>
-{{- end }}

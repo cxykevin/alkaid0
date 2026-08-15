@@ -9,12 +9,11 @@ import (
 	"github.com/cxykevin/alkaid0/config"
 	cfgStructs "github.com/cxykevin/alkaid0/config/structs"
 	"github.com/cxykevin/alkaid0/mock/openai"
-	"github.com/cxykevin/alkaid0/tools/index"
 	u "github.com/cxykevin/alkaid0/utils"
 )
 
-// TestToolCallStreaming 验证工具调用增量流式广播：
-// mock toolcall-chat 逐 word 流式返回 <tools> JSON（参数逐 token 增量到达）→ solver 增量解析 →
+// TestToolCallStreaming 验证原生 tool_calls 增量流式广播：
+// mock 返回 delta.tool_calls 参数增量 → solver 增量解析 →
 // OnHook 把部分参数写入 ToolCallingContext → SetCallback 限流广播
 // tool_call_update（status=streaming）；审批自动通过后广播最终 tool_call_update。
 func TestToolCallStreaming(t *testing.T) {
@@ -25,13 +24,10 @@ func TestToolCallStreaming(t *testing.T) {
 
 	openai.StartServerTask()
 	setupConfigForTest()
-	// 注册所有内置工具（index.Load 在服务器启动时调用；测试环境需手动触发，
-	// 否则 toolobj.ToolsList 为空、ToolsSolver 解析不到任何工具）
-	index.Load()
-	// 使用 toolcall-chat 模型：mock 直接流式返回固定的 <tools> 工具调用
+	// 使用原生 toolcall 模型：mock 返回 delta.tool_calls 工具调用
 	config.GlobalConfig.Model.Models[1] = cfgStructs.ModelConfig{
-		ModelName:   "toolcall-chat",
-		ModelID:     "toolcall-chat",
+		ModelName:   "toolcall-native",
+		ModelID:     "toolcall-native",
 		ProviderURL: openai.BaseURL,
 		ProviderKey: "test-key",
 	}
@@ -54,8 +50,8 @@ func TestToolCallStreaming(t *testing.T) {
 	calls2 := make(chan ReceivedCall, 300)
 	sessionID := newTitleTestSession(t, tmpDir, calls2)
 
-	// 发送任意 prompt；mock toolcall-chat 无视内容，第一次返回 <tools> 流式响应，
-	// 工具执行后（请求含 <tools_return>）返回普通文本以终止循环
+	// 发送任意 prompt；mock 原生 toolcall 模型第一次返回 tool_calls 流式响应，
+	// 工具执行后返回普通文本以终止循环
 	_, err = SessionPrompt(SessionPromptRequest{SessionID: sessionID, Prompt: []u.H{{"type": "text", "text": "please call a tool"}}}, nil, 1)
 	if err != nil {
 		t.Fatalf("SessionPrompt failed: %v", err)

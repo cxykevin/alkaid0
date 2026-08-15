@@ -29,7 +29,6 @@ func setupBuildTest(t *testing.T) *gorm.DB {
 					ModelTemperature:  0.7,
 					ModelTopP:         0.9,
 					EnableThinking:    true,
-					EnableToolCalling: true,
 					ProviderSpecificConfig: cfgStruct.ProviderSpecificConfig{
 						EnableDeepseekThinking: true,
 						EnableReasoningEffort:  true,
@@ -240,7 +239,6 @@ func TestBuildWithMultipleModels(t *testing.T) {
 		ModelTemperature:  0.5,
 		ModelTopP:         0.8,
 		EnableThinking:    false,
-		EnableToolCalling: false,
 	}
 
 	// 创建聊天记录，使用不同的模型ID

@@ -90,8 +90,7 @@ func SummaryWithKeepNumber(chatID uint32, agentID string, db *gorm.DB, keepNum i
 				}
 			} else {
 				if v.Type == structs.MessagesRoleTool || (v.Type == structs.MessagesRoleAgent && v.ToolCallingJSONString != "") {
-					// 工具调用信息不进入总结：工具结果消息与带工具调用的 assistant 消息一律跳过，
-					// 总结模型只见纯文本对话，不接触任何工具格式（<tools> / <tools_return> / tool_calls）。
+					// 工具调用信息不进入总结：工具结果消息与带工具调用的 assistant 消息一律跳过。
 					skipMsg = true
 				} else if v.Type == structs.MessagesRoleUser {
 					rendered, err := prompts.Render(prompts.UserWrapTemplate, struct {
@@ -105,16 +104,6 @@ func SummaryWithKeepNumber(chatID uint32, agentID string, db *gorm.DB, keepNum i
 						return 0, nil, err
 					}
 					msg.Content = rendered
-				} else if v.Type == structs.MessagesRoleTool {
-					toolRendered, err := prompts.Render(prompts.ToolResponseWrapTemplate, struct {
-						Prompt string
-					}{
-						Prompt: v.Delta,
-					})
-					if err != nil {
-						return 0, nil, err
-					}
-					msg.Content = toolRendered
 				} else if v.Type == structs.MessagesRoleCommunicate {
 					renderAgentID := ""
 					if v.AgentID != nil {

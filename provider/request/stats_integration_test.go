@@ -27,7 +27,6 @@ func setupUsageTestConfig(url string) {
 					ModelID:           "usage-test",
 					ProviderURL:       url,
 					ProviderKey:       "mock-key",
-					EnableToolCalling: false,
 					EnableThinking:    false,
 				},
 			},

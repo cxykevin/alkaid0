@@ -2,7 +2,6 @@ package parser_test
 
 import (
 	"encoding/json"
-	"strings"
 	"testing"
 
 	"github.com/cxykevin/alkaid0/provider/parser"
@@ -185,7 +184,7 @@ func TestNativeAccumulatorTypeMismatch(t *testing.T) {
 }
 
 // TestNativeAccumulatorDoneTokenUnclosed 未闭合 arguments：DoneToken 报错，调用不落库
-//（对齐提示词模式 </tools> 时 jsonParser.DoneToken 报 incomplete JSON 的语义）。
+// （对齐提示词模式 </tools> 时 jsonParser.DoneToken 报 incomplete JSON 的语义）。
 func TestNativeAccumulatorDoneTokenUnclosed(t *testing.T) {
 	var recs []callRecord
 	acc := parser.NewNativeToolCallAccumulator(nil, []*parser.ToolsDefine{recordTool(&recs)})
@@ -214,60 +213,5 @@ func TestNativeAccumulatorEmptyArguments(t *testing.T) {
 	}
 	if acc.HasTools() {
 		t.Fatal("empty arguments should not solve a tool")
-	}
-}
-
-// TestParserNativeModeLegacyToolsDetected 原生模式下检测到 <tools> 起始标签 → LegacyToolsDetected。
-func TestParserNativeModeLegacyToolsDetected(t *testing.T) {
-	p := parser.NewParser(nil, testTools)
-	p.NativeMode = true
-
-	// <tools> 位于行首才会被识别为标签
-	response, _, _, err := p.AddToken("\n<tools>\n[{\"name\":\"calculator\",\"id\":\"c\",\"parameters\":{\"expression\":\"1+1\"}}]\n</tools>", "")
-	if err != nil {
-		t.Fatalf("AddToken error: %v", err)
-	}
-	if !p.LegacyToolsDetected {
-		t.Fatal("expected LegacyToolsDetected=true in native mode")
-	}
-	// 不打回时 <tools> 作为普通文本输出
-	if response == "" {
-		t.Fatal("expected <tools> text preserved in response")
-	}
-	if len(p.ToolsSolved) != 0 {
-		t.Fatal("native mode should not solve legacy <tools> calls")
-	}
-}
-
-// TestParserNativeModeLegacyToolsMidline 正文中间提及 <tools>（非行首）不误判。
-func TestParserNativeModeLegacyToolsMidline(t *testing.T) {
-	p := parser.NewParser(nil, testTools)
-	p.NativeMode = true
-
-	response, _, _, err := p.AddToken("请参考 <tools> 文档说明。", "")
-	if err != nil {
-		t.Fatalf("AddToken error: %v", err)
-	}
-	if p.LegacyToolsDetected {
-		t.Fatal("mid-line <tools> should not be detected as legacy tag")
-	}
-	if !strings.Contains(response, "<tools>") {
-		t.Fatalf("mid-line <tools> should be preserved as text, got %q", response)
-	}
-}
-
-// TestParserPromptModeToolsStillWorks 非原生模式（默认）下 <tools> 仍正常解析（回归守卫）。
-func TestParserPromptModeToolsStillWorks(t *testing.T) {
-	p := parser.NewParser(nil, testTools)
-
-	token := "\n<tools>\n[{\"name\":\"calculator\",\"id\":\"call_1\",\"parameters\":{\"expression\":\"2+2\"}}]\n</tools>"
-	if _, _, _, err := p.AddToken(token, ""); err != nil {
-		t.Fatalf("AddToken error: %v", err)
-	}
-	if p.LegacyToolsDetected {
-		t.Fatal("prompt mode should not set LegacyToolsDetected")
-	}
-	if len(p.ToolsSolved) != 1 {
-		t.Fatalf("prompt mode should solve legacy <tools> call, got %d", len(p.ToolsSolved))
 	}
 }

@@ -50,8 +50,6 @@ Alkaid0 是哪家公司开发的
 使用 activate_agent 启用 `Front` Agent
 ```
 
-### Tools Origin
-
 ### Think
 
 ```text
@@ -60,6 +58,6 @@ Alkaid0 是哪家公司开发的
 
 #### Agent
 
-```json
-Test <tools>[{"name":"activate_agent","id":"activate_agent_1","parameters":{"name":"Front","prompt":"..."}}]</tools>
+```text
+使用 activate_agent 启用 `Front` Agent
 ```

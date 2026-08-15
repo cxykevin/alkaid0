@@ -17,10 +17,9 @@ type ProviderSpecificConfig struct {
 	EnableTopP             bool   `default:"false"`
 	EnableTemperature      bool   `default:"false"`
 	EnableTopK             bool   `default:"false"`
-	EnableUsage            bool   `default:"true"`
-	Dimension              int    `default:"0"`    // Embedding 模型维度, 嵌入模型必填
-	ToolPromptEnhance      string `default:"auto"` // 工具提示词增强: auto(默认,启用) / on(强制启用) / off(强制关闭)
-	EnableToolCallingCompat bool  `default:"false"` // 历史回放兼容模式：把"一个 assistant 携带多个 tool_calls"的消息拆分为逐条"单 tool_call + 结果"，适配逐条转换 role:tool 消息的 OpenAI→Anthropic 代理（默认关闭）
+	EnableUsage               bool `default:"true"`
+	Dimension                 int  `default:"0"`    // Embedding 模型维度, 嵌入模型必填
+	EnableToolCallingCompat   bool `default:"false"` // 历史回放兼容模式：把"一个 assistant 携带多个 tool_calls"的消息拆分为逐条"单 tool_call + 结果"，适配逐条转换 role:tool 消息的 OpenAI→Anthropic 代理（默认关闭）
 	EnableTrailingUserMessage bool `default:"false"` // 收尾消息兼容模式：请求以 role:"tool"（tool_result）结果消息结尾时追加一条 user 收尾消息，适配拒绝以 tool_result 结尾请求的 OpenAI→Anthropic 转换代理（默认关闭）
 }
 
@@ -37,7 +36,6 @@ type ModelConfig struct {
 	ProviderURL            string                 `default:"https://openrouter.com/api/v1"` // 覆写模型提供者URL
 	ProviderKey            string                 `default:"sk-or-xxx"`                     // 复写模型提供者Key
 	EnableThinking         bool                   `default:"false"`                         // 是否启用思考
-	EnableToolCalling      bool                   `default:"true"`                          // 是否启用原生 tools 参数/tool_calls 模式（默认 true = 原生 tool_calls 模式；false = 提示词 <tools> 标签模式，兼容旧配置）
 	CompressSize           uint32                 `default:"128000"`                        // 压缩大小
 	Hide                   bool                   `default:"false"`                         // 在列表中隐藏
 	Type                   ModelType              `default:""`                              // 模型类型

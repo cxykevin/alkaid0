@@ -9,9 +9,6 @@ func TestPrompts(t *testing.T) {
 	if Global == "" {
 		t.Error("Global prompt is empty")
 	}
-	if Tools == "" {
-		t.Error("Tools prompt is empty")
-	}
 	if DefaultAgent == "" {
 		t.Error("DefaultAgent prompt is empty")
 	}

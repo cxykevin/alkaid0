@@ -44,10 +44,9 @@ func setupTestConfig() {
 					ModelName: "test-model",
 					ModelID:   "test-chat",
 
-					ModelTemperature:  0.7,
-					ModelTopP:         0.9,
-					EnableThinking:    true,
-					EnableToolCalling: true,
+					ModelTemperature: 0.7,
+					ModelTopP:        0.9,
+					EnableThinking:   true,
 					ProviderSpecificConfig: cfgStruct.ProviderSpecificConfig{
 						EnableDeepseekThinking: true,
 						EnableReasoningEffort:  true,
@@ -57,12 +56,11 @@ func setupTestConfig() {
 					},
 				},
 				2: {
-					ModelName:         "test-model-no-think",
-					ModelID:           "test-chat",
-					ModelTemperature:  0.7,
-					ModelTopP:         0.9,
-					EnableThinking:    false,
-					EnableToolCalling: true,
+					ModelName:        "test-model-no-think",
+					ModelID:          "test-chat",
+					ModelTemperature: 0.7,
+					ModelTopP:        0.9,
+					EnableThinking:   false,
 					ProviderSpecificConfig: cfgStruct.ProviderSpecificConfig{
 						EnableDeepseekThinking: true,
 						EnableReasoningEffort:  true,
@@ -175,7 +173,7 @@ func TestRequestBody_Basic(t *testing.T) {
 	if !strings.Contains(content, "You are a helpful assistant") {
 		t.Errorf("System message should contain global prompt, got: %s", content)
 	}
-	if strings.Count(content, "Use the native function schema supplied by the API") != 1 {
+	if strings.Count(content, "Use only the native function schema supplied by the API") != 1 {
 		t.Errorf("System message should include the native tool protocol exactly once, got: %s", content)
 	}
 	if strings.Contains(content, "DO NOT CALL TOOLS WITHOUT EMPTY OBJECT OR NOTHING!") {
@@ -459,12 +457,11 @@ func TestRequestBody_InvalidModel(t *testing.T) {
 			DefaultModelID: 999, // 不存在的默认模型
 			Models: map[int32]cfgStruct.ModelConfig{
 				1: {
-					ModelName:         "test-model",
-					ModelID:           "test-model-id",
-					ModelTemperature:  0.7,
-					ModelTopP:         0.9,
-					EnableThinking:    true,
-					EnableToolCalling: true,
+					ModelName:        "test-model",
+					ModelID:          "test-model-id",
+					ModelTemperature: 0.7,
+					ModelTopP:        0.9,
+					EnableThinking:   true,
 				},
 			},
 		},
@@ -604,45 +601,18 @@ func TestRequestBody_ManyMessages(t *testing.T) {
 	}
 }
 
-// TestRequestBody_ToolMessage 测试工具类型消息（模式感知）：
-// 提示词模式工具结果走 <tools_return> 文本拼法（映射为 user 角色）；
-// 原生模式按 id 拆分为 role:"tool" 消息并严格配对（无对应 assistant 调用的结果丢弃）。
+// TestRequestBody_ToolMessage 原生模式按 id 拆分为 role:"tool" 消息并严格配对，
+// 无对应 assistant 调用的结果丢弃。
 func TestRequestBody_ToolMessage(t *testing.T) {
 	db := setupTestDB(t)
 
 	toolsList := []*parser.ToolsDefine{}
+	setupTestConfig()
+	cfg := *config.GlobalConfig
+	m := cfg.Model.Models[cfg.Model.DefaultModelID]
+	cfg.Model.Models[cfg.Model.DefaultModelID] = m
+	config.GlobalConfigSwap(cfg)
 
-	buildReq := func(chatID uint32, native bool, delta string) *reqStruct.ChatCompletionRequest {
-		setupTestConfig()
-		cfg := *config.GlobalConfig
-		m := cfg.Model.Models[cfg.Model.DefaultModelID]
-		m.EnableToolCalling = native
-		cfg.Model.Models[cfg.Model.DefaultModelID] = m
-		config.GlobalConfigSwap(cfg)
-		if err := db.Create(&structs.Messages{ChatID: chatID, Type: structs.MessagesRoleTool, Delta: delta}).Error; err != nil {
-			t.Fatalf("Failed to create test message: %v", err)
-		}
-		request, err := RequestBody(chatID, 1, "", &toolsList, db, "", "", cfgStruct.AgentConfig{}, &structs.Chats{})
-		if err != nil {
-			t.Fatalf("RequestBody failed: %v", err)
-		}
-		return request
-	}
-
-	// 提示词模式：工具结果映射为 user 角色，内容含 <tools_return> 段
-	req := buildReq(7, false, "Tool result")
-	foundToolMsg := false
-	for _, msg := range req.Messages {
-		if strings.Contains(msg.Content, "Tool result") && strings.Contains(msg.Content, "<tools_return>") && msg.Role == "user" {
-			foundToolMsg = true
-			break
-		}
-	}
-	if !foundToolMsg {
-		t.Error("提示词模式：Expected tool message mapped to user role with <tools_return> wrapper")
-	}
-
-	// 原生模式：先创建带工具调用的 assistant 消息（提供配对 id 集合）
 	if err := db.Create(&structs.Messages{
 		ChatID:                8,
 		Type:                  structs.MessagesRoleAgent,
@@ -651,10 +621,19 @@ func TestRequestBody_ToolMessage(t *testing.T) {
 	}).Error; err != nil {
 		t.Fatalf("create assistant msg: %v", err)
 	}
-	// 结果含一个无对应调用的 ghost 结果（应被丢弃）
-	nreq := buildReq(8, true, `[{"name":"edit","id":"call_1","return":"{\"ok\":true}"},{"name":"edit","id":"call_2","return":"{\"ok\":false}"},{"name":"edit","id":"call_ghost","return":"{\"no\":true}"}]`)
+	if err := db.Create(&structs.Messages{
+		ChatID: 8, Type: structs.MessagesRoleTool,
+		Delta: `[{"name":"edit","id":"call_1","return":"{\"ok\":true}"},{"name":"edit","id":"call_2","return":"{\"ok\":false}"},{"name":"edit","id":"call_ghost","return":"{\"no\":true}"}]`,
+	}).Error; err != nil {
+		t.Fatalf("create tool result: %v", err)
+	}
+
+	req, err := RequestBody(8, 1, "", &toolsList, db, "", "", cfgStruct.AgentConfig{}, &structs.Chats{})
+	if err != nil {
+		t.Fatalf("RequestBody failed: %v", err)
+	}
 	var toolMsgs []reqStruct.Message
-	for _, msg := range nreq.Messages {
+	for _, msg := range req.Messages {
 		if msg.Role == reqStruct.RoleTool {
 			toolMsgs = append(toolMsgs, msg)
 		}
@@ -668,12 +647,6 @@ func TestRequestBody_ToolMessage(t *testing.T) {
 	if toolMsgs[1].ToolCallID != "call_2" || !strings.Contains(toolMsgs[1].Content, `{"ok":false}`) {
 		t.Errorf("原生模式：second tool msg mismatch: %+v", toolMsgs[1])
 	}
-	// 原生模式工具结果消息不产生 <tools_return> 文本段（system 提示词含示例文本，不在此检查范围）
-	for _, msg := range nreq.Messages {
-		if msg.Role == reqStruct.RoleTool && strings.Contains(msg.Content, "<tools_return>") {
-			t.Error("原生模式：tool result message should NOT contain <tools_return> text segment")
-		}
-	}
 }
 
 // TestRequestBody_NativeHistoryReplay 原生模式完整历史回放：
@@ -686,7 +659,6 @@ func TestRequestBody_NativeHistoryReplay(t *testing.T) {
 	setupTestConfig()
 	cfg := *config.GlobalConfig
 	m := cfg.Model.Models[cfg.Model.DefaultModelID]
-	m.EnableToolCalling = true
 	cfg.Model.Models[cfg.Model.DefaultModelID] = m
 	config.GlobalConfigSwap(cfg)
 
@@ -762,7 +734,6 @@ func TestRequestBody_TerminatedToolCall(t *testing.T) {
 	setupTestConfig()
 	cfg := *config.GlobalConfig
 	m := cfg.Model.Models[cfg.Model.DefaultModelID]
-	m.EnableToolCalling = true
 	cfg.Model.Models[cfg.Model.DefaultModelID] = m
 	config.GlobalConfigSwap(cfg)
 
@@ -858,7 +829,6 @@ func TestRequestBody_AllToolTurnsReplayed(t *testing.T) {
 	setupTestConfig()
 	cfg := *config.GlobalConfig
 	m := cfg.Model.Models[cfg.Model.DefaultModelID]
-	m.EnableToolCalling = true
 	cfg.Model.Models[cfg.Model.DefaultModelID] = m
 	config.GlobalConfigSwap(cfg)
 
@@ -930,7 +900,6 @@ func replayArguments(t *testing.T, chatID uint32, msgs []structs.Messages, callI
 	setupTestConfig()
 	cfg := *config.GlobalConfig
 	m := cfg.Model.Models[cfg.Model.DefaultModelID]
-	m.EnableToolCalling = true
 	cfg.Model.Models[cfg.Model.DefaultModelID] = m
 	config.GlobalConfigSwap(cfg)
 	for _, mm := range msgs {
@@ -982,7 +951,6 @@ func TestRequestBody_AllShortArgsReplayed(t *testing.T) {
 	setupTestConfig()
 	cfg := *config.GlobalConfig
 	m := cfg.Model.Models[cfg.Model.DefaultModelID]
-	m.EnableToolCalling = true
 	cfg.Model.Models[cfg.Model.DefaultModelID] = m
 	config.GlobalConfigSwap(cfg)
 	for _, mm := range msgs {
@@ -1079,7 +1047,6 @@ func TestRequestBody_OldTurnEventBlockAfterResults(t *testing.T) {
 	setupTestConfig()
 	cfg := *config.GlobalConfig
 	m := cfg.Model.Models[cfg.Model.DefaultModelID]
-	m.EnableToolCalling = true
 	cfg.Model.Models[cfg.Model.DefaultModelID] = m
 	config.GlobalConfigSwap(cfg)
 
@@ -1158,7 +1125,6 @@ func TestRequestBody_DiffPlanFallbackAdvancesCache(t *testing.T) {
 	setupTestConfig()
 	cfg := *config.GlobalConfig
 	m := cfg.Model.Models[cfg.Model.DefaultModelID]
-	m.EnableToolCalling = true
 	cfg.Model.Models[cfg.Model.DefaultModelID] = m
 	config.GlobalConfigSwap(cfg)
 
@@ -1226,7 +1192,6 @@ func TestRequestBody_TraceFollowsEvent_Native(t *testing.T) {
 	setupTestConfig()
 	cfg := *config.GlobalConfig
 	m := cfg.Model.Models[cfg.Model.DefaultModelID]
-	m.EnableToolCalling = true
 	cfg.Model.Models[cfg.Model.DefaultModelID] = m
 	config.GlobalConfigSwap(cfg)
 
@@ -1294,7 +1259,6 @@ func TestRequestBody_ParallelToolCalls_BlockAfterAllResults(t *testing.T) {
 	setupTestConfig()
 	cfg := *config.GlobalConfig
 	m := cfg.Model.Models[cfg.Model.DefaultModelID]
-	m.EnableToolCalling = true
 	cfg.Model.Models[cfg.Model.DefaultModelID] = m
 	config.GlobalConfigSwap(cfg)
 
@@ -1349,64 +1313,6 @@ func TestRequestBody_ParallelToolCalls_BlockAfterAllResults(t *testing.T) {
 	}
 }
 
-// TestRequestBody_TraceFollowsEvent_Prompt 提示词模式：内容块紧跟事件 assistant 消息之后。
-func TestRequestBody_TraceFollowsEvent_Prompt(t *testing.T) {
-	db := setupTestDB(t)
-	toolsList := []*parser.ToolsDefine{}
-
-	setupTestConfig()
-	cfg := *config.GlobalConfig
-	m := cfg.Model.Models[cfg.Model.DefaultModelID]
-	m.EnableToolCalling = false
-	cfg.Model.Models[cfg.Model.DefaultModelID] = m
-	config.GlobalConfigSwap(cfg)
-
-	msgs := []structs.Messages{
-		{ChatID: 21, Type: structs.MessagesRoleUser, Delta: "read a.txt"},
-		{ChatID: 21, Type: structs.MessagesRoleAgent, Delta: "reading now", ToolCallingJSONString: `[{"name":"read","id":"call_2","parameters":{"path":"a.txt"}}]`},
-		{ChatID: 21, Type: structs.MessagesRoleTool, Delta: `[{"name":"read","id":"call_2","return":"traced"}]`},
-	}
-	for i := range msgs {
-		if err := db.Create(&msgs[i]).Error; err != nil {
-			t.Fatalf("create msg: %v", err)
-		}
-	}
-	asstID := msgs[1].ID
-
-	chatLn := eventTestChatLn(
-		map[string]*structs.TraceEvent{
-			"a.txt": {MsgID: asstID, ToolCallID: "call_2", IsEdit: false, InRecent: false},
-		},
-		map[string]trace.FileBlock{
-			"a.txt": {Name: "a.txt", Size: "5", Length: 5, Text: "1|hi\n"},
-		},
-	)
-
-	req, err := RequestBody(21, 1, "", &toolsList, db, "", "", cfgStruct.AgentConfig{}, chatLn)
-	if err != nil {
-		t.Fatalf("RequestBody failed: %v", err)
-	}
-
-	asstIdx, blockIdx := -1, -1
-	for i, msg := range req.Messages {
-		if msg.Role == "assistant" && strings.Contains(msg.Content, "reading now") {
-			asstIdx = i
-		}
-		if msg.Role == "user" && strings.Contains(msg.Content, `path="a.txt"`) {
-			blockIdx = i
-		}
-	}
-	if asstIdx < 0 {
-		t.Fatal("expected event assistant message")
-	}
-	if blockIdx < 0 {
-		t.Fatal("expected trace content block after event")
-	}
-	if blockIdx != asstIdx+1 {
-		t.Errorf("content block should follow event assistant immediately: asstIdx=%d blockIdx=%d", asstIdx, blockIdx)
-	}
-}
-
 // TestRequestBody_TraceFollowsEvent_MultiFileOneMessage 同一事件内多文件合并为一条 user 消息，
 // 且位于该事件所有 tool 结果之后。
 func TestRequestBody_TraceFollowsEvent_MultiFileOneMessage(t *testing.T) {
@@ -1416,7 +1322,6 @@ func TestRequestBody_TraceFollowsEvent_MultiFileOneMessage(t *testing.T) {
 	setupTestConfig()
 	cfg := *config.GlobalConfig
 	m := cfg.Model.Models[cfg.Model.DefaultModelID]
-	m.EnableToolCalling = true
 	cfg.Model.Models[cfg.Model.DefaultModelID] = m
 	config.GlobalConfigSwap(cfg)
 
@@ -1482,7 +1387,6 @@ func TestRequestBody_NonRecentEvent_FallsBackTop(t *testing.T) {
 	setupTestConfig()
 	cfg := *config.GlobalConfig
 	m := cfg.Model.Models[cfg.Model.DefaultModelID]
-	m.EnableToolCalling = true
 	cfg.Model.Models[cfg.Model.DefaultModelID] = m
 	config.GlobalConfigSwap(cfg)
 
@@ -1539,7 +1443,6 @@ func TestRequestBody_NoEventFile_Top(t *testing.T) {
 	setupTestConfig()
 	cfg := *config.GlobalConfig
 	m := cfg.Model.Models[cfg.Model.DefaultModelID]
-	m.EnableToolCalling = true
 	cfg.Model.Models[cfg.Model.DefaultModelID] = m
 	config.GlobalConfigSwap(cfg)
 

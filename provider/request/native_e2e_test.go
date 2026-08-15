@@ -88,12 +88,11 @@ func setupNativeE2EConfig(url string) {
 			DefaultModelID: 1,
 			Models: map[int32]cfgStruct.ModelConfig{
 				1: {
-					ModelName:         "native-e2e",
-					ModelID:           "native-e2e",
-					ProviderURL:       url,
-					ProviderKey:       "mock-key",
-					EnableToolCalling: true,
-					EnableThinking:    false,
+					ModelName:      "native-e2e",
+					ModelID:        "native-e2e",
+					ProviderURL:    url,
+					ProviderKey:    "mock-key",
+					EnableThinking: false,
 				},
 			},
 		},
@@ -143,13 +142,9 @@ func emitTextSSE(w http.ResponseWriter, text string) {
 }
 
 // reqHasToolReturn 判断请求体是否已含工具结果（历史工具已执行）。
-// 原生模式：存在 role:"tool" 消息即已执行；提示词模式：含 <tools_return> 文本段。
 func reqHasToolReturn(req structs.ChatCompletionRequest) bool {
 	for _, m := range req.Messages {
 		if m.Role == structs.RoleTool {
-			return true
-		}
-		if m.Role == structs.RoleUser && strings.Contains(m.Content, "<tools_return>") {
 			return true
 		}
 	}
@@ -273,17 +268,12 @@ func TestNativeSendRequest_ToolCalling(t *testing.T) {
 		t.Fatalf("expected >=2 request bodies, got %d", len(bodies))
 	}
 	round2 := bodies[len(bodies)-1]
-	// 历史回放原生格式：assistant 带原生 tool_calls，工具结果以 role:"tool" 消息回放（tool_call_id 配对），
-	// 无 <tools>/<tools_return> 文本段
+	// 历史回放原生格式：assistant 带原生 tool_calls，工具结果以 role:"tool" 消息回放（tool_call_id 配对）。
 	foundAssistantTools := false
 	foundToolReturn := false
-	hasLegacyTools := false
 	var asstIdx, toolIdx = -1, -1
 	for i, m := range round2.Messages {
 		if m.Role == structs.RoleAssistant {
-			if strings.Contains(m.Content, "<tools>") {
-				hasLegacyTools = true
-			}
 			for _, tc := range m.ToolCalls {
 				if tc.ID == "call_e2e_1" && tc.Type == "function" && tc.Function != nil && tc.Function.Name == "e2e_tool" {
 					foundAssistantTools = true
@@ -296,9 +286,6 @@ func TestNativeSendRequest_ToolCalling(t *testing.T) {
 			toolIdx = i
 		}
 	}
-	if hasLegacyTools {
-		t.Error("round2 request should NOT contain <tools> text segment")
-	}
 	if !foundAssistantTools {
 		t.Error("round2 request should replay assistant tool call as native tool_calls (id/name)")
 	}
@@ -310,9 +297,9 @@ func TestNativeSendRequest_ToolCalling(t *testing.T) {
 	}
 }
 
-// TestNativeSendRequest_LegacyTextAccepted 原生模式下不再拒绝模型输出的普通文本，
-// <tools> 文本不会触发格式打回或注入纠正消息。
-func TestNativeSendRequest_LegacyTextAccepted(t *testing.T) {
+// TestNativeSendRequest_TextAccepted 原生模式下接受模型输出的普通文本，
+// 不触发格式打回或注入纠正消息。
+func TestNativeSendRequest_TextAccepted(t *testing.T) {
 	initAgentsConsumer()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")

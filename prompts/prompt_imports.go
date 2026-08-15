@@ -56,17 +56,7 @@ var Title string
 //go:embed prompts/title_system.md
 var TitleSystem string
 
-// ToolEnhance Tool calling reinforcement prompt
-//
-//go:embed prompts/tool_enhance.md
-var ToolEnhance string
-
-// ToolEnhanceNative Native tool calling reinforcement prompt (counterpart of tool_enhance.md)
-//
-//go:embed prompts/tool_enhance_native.md
-var ToolEnhanceNative string
-
-// ToolNative Native tool calling prompt (counterpart of tools.md)
+// ToolNative Native tool calling prompt
 //
 //go:embed prompts/tool_native.md
 var ToolNative string
@@ -76,25 +66,10 @@ var ToolNative string
 //go:embed prompts/tool_prehook.md
 var ToolPrehook string
 
-// ToolResponseWrap 工具返回提示词
-//
-//go:embed prompts/tool_response_wrap.md
-var ToolResponseWrap string
-
 // ToolScopes 工具作用域
 //
 //go:embed prompts/tool_scopes.md
 var ToolScopes string
-
-// Tools Tool calling prompt
-//
-//go:embed prompts/tools.md
-var Tools string
-
-// ToolsWrap 工具占位符
-//
-//go:embed prompts/tools_wrap.md
-var ToolsWrap string
 
 // UserReject <| user reject last tools calling |>
 //
@@ -136,29 +111,14 @@ var TitleTemplate *template.Template
 // TitleSystem 标题生成系统提示词模板
 var TitleSystemTemplate *template.Template
 
-// ToolEnhance Tool calling reinforcement prompt模板
-var ToolEnhanceTemplate *template.Template
-
-// ToolEnhanceNative Native tool calling reinforcement prompt (counterpart of tool_enhance.md)模板
-var ToolEnhanceNativeTemplate *template.Template
-
-// ToolNative Native tool calling prompt (counterpart of tools.md)模板
+// ToolNative Native tool calling prompt模板
 var ToolNativeTemplate *template.Template
 
 // ToolPrehook 工具预调用提示词生成器模板
 var ToolPrehookTemplate *template.Template
 
-// ToolResponseWrap 工具返回提示词模板
-var ToolResponseWrapTemplate *template.Template
-
 // ToolScopes 工具作用域模板
 var ToolScopesTemplate *template.Template
-
-// Tools Tool calling prompt模板
-var ToolsTemplate *template.Template
-
-// ToolsWrap 工具占位符模板
-var ToolsWrapTemplate *template.Template
 
 // UserReject <| user reject last tools calling |>模板
 var UserRejectTemplate *template.Template
@@ -177,14 +137,9 @@ func initTemplates() {
 	SummaryWrapTemplate = Load("SummaryWrap", SummaryWrap)
 	TitleTemplate = Load("Title", Title)
 	TitleSystemTemplate = Load("TitleSystem", TitleSystem)
-	ToolEnhanceTemplate = Load("ToolEnhance", ToolEnhance)
-	ToolEnhanceNativeTemplate = Load("ToolEnhanceNative", ToolEnhanceNative)
 	ToolNativeTemplate = Load("ToolNative", ToolNative)
 	ToolPrehookTemplate = Load("ToolPrehook", ToolPrehook)
-	ToolResponseWrapTemplate = Load("ToolResponseWrap", ToolResponseWrap)
 	ToolScopesTemplate = Load("ToolScopes", ToolScopes)
-	ToolsTemplate = Load("Tools", Tools)
-	ToolsWrapTemplate = Load("ToolsWrap", ToolsWrap)
 	UserRejectTemplate = Load("UserReject", UserReject)
 	UserWrapTemplate = Load("UserWrap", UserWrap)
 }
