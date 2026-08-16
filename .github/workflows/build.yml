@@ -324,5 +324,3 @@ jobs:
           gitee_release_body: ${{ github.event.release.body }}
           gitee_target_commitish: main
           gitee_upload_retry_times: 3
-          gitee_files: |
-            ./binaries/*
