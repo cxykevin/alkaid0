@@ -392,16 +392,21 @@ jobs:
           fi
           case "$release_status" in
             200)
-              if ! release_id="$(jq -er '.id' "$response_file")"; then
-                echo "Gitee Release 查询响应缺少 id"
-                cat "$response_file"
-                exit 1
+              if release_id="$(jq -er '.id // empty' "$response_file")"; then
+                request_release PATCH "${api_url}/releases/${release_id}"
+              else
+                echo "Gitee Release 按 tag 查询为空，创建新 Release"
+                request_release POST "${api_url}/releases"
+                if ! release_id="$(jq -er '.id // empty' "$response_file")"; then
+                  echo "Gitee Release 创建响应缺少 id"
+                  cat "$response_file"
+                  exit 1
+                fi
               fi
-              request_release PATCH "${api_url}/releases/${release_id}"
               ;;
             404)
               request_release POST "${api_url}/releases"
-              if ! release_id="$(jq -er '.id' "$response_file")"; then
+              if ! release_id="$(jq -er '.id // empty' "$response_file")"; then
                 echo "Gitee Release 创建响应缺少 id"
                 cat "$response_file"
                 exit 1
