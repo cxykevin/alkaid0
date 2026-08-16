@@ -330,7 +330,8 @@ jobs:
             exit 0
           fi
 
-          repo_url="${GITEE_URL%/}"
+          repo_url="$(printf '%s' "$GITEE_URL" | xargs)"
+          repo_url="${repo_url%/}"
           repo_url="${repo_url%.git}"
           if [[ "$repo_url" =~ ^https?://([^/]+)/(.*)$ ]]; then
             gitee_origin="${BASH_REMATCH[1]}"
@@ -346,6 +347,7 @@ jobs:
           fi
           owner="${BASH_REMATCH[1]}"
           repo="${BASH_REMATCH[2]}"
+          echo "准备同步 Gitee Release：${gitee_origin}/${owner}/${repo}"
           api_url="https://${gitee_origin}/api/v5/repos/${owner}/${repo}"
 
           response_file="$(mktemp)"
@@ -390,12 +392,20 @@ jobs:
           fi
           case "$release_status" in
             200)
-              release_id="$(jq -er '.id' "$response_file")"
+              if ! release_id="$(jq -er '.id' "$response_file")"; then
+                echo "Gitee Release 查询响应缺少 id"
+                cat "$response_file"
+                exit 1
+              fi
               request_release PATCH "${api_url}/releases/${release_id}"
               ;;
             404)
               request_release POST "${api_url}/releases"
-              release_id="$(jq -er '.id' "$response_file")"
+              if ! release_id="$(jq -er '.id' "$response_file")"; then
+                echo "Gitee Release 创建响应缺少 id"
+                cat "$response_file"
+                exit 1
+              fi
               ;;
             *)
               echo "查询 Gitee Release 失败，HTTP ${release_status}"
