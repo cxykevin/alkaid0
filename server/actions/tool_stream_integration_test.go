@@ -9,6 +9,7 @@ import (
 	"github.com/cxykevin/alkaid0/config"
 	cfgStructs "github.com/cxykevin/alkaid0/config/structs"
 	"github.com/cxykevin/alkaid0/mock/openai"
+	"github.com/cxykevin/alkaid0/tools/index"
 	u "github.com/cxykevin/alkaid0/utils"
 )
 
@@ -24,6 +25,8 @@ func TestToolCallStreaming(t *testing.T) {
 
 	openai.StartServerTask()
 	setupConfigForTest()
+	// 集成测试不经过 startup，显式加载内置工具以便请求携带 tools 定义。
+	index.Load()
 	// 使用原生 toolcall 模型：mock 返回 delta.tool_calls 工具调用
 	config.GlobalConfig.Model.Models[1] = cfgStructs.ModelConfig{
 		ModelName:   "toolcall-native",
