@@ -312,152 +312,17 @@ jobs:
             ./binaries/*
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
       - name: 同步到 Gitee Release
-        env:
-          GITEE_ACCESS_TOKEN: ${{ secrets.GITEE_ACCESS_TOKEN }}
-          GITEE_URL: ${{ secrets.GITEE_URL }}
-          RELEASE_TAG: ${{ github.event.release.tag_name }}
-          RELEASE_NAME: ${{ github.event.release.name }}
-          RELEASE_BODY: ${{ github.event.release.body }}
-          RELEASE_PRERELEASE: ${{ github.event.release.prerelease }}
-          RELEASE_DRAFT: ${{ github.event.release.draft }}
-        run: |
-          set -euo pipefail
-
-          if [ -z "$GITEE_ACCESS_TOKEN" ] || [ -z "$GITEE_URL" ]; then
-            echo "GITEE_ACCESS_TOKEN 或 GITEE_URL 未设置，跳过 Gitee Release 同步"
-            exit 0
-          fi
-
-          repo_url="$(printf '%s' "$GITEE_URL" | xargs)"
-          repo_url="${repo_url%/}"
-          repo_url="${repo_url%.git}"
-          if [[ "$repo_url" =~ ^https?://([^/]+)/(.*)$ ]]; then
-            gitee_origin="${BASH_REMATCH[1]}"
-            repo_path="${BASH_REMATCH[2]}"
-          else
-            gitee_origin="gitee.com"
-            repo_path="$repo_url"
-          fi
-          repo_path="${repo_path#/}"
-          if [[ ! "$repo_path" =~ ^([^/]+)/([^/]+)$ ]]; then
-            echo "GITEE_URL 必须是 owner/repo 或包含 owner/repo 的仓库 URL"
-            exit 1
-          fi
-          owner="${BASH_REMATCH[1]}"
-          repo="${BASH_REMATCH[2]}"
-          echo "准备同步 Gitee Release：${gitee_origin}/${owner}/${repo}"
-          api_url="https://${gitee_origin}/api/v5/repos/${owner}/${repo}"
-
-          response_file="$(mktemp)"
-          error_file="$(mktemp)"
-          trap 'rm -f "$response_file" "$error_file"' EXIT
-
-          request_release() {
-            local method="$1"
-            local url="$2"
-            local status
-            status="$(curl --silent --show-error --output "$response_file" --write-out '%{http_code}' \
-              --retry 3 --retry-all-errors --connect-timeout 15 --max-time 60 \
-              --request "$method" \
-              --header "Authorization: token ${GITEE_ACCESS_TOKEN}" \
-              --data-urlencode "access_token=${GITEE_ACCESS_TOKEN}" \
-              --data-urlencode "tag_name=${RELEASE_TAG}" \
-              --data-urlencode "name=${RELEASE_NAME}" \
-              --data-urlencode "body=${RELEASE_BODY}" \
-              --data-urlencode "target_commitish=${GITHUB_SHA}" \
-              --data-urlencode "prerelease=${RELEASE_PRERELEASE}" \
-              --data-urlencode "draft=${RELEASE_DRAFT}" \
-              "$url" 2>"$error_file")" || {
-                echo "${method} Gitee Release 请求失败"
-                cat "$error_file"
-                exit 1
-              }
-            if [[ ! "$status" =~ ^2[0-9][0-9]$ ]]; then
-              echo "${method} Gitee Release 失败，HTTP ${status}"
-              cat "$response_file"
-              exit 1
-            fi
-          }
-
-          release_url="${api_url}/releases/tags/${RELEASE_TAG}"
-          if ! release_status="$(curl --silent --show-error --output "$response_file" --write-out '%{http_code}' \
-            --retry 3 --retry-all-errors --connect-timeout 15 --max-time 60 \
-            --header "Authorization: token ${GITEE_ACCESS_TOKEN}" \
-            --get --data-urlencode "access_token=${GITEE_ACCESS_TOKEN}" "$release_url" 2>"$error_file")"; then
-            echo "查询 Gitee Release 时网络请求失败"
-            cat "$error_file"
-            exit 1
-          fi
-          case "$release_status" in
-            200)
-              if release_id="$(jq -er '.id // empty' "$response_file")"; then
-                request_release PATCH "${api_url}/releases/${release_id}"
-              else
-                echo "Gitee Release 按 tag 查询为空，创建新 Release"
-                request_release POST "${api_url}/releases"
-                if ! release_id="$(jq -er '.id // empty' "$response_file")"; then
-                  echo "Gitee Release 创建响应缺少 id"
-                  cat "$response_file"
-                  exit 1
-                fi
-              fi
-              ;;
-            404)
-              request_release POST "${api_url}/releases"
-              if ! release_id="$(jq -er '.id // empty' "$response_file")"; then
-                echo "Gitee Release 创建响应缺少 id"
-                cat "$response_file"
-                exit 1
-              fi
-              ;;
-            *)
-              echo "查询 Gitee Release 失败，HTTP ${release_status}"
-              exit 1
-              ;;
-          esac
-
-          existing_files="$(mktemp)"
-          trap 'rm -f "$response_file" "$error_file" "$existing_files"' EXIT
-          if ! files_status="$(curl --silent --show-error --output "$response_file" --write-out '%{http_code}' \
-            --retry 3 --retry-all-errors --connect-timeout 15 --max-time 60 \
-            --header "Authorization: token ${GITEE_ACCESS_TOKEN}" \
-            --get --data-urlencode "access_token=${GITEE_ACCESS_TOKEN}" \
-            "${api_url}/releases/${release_id}/attach_files" 2>"$error_file")"; then
-            echo "获取 Gitee Release 附件列表时网络请求失败"
-            cat "$error_file"
-            exit 1
-          fi
-          if [ "$files_status" != "200" ]; then
-            echo "获取 Gitee Release 附件列表失败，HTTP ${files_status}"
-            cat "$response_file"
-            exit 1
-          fi
-          jq -r '.[].name' "$response_file" >"$existing_files"
-
-          shopt -s nullglob
-          for asset in ./binaries/*; do
-            asset_name="$(basename "$asset")"
-            if grep -Fxq "$asset_name" "$existing_files"; then
-              echo "Gitee Release 已存在附件，跳过 ${asset_name}"
-              continue
-            fi
-            echo "上传 Gitee Release 附件 ${asset_name}"
-            if ! upload_status="$(curl --silent --show-error --output "$response_file" --write-out '%{http_code}' \
-              --retry 3 --retry-all-errors --connect-timeout 15 --max-time 300 \
-              --request POST \
-              --header "Authorization: token ${GITEE_ACCESS_TOKEN}" \
-              --form "access_token=${GITEE_ACCESS_TOKEN}" \
-              --form "file=@${asset}" \
-              "${api_url}/releases/${release_id}/attach_files" 2>"$error_file")"; then
-              echo "上传 Gitee Release 附件时网络请求失败：${asset_name}"
-              cat "$error_file"
-              exit 1
-            fi
-            if [[ ! "$upload_status" =~ ^2[0-9][0-9]$ ]]; then
-              echo "上传 Gitee Release 附件失败：${asset_name}，HTTP ${upload_status}"
-              cat "$response_file"
-              exit 1
-            fi
-          done
+        uses: nICEnnnnnnnLee/action-gitee-release@v2.0.0
+        with:
+          gitee_action: create_release
+          gitee_owner: cxy_kevin
+          gitee_repo: alkaid0
+          gitee_token: ${{ secrets.GITEE_ACCESS_TOKEN }}
+          gitee_tag_name: ${{ github.event.release.tag_name }}
+          gitee_release_name: ${{ github.event.release.name }}
+          gitee_release_body: ${{ github.event.release.body }}
+          gitee_target_commitish: main
+          gitee_upload_retry_times: 3
+          gitee_files: |
+            ./binaries/*
