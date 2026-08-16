@@ -349,7 +349,8 @@ jobs:
           api_url="https://${gitee_origin}/api/v5/repos/${owner}/${repo}"
 
           response_file="$(mktemp)"
-          trap 'rm -f "$response_file"' EXIT
+          error_file="$(mktemp)"
+          trap 'rm -f "$response_file" "$error_file"' EXIT
 
           request_release() {
             local method="$1"
@@ -366,8 +367,9 @@ jobs:
               --data-urlencode "target_commitish=${GITHUB_SHA}" \
               --data-urlencode "prerelease=${RELEASE_PRERELEASE}" \
               --data-urlencode "draft=${RELEASE_DRAFT}" \
-              "$url")" || {
+              "$url" 2>"$error_file")" || {
                 echo "${method} Gitee Release 请求失败"
+                cat "$error_file"
                 exit 1
               }
             if [[ ! "$status" =~ ^2[0-9][0-9]$ ]]; then
@@ -381,8 +383,9 @@ jobs:
           if ! release_status="$(curl --silent --show-error --output "$response_file" --write-out '%{http_code}' \
             --retry 3 --retry-all-errors --connect-timeout 15 --max-time 60 \
             --header "Authorization: token ${GITEE_ACCESS_TOKEN}" \
-            --get --data-urlencode "access_token=${GITEE_ACCESS_TOKEN}" "$release_url")"; then
+            --get --data-urlencode "access_token=${GITEE_ACCESS_TOKEN}" "$release_url" 2>"$error_file")"; then
             echo "查询 Gitee Release 时网络请求失败"
+            cat "$error_file"
             exit 1
           fi
           case "$release_status" in
@@ -401,10 +404,16 @@ jobs:
           esac
 
           existing_files="$(mktemp)"
-          trap 'rm -f "$response_file" "$existing_files"' EXIT
-          files_status="$(curl --silent --output "$response_file" --write-out '%{http_code}' \
+          trap 'rm -f "$response_file" "$error_file" "$existing_files"' EXIT
+          if ! files_status="$(curl --silent --show-error --output "$response_file" --write-out '%{http_code}' \
+            --retry 3 --retry-all-errors --connect-timeout 15 --max-time 60 \
             --header "Authorization: token ${GITEE_ACCESS_TOKEN}" \
-            "${api_url}/releases/${release_id}/attach_files")"
+            --get --data-urlencode "access_token=${GITEE_ACCESS_TOKEN}" \
+            "${api_url}/releases/${release_id}/attach_files" 2>"$error_file")"; then
+            echo "获取 Gitee Release 附件列表时网络请求失败"
+            cat "$error_file"
+            exit 1
+          fi
           if [ "$files_status" != "200" ]; then
             echo "获取 Gitee Release 附件列表失败，HTTP ${files_status}"
             cat "$response_file"
@@ -420,15 +429,20 @@ jobs:
               continue
             fi
             echo "上传 Gitee Release 附件 ${asset_name}"
-            curl --silent --show-error \
-              --fail-with-body \
+            if ! upload_status="$(curl --silent --show-error --output "$response_file" --write-out '%{http_code}' \
               --retry 3 --retry-all-errors --connect-timeout 15 --max-time 300 \
               --request POST \
               --header "Authorization: token ${GITEE_ACCESS_TOKEN}" \
               --form "access_token=${GITEE_ACCESS_TOKEN}" \
               --form "file=@${asset}" \
-              "${api_url}/releases/${release_id}/attach_files" >/dev/null || {
-                echo "上传 Gitee Release 附件失败：${asset_name}"
-                exit 1
-              }
+              "${api_url}/releases/${release_id}/attach_files" 2>"$error_file")"; then
+              echo "上传 Gitee Release 附件时网络请求失败：${asset_name}"
+              cat "$error_file"
+              exit 1
+            fi
+            if [[ ! "$upload_status" =~ ^2[0-9][0-9]$ ]]; then
+              echo "上传 Gitee Release 附件失败：${asset_name}，HTTP ${upload_status}"
+              cat "$response_file"
+              exit 1
+            fi
           done
