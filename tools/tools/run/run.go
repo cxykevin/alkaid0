@@ -19,6 +19,7 @@ import (
 	"github.com/cxykevin/alkaid0/prompts"
 	"github.com/cxykevin/alkaid0/provider/parser"
 	"github.com/cxykevin/alkaid0/storage/structs"
+	"github.com/cxykevin/alkaid0/terminal/pythonenv"
 	"github.com/cxykevin/alkaid0/terminal/sandbox"
 	"github.com/cxykevin/alkaid0/tools/actions"
 	"github.com/cxykevin/alkaid0/tools/index"
@@ -217,6 +218,13 @@ const maxSleepSeconds = 3600
 // 超出部分截断并提示完整 @temp 路径。让 AI 无需依赖 trace 注入即可直接看到
 // 本次调用的命令输出，避免"结果已返回但 AI 看不到、只能反复重试同一命令"的循环。
 const maxRunOutputChars = 2000
+
+func nonEmptyDirs(dir string) []string {
+	if dir == "" {
+		return nil
+	}
+	return []string{dir}
+}
 
 // sleepTask 处理 run 工具的 "sleep" 类型：让 agent 等待指定秒数，不执行实际命令。
 func sleepTask(session *structs.Chats, mp map[string]*any, cross []*any) (bool, []*any, map[string]*any, error) {
@@ -489,6 +497,7 @@ func runTask(session *structs.Chats, mp map[string]*any, cross []*any) (bool, []
 		Timeout:          time.Duration(timeout) * time.Second,
 		Sandbox:          sandboxFlag,
 		SandboxSpecified: sandboxSpecified,
+		WritableDirs:     nonEmptyDirs(pythonenv.VenvDir()),
 		RunID:            runid,
 		UpdateFn:         updateFn,
 	}

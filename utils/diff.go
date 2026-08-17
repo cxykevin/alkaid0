@@ -130,10 +130,7 @@ func renderHunk(oldLines, newLines []string, prefix, suffix int, ops []diffOp) s
 	}
 	var lines []signedLine
 
-	start := prefix - ctx
-	if start < 0 {
-		start = 0
-	}
+	start := max(prefix-ctx, 0)
 	// 前导上下文
 	for k := start; k < prefix; k++ {
 		lines = append(lines, signedLine{' ', oldLines[k]})
@@ -150,10 +147,7 @@ func renderHunk(oldLines, newLines []string, prefix, suffix int, ops []diffOp) s
 		}
 	}
 	// 后缀上下文
-	end := len(oldLines) - suffix + ctx
-	if end > len(oldLines) {
-		end = len(oldLines)
-	}
+	end := min(len(oldLines)-suffix+ctx, len(oldLines))
 	for k := len(oldLines) - suffix; k < end; k++ {
 		lines = append(lines, signedLine{' ', oldLines[k]})
 	}

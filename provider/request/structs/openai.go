@@ -22,18 +22,28 @@ type ChatCompletionStreamOptions struct {
 
 // ChatCompletionRequest OpenAI ChatCompletion 请求结构体
 type ChatCompletionRequest struct {
-	Model           string                       `json:"model"`
-	Messages        []Message                    `json:"messages"`
-	Temperature     *float32                     `json:"temperature,omitempty"`
-	TopP            *float32                     `json:"top_p,omitempty"`
-	MaxTokens       *int                         `json:"max_tokens,omitempty"`
-	User            string                       `json:"user,omitempty"`
-	Stream          bool                         `json:"stream"`
-	StreamOptions   *ChatCompletionStreamOptions `json:"stream_options,omitempty"`
-	Thinking        *ChatCompletionThinkingType  `json:"thinking,omitempty"`         // enabled | disabled
-	ReasoningEffort *string                      `json:"reasoning_effort,omitempty"` // low | medium | high | max | xhigh
-	Tools           []Tool                       `json:"tools,omitempty"`            // 原生函数定义
-	ToolChoice      any                          `json:"tool_choice,omitempty"`      // "auto" | "none" | "required" | {"type":"function",...}
+	Model               string                       `json:"model"`
+	Messages            []Message                    `json:"messages"`
+	Temperature         *float32                     `json:"temperature,omitempty"`
+	TopP                *float32                     `json:"top_p,omitempty"`
+	MaxTokens           *int                         `json:"max_tokens,omitempty"`
+	MaxCompletionTokens *int                         `json:"max_completion_tokens,omitempty"`
+	Stop                any                          `json:"stop,omitempty"`
+	PresencePenalty     *float32                     `json:"presence_penalty,omitempty"`
+	FrequencyPenalty    *float32                     `json:"frequency_penalty,omitempty"`
+	Seed                *int                         `json:"seed,omitempty"`
+	N                   *int                         `json:"n,omitempty"`
+	Logprobs            *bool                        `json:"logprobs,omitempty"`
+	TopLogprobs         *int                         `json:"top_logprobs,omitempty"`
+	ResponseFormat      any                          `json:"response_format,omitempty"`
+	User                string                       `json:"user,omitempty"`
+	Stream              bool                         `json:"stream"`
+	StreamOptions       *ChatCompletionStreamOptions `json:"stream_options"`
+	Thinking            *ChatCompletionThinkingType  `json:"thinking"`
+	ReasoningEffort     *string                      `json:"reasoning_effort,omitempty"`
+	Tools               []Tool                       `json:"tools,omitempty"`
+	ToolChoice          any                          `json:"tool_choice,omitempty"`
+	ParallelToolCalls   *bool                        `json:"parallel_tool_calls,omitempty"`
 }
 
 // Tool 请求级工具定义（OpenAI tools 参数）
@@ -51,9 +61,9 @@ type ToolFunction struct {
 
 // ToolCallMsg assistant 消息内携带的完整工具调用（历史回放，非流式，无 index）
 type ToolCallMsg struct {
-	ID       string        `json:"id"`
-	Type     string        `json:"type"` // "function"
-	Function ToolCallFunc  `json:"function"`
+	ID       string       `json:"id"`
+	Type     string       `json:"type"` // "function"
+	Function ToolCallFunc `json:"function"`
 }
 
 // ToolCallFunc 工具调用的函数信息
@@ -64,10 +74,10 @@ type ToolCallFunc struct {
 
 // StreamToolCall 流式 delta.tool_calls 增量（OpenAI 标准：index + 可选 id/type/function 片段）
 type StreamToolCall struct {
-	Index    int                  `json:"index,omitempty"` // 省略 0：流式单调用与历史回放（完整格式）均合法
-	ID       string               `json:"id,omitempty"`
-	Type     string               `json:"type,omitempty"`
-	Function *StreamToolCallFunc  `json:"function,omitempty"`
+	Index    int                 `json:"index,omitempty"` // 省略 0：流式单调用与历史回放（完整格式）均合法
+	ID       string              `json:"id,omitempty"`
+	Type     string              `json:"type,omitempty"`
+	Function *StreamToolCallFunc `json:"function"`
 }
 
 // StreamToolCallFunc 流式函数增量
@@ -78,11 +88,11 @@ type StreamToolCallFunc struct {
 
 // Message 消息结构体
 type Message struct {
-	Role             string            `json:"role"` // RoleUser | RoleAssistant | RoleSystem | RoleTool
-	Content          string            `json:"content"`
-	ReasoningContent *string           `json:"reasoning_content,omitempty"`
-	ToolCalls        []StreamToolCall  `json:"tool_calls,omitempty"` // assistant 消息的 tool_calls（含流式 delta 反序列化目标）
-	ToolCallID       string            `json:"tool_call_id,omitempty"` // tool 角色结果关联的调用 id
+	Role             string           `json:"role"` // RoleUser | RoleAssistant | RoleSystem | RoleTool
+	Content          string           `json:"content"`
+	ReasoningContent *string          `json:"reasoning_content,omitempty"`
+	ToolCalls        []StreamToolCall `json:"tool_calls"`   // assistant 消息的 tool_calls（含流式 delta 反序列化目标）
+	ToolCallID       string           `json:"tool_call_id,omitempty"` // tool 角色结果关联的调用 id
 }
 
 // ChatCompletionResponse OpenAI ChatCompletion 响应结构体
@@ -99,6 +109,7 @@ type ChatCompletionResponse struct {
 type Choice struct {
 	Index        int     `json:"index"`
 	Delta        Message `json:"delta"`
+	Message      Message `json:"message"`
 	FinishReason string  `json:"finish_reason"`
 }
 
@@ -158,10 +169,48 @@ type StreamDelta struct {
 
 // EmbeddingRequest 嵌入请求
 type EmbeddingRequest struct {
-	Input          []string `json:"input"` // 字符串数组
-	Model          string   `json:"model"`
-	EncodingFormat string   `json:"encoding_format,omitempty"` // float, base64
-	User           string   `json:"user,omitempty"`
+	Input          []string        `json:"input,omitempty"` // 字符串数组
+	InputRaw       json.RawMessage `json:"-"`               // 单字符串或 token ID 输入的原始 JSON
+	Model          string          `json:"model"`
+	EncodingFormat string          `json:"encoding_format,omitempty"` // float, base64
+	Dimensions     *int            `json:"dimensions,omitempty"`
+	User           string          `json:"user,omitempty"`
+}
+
+func (r EmbeddingRequest) MarshalJSON() ([]byte, error) {
+	type embeddingRequest EmbeddingRequest
+	v := struct {
+		embeddingRequest
+		Input json.RawMessage `json:"input"`
+	}{embeddingRequest: embeddingRequest(r), Input: r.InputRaw}
+	if len(v.Input) == 0 {
+		input, err := json.Marshal(r.Input)
+		if err != nil {
+			return nil, err
+		}
+		v.Input = input
+	}
+	return json.Marshal(v)
+}
+
+func (r *EmbeddingRequest) UnmarshalJSON(data []byte) error {
+	type embeddingRequest EmbeddingRequest
+	var v struct {
+		Input json.RawMessage `json:"input"`
+		*embeddingRequest
+	}
+	v.embeddingRequest = (*embeddingRequest)(r)
+	if err := json.Unmarshal(data, &v); err != nil {
+		return err
+	}
+	r.InputRaw = append(r.InputRaw[:0], v.Input...)
+	var input []string
+	if err := json.Unmarshal(v.Input, &input); err == nil {
+		r.Input = input
+	} else {
+		r.Input = nil
+	}
+	return nil
 }
 
 // EmbeddingResponse 嵌入响应
@@ -169,7 +218,7 @@ type EmbeddingResponse struct {
 	Object string      `json:"object"`
 	Data   []Embedding `json:"data"`
 	Model  string      `json:"model"`
-	Usage  Usage       `json:"usage"`
+	Usage  *Usage      `json:"usage,omitempty"`
 }
 
 // Embedding 单个嵌入

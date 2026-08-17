@@ -15,7 +15,7 @@ const runLoopJSON = `[{"name":"run","id":"call_a","parameters":{"type":"shell","
 // seedLoopHistory 插入 count 条相同工具调用的 assistant 消息。
 func seedLoopHistory(t *testing.T, db *gorm.DB, chatID uint32, count int, toolCallingJSON string) {
 	t.Helper()
-	for i := 0; i < count; i++ {
+	for range count {
 		if err := db.Create(&storageStructs.Messages{
 			ChatID:                chatID,
 			Type:                  storageStructs.MessagesRoleAgent,
@@ -121,7 +121,7 @@ func TestDetectToolCallLoop_SleepExact(t *testing.T) {
 		t.Fatalf("create chat: %v", err)
 	}
 	hist := `[{"name":"run","id":"call_a","parameters":{"type":"sleep","reason":"wait","command":"5"}}]`
-	for i := 0; i < toolCallLoopThreshold-1; i++ {
+	for range toolCallLoopThreshold - 1 {
 		if err := db.Create(&storageStructs.Messages{
 			ChatID:                7012,
 			Type:                  storageStructs.MessagesRoleAgent,

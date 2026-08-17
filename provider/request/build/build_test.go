@@ -24,11 +24,11 @@ func setupBuildTest(t *testing.T) *gorm.DB {
 			DefaultModelID: 1,
 			Models: map[int32]cfgStruct.ModelConfig{
 				1: {
-					ModelName:         "test-model",
-					ModelID:           "test-model-id",
-					ModelTemperature:  0.7,
-					ModelTopP:         0.9,
-					EnableThinking:    true,
+					ModelName:        "test-model",
+					ModelID:          "test-model-id",
+					ModelTemperature: 0.7,
+					ModelTopP:        0.9,
+					EnableThinking:   true,
 					ProviderSpecificConfig: cfgStruct.ProviderSpecificConfig{
 						EnableDeepseekThinking: true,
 						EnableReasoningEffort:  true,
@@ -234,11 +234,11 @@ func TestBuildWithMultipleModels(t *testing.T) {
 
 	// 添加多个模型配置
 	config.GlobalConfig.Model.Models[2] = cfgStruct.ModelConfig{
-		ModelName:         "test-model-2",
-		ModelID:           "test-model-id-2",
-		ModelTemperature:  0.5,
-		ModelTopP:         0.8,
-		EnableThinking:    false,
+		ModelName:        "test-model-2",
+		ModelID:          "test-model-id-2",
+		ModelTemperature: 0.5,
+		ModelTopP:        0.8,
+		EnableThinking:   false,
 	}
 
 	// 创建聊天记录，使用不同的模型ID

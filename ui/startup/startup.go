@@ -26,6 +26,7 @@ import (
 	reqstructs "github.com/cxykevin/alkaid0/provider/request/structs"
 	"github.com/cxykevin/alkaid0/server"
 	"github.com/cxykevin/alkaid0/server/client/jsonrpc/connect"
+	"github.com/cxykevin/alkaid0/terminal/pythonenv"
 	"github.com/cxykevin/alkaid0/tools/index"
 	"github.com/cxykevin/alkaid0/tools/tools/fetch"
 	"github.com/cxykevin/alkaid0/tools/tools/search"
@@ -120,6 +121,10 @@ func Startup() {
 
 	openai.Start()
 	config.Load()
+	if err := pythonenv.Initialize(context.Background(), config.GlobalConfig.Python, config.Path()); err != nil {
+		logger.Error("python environment initialization failed: %v", err)
+		return
+	}
 	log.Load()
 	if os.Getenv("ALKAID0_DEBUG") != "true" {
 		defer log.SolvePanic()

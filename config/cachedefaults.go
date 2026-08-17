@@ -10,8 +10,8 @@ import (
 // 缓存相关配置的期望默认值。与 default tag 保持一致，用于存量配置文件
 // （缺新字段时 unmarshal 会得到零值，而非 default tag 值）的补齐。
 const (
-	defaultCachePriceMultiplier  float32 = 0.2  // 缓存命中 token 相对输入价格的倍率
-	defaultCacheRetentionMinutes int32   = 180  // 缓存保留时间（分钟）
+	defaultCachePriceMultiplier  float32 = 0.2 // 缓存命中 token 相对输入价格的倍率
+	defaultCacheRetentionMinutes int32   = 180 // 缓存保留时间（分钟）
 )
 
 // EnsureCacheDefaults 填充 Model.Models 各模型缺失的缓存字段为期望默认值。

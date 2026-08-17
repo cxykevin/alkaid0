@@ -103,14 +103,12 @@ func TestConcurrentAddUsage(t *testing.T) {
 	const goroutines = 8
 	const perGoroutine = 100
 	var wg sync.WaitGroup
-	for g := 0; g < goroutines; g++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for i := 0; i < perGoroutine; i++ {
+	for range goroutines {
+		wg.Go(func() {
+			for range perGoroutine {
 				AddUsage(1, "Kimi", 10, 20, 5)
 			}
-		}()
+		})
 	}
 	wg.Wait()
 	snap := Snapshot()

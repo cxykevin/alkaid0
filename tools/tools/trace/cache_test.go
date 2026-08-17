@@ -24,7 +24,7 @@ func TestDecideDiffPlan(t *testing.T) {
 	}
 	// 大改动（diff 比原文件长）→ 强制方案1
 	var newBig strings.Builder
-	for i := 0; i < 20; i++ {
+	for range 20 {
 		newBig.WriteString("line\n")
 	}
 	if _, keep := decideDiffPlan("a.txt", "one\n", newBig.String(), false, 0.2); keep {
@@ -33,7 +33,7 @@ func TestDecideDiffPlan(t *testing.T) {
 
 	// 小改动 → 方案2
 	var old, new strings.Builder
-	for i := 0; i < 30; i++ {
+	for i := range 30 {
 		old.WriteString("line ")
 		old.WriteString(string(rune('A' + i%26)))
 		old.WriteString("\n")

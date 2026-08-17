@@ -23,11 +23,11 @@ func setupUsageTestConfig(url string) {
 			DefaultModelID: 1,
 			Models: map[int32]cfgStruct.ModelConfig{
 				1: {
-					ModelName:         "usage-test",
-					ModelID:           "usage-test",
-					ProviderURL:       url,
-					ProviderKey:       "mock-key",
-					EnableThinking:    false,
+					ModelName:      "usage-test",
+					ModelID:        "usage-test",
+					ProviderURL:    url,
+					ProviderKey:    "mock-key",
+					EnableThinking: false,
 				},
 			},
 		},
@@ -54,9 +54,9 @@ func TestSendRequest_RecordsNestedCachedTokens(t *testing.T) {
 		sseChunk(w, structs.ChatCompletionResponse{
 			ID: "chatcmpl-usage-nested", Model: "usage-test",
 			Usage: &structs.Usage{
-				PromptTokens:       200,
-				CompletionTokens:   40,
-				TotalTokens:        240,
+				PromptTokens:        200,
+				CompletionTokens:    40,
+				TotalTokens:         240,
 				PromptTokensDetails: &structs.PromptTokensDetails{CachedTokens: 150},
 				BillingUsage:        &structs.BillingUsage{ClaudeUsage: &structs.ClaudeUsage{CacheReadInputTokens: 150}},
 			},

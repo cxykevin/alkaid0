@@ -107,10 +107,18 @@ func (e *Engine) MaskMessages(messages []structs.Message) []structs.Message {
 				changed = true
 			}
 		}
-		if rc := out[i].ReasoningContent; rc != nil && *rc != "" {
-			if nr, ok := e.maskText(*rc); ok {
+		if out[i].ReasoningContent != nil && *out[i].ReasoningContent != "" {
+			if nr, ok := e.maskText(*out[i].ReasoningContent); ok {
 				out[i].ReasoningContent = &nr
 				changed = true
+			}
+		}
+		for j := range out[i].ToolCalls {
+			if out[i].ToolCalls[j].Function != nil && out[i].ToolCalls[j].Function.Arguments != "" {
+				if na, ok := e.maskText(out[i].ToolCalls[j].Function.Arguments); ok {
+					out[i].ToolCalls[j].Function.Arguments = na
+					changed = true
+				}
 			}
 		}
 	}

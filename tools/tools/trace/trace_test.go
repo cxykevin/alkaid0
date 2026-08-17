@@ -1263,7 +1263,7 @@ func TestRenderTraceBlocks_LastContentAdvance(t *testing.T) {
 		defer u.Unwrap(db.DB()).Close()
 		tmpDir := t.TempDir()
 		var oldContent strings.Builder
-		for i := 0; i < 100; i++ {
+		for i := range 100 {
 			fmt.Fprintf(&oldContent, "line %d\n", i)
 		}
 		newContent := oldContent.String() + "line 100 appended\n"
@@ -1330,10 +1330,10 @@ func TestAdvanceTraceCache(t *testing.T) {
 
 func TestRenderContentBlockLineLimit(t *testing.T) {
 	var exact, over strings.Builder
-	for i := 0; i < MaxFileLine-1; i++ {
+	for i := range MaxFileLine - 1 {
 		fmt.Fprintf(&exact, "line %d\n", i)
 	}
-	for i := 0; i < MaxFileLine; i++ {
+	for i := range MaxFileLine {
 		fmt.Fprintf(&over, "line %d\n", i)
 	}
 	if _, ok := renderContentBlock("exact.txt", exact.String()); !ok {

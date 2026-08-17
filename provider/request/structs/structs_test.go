@@ -77,8 +77,8 @@ func TestChatCompletionRequestNativeTools(t *testing.T) {
 		Messages: []Message{
 			{Role: RoleUser, Content: "hi"},
 		},
-		Stream:     true,
-		Tools:      []Tool{{
+		Stream: true,
+		Tools: []Tool{{
 			Type: "function",
 			Function: ToolFunction{
 				Name:        "calculator",

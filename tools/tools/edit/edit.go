@@ -240,14 +240,8 @@ func buildGitPatch(absPath, oldContent, newContent string, isNew bool) string {
 	oldLine, newLine := 1, 1
 	pos := 0
 	for _, iv := range merged {
-		s := iv.start - ctx
-		if s < 0 {
-			s = 0
-		}
-		e := iv.end + ctx
-		if e > len(ops) {
-			e = len(ops)
-		}
+		s := max(iv.start-ctx, 0)
+		e := min(iv.end+ctx, len(ops))
 		// 推进到 hunk 起点，维护全局行号
 		for ; pos < s; pos++ {
 			switch ops[pos].kind {

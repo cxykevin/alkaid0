@@ -15,4 +15,6 @@ type Config struct {
 	DataMask DataMaskConfig
 	// Feedback 反馈上报配置
 	Feedback FeedbackConfig
+	// Python 全局 IPython 虚拟环境配置
+	Python PythonConfig
 }

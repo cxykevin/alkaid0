@@ -77,7 +77,7 @@ func TestNativeSolver_ToolCalls(t *testing.T) {
 				return false, nil, nil
 			}},
 			PostHook: toolobj.PostHookFunction{Func: func(*storageStructs.Chats, map[string]*any, []*any) (bool, []*any, map[string]*any, error) {
-				return false, nil, map[string]*any{"ok": newAny(true)}, nil
+				return false, nil, map[string]*any{"ok": new(any(true))}, nil
 			}},
 		}},
 	}
@@ -132,6 +132,7 @@ func TestNativeSolver_ToolCalls(t *testing.T) {
 	}
 }
 
+//go:fix inline
 func newAny(v any) *any {
-	return &v
+	return new(v)
 }

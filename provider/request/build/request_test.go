@@ -1483,7 +1483,7 @@ func TestCollectTracePathsAfter(t *testing.T) {
 	db := setupTestDB(t)
 	msgs := []structs.Messages{
 		{ChatID: 40, Type: structs.MessagesRoleAgent, ToolCallingJSONString: `[{"name":"edit","parameters":{"path":"old.txt"}}]`},
-		{ChatID: 40, Type: structs.MessagesRoleAgent, AgentID: stringPtr("child"), ToolCallingJSONString: `[{"name":"read","parameters":{"path":"child.txt"}}]`},
+		{ChatID: 40, Type: structs.MessagesRoleAgent, AgentID: new("child"), ToolCallingJSONString: `[{"name":"read","parameters":{"path":"child.txt"}}]`},
 		{ChatID: 40, Type: structs.MessagesRoleAgent, ToolCallingJSONString: `[{"name":"read","parameters":{"path":"new.txt"}},{"name":"edit","parameters":{"path":"@temp/run"}},{"name":"edit","parameters":{"path":"@task"}}]`},
 	}
 	for i := range msgs {
@@ -1507,7 +1507,8 @@ func TestCollectTracePathsAfter(t *testing.T) {
 	}
 }
 
-func stringPtr(value string) *string { return &value }
+//go:fix inline
+func stringPtr(value string) *string { return new(value) }
 
 func TestDetectTraceEvents(t *testing.T) {
 	db := setupTestDB(t)

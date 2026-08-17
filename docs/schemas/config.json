@@ -402,6 +402,22 @@
                 }
             }
         },
+        "Python": {
+            "type": "object",
+            "description": "全局 IPython 虚拟环境配置",
+            "properties": {
+                "Path": {
+                    "type": "string",
+                    "description": "创建虚拟环境使用的 Python 可执行文件；为空时依次查找 python3/python",
+                    "default": ""
+                },
+                "Source": {
+                    "type": "string",
+                    "description": "pip 安装源；非空时追加 --index-url",
+                    "default": ""
+                }
+            }
+        },
         "Context": {
             "type": "object",
             "description": "上下文/集成相关配置",

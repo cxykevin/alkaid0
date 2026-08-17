@@ -16,6 +16,7 @@ import (
 	"github.com/cxykevin/alkaid0/library/chancall"
 	"github.com/cxykevin/alkaid0/log"
 	"github.com/cxykevin/alkaid0/product"
+	"github.com/cxykevin/alkaid0/server/openai"
 	"github.com/cxykevin/alkaid0/stats"
 	u "github.com/cxykevin/alkaid0/utils"
 	"github.com/gorilla/websocket"
@@ -87,8 +88,11 @@ func StartWs(handler func(string, func(string) error, uint64) (returnString stri
 	connsMutex := sync.Mutex{}
 	conns := make(map[uint64]*websocket.Conn)
 
+	// 显式 mux 允许在同一 HTTP server 上挂载 ACP 与 OpenAI API。
+	mux := http.NewServeMux()
+
 	// 根路径返回简单 JSON
-	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/" {
 			return
 		}
@@ -101,7 +105,7 @@ func StartWs(handler func(string, func(string) error, uint64) (returnString stri
 	})
 
 	// 根路径返回简单 JSON
-	http.HandleFunc("/info", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/info", func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/info" {
 			return
 		}
@@ -134,7 +138,7 @@ func StartWs(handler func(string, func(string) error, uint64) (returnString stri
 	})
 
 	// 处理 WebSocket 连接
-	http.HandleFunc(config.GlobalConfig.Server.Path, func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc(config.GlobalConfig.Server.Path, func(w http.ResponseWriter, r *http.Request) {
 		vals := r.URL.Query()
 		if len(vals) == 0 {
 			loggerWs.Error("no query params")
@@ -274,8 +278,11 @@ func StartWs(handler func(string, func(string) error, uint64) (returnString stri
 		loggerWs.Info("connection close: %d", connID)
 	})
 
+	// 注册 OpenAI-compatible proxy，共用当前 WebSocket listener。
+	openai.NewHandler().Register(mux)
+
 	// 启动 HTTP 服务器（支持优雅关闭）
-	wsHTTPServer = &http.Server{Addr: addr}
+	wsHTTPServer = &http.Server{Addr: addr, Handler: mux}
 	loggerWs.Info("webSocket service started in ws://%s%s", addr, path)
 	fmt.Fprintf(os.Stderr, "WebSocket service started in ws://%s%s\n", addr, path)
 	go func() {

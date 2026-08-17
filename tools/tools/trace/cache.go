@@ -24,9 +24,9 @@ type DiffPlan struct {
 }
 
 const (
-	cacheDefaultMultiplier float32 = 0.2  // 缓存命中 token 相对输入价格的倍率
-	cacheDefaultRetention  int32   = 180  // 缓存保留时间（分钟）
-	cacheCostRatio         float64 = 1.5  // 方案2 成本相对方案1 的最大允许倍数
+	cacheDefaultMultiplier float32 = 0.2 // 缓存命中 token 相对输入价格的倍率
+	cacheDefaultRetention  int32   = 180 // 缓存保留时间（分钟）
+	cacheCostRatio         float64 = 1.5 // 方案2 成本相对方案1 的最大允许倍数
 )
 
 // cacheModelConfig 读取当前模型（session.LastModelID）的缓存倍率与保留分钟，取不到回退默认。

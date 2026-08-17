@@ -863,9 +863,9 @@ func TestRunTaskReturnsOutputField(t *testing.T) {
 
 	session := runOutputSession(t)
 	mp := map[string]*any{
-		"type":    ptrAny("shell"),
-		"reason":  ptrAny("test output field"),
-		"command": ptrAny("echo alkaid0-run-output-test"),
+		"type":    new(any("shell")),
+		"reason":  new(any("test output field")),
+		"command": new(any("echo alkaid0-run-output-test")),
 	}
 
 	pass, _, res, err := runTask(session, mp, []*any{})
@@ -909,9 +909,9 @@ func TestRunTaskOutputTruncated(t *testing.T) {
 
 	session := runOutputSession(t)
 	mp := map[string]*any{
-		"type":    ptrAny("shell"),
-		"reason":  ptrAny("test truncate"),
-		"command": ptrAny(fmt.Sprintf("seq 1 %d", trace.MaxFileLine+100)),
+		"type":    new(any("shell")),
+		"reason":  new(any("test truncate")),
+		"command": new(any(fmt.Sprintf("seq 1 %d", trace.MaxFileLine+100))),
 	}
 
 	_, _, res, err := runTask(session, mp, []*any{})
@@ -963,9 +963,9 @@ func TestRunTaskWritesTrace(t *testing.T) {
 
 	session := runOutputSession(t)
 	mp := map[string]*any{
-		"type":    ptrAny("shell"),
-		"reason":  ptrAny("test trace"),
-		"command": ptrAny("echo alkaid0-traced"),
+		"type":    new(any("shell")),
+		"reason":  new(any("test trace")),
+		"command": new(any("echo alkaid0-traced")),
 	}
 	if _, _, _, err := runTask(session, mp, []*any{}); err != nil {
 		t.Fatalf("runTask: %v", err)

@@ -49,6 +49,7 @@ type Request struct {
 	Timeout          time.Duration
 	Sandbox          bool
 	SandboxSpecified bool
+	WritableDirs     []string
 	// RunID background 模式的 temp obj 内部路径（如 "run/xxx"），作为 runid 供 wait 查询
 	RunID string
 	// UpdateFn background 模式的运行状态刷新回调（写入 temp obj）
@@ -142,7 +143,7 @@ func (j *Job) Done() <-chan struct{} {
 }
 
 // serviceReq 后台服务请求（事件循环中按类型分发）。
-type serviceReq interface{}
+type serviceReq any
 
 type submitReq struct {
 	req  *Request
@@ -371,6 +372,7 @@ func (s *Service) runCommand(ctx context.Context, job *Job, req *Request) *Resul
 		Env:           req.Env,
 		Timeout:       sandTimeout,
 		IsolationMode: isolateMode,
+		WritableDirs:  req.WritableDirs,
 	})
 	if err != nil {
 		return &Result{CreateErr: err}
@@ -413,6 +415,7 @@ func (s *Service) runCommand(ctx context.Context, job *Job, req *Request) *Resul
 			Env:           req.Env,
 			Timeout:       sandTimeout,
 			IsolationMode: sandbox.IsolationNone,
+			WritableDirs:  req.WritableDirs,
 		})
 		if err2 != nil {
 			errString += fmt.Sprintf("[System] Command Execute Error: %v\n", err)

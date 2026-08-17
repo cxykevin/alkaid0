@@ -3,6 +3,7 @@ package tree
 import (
 	_ "embed" // embed
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"sort"
@@ -399,9 +400,7 @@ func cloneTreeCache(cache *cacheStruct) *cacheStruct {
 	clone := *cache
 	clone.TreeObj = cloneTreeNode(cache.TreeObj)
 	clone.Entries = make(map[string]treeEntryState, len(cache.Entries))
-	for path, state := range cache.Entries {
-		clone.Entries[path] = state
-	}
+	maps.Copy(clone.Entries, cache.Entries)
 	return &clone
 }
 

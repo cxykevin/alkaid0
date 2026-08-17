@@ -135,7 +135,7 @@ func TestServiceConcurrent(t *testing.T) {
 
 	const n = 5
 	var wg sync.WaitGroup
-	for i := 0; i < n; i++ {
+	for i := range n {
 		wg.Add(1)
 		go func(idx int) {
 			defer wg.Done()
@@ -186,7 +186,9 @@ func TestServiceKillBeforeStart(t *testing.T) {
 }
 
 // ptrAny 构造 *any 参数，用于 runTask 的 mp。
-func ptrAny(v any) *any { return &v }
+//
+//go:fix inline
+func ptrAny(v any) *any { return new(v) }
 
 // setupTestDB 构造内存 SQLite 测试库。
 func setupTestDB(t *testing.T) *gorm.DB {
@@ -296,9 +298,9 @@ func TestWaitTask(t *testing.T) {
 		TemporyDataOfRequest: make(map[string]any),
 	}
 	mp := map[string]*any{
-		"type":    ptrAny("wait"),
-		"reason":  ptrAny("wait for background task"),
-		"command": ptrAny(runID),
+		"type":    new(any("wait")),
+		"reason":  new(any("wait for background task")),
+		"command": new(any(runID)),
 	}
 
 	done := make(chan struct{})
@@ -342,9 +344,9 @@ func TestWaitTaskUnknownRunID(t *testing.T) {
 		TemporyDataOfRequest: make(map[string]any),
 	}
 	mp := map[string]*any{
-		"type":    ptrAny("wait"),
-		"reason":  ptrAny("wait"),
-		"command": ptrAny("@temp/run/does_not_exist"),
+		"type":    new(any("wait")),
+		"reason":  new(any("wait")),
+		"command": new(any("@temp/run/does_not_exist")),
 	}
 
 	pass, _, res, err := waitTask(session, mp, []*any{})
@@ -381,12 +383,12 @@ func TestRunTaskBackground(t *testing.T) {
 	}
 
 	mp := map[string]*any{
-		"type":       ptrAny("shell"),
-		"reason":     ptrAny("test background"),
-		"command":    ptrAny("echo bg-output"),
-		"sandbox":    ptrAny(false),
-		"background": ptrAny(true),
-		"_id":        ptrAny("testtool"),
+		"type":       new(any("shell")),
+		"reason":     new(any("test background")),
+		"command":    new(any("echo bg-output")),
+		"sandbox":    new(any(false)),
+		"background": new(any(true)),
+		"_id":        new(any("testtool")),
 	}
 
 	start := time.Now()
