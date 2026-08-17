@@ -602,3 +602,115 @@ func contains(str, substr string) bool {
 	}
 	return false
 }
+
+func TestBuildGlobalPrompt_SessionCacheReuse(t *testing.T) {
+	testDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(testDir, "initial.txt"), []byte("content"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	session := &structs.Chats{
+		Root:                 testDir,
+		CurrentActivatePath:  ".",
+		EnableScopes:         map[string]bool{},
+		TemporyDataOfRequest: make(map[string]any),
+		TemporyDataOfSession: make(map[string]any),
+	}
+
+	if _, err := buildGlobalPrompt(session); err != nil {
+		t.Fatal(err)
+	}
+	first, ok := session.TemporyDataOfRequest[treeCacheKey].(*cacheStruct)
+	if !ok || first == nil {
+		t.Fatal("expected request tree cache")
+	}
+	firstSession, ok := session.TemporyDataOfSession[treeCacheKey].(map[string]*cacheStruct)
+	if !ok || firstSession[first.WorkPath] != first {
+		t.Fatal("expected session tree cache to reference the built snapshot")
+	}
+
+	// A new request must reuse the session snapshot rather than rebuild it.
+	session.TemporyDataOfRequest = make(map[string]any)
+	if _, err := buildGlobalPrompt(session); err != nil {
+		t.Fatal(err)
+	}
+	second, ok := session.TemporyDataOfRequest[treeCacheKey].(*cacheStruct)
+	if !ok || second != first {
+		t.Fatal("expected the same tree snapshot to be reused across requests")
+	}
+}
+
+func TestBuildGlobalPrompt_InvalidatesOnDirectoryChange(t *testing.T) {
+	testDir := t.TempDir()
+	session := &structs.Chats{
+		Root:                 testDir,
+		CurrentActivatePath:  ".",
+		EnableScopes:         map[string]bool{},
+		TemporyDataOfRequest: make(map[string]any),
+		TemporyDataOfSession: make(map[string]any),
+	}
+	if _, err := buildGlobalPrompt(session); err != nil {
+		t.Fatal(err)
+	}
+	first := session.TemporyDataOfRequest[treeCacheKey].(*cacheStruct)
+
+	if err := os.WriteFile(filepath.Join(testDir, "created.txt"), []byte("new"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	session.TemporyDataOfRequest = make(map[string]any)
+	if _, err := buildGlobalPrompt(session); err != nil {
+		t.Fatal(err)
+	}
+	second := session.TemporyDataOfRequest[treeCacheKey].(*cacheStruct)
+	if second == first {
+		t.Fatal("expected directory change to invalidate the snapshot")
+	}
+	if !contains(second.TreeString, "created.txt") {
+		t.Fatal("expected rebuilt tree to contain the created file")
+	}
+}
+
+func TestBuildGlobalPrompt_IsolatesActivatePath(t *testing.T) {
+	testDir := t.TempDir()
+	for _, name := range []string{"one", "two"} {
+		if err := os.Mkdir(filepath.Join(testDir, name), 0755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	session := &structs.Chats{
+		Root:                 testDir,
+		CurrentActivatePath:  "one",
+		EnableScopes:         map[string]bool{},
+		TemporyDataOfRequest: make(map[string]any),
+		TemporyDataOfSession: make(map[string]any),
+	}
+	if _, err := buildGlobalPrompt(session); err != nil {
+		t.Fatal(err)
+	}
+	one := session.TemporyDataOfRequest[treeCacheKey].(*cacheStruct)
+
+	session.CurrentActivatePath = "two"
+	session.TemporyDataOfRequest = make(map[string]any)
+	if _, err := buildGlobalPrompt(session); err != nil {
+		t.Fatal(err)
+	}
+	two := session.TemporyDataOfRequest[treeCacheKey].(*cacheStruct)
+	if one == two || one.WorkPath == two.WorkPath {
+		t.Fatal("expected separate snapshots for separate activate paths")
+	}
+}
+
+func TestBuildTree_SymlinkCycle(t *testing.T) {
+	testDir := t.TempDir()
+	loop := filepath.Join(testDir, "loop")
+	if err := os.Symlink(testDir, loop); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
+	treeID := int32(0)
+	node, errs := BuildTree(testDir, &treeID, 0)
+	if node == nil {
+		t.Fatal("expected a tree node")
+	}
+	if len(errs) == 0 {
+		t.Fatal("expected a symlink cycle error")
+	}
+}

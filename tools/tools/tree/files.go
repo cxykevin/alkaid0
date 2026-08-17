@@ -110,6 +110,10 @@ func sortNodeCmp(i, j *Node) int {
 // BuildTree 构建树
 // depth 为当前递归深度，达到 MaxDepth 后不再展开子目录，防止深层目录全量递归耗尽内存
 func BuildTree(dir string, ID *int32, depth int) (*Node, []error) {
+	return buildTree(dir, ID, depth, make(map[string]bool))
+}
+
+func buildTree(dir string, ID *int32, depth int, ancestors map[string]bool) (*Node, []error) {
 	errorsTable := []error{}
 	info, err := os.Stat(dir)
 	if err != nil {
@@ -128,6 +132,18 @@ func BuildTree(dir string, ID *int32, depth int) (*Node, []error) {
 			IsDir: false,
 			ID:    *ID,
 		}, errorsTable
+	}
+	// BuildTree follows directory symlinks for compatibility, but must not
+	// recurse forever when a symlink points to an ancestor directory.
+	realDir, realErr := filepath.EvalSymlinks(dir)
+	if realErr == nil {
+		realDir, _ = filepath.Abs(realDir)
+		if ancestors[realDir] {
+			err := fmt.Errorf("directory symlink cycle at %s", dir)
+			return &Node{Name: filepath.Base(dir), Path: dir, IsDir: true, Error: err}, []error{err}
+		}
+		ancestors[realDir] = true
+		defer delete(ancestors, realDir)
 	}
 	entries, err := os.ReadDir(dir)
 	if err != nil {
@@ -156,7 +172,7 @@ func BuildTree(dir string, ID *int32, depth int) (*Node, []error) {
 	if node.ChildrenNum <= MaxChildrenNum && depth < MaxDepth {
 		node.Children = []*Node{}
 		for _, entry := range filteredEntries {
-			subnode, errorsSubTable := BuildTree(filepath.Join(dir, entry.Name()), ID, depth+1)
+			subnode, errorsSubTable := buildTree(filepath.Join(dir, entry.Name()), ID, depth+1, ancestors)
 			if len(errorsSubTable) > 0 {
 				errorsTable = append(errorsTable, errorsSubTable...)
 			}

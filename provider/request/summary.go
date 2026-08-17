@@ -15,6 +15,7 @@ import (
 	"github.com/cxykevin/alkaid0/provider/request/structs"
 	storageStructs "github.com/cxykevin/alkaid0/storage/structs"
 	"github.com/cxykevin/alkaid0/tools/tools/trace"
+	"github.com/cxykevin/alkaid0/tools/tools/tree"
 )
 
 // SummaryTimeout 获取总结超时时间
@@ -111,6 +112,7 @@ func SummarySession(ctx context.Context, session *storageStructs.Chats) (string,
 	resp, err := Summary(ctx, db, chatID, agentID)
 	if err == nil {
 		trace.InvalidateTraceCache(session)
+		tree.InvalidateTreeCache(session)
 	}
 	return resp, err
 }
