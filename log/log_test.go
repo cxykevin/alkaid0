@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/cxykevin/alkaid0/internal/configutil"
 )
@@ -28,8 +29,73 @@ func TestExpandPath(t *testing.T) {
 	}
 }
 
+func TestDefaultLogPathAt(t *testing.T) {
+	now := time.Date(2026, time.August, 18, 14, 30, 15, 0, time.Local)
+	got := defaultLogPathAt(now)
+	want := filepath.Join(defaultLogDir, "log20260818-143015.log")
+	if got != want {
+		t.Fatalf("defaultLogPathAt() = %q, want %q", got, want)
+	}
+}
+
+func TestCleanupDefaultLogs(t *testing.T) {
+	dir := t.TempDir()
+	for i := 1; i <= 12; i++ {
+		name := fmt.Sprintf("log20260818-1430%02d.log", i)
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(name), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, name := range []string{"log.log", "log20260818-143099.txt", "other.log"} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("keep"), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	current := filepath.Join(dir, "log20260818-143001.log")
+	if err := cleanupDefaultLogs(dir, current); err != nil {
+		t.Fatal(err)
+	}
+	for i := 1; i <= 12; i++ {
+		name := fmt.Sprintf("log20260818-1430%02d.log", i)
+		_, err := os.Stat(filepath.Join(dir, name))
+		shouldExist := i == 1 || i >= 4
+		if shouldExist && err != nil {
+			t.Errorf("expected %s to remain: %v", name, err)
+		}
+		if !shouldExist && !os.IsNotExist(err) {
+			t.Errorf("expected %s to be removed, err=%v", name, err)
+		}
+	}
+	for _, name := range []string{"log.log", "log20260818-143099.txt", "other.log"} {
+		if _, err := os.Stat(filepath.Join(dir, name)); err != nil {
+			t.Errorf("non-matching file %s should remain: %v", name, err)
+		}
+	}
+}
+
+func TestOpenLogTruncatesExistingFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "custom.log")
+	if err := os.WriteFile(path, []byte("old content"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	file, err := os.OpenFile(path, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(data) != 0 {
+		t.Fatalf("truncated file has %d bytes, want 0", len(data))
+	}
+}
+
+// TestLogger 测试初始化和基本日志功能。
 func TestLogger(t *testing.T) {
-	// 测试初始化和基本日志功能
 	os.Setenv(envLogName, "test.log")
 	defer os.Remove("test.log")
 

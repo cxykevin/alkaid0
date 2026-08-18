@@ -44,7 +44,7 @@ irm https://alk.cxykevin.top/i.ps1 | iex
 
 ## 日志
 
-路径 `~/.config/alkaid0/log.log` (直接启动二进制文件) / `/var/log/alkaid0/log.log` (Linux 系统级别安装) / `C:\ProgramData\alkaid0\config.json` (Windows 系统级别安装)
+直接启动二进制文件时，默认日志保存在 `~/.config/alkaid0/logYYYYMMDD-HHMMSS.log`，每次启动按启动时间生成独立文件；同名文件会覆盖打开，默认目录最多保留 10 份日志。Linux 系统级别安装使用 `/var/log/alkaid0/log.log`，Windows 系统级别安装使用 `C:\ProgramData\alkaid0\log.log`。设置 `ALKAID0_LOG_PATH` 后使用指定路径，并跳过默认日志清理。
 
 > 日志经过脱敏处理（脱去 Provider URL / KEY），但会保留请求的 Model ID 和 Agent Name 以及完整输入输出。日志不会携带工作区信息但 AI 模型的输出可能会包含部分用户代码。
 

@@ -7,9 +7,12 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"regexp"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 	"unicode/utf8"
 
 	"github.com/cxykevin/alkaid0/internal/configutil"
@@ -17,10 +20,69 @@ import (
 
 var globalLogLevel = 1
 
-const defaultLogPath = "~/.config/alkaid0/log.log"
+const defaultLogDir = "~/.config/alkaid0"
 const envLogName = "ALKAID0_LOG_PATH"
+const logFilePattern = `^log[0-9]{8}-[0-9]{6}\.log$`
+const maxLogFiles = 10
 
 var logPath string
+
+var logFileNamePattern = regexp.MustCompile(logFilePattern)
+
+func defaultLogPathAt(now time.Time) string {
+	return filepath.Join(defaultLogDir, "log"+now.Format("20060102-150405")+".log")
+}
+
+type storedLogFile struct {
+	name string
+	path string
+}
+
+func cleanupDefaultLogs(dir, currentPath string) error {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return err
+	}
+
+	files := make([]storedLogFile, 0, len(entries))
+	for _, entry := range entries {
+		if !logFileNamePattern.MatchString(entry.Name()) {
+			continue
+		}
+		info, err := entry.Info()
+		if err != nil || !info.Mode().IsRegular() {
+			continue
+		}
+		files = append(files, storedLogFile{
+			name: entry.Name(),
+			path: filepath.Join(dir, entry.Name()),
+		})
+	}
+
+	sort.Slice(files, func(i, j int) bool { return files[i].name < files[j].name })
+	removeCount := len(files) - maxLogFiles
+	if removeCount <= 0 {
+		return nil
+	}
+
+	var firstErr error
+	for _, file := range files {
+		if removeCount == 0 {
+			break
+		}
+		if filepath.Clean(file.path) == filepath.Clean(currentPath) {
+			continue
+		}
+		if err := os.Remove(file.path); err != nil && !os.IsNotExist(err) {
+			if firstErr == nil {
+				firstErr = err
+			}
+			continue
+		}
+		removeCount--
+	}
+	return firstErr
+}
 
 // Logger 日志对象
 var Logger *log.Logger
@@ -64,12 +126,13 @@ func Load() {
 			globalLogLevel = 3
 		}
 	}
-	// logLck.Lock()
-	// 读取环境变量
+	// 读取环境变量。显式路径保持原样，不参与默认日志清理。
+	isDefaultPath := false
 	if path := os.Getenv(envLogName); path != "" {
 		logPath = path
 	} else {
-		logPath = defaultLogPath
+		logPath = defaultLogPathAt(time.Now())
+		isDefaultPath = true
 	}
 
 	// 展开用户目录路径
@@ -84,9 +147,8 @@ func Load() {
 		return
 	}
 
-	// 使用 OpenFile 打开日志文件（追加模式，不清空历史日志；
-	// 避免多进程/多实例共用同一日志路径时相互截断、历史日志丢失）
-	file, err := os.OpenFile(expandedPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0600)
+	// 使用覆盖模式打开日志文件，确保同名启动日志从本次启动内容开始。
+	file, err := os.OpenFile(expandedPath, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0600)
 	if err != nil {
 		// 打开失败时回退到 stderr，绝不 panic
 		Logger = log.New(os.Stderr, "", log.LstdFlags)
@@ -96,6 +158,13 @@ func Load() {
 
 	// 创建logger，输出到文件
 	Logger = log.New(file, "", log.LstdFlags)
+
+	// 默认日志只清理程序生成的时间戳文件；显式路径不参与清理。
+	if isDefaultPath {
+		if err := cleanupDefaultLogs(dir, expandedPath); err != nil {
+			fmt.Fprintf(os.Stderr, "log cleanup failed: %v\n", err)
+		}
+	}
 
 	// 初始化异步日志channel
 	// logChannel 的写和读分别由 logFlushMutex 保护：
