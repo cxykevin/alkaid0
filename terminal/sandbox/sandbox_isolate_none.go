@@ -24,6 +24,16 @@ func CreateExecFromCmd(cmd *exec.Cmd, clean func()) *ExecCmd {
 func createIsolateNoneCmd(ctx context.Context, name string, args []string, env []string, dir string) *ExecCmd {
 
 	cmd := exec.CommandContext(ctx, name, args...)
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.Cancel = func() error {
+		if cmd.Process == nil {
+			return nil
+		}
+		if err := syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL); err != nil {
+			return err
+		}
+		return nil
+	}
 	cmd.Dir = dir
 	cmd.Env = env
 

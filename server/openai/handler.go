@@ -15,6 +15,7 @@ import (
 	"github.com/cxykevin/alkaid0/product"
 	"github.com/cxykevin/alkaid0/provider/request"
 	reqstructs "github.com/cxykevin/alkaid0/provider/request/structs"
+	"github.com/cxykevin/alkaid0/server/apikey"
 	"github.com/cxykevin/alkaid0/stats"
 )
 
@@ -67,7 +68,7 @@ type configuredModel struct {
 func visibleModels() []configuredModel {
 	models := make([]configuredModel, 0, len(config.GlobalConfig.Model.Models))
 	for id, model := range config.GlobalConfig.Model.Models {
-		if strings.TrimSpace(model.ModelID) == "" {
+		if model.Hide || strings.TrimSpace(model.ModelID) == "" {
 			continue
 		}
 		models = append(models, configuredModel{id: id, config: model})
@@ -416,7 +417,7 @@ func (h *Handler) embeddings(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) authorize(w http.ResponseWriter, r *http.Request) bool {
 	auth := strings.TrimSpace(r.Header.Get("Authorization"))
 	parts := strings.SplitN(auth, " ", 2)
-	if len(parts) != 2 || !strings.EqualFold(parts[0], "Bearer") || !ValidateAPIKey(strings.TrimSpace(parts[1])) {
+	if len(parts) != 2 || !strings.EqualFold(parts[0], "Bearer") || !apikey.Validate(strings.TrimSpace(parts[1])) {
 		h.error(w, http.StatusUnauthorized, "invalid API key", "authentication_error", nil)
 		return false
 	}

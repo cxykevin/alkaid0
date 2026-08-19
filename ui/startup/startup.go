@@ -121,10 +121,8 @@ func Startup() {
 
 	openai.Start()
 	config.Load()
-	if err := pythonenv.Initialize(context.Background(), config.GlobalConfig.Python, config.Path()); err != nil {
-		logger.Error("python environment initialization failed: %v", err)
-		return
-	}
+	// 异步初始化 Python venv，不阻塞启动
+	pythonenv.InitializeAsync(config.GlobalConfig.Python, config.Path())
 	log.Load()
 	if os.Getenv("ALKAID0_DEBUG") != "true" {
 		defer log.SolvePanic()

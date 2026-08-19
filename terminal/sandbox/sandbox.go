@@ -42,6 +42,8 @@ type Sandbox struct {
 	env []string
 	// 超时时间，防止恶意脚本或死循环耗尽系统资源。
 	timeout time.Duration
+	// 调用方上下文，用于在命令启动前或执行中传播取消信号。
+	baseContext context.Context
 	// 隔离模式，决定了安全限制的实现方式。
 	isolationMode IsolationMode
 	// 互斥锁，保证多线程环境下沙盒配置的安全性。
@@ -58,6 +60,8 @@ type Config struct {
 	WorkDir string
 	// 环境变量
 	Env []string
+	// 调用方上下文，用于在命令启动前或执行中传播取消信号。
+	Context context.Context
 	// 超时时间（0表示无超时）
 	Timeout time.Duration
 	// 隔离模式（默认使用OS级隔离）
@@ -107,6 +111,7 @@ func New(cfg Config) (*Sandbox, error) {
 		workDir:       workDir,
 		env:           env,
 		timeout:       cfg.Timeout,
+		baseContext:   cfg.Context,
 		isolationMode: isolationMode,
 	}, nil
 }
@@ -147,15 +152,20 @@ func (s *Sandbox) Execute(name string, args ...string) (*Command, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	logger.Info("Execute command: %s %v (isolation: %s)", name, args, s.isolationMode.String())
+	// Do not log arguments: structured commands may contain source code or secrets.
+	logger.Info("Execute command: %s (args=%d, isolation: %s)", name, len(args), s.isolationMode.String())
 
 	// 创建上下文，若配置了超时则使用 WithTimeout
+	baseContext := s.baseContext
+	if baseContext == nil {
+		baseContext = context.Background()
+	}
 	var ctx context.Context
 	var cancel context.CancelFunc
 	if s.timeout > 0 {
-		ctx, cancel = context.WithTimeout(context.Background(), s.timeout)
+		ctx, cancel = context.WithTimeout(baseContext, s.timeout)
 	} else {
-		ctx, cancel = context.WithCancel(context.Background())
+		ctx, cancel = context.WithCancel(baseContext)
 	}
 
 	switch s.isolationMode {
@@ -212,6 +222,11 @@ func (c *Command) Start() error {
 	logger.Debug("starting command: %s", c.name)
 	c.cmdMu.Lock()
 	defer c.cmdMu.Unlock()
+	if c.ctx != nil {
+		if err := c.ctx.Err(); err != nil {
+			return err
+		}
+	}
 	return c.cmd.Start()
 }
 

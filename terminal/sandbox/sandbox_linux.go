@@ -116,6 +116,8 @@ func (s *Sandbox) createLinuxIsolatedCommand(ctx context.Context, name string, a
 	unshareArgs = append(unshareArgs, mapArgs...)
 	unshareArgs = append(unshareArgs, "sh", "-c", script)
 	cmd := exec.CommandContext(ctx, "unshare", unshareArgs...)
+	// 将调用方环境传给 unshare；否则隔离进程会丢失任务注入的凭据和配置。
+	cmd.Env = s.env
 	// 设置进程组，确保超时时可以杀死整个进程树
 	// unshare --pid --fork 的子进程会成为孤儿进程，通过进程组 kill 可防止残留
 	cmd.SysProcAttr = &syscall.SysProcAttr{

@@ -44,6 +44,13 @@ func TestInitializeCreatesVenvAndInstallsIPythonOffline(t *testing.T) {
 	if got := VenvDir(); got != wantDir {
 		t.Fatalf("VenvDir() = %q, want %q", got, wantDir)
 	}
+
+	// 验证 ready marker 存在
+	markerPath := filepath.Join(wantDir, readyMarkerFile)
+	if _, err := os.Stat(markerPath); err != nil {
+		t.Errorf("ready marker file should exist at %s: %v", markerPath, err)
+	}
+
 	if len(calls) != 5 {
 		t.Fatalf("got %d commands, want 5: %#v", len(calls), calls)
 	}
@@ -64,12 +71,18 @@ func TestInitializeCreatesVenvAndInstallsIPythonOffline(t *testing.T) {
 	}
 }
 
-func TestInitializeRejectsInvalidExistingVenv(t *testing.T) {
+func TestInitializeRejectsInvalidExistingVenvWithMarker(t *testing.T) {
 	root := t.TempDir()
 	venv := filepath.Join(root, "venv")
 	if err := os.MkdirAll(venv, 0755); err != nil {
 		t.Fatal(err)
 	}
+	// 写入 ready marker
+	markerPath := filepath.Join(venv, readyMarkerFile)
+	if err := os.WriteFile(markerPath, []byte("initialized\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
 	python := filepath.Join(root, "python")
 	if err := os.WriteFile(python, []byte("python"), 0755); err != nil {
 		t.Fatal(err)
@@ -78,7 +91,67 @@ func TestInitializeRejectsInvalidExistingVenv(t *testing.T) {
 	commandRunner = func(context.Context, string, ...string) error { t.Fatal("must not run commands"); return nil }
 	defer func() { commandRunner = oldRunner }()
 
+	// 应该失败，因为 venv 有 marker 但无效（没有 Python）
 	if err := Initialize(context.Background(), structs.PythonConfig{Path: python}, filepath.Join(root, "config.json")); err == nil {
-		t.Fatal("Initialize succeeded for invalid existing venv")
+		t.Fatal("Initialize succeeded for invalid existing venv with marker")
+	}
+}
+
+func TestInitializeRemovesVenvWithoutMarker(t *testing.T) {
+	root := t.TempDir()
+	venv := filepath.Join(root, "venv")
+	if err := os.MkdirAll(venv, 0755); err != nil {
+		t.Fatal(err)
+	}
+	// 在 venv 中放一个测试文件（没有 marker）
+	testFile := filepath.Join(venv, "test.txt")
+	if err := os.WriteFile(testFile, []byte("old venv"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	python := filepath.Join(root, "python")
+	if err := os.WriteFile(python, []byte("python"), 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	var removedVenv bool
+	oldRunner := commandRunner
+	commandRunner = func(_ context.Context, name string, args ...string) error {
+		if len(args) > 0 && args[0] == "-m" && len(args) > 1 && args[1] == "venv" {
+			// venv 创建命令
+			venvPath := args[len(args)-1]
+			if venvPath == venv {
+				removedVenv = true
+			}
+			venvPython := pythonInVenv(venvPath)
+			if err := os.MkdirAll(filepath.Dir(venvPython), 0755); err != nil {
+				return err
+			}
+			return os.WriteFile(venvPython, []byte("venv python"), 0755)
+		}
+		if len(args) > 2 && args[1] == "pip" && args[2] == "show" {
+			return os.ErrNotExist // 触发安装
+		}
+		return nil
+	}
+	defer func() { commandRunner = oldRunner }()
+
+	if err := Initialize(context.Background(), structs.PythonConfig{Path: python}, filepath.Join(root, "config.json")); err != nil {
+		t.Fatalf("Initialize failed: %v", err)
+	}
+
+	// 验证旧文件已被删除
+	if _, err := os.Stat(testFile); !os.IsNotExist(err) {
+		t.Error("expected old venv to be removed, but test file still exists")
+	}
+
+	// 验证新 venv 有 marker
+	markerPath := filepath.Join(venv, readyMarkerFile)
+	if _, err := os.Stat(markerPath); err != nil {
+		t.Errorf("ready marker should exist in new venv: %v", err)
+	}
+
+	if !removedVenv {
+		t.Error("expected venv to be recreated")
 	}
 }

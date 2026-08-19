@@ -54,7 +54,7 @@ var paras = map[string]parser.ToolParameters{
 	"type": {
 		Type:        parser.ToolTypeString,
 		Required:    true,
-		Description: "A Enum decided which type of task want to do. Must Be First Parameter. Enum: [\"shell\", \"sleep\", \"wait\"]",
+		Description: "A Enum decided which type of task want to do. Must Be First Parameter. Enum: [\"shell\", \"sleep\", \"wait\", \"python\"]",
 	},
 	"reason": {
 		Type:        parser.ToolTypeString,
@@ -64,22 +64,22 @@ var paras = map[string]parser.ToolParameters{
 	"command": {
 		Type:        parser.ToolTypeString,
 		Required:    true,
-		Description: `Command or program will be run. For "sleep" type, it must be an int number representing seconds to wait. For "wait" type, it must be the run id returned by a background run. Must Be Third Parameter`,
+		Description: `Command or program will be run. For "sleep" type, it must be an int number representing seconds to wait. For "wait" type, it must be the run id returned by a background run. For "python" type, it must be complete Python source code (passed as the interpreter's -c argument). Must Be Third Parameter`,
 	},
 	"timeout": {
 		Type:        parser.ToolTypeNumber,
 		Required:    false,
-		Description: "Timeout of the command. Default is 60(seconds). If it will not be run in background(default), it must less than 300(seconds). If run in background, default is no timeout and no limit. Only avaible in \"shell\" type",
+		Description: "Timeout of the command. Default is 60(seconds). If it will not be run in background(default), it must less than 300(seconds). If run in background, default is no timeout and no limit. Only avaible in \"shell\" and \"python\" type",
 	},
 	"sandbox": {
 		Type:        parser.ToolTypeBoolean,
 		Required:    false,
-		Description: "Whether run in sandbox. Some type don't support this parameter. Default is true. Only avaible in \"shell\" type",
+		Description: "Whether run in sandbox. Some type don't support this parameter. Default is true. Only avaible in \"shell\" and \"python\" type",
 	},
 	"background": {
 		Type:        parser.ToolTypeBoolean,
 		Required:    false,
-		Description: "Whether run in background. Default is false. If true, the command runs asynchronously: a temp object is created immediately and its path returned as run id, updated every 60 seconds until the command finishes. Only avaible in \"shell\" type",
+		Description: "Whether run in background. Default is false. If true, the command runs asynchronously: a temp object is created immediately and its path returned as run id, updated every 60 seconds until the command finishes. Only avaible in \"shell\" and \"python\" type",
 	},
 }
 
@@ -344,8 +344,8 @@ func runTask(session *structs.Chats, mp map[string]*any, cross []*any) (bool, []
 	if !ok {
 		return errResult("[System] Parameter Error: type must be string", cross)
 	}
-	if runType != "shell" && runType != "sleep" && runType != "wait" {
-		return errResult(fmt.Sprintf("[System] Parameter Error: type '%s' not supported, only 'shell' and 'sleep' and 'wait' are allowed", runType), cross)
+	if runType != "shell" && runType != "sleep" && runType != "wait" && runType != "python" {
+		return errResult(fmt.Sprintf("[System] Parameter Error: type '%s' not supported, only 'shell', 'sleep', 'wait', and 'python' are allowed", runType), cross)
 	}
 
 	if runType == "sleep" {
@@ -353,6 +353,9 @@ func runTask(session *structs.Chats, mp map[string]*any, cross []*any) (bool, []
 	}
 	if runType == "wait" {
 		return waitTask(session, mp, cross)
+	}
+	if runType == "python" {
+		return pythonTask(session, mp, cross)
 	}
 
 	reasonObj, ok := mp["reason"]
@@ -600,7 +603,29 @@ func runTask(session *structs.Chats, mp map[string]*any, cross []*any) (bool, []
 
 // runCmd 执行命令，优先使用 PTY，否则回退到缓冲区模式。
 // runCmd 内部处理 context 取消监听和输出收集。
-func runCmd(ctx context.Context, c *sandbox.Command, buf *bytes.Buffer, command string) error {
+// usePTY 为 shell 命令启用 PTY；结构化 Python 执行使用管道，避免 PTY
+// 把 stdin 预置内容替换成终端从端而导致进程一直等待输入。
+func runCmd(ctx context.Context, c *sandbox.Command, buf *bytes.Buffer, command string, usePTYOpt ...bool) error {
+	usePTY := true
+	if len(usePTYOpt) > 0 {
+		usePTY = usePTYOpt[0]
+	}
+	if !usePTY {
+		contextDone := make(chan struct{})
+		go func() {
+			select {
+			case <-ctx.Done():
+				logger.Info("Context cancelled, killing command: %s", command)
+				_ = c.Kill()
+			case <-contextDone:
+			}
+		}()
+		defer close(contextDone)
+		c.SetStdout(buf)
+		c.SetStderr(buf)
+		return c.Run()
+	}
+
 	master, slave, ptyErr := openPTYForCmd()
 	if ptyErr == nil {
 		// 先打开 PTY，再启动 context 监听，确保监听 goroutine 能访问 master
@@ -612,14 +637,12 @@ func runCmd(ctx context.Context, c *sandbox.Command, buf *bytes.Buffer, command 
 				if err := c.Kill(); err != nil {
 					logger.Warn("Failed to kill command: %v", err)
 				}
-				// 关闭 master 解除 io.Copy 阻塞（孤儿进程可能仍持有 slave fd）
 				_ = master.Close()
 			case <-contextDone:
 			}
 		}()
 		defer close(contextDone)
 
-		// PTY 模式：将子进程 stdio 挂载到 PTY 从端
 		c.SetStdin(slave)
 		c.SetStdout(slave)
 		c.SetStderr(slave)
@@ -629,20 +652,13 @@ func runCmd(ctx context.Context, c *sandbox.Command, buf *bytes.Buffer, command 
 			_ = slave.Close()
 			return err
 		}
-
-		// 关闭从端（子进程已有自己的副本）
 		_ = slave.Close()
 
-		// 从主端读取输出到缓冲区
 		var copyWg sync.WaitGroup
 		copyWg.Go(func() {
 			_, _ = io.Copy(buf, master)
 		})
-
-		// 等待命令完成
 		err := c.Wait()
-
-		// 关闭主端，io.Copy 收到 EOF 后退出
 		_ = master.Close()
 		copyWg.Wait()
 		return err
@@ -659,7 +675,6 @@ func runCmd(ctx context.Context, c *sandbox.Command, buf *bytes.Buffer, command 
 		}
 	}()
 	defer close(contextDone)
-	c.SetStdin(nil)
 	c.SetStdout(buf)
 	c.SetStderr(buf)
 	return c.Run()

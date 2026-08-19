@@ -54,6 +54,13 @@ type Request struct {
 	RunID string
 	// UpdateFn background 模式的运行状态刷新回调（写入 temp obj）
 	UpdateFn func(content string)
+
+	// 结构化执行字段（Python 类型等）
+	Program        string   // 可执行文件路径（优先于 Shell）
+	Args           []string // 程序参数
+	Stdin          string   // 标准输入内容
+	DisplayCommand string   // 用于日志/trace/background 状态的脱敏显示命令
+	CleanupFn      func()   // 任务结束时的清理回调（销毁临时 key 等）
 }
 
 // Result 命令执行结果。
@@ -86,6 +93,8 @@ type Job struct {
 	killFnMu      sync.Mutex
 	killFn        func()
 	killRequested bool
+
+	cleanupFn func() // 任务结束时的清理回调（销毁临时 key 等）
 }
 
 // setKillFn 设置命令终止回调（命令启动后调用）。若期间 kill 已被请求则立即触发。
@@ -240,14 +249,19 @@ func (s *Service) doSubmit(ctx context.Context, req *Request) *Job {
 	s.mu.Lock()
 	s.seq++
 	id := fmt.Sprintf("run_%d", s.seq)
+	displayCmd := req.Command
+	if req.DisplayCommand != "" {
+		displayCmd = req.DisplayCommand
+	}
 	job := &Job{
 		ID:        id,
 		State:     JobRunning,
-		Command:   req.Command,
+		Command:   displayCmd,
 		Reason:    req.Reason,
 		CreatedAt: time.Now(),
 		done:      make(chan struct{}),
 		UpdateFn:  req.UpdateFn,
+		cleanupFn: req.CleanupFn,
 	}
 	s.jobs[id] = job
 	if req.RunID != "" {
@@ -255,7 +269,7 @@ func (s *Service) doSubmit(ctx context.Context, req *Request) *Job {
 	}
 	s.mu.Unlock()
 
-	logger.Info("background service: new job %s (session=%d, agent=%s, runid=%s) cmd=%q", id, req.SessionID, req.AgentID, req.RunID, req.Command)
+	logger.Info("background service: new job %s (session=%d, agent=%s, runid=%s) cmd=%q", id, req.SessionID, req.AgentID, req.RunID, displayCmd)
 	go s.execute(ctx, job, req)
 	return job
 }
@@ -298,7 +312,7 @@ func (s *Service) execute(ctx context.Context, job *Job, req *Request) {
 			for {
 				select {
 				case <-t.C:
-					job.UpdateFn(bgRunningContent(req.Command, job.CreatedAt))
+					job.UpdateFn(bgRunningContent(job.Command, job.CreatedAt))
 				case <-tickerStop:
 					return
 				}
@@ -308,6 +322,9 @@ func (s *Service) execute(ctx context.Context, job *Job, req *Request) {
 
 	defer func() {
 		stopTicker()
+		if job.cleanupFn != nil {
+			job.cleanupFn()
+		}
 		if r := recover(); r != nil {
 			logger.Error("background job %s panicked: %v", job.ID, r)
 			job.resultMu.Lock()
@@ -323,7 +340,7 @@ func (s *Service) execute(ctx context.Context, job *Job, req *Request) {
 	// 停止定时刷新，写最终结果（命令结束后最后一次更新 temp obj）
 	stopTicker()
 	if job.UpdateFn != nil {
-		job.UpdateFn(bgFinalContent(req.Command, result))
+		job.UpdateFn(bgFinalContent(job.Command, result))
 	}
 
 	job.resultMu.Lock()
@@ -356,6 +373,19 @@ func bgFinalContent(command string, r *Result) string {
 
 // runCommand 在沙盒中执行命令（含非沙盒降级），并填充结果。
 func (s *Service) runCommand(ctx context.Context, job *Job, req *Request) *Result {
+	// Avoid creating or starting a command after the caller has already cancelled.
+	// Kill() cannot terminate an os/exec command before Start, so the watcher alone
+	// is not sufficient for a pre-cancelled context.
+	if ctx != nil {
+		if err := ctx.Err(); err != nil {
+			return &Result{
+				Success:   false,
+				ErrString: fmt.Sprintf("[System] Command cancelled before start: %v\n", err),
+				Killed:    true,
+			}
+		}
+	}
+
 	isolateMode := sandbox.IsolationNone
 	if req.Sandbox {
 		isolateMode = sandbox.IsolationOS
@@ -370,6 +400,7 @@ func (s *Service) runCommand(ctx context.Context, job *Job, req *Request) *Resul
 	sand, err := sandbox.New(sandbox.Config{
 		WorkDir:       req.WorkDir,
 		Env:           req.Env,
+		Context:       ctx,
 		Timeout:       sandTimeout,
 		IsolationMode: isolateMode,
 		WritableDirs:  req.WritableDirs,
@@ -378,19 +409,38 @@ func (s *Service) runCommand(ctx context.Context, job *Job, req *Request) *Resul
 		return &Result{CreateErr: err}
 	}
 
-	startCmd := []string{}
-	switch req.Shell {
-	case "powershell", "powershell.exe", "pwsh", "pwsh.exe":
-		startCmd = []string{"-Command", req.Command}
-	case "cmd", "cmd.exe":
-		startCmd = []string{"/C", req.Command}
-	default:
-		startCmd = []string{"-c", req.Command}
-	}
+	var c *sandbox.Command
+	var displayCmd string
 
-	c, err := sand.Execute(req.Shell, startCmd...)
-	if err != nil {
-		return &Result{CreateErr: err}
+	// 结构化执行：Program 非空时使用程序+参数，否则使用 shell+command
+	if req.Program != "" {
+		displayCmd = req.DisplayCommand
+		if displayCmd == "" {
+			displayCmd = req.Program
+		}
+		c, err = sand.Execute(req.Program, req.Args...)
+		if err != nil {
+			return &Result{CreateErr: err}
+		}
+		if req.Stdin != "" {
+			c.SetStdin(strings.NewReader(req.Stdin))
+		}
+	} else {
+		displayCmd = req.Command
+		startCmd := []string{}
+		switch req.Shell {
+		case "powershell", "powershell.exe", "pwsh", "pwsh.exe":
+			startCmd = []string{"-Command", req.Command}
+		case "cmd", "cmd.exe":
+			startCmd = []string{"/C", req.Command}
+		default:
+			startCmd = []string{"-c", req.Command}
+		}
+
+		c, err = sand.Execute(req.Shell, startCmd...)
+		if err != nil {
+			return &Result{CreateErr: err}
+		}
 	}
 
 	// 注册终止回调：loop.Stop()/context 取消经 Kill(id) 终止此命令
@@ -405,7 +455,7 @@ func (s *Service) runCommand(ctx context.Context, job *Job, req *Request) *Resul
 	var buf bytes.Buffer
 
 	// 监听 context 取消，强制 kill 进程（runCmd 内部处理）
-	err = runCmd(ctx, c, &buf, req.Command)
+	err = runCmd(ctx, c, &buf, displayCmd, req.Program == "")
 
 	// 只有未显式指定沙盒时，unshare 错误才降级到非沙盒重试
 	if err != nil && req.Sandbox && !req.SandboxSpecified && strings.Contains(err.Error(), "unshare") {
@@ -413,6 +463,7 @@ func (s *Service) runCommand(ctx context.Context, job *Job, req *Request) *Resul
 		sand2, err2 := sandbox.New(sandbox.Config{
 			WorkDir:       req.WorkDir,
 			Env:           req.Env,
+			Context:       ctx,
 			Timeout:       sandTimeout,
 			IsolationMode: sandbox.IsolationNone,
 			WritableDirs:  req.WritableDirs,
@@ -421,7 +472,26 @@ func (s *Service) runCommand(ctx context.Context, job *Job, req *Request) *Resul
 			errString += fmt.Sprintf("[System] Command Execute Error: %v\n", err)
 			return &Result{Success: false, ErrString: errString, Output: buf.String(), Fallback: true}
 		}
-		c2, err2 := sand2.Execute(req.Shell, startCmd...)
+
+		var c2 *sandbox.Command
+		if req.Program != "" {
+			c2, err2 = sand2.Execute(req.Program, req.Args...)
+			if err2 == nil && req.Stdin != "" {
+				c2.SetStdin(strings.NewReader(req.Stdin))
+			}
+		} else {
+			startCmd := []string{}
+			switch req.Shell {
+			case "powershell", "powershell.exe", "pwsh", "pwsh.exe":
+				startCmd = []string{"-Command", req.Command}
+			case "cmd", "cmd.exe":
+				startCmd = []string{"/C", req.Command}
+			default:
+				startCmd = []string{"-c", req.Command}
+			}
+			c2, err2 = sand2.Execute(req.Shell, startCmd...)
+		}
+
 		if err2 != nil {
 			errString += fmt.Sprintf("[System] Command Execute Error: %v\n", err2)
 			return &Result{Success: false, ErrString: errString, Output: buf.String(), Fallback: true}
@@ -434,7 +504,7 @@ func (s *Service) runCommand(ctx context.Context, job *Job, req *Request) *Resul
 		}
 
 		var buf2 bytes.Buffer
-		err2 = runCmd(ctx, c2, &buf2, req.Command)
+		err2 = runCmd(ctx, c2, &buf2, displayCmd, req.Program == "")
 
 		if err2 != nil {
 			errString += fmt.Sprintf("[System] Command Execute Error: %v\n", err2)
