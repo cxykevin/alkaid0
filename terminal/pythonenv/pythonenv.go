@@ -8,7 +8,9 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -39,7 +41,12 @@ var (
 
 	// commandRunner is replaceable by package tests so initialization remains offline.
 	commandRunner = runCommand
+
+	// pythonVersionRunner is replaceable by package tests so version checks remain offline.
+	pythonVersionRunner = runPythonVersion
 )
+
+const minimumPythonMinor = 12
 
 // VenvDir returns the most recently initialized virtual environment directory.
 // It returns an empty string until Initialize succeeds.
@@ -149,6 +156,12 @@ func initialize(ctx context.Context, cfg structs.PythonConfig, configPath string
 	dir := filepath.Dir(configFile)
 	path := filepath.Join(dir, venvName)
 
+	// Validate the interpreter before any venv removal or creation.
+	python, err := findPython(ctx, cfg.Path)
+	if err != nil {
+		return err
+	}
+
 	// Check if venv exists
 	info, err := os.Stat(path)
 	if err == nil && !info.IsDir() {
@@ -174,11 +187,6 @@ func initialize(ctx context.Context, cfg structs.PythonConfig, configPath string
 		return fmt.Errorf("pythonenv: create config directory: %w", err)
 	}
 
-	python, err := findPython(cfg.Path)
-	if err != nil {
-		return err
-	}
-
 	venvPython := pythonInVenv(path)
 	if info == nil {
 		logger.Info("creating python venv at: %s", path)
@@ -187,6 +195,9 @@ func initialize(ctx context.Context, cfg structs.PythonConfig, configPath string
 		}
 	} else if err := validateExecutable(venvPython); err != nil {
 		return fmt.Errorf("pythonenv: invalid venv directory %s: %w", path, err)
+	}
+	if err := validatePythonVersion(ctx, venvPython); err != nil {
+		return fmt.Errorf("pythonenv: invalid venv Python: %w", err)
 	}
 
 	for _, packageName := range []string{"ipython", "openai"} {
@@ -215,7 +226,7 @@ func initialize(ctx context.Context, cfg structs.PythonConfig, configPath string
 	return nil
 }
 
-func findPython(configured string) (string, error) {
+func findPython(ctx context.Context, configured string) (string, error) {
 	if strings.TrimSpace(configured) != "" {
 		path, err := exec.LookPath(configured)
 		if err != nil {
@@ -224,17 +235,54 @@ func findPython(configured string) (string, error) {
 		if err := validateExecutable(path); err != nil {
 			return "", fmt.Errorf("pythonenv: configured Python is not executable: %w", err)
 		}
+		if err := validatePythonVersion(ctx, path); err != nil {
+			return "", fmt.Errorf("pythonenv: configured Python is not supported: %w", err)
+		}
 		return path, nil
 	}
+	var versionErr error
 	for _, name := range []string{"python3", "python"} {
 		if path, err := exec.LookPath(name); err == nil {
-			if validateExecutable(path) == nil {
+			if validateExecutable(path) != nil {
+				continue
+			}
+			if err := validatePythonVersion(ctx, path); err == nil {
 				return path, nil
+			} else {
+				versionErr = err
 			}
 		}
 	}
+	if versionErr != nil {
+		return "", fmt.Errorf("pythonenv: no supported Python found: %w", versionErr)
+	}
 	return "", errors.New("pythonenv: neither python3 nor python is executable")
 }
+
+func validatePythonVersion(ctx context.Context, path string) error {
+	output, err := pythonVersionRunner(ctx, path)
+	if err != nil {
+		return fmt.Errorf("pythonenv: failed to determine Python version for %s: %w", path, err)
+	}
+	version := pythonVersionRegexp.FindStringSubmatch(string(output))
+	if len(version) != 3 {
+		return fmt.Errorf("pythonenv: failed to parse Python version for %s from %q", path, strings.TrimSpace(string(output)))
+	}
+	major, err := strconv.Atoi(version[1])
+	if err != nil {
+		return fmt.Errorf("pythonenv: invalid Python major version %q: %w", version[1], err)
+	}
+	minor, err := strconv.Atoi(version[2])
+	if err != nil {
+		return fmt.Errorf("pythonenv: invalid Python minor version %q: %w", version[2], err)
+	}
+	if major < 3 || (major == 3 && minor < minimumPythonMinor) {
+		return fmt.Errorf("pythonenv: Python %d.%d is unsupported; Python 3.12 or newer is required", major, minor)
+	}
+	return nil
+}
+
+var pythonVersionRegexp = regexp.MustCompile(`(?m)Python\s+([0-9]+)\.([0-9]+)`)
 
 func validateExecutable(path string) error {
 	info, err := os.Stat(path)
@@ -262,4 +310,9 @@ func runCommand(ctx context.Context, name string, args ...string) error {
 	cmd.Stdout = nil
 	cmd.Stderr = nil
 	return cmd.Run()
+}
+
+func runPythonVersion(ctx context.Context, name string) ([]byte, error) {
+	cmd := exec.CommandContext(ctx, name, "--version")
+	return cmd.CombinedOutput()
 }

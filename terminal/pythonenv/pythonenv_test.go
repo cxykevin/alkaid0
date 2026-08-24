@@ -20,6 +20,8 @@ func TestInitializeCreatesVenvAndInstallsIPythonOffline(t *testing.T) {
 	configPath := filepath.Join(root, "config.json")
 	var calls [][]string
 	oldRunner := commandRunner
+	oldVersionRunner := pythonVersionRunner
+	pythonVersionRunner = func(context.Context, string) ([]byte, error) { return []byte("Python 3.12.0\n"), nil }
 	commandRunner = func(_ context.Context, name string, args ...string) error {
 		calls = append(calls, append([]string{name}, args...))
 		if len(calls) == 1 {
@@ -35,7 +37,7 @@ func TestInitializeCreatesVenvAndInstallsIPythonOffline(t *testing.T) {
 		}
 		return nil
 	}
-	defer func() { commandRunner = oldRunner }()
+	defer func() { commandRunner = oldRunner; pythonVersionRunner = oldVersionRunner }()
 
 	if err := Initialize(context.Background(), structs.PythonConfig{Path: python, Source: "https://mirror.invalid/simple"}, configPath); err != nil {
 		t.Fatal(err)
@@ -45,7 +47,6 @@ func TestInitializeCreatesVenvAndInstallsIPythonOffline(t *testing.T) {
 		t.Fatalf("VenvDir() = %q, want %q", got, wantDir)
 	}
 
-	// 验证 ready marker 存在
 	markerPath := filepath.Join(wantDir, readyMarkerFile)
 	if _, err := os.Stat(markerPath); err != nil {
 		t.Errorf("ready marker file should exist at %s: %v", markerPath, err)
@@ -71,13 +72,33 @@ func TestInitializeCreatesVenvAndInstallsIPythonOffline(t *testing.T) {
 	}
 }
 
+func TestInitializeRejectsUnsupportedPython(t *testing.T) {
+	root := t.TempDir()
+	python := filepath.Join(root, "python")
+	if err := os.WriteFile(python, []byte("python"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	oldVersionRunner := pythonVersionRunner
+	oldRunner := commandRunner
+	pythonVersionRunner = func(context.Context, string) ([]byte, error) { return []byte("Python 3.11.9\n"), nil }
+	commandRunner = func(context.Context, string, ...string) error { t.Fatal("must not run commands"); return nil }
+	defer func() { pythonVersionRunner = oldVersionRunner; commandRunner = oldRunner }()
+
+	err := Initialize(context.Background(), structs.PythonConfig{Path: python}, filepath.Join(root, "config.json"))
+	if err == nil || !strings.Contains(err.Error(), "Python 3.12") {
+		t.Fatalf("Initialize error = %v, want unsupported-version error", err)
+	}
+	if _, statErr := os.Stat(filepath.Join(root, "venv")); !os.IsNotExist(statErr) {
+		t.Fatalf("venv was created for unsupported Python: %v", statErr)
+	}
+}
+
 func TestInitializeRejectsInvalidExistingVenvWithMarker(t *testing.T) {
 	root := t.TempDir()
 	venv := filepath.Join(root, "venv")
 	if err := os.MkdirAll(venv, 0755); err != nil {
 		t.Fatal(err)
 	}
-	// 写入 ready marker
 	markerPath := filepath.Join(venv, readyMarkerFile)
 	if err := os.WriteFile(markerPath, []byte("initialized\n"), 0644); err != nil {
 		t.Fatal(err)
@@ -87,11 +108,12 @@ func TestInitializeRejectsInvalidExistingVenvWithMarker(t *testing.T) {
 	if err := os.WriteFile(python, []byte("python"), 0755); err != nil {
 		t.Fatal(err)
 	}
+	oldVersionRunner := pythonVersionRunner
 	oldRunner := commandRunner
+	pythonVersionRunner = func(context.Context, string) ([]byte, error) { return []byte("Python 3.12.0\n"), nil }
 	commandRunner = func(context.Context, string, ...string) error { t.Fatal("must not run commands"); return nil }
-	defer func() { commandRunner = oldRunner }()
+	defer func() { pythonVersionRunner = oldVersionRunner; commandRunner = oldRunner }()
 
-	// 应该失败，因为 venv 有 marker 但无效（没有 Python）
 	if err := Initialize(context.Background(), structs.PythonConfig{Path: python}, filepath.Join(root, "config.json")); err == nil {
 		t.Fatal("Initialize succeeded for invalid existing venv with marker")
 	}
@@ -103,7 +125,6 @@ func TestInitializeRemovesVenvWithoutMarker(t *testing.T) {
 	if err := os.MkdirAll(venv, 0755); err != nil {
 		t.Fatal(err)
 	}
-	// 在 venv 中放一个测试文件（没有 marker）
 	testFile := filepath.Join(venv, "test.txt")
 	if err := os.WriteFile(testFile, []byte("old venv"), 0644); err != nil {
 		t.Fatal(err)
@@ -116,9 +137,10 @@ func TestInitializeRemovesVenvWithoutMarker(t *testing.T) {
 
 	var removedVenv bool
 	oldRunner := commandRunner
+	oldVersionRunner := pythonVersionRunner
+	pythonVersionRunner = func(context.Context, string) ([]byte, error) { return []byte("Python 3.12.0\n"), nil }
 	commandRunner = func(_ context.Context, name string, args ...string) error {
 		if len(args) > 0 && args[0] == "-m" && len(args) > 1 && args[1] == "venv" {
-			// venv 创建命令
 			venvPath := args[len(args)-1]
 			if venvPath == venv {
 				removedVenv = true
@@ -130,27 +152,22 @@ func TestInitializeRemovesVenvWithoutMarker(t *testing.T) {
 			return os.WriteFile(venvPython, []byte("venv python"), 0755)
 		}
 		if len(args) > 2 && args[1] == "pip" && args[2] == "show" {
-			return os.ErrNotExist // 触发安装
+			return os.ErrNotExist
 		}
 		return nil
 	}
-	defer func() { commandRunner = oldRunner }()
+	defer func() { commandRunner = oldRunner; pythonVersionRunner = oldVersionRunner }()
 
 	if err := Initialize(context.Background(), structs.PythonConfig{Path: python}, filepath.Join(root, "config.json")); err != nil {
 		t.Fatalf("Initialize failed: %v", err)
 	}
-
-	// 验证旧文件已被删除
 	if _, err := os.Stat(testFile); !os.IsNotExist(err) {
 		t.Error("expected old venv to be removed, but test file still exists")
 	}
-
-	// 验证新 venv 有 marker
 	markerPath := filepath.Join(venv, readyMarkerFile)
 	if _, err := os.Stat(markerPath); err != nil {
 		t.Errorf("ready marker should exist in new venv: %v", err)
 	}
-
 	if !removedVenv {
 		t.Error("expected venv to be recreated")
 	}
