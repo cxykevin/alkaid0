@@ -200,7 +200,7 @@ func initialize(ctx context.Context, cfg structs.PythonConfig, configPath string
 		return fmt.Errorf("pythonenv: invalid venv Python: %w", err)
 	}
 
-	for _, packageName := range []string{"ipython", "openai"} {
+	for _, packageName := range []string{"ipython", "openai", "dynworkflow"} {
 		if err := commandRunner(ctx, venvPython, "-m", "pip", "show", packageName); err != nil {
 			logger.Info("installing %s package...", packageName)
 			args := []string{"-m", "pip", "install", packageName}

@@ -32,7 +32,7 @@ func TestInitializeCreatesVenvAndInstallsIPythonOffline(t *testing.T) {
 			}
 			return os.WriteFile(venvPython, []byte("venv python"), 0755)
 		}
-		if len(calls) == 2 || len(calls) == 4 {
+		if len(calls) == 2 || len(calls) == 4 || len(calls) == 6 {
 			return os.ErrNotExist
 		}
 		return nil
@@ -52,8 +52,8 @@ func TestInitializeCreatesVenvAndInstallsIPythonOffline(t *testing.T) {
 		t.Errorf("ready marker file should exist at %s: %v", markerPath, err)
 	}
 
-	if len(calls) != 5 {
-		t.Fatalf("got %d commands, want 5: %#v", len(calls), calls)
+	if len(calls) != 7 {
+		t.Fatalf("got %d commands, want 7: %#v", len(calls), calls)
 	}
 	if !reflect.DeepEqual(calls[0][1:], []string{"-m", "venv", wantDir}) {
 		t.Errorf("venv command = %#v", calls[0])
@@ -64,11 +64,17 @@ func TestInitializeCreatesVenvAndInstallsIPythonOffline(t *testing.T) {
 	if !reflect.DeepEqual(calls[3][1:], []string{"-m", "pip", "show", "openai"}) {
 		t.Errorf("openai pip show command = %#v", calls[3])
 	}
+	if !reflect.DeepEqual(calls[5][1:], []string{"-m", "pip", "show", "dynworkflow"}) {
+		t.Errorf("dynworkflow pip show command = %#v", calls[5])
+	}
 	if !strings.HasSuffix(strings.Join(calls[2], " "), "--index-url https://mirror.invalid/simple") {
 		t.Errorf("ipython pip install command = %#v", calls[2])
 	}
 	if !strings.HasSuffix(strings.Join(calls[4], " "), "--index-url https://mirror.invalid/simple") {
 		t.Errorf("openai pip install command = %#v", calls[4])
+	}
+	if !strings.HasSuffix(strings.Join(calls[6], " "), "--index-url https://mirror.invalid/simple") {
+		t.Errorf("dynworkflow pip install command = %#v", calls[6])
 	}
 }
 
