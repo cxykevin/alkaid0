@@ -2,7 +2,14 @@
 
 Use only the `run` tool for execution and timing; use `read` for file content, `edit` for file changes, `search` for code search, and `fetch` for HTTP requests.
 
-#### Parameters
+Use `read` to inspect the built-in read-only workflow documentation at `@docs/run/workflow`; it cannot be edited.
+
+Workflow usage:
+- When a task requires starting subagents and running at least two of them concurrently, read `@docs/run/workflow` first and use the workflow instructions.
+- When a task needs a more complex multi-step agent workflow, read `@docs/run/workflow` first and follow it.
+- When a current goal is active, proactively read `@docs/run/workflow` and use it when the goal calls for agent orchestration.
+- For a single subagent or a simple sequential task, workflow is not required unless the task otherwise meets the conditions above.
+
 
 - `type` (string, required): One of `shell`, `sleep`, `wait`, or `python`.
 - `reason` (string, required): A short reason for the operation (20 words or fewer).

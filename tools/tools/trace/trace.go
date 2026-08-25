@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"text/template"
@@ -15,6 +16,7 @@ import (
 	"github.com/cxykevin/alkaid0/provider/parser"
 	"github.com/cxykevin/alkaid0/storage/structs"
 	"github.com/cxykevin/alkaid0/tools/actions"
+	docresources "github.com/cxykevin/alkaid0/tools/docs"
 	"github.com/cxykevin/alkaid0/tools/index"
 	"github.com/cxykevin/alkaid0/tools/toolobj"
 	u "github.com/cxykevin/alkaid0/utils"
@@ -176,6 +178,53 @@ func Trace(session *structs.Chats, mp map[string]*any, push []*any) (bool, []*an
 		}, nil
 	}
 
+	if strings.HasPrefix(path, "@docs") {
+		if !isDocsPath(path) {
+			boolx := false
+			success := any(boolx)
+			errMsg := any("invalid @docs path")
+			return false, push, map[string]*any{"success": &success, "error": &errMsg}, nil
+		}
+		snapshots := getDocsSnapshots(session)
+		snapshot, exists := snapshots[path]
+		if unread {
+			if !exists {
+				boolx := false
+				success := any(boolx)
+				errMsg := any("no such trace")
+				return false, push, map[string]*any{"success": &success, "error": &errMsg}, nil
+			}
+			snapshot.Active = false
+			snapshots[path] = snapshot
+			clearDocsEventCache(session, path)
+		} else {
+			if !exists {
+				content, ok := docresources.Read(path)
+				if !ok {
+					boolx := false
+					success := any(boolx)
+					errMsg := any("file not exist")
+					return false, push, map[string]*any{"success": &success, "error": &errMsg}, nil
+				}
+				if len(content) > MaxFileSize || len(strings.Split(content, "\n")) > MaxFileLine {
+					boolx := false
+					success := any(boolx)
+					errMsg := any("file too large")
+					return false, push, map[string]*any{"success": &success, "error": &errMsg}, nil
+				}
+				snapshot = docsSnapshot{Content: content}
+			}
+			snapshot.Active = true
+			snapshots[path] = snapshot
+		}
+		boolx := true
+		success := any(boolx)
+		msg := "The file has been read and injected into the top of the context."
+		msgAny := any(msg)
+		pathAny := any(path)
+		return false, push, map[string]*any{"success": &success, "message": &msgAny, "path": &pathAny}, nil
+	}
+
 	traceStr := "trace"
 	if unread {
 		traceStr = "unread"
@@ -206,6 +255,7 @@ func Trace(session *structs.Chats, mp map[string]*any, push []*any) (bool, []*an
 				"error":   &errMsg,
 			}, nil
 		}
+		InvalidateTraceCache(session)
 	} else {
 		var str string
 		var err error
@@ -395,6 +445,47 @@ type traceCache map[string]([]structs.Traces)
 
 type traceExpectedContent map[string]string
 
+type docsSnapshot struct {
+	Content string
+	Active  bool
+}
+
+// docsSnapshots 按 agent 隔离文档状态，避免子代理互相看到或停用对方的 @docs。
+type docsSnapshots map[string]map[string]docsSnapshot
+
+func getDocsSnapshots(session *structs.Chats) map[string]docsSnapshot {
+	if session.TemporyDataOfSession == nil {
+		session.TemporyDataOfSession = make(map[string]any)
+	}
+	all, _ := session.TemporyDataOfSession[structs.TempKeyTraceDocsSnapshots].(docsSnapshots)
+	if all == nil {
+		all = make(docsSnapshots)
+		session.TemporyDataOfSession[structs.TempKeyTraceDocsSnapshots] = all
+	}
+	snapshots := all[session.NowAgent]
+	if snapshots == nil {
+		snapshots = make(map[string]docsSnapshot)
+		all[session.NowAgent] = snapshots
+	}
+	return snapshots
+}
+
+func isDocsPath(path string) bool {
+	return docresources.IsDocsPath(path)
+}
+
+func clearDocsEventCache(session *structs.Chats, path string) {
+	if cache, ok := session.TemporyDataOfSession[structs.TempKeyTraceFileBlocks].(map[string]FileBlock); ok {
+		delete(cache, path)
+	}
+	if events, ok := session.TemporyDataOfSession[structs.TempKeyTraceEvents].(map[string]*structs.TraceEvent); ok {
+		delete(events, path)
+	}
+	if prev, ok := session.TemporyDataOfSession[structs.TempKeyTracePrevEvents].(map[string]*structs.TraceEvent); ok {
+		delete(prev, path)
+	}
+}
+
 // confirmTraceContent 记录本轮请求或 Agent 编辑后确认过的文件内容。
 // edit 在实际写盘前以此检查请求构建后的外部修改，避免覆盖用户的新内容。
 func confirmTraceContent(session *structs.Chats, path, content string) {
@@ -413,7 +504,7 @@ func confirmTraceContent(session *structs.Chats, path, content string) {
 // 方案2只在旧块和 diff 都成功插入时保留 LastContent；请求构建阶段若锚点或成本复核失败，
 // 模型收到的是完整当前块，缓存也必须同步到该内容，避免下一轮重复生成同一份 diff。
 func AdvanceTraceCache(session *structs.Chats, path string) {
-	if session == nil || session.DB == nil || strings.HasPrefix(path, "@temp/") {
+	if session == nil || session.DB == nil || strings.HasPrefix(path, "@temp/") || isDocsPath(path) {
 		return
 	}
 	confirmed, _ := session.TemporyDataOfSession[structs.TempKeyTraceConfirmedContent].(traceExpectedContent)
@@ -470,6 +561,10 @@ func InvalidateTraceCache(session *structs.Chats) {
 // readTraceFileContent 读取被追踪文件的原始内容（@temp 读 ReferFiles，普通文件读磁盘），
 // 返回编码转换后的字符串内容；失败返回 ok=false。
 func readTraceFileContent(session *structs.Chats, nowpath string, traceObj structs.Traces) (string, bool) {
+	if isDocsPath(traceObj.Path) {
+		snapshot, ok := getDocsSnapshots(session)[traceObj.Path]
+		return snapshot.Content, ok && snapshot.Active
+	}
 	if vpath, ok := strings.CutPrefix(traceObj.Path, "@temp/"); ok {
 		var fileObj structs.ReferFiles
 		session.DB.Where("chat_id = ?", session.ID).Where("path = ?", vpath).First(&fileObj)
@@ -597,7 +692,28 @@ func RenderTraceBlocks(session *structs.Chats) (topBlock string, eventBlocks map
 	if !ok {
 		return "", nil, errors.New("failed to read traces from database")
 	}
-
+	snapshots := getDocsSnapshots(session)
+	if events, ok := session.TemporyDataOfSession[structs.TempKeyTraceEvents].(map[string]*structs.TraceEvent); ok {
+		for path := range events {
+			if _, exists := snapshots[path]; exists || !isDocsPath(path) {
+				continue
+			}
+			if content, ok := docresources.Read(path); ok {
+				snapshots[path] = docsSnapshot{Content: content, Active: true}
+			}
+		}
+	}
+	docPaths := make([]string, 0, len(snapshots))
+	for path, snapshot := range snapshots {
+		if snapshot.Active {
+			docPaths = append(docPaths, path)
+		}
+	}
+	sort.Strings(docPaths)
+	for _, path := range docPaths {
+		snapshot := getDocsSnapshots(session)[path]
+		traces = append(traces, structs.Traces{Path: path, ChatID: session.ID, AgentID: session.NowAgent, LastContent: snapshot.Content})
+	}
 	mult, retention := cacheModelConfig(session)
 	timeout := cacheTimeout(session, retention)
 
@@ -620,7 +736,7 @@ func RenderTraceBlocks(session *structs.Chats) (topBlock string, eventBlocks map
 		// 模型从未见过的字节，前缀缓存恰在旧块处断裂（连续编辑缓存率下跌的根因）。
 		if keep {
 			diffPlans[traceObj.Path] = plan
-		} else if traceObj.LastContent != newContent && !strings.HasPrefix(traceObj.Path, "@temp/") {
+		} else if traceObj.LastContent != newContent && !strings.HasPrefix(traceObj.Path, "@temp/") && !isDocsPath(traceObj.Path) {
 			session.DB.Model(&structs.Traces{}).
 				Where("chat_id = ? AND path = ? AND agent_id = ?", session.ID, traceObj.Path, session.NowAgent).
 				Update("last_content", newContent)
@@ -710,6 +826,9 @@ func init() {
 
 // AddTempObject 添加临时文件
 func AddTempObject(session *structs.Chats, path string, content string, ro bool) error {
+	if isDocsPath(path) || strings.HasPrefix(path, "@docs") {
+		return errors.New("@docs paths are read-only and cannot be stored")
+	}
 	// 截取内容末尾 MaxFileLine 行，避免临时对象超过 trace 注入上限。
 	if ln := len(strings.Split(content, "\n")); ln > MaxFileLine {
 		content = "(omitted)\n" + strings.Join(strings.Split(content, "\n")[ln-(MaxFileLine-2):], "\n")
@@ -786,6 +905,9 @@ func AddTempObject(session *structs.Chats, path string, content string, ro bool)
 // UpdateTempObject 更新已存在的临时对象内容（按 ChatID+Path 主键覆盖）。
 // 用于后台任务定期刷新运行状态/最终结果。
 func UpdateTempObject(session *structs.Chats, path string, content string) error {
+	if isDocsPath(path) || strings.HasPrefix(path, "@docs") {
+		return errors.New("@docs paths are read-only and cannot be stored")
+	}
 	// 截取ctn后2000行（与 AddTempObject 保持一致）
 	if ln := len(strings.Split(content, "\n")); ln > 2000 {
 		content = "(omitted)\n" + strings.Join(strings.Split(content, "\n")[ln-1998:], "\n")
@@ -819,6 +941,9 @@ func SetIndexTaskFn(fn IndexTaskFn) {
 
 // StoreTempObject 存储临时对象（不创建 Traces 记录）
 func StoreTempObject(session *structs.Chats, path string, content string, ro bool) error {
+	if isDocsPath(path) || strings.HasPrefix(path, "@docs") {
+		return errors.New("@docs paths are read-only and cannot be stored")
+	}
 	err := session.DB.Create(structs.ReferFiles{
 		ChatID:   session.ID,
 		Path:     path,

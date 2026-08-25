@@ -178,6 +178,30 @@ func TestToolNameToType(t *testing.T) {
 	}
 }
 
+func TestSessionNewHidden(t *testing.T) {
+	tests := []struct {
+		name string
+		args map[string]json.RawMessage
+		want bool
+	}{
+		{name: "true", args: map[string]json.RawMessage{sessionNewHiddenArg: json.RawMessage(`true`)}, want: true},
+		{name: "false", args: map[string]json.RawMessage{sessionNewHiddenArg: json.RawMessage(`false`)}},
+		{name: "null", args: map[string]json.RawMessage{sessionNewHiddenArg: json.RawMessage(`null`)}},
+		{name: "string", args: map[string]json.RawMessage{sessionNewHiddenArg: json.RawMessage(`"true"`)}},
+		{name: "number", args: map[string]json.RawMessage{sessionNewHiddenArg: json.RawMessage(`1`)}},
+		{name: "object", args: map[string]json.RawMessage{sessionNewHiddenArg: json.RawMessage(`{}`)}},
+		{name: "array", args: map[string]json.RawMessage{sessionNewHiddenArg: json.RawMessage(`[]`)}},
+		{name: "meta is ignored", args: nil, want: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := sessionNewHidden(tt.args); got != tt.want {
+				t.Errorf("sessionNewHidden() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
 // TestSessionNewValidation 测试SessionNew的参数验证
 func TestSessionNewValidation(t *testing.T) {
 	tests := []struct {
@@ -320,7 +344,63 @@ func TestSessionList_OrderAndUpdatedAt(t *testing.T) {
 	}
 }
 
-// TestSessionList_Pagination 验证 cursor 分页：每页最多 30 条、跨页不重不漏、顺序全局倒序
+// TestSessionList_HiddenChats 验证隐藏会话不出现在列表，且不占用分页容量。
+func TestSessionList_HiddenChats(t *testing.T) {
+	dir, db, ids := newSessionListDB(t, 3)
+	base := time.Date(2026, 8, 1, 10, 0, 0, 0, time.UTC)
+	for i, id := range ids {
+		setChatUpdatedAt(t, db, id, base.Add(time.Duration(i)*time.Hour))
+	}
+	if err := db.Model(&structs.Chats{}).Where("id = ?", ids[1]).Update("hidden", true).Error; err != nil {
+		t.Fatalf("failed to hide chat: %v", err)
+	}
+
+	resp, err := SessionList(SessionListRequest{Cwd: dir}, nil, 1)
+	if err != nil {
+		t.Fatalf("SessionList failed: %v", err)
+	}
+	if len(resp.Sessions) != 2 {
+		t.Fatalf("expected 2 visible sessions, got %d", len(resp.Sessions))
+	}
+	wantIDs := []uint32{ids[2], ids[0]}
+	for i, id := range wantIDs {
+		if got := resp.Sessions[i].SessionID; got != cwd2SessionID(dir, id) {
+			t.Errorf("session[%d] = %s, want id %d", i, got, id)
+		}
+	}
+	if resp.NextCursor != "" {
+		t.Errorf("expected no nextCursor, got %q", resp.NextCursor)
+	}
+
+	found, err := funcs.QueryChat(db, ids[1])
+	if err != nil {
+		t.Fatalf("QueryChat failed for hidden chat: %v", err)
+	}
+	if !found.Hidden {
+		t.Error("QueryChat did not preserve hidden flag")
+	}
+}
+
+// TestSessionList_AllHidden 验证全部会话隐藏时列表为空且没有游标。
+func TestSessionList_AllHidden(t *testing.T) {
+	dir, db, ids := newSessionListDB(t, 3)
+	if err := db.Model(&structs.Chats{}).Where("id IN ?", ids).Update("hidden", true).Error; err != nil {
+		t.Fatalf("failed to hide chats: %v", err)
+	}
+
+	resp, err := SessionList(SessionListRequest{Cwd: dir}, nil, 1)
+	if err != nil {
+		t.Fatalf("SessionList failed: %v", err)
+	}
+	if len(resp.Sessions) != 0 {
+		t.Fatalf("expected no visible sessions, got %d", len(resp.Sessions))
+	}
+	if resp.NextCursor != "" {
+		t.Errorf("expected no nextCursor, got %q", resp.NextCursor)
+	}
+}
+
+// TestSessionList_Pagination 验证 cursor 分页：每页最多 30 条、跨页不重不漏、顺序全局倒序。
 func TestSessionList_Pagination(t *testing.T) {
 	const total = 75 // 30 + 30 + 15
 	dir, db, ids := newSessionListDB(t, total)

@@ -30,7 +30,19 @@ import (
 
 // SessionNewRequest 创建新会话的请求
 type SessionNewRequest struct {
-	Cwd string `json:"cwd"`
+	Cwd  string                     `json:"cwd"`
+	Args map[string]json.RawMessage `json:"args,omitempty"`
+}
+
+const sessionNewHiddenArg = "dyn.cxykevin.top/hidden"
+
+func sessionNewHidden(args map[string]json.RawMessage) bool {
+	raw, ok := args[sessionNewHiddenArg]
+	if !ok {
+		return false
+	}
+	var hidden bool
+	return json.Unmarshal(raw, &hidden) == nil && hidden
 }
 
 // ConfigOptionValue 配置选项值
@@ -624,8 +636,10 @@ func closeDB(path string) {
 }
 
 // loadSession 加载或创建会话，支持引用计数生命周期管理
-// knowID为true时表示使用已知的会话ID，否则创建新会话
-func loadSession(cwd string, id *uint32, knowID bool) (*structs.Chats, error) {
+// knowID为true时表示使用已知的会话ID，否则创建新会话。
+// hidden 仅用于新建会话，恢复已有会话时不会改变持久化标志。
+func loadSession(cwd string, id *uint32, knowID bool, hidden ...bool) (*structs.Chats, error) {
+	isHidden := len(hidden) > 0 && hidden[0]
 	logger.Info("load session cwd=%s id=%d knowID=%t", cwd, *id, knowID)
 	sessID := ""
 	if knowID {
@@ -653,7 +667,7 @@ func loadSession(cwd string, id *uint32, knowID bool) (*structs.Chats, error) {
 		}
 
 		if !knowID {
-			idv, err := funcs.CreateChat(db)
+			idv, err := funcs.CreateChat(db, isHidden)
 			*id = idv
 			if err != nil {
 				closeDB(cwd)
@@ -1152,7 +1166,8 @@ func SessionNew(req SessionNewRequest, call func(string, any, *string) error, co
 	}
 
 	var id uint32
-	sess, err := loadSession(req.Cwd, &id, false)
+	hidden := sessionNewHidden(req.Args)
+	sess, err := loadSession(req.Cwd, &id, false, hidden)
 	if err != nil {
 		return SessionNewResponse{}, fmt.Errorf("new session failed: %v", err)
 	}

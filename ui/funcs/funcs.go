@@ -21,11 +21,11 @@ import (
 
 var logger = log.New("funcs")
 
-// GetChats 获取所有聊天，按最后活动时间倒序（UpdatedAt DESC，同时间按 ID DESC）。
+// GetChats 获取所有可见聊天，按最后活动时间倒序（UpdatedAt DESC，同时间按 ID DESC）。
 // UpdatedAt 为零值（历史数据未记录时间）视为最旧，排在末尾。
 func GetChats(db *gorm.DB) ([]*structs.Chats, error) {
 	chats := []*structs.Chats{}
-	err := db.Find(&chats).Error
+	err := db.Where("hidden = ?", false).Find(&chats).Error
 	if err != nil {
 		return chats, err
 	}
@@ -71,8 +71,11 @@ func DeleteChat(db *gorm.DB, chat *structs.Chats) error {
 }
 
 // CreateChat 创建聊天
-func CreateChat(db *gorm.DB) (uint32, error) {
+func CreateChat(db *gorm.DB, hidden ...bool) (uint32, error) {
 	newChat := &structs.Chats{}
+	if len(hidden) > 0 {
+		newChat.Hidden = hidden[0]
+	}
 	tx := db.Create(newChat)
 	if tx.Error != nil {
 		return 0, tx.Error

@@ -517,6 +517,15 @@ func writeFile(session *structs.Chats, mp map[string]*any, cross []*any) (bool, 
 			"error":   &errMsg,
 		}, nil
 	}
+	if strings.HasPrefix(path, "@docs/") || path == "@docs" {
+		boolx := false
+		success := any(boolx)
+		errMsg := any("@docs paths are read-only; use the read tool instead")
+		return false, cross, map[string]*any{
+			"success": &success,
+			"error":   &errMsg,
+		}, nil
+	}
 	// 保存原始相对路径，供编辑成功后加入 trace 列表（下面 path 会被改写为绝对路径）
 	origRelPath := path
 

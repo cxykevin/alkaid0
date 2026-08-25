@@ -236,6 +236,65 @@ func TestTraceFileNotExist(t *testing.T) {
 	}
 }
 
+func TestTraceDocsDoesNotPersistContent(t *testing.T) {
+	db := setupTestDB(t)
+	defer u.Unwrap(db.DB()).Close()
+
+	session := &structs.Chats{
+		ID:                   1,
+		DB:                   db,
+		TemporyDataOfRequest: make(map[string]any),
+		TemporyDataOfSession: make(map[string]any),
+		NowAgent:             "test_agent",
+	}
+	path := "@docs/run/workflow"
+	mp := map[string]*any{"path": func() *any { value := any(path); return &value }()}
+
+	pass, _, result, err := Trace(session, mp, nil)
+	if err != nil {
+		t.Fatalf("Trace returned error: %v", err)
+	}
+	if pass {
+		t.Fatal("docs trace should return handled=false")
+	}
+	if success, ok := (*result["success"]).(bool); !ok || !success {
+		t.Fatalf("docs trace did not succeed: %#v", result)
+	}
+
+	var traceCount, referCount int64
+	if err := db.Model(&structs.Traces{}).Where("chat_id = ? AND path = ?", session.ID, path).Count(&traceCount).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Model(&structs.ReferFiles{}).Where("chat_id = ? AND path = ?", session.ID, path).Count(&referCount).Error; err != nil {
+		t.Fatal(err)
+	}
+	if traceCount != 0 || referCount != 0 {
+		t.Fatalf("docs content was persisted: traces=%d refer_files=%d", traceCount, referCount)
+	}
+
+	snapshots := getDocsSnapshots(session)
+	original, ok := snapshots[path]
+	if !ok || original.Content == "" || !original.Active {
+		t.Fatalf("docs snapshot was not initialized: %#v", snapshots)
+	}
+	if _, _, _, err := Trace(session, mp, nil); err != nil {
+		t.Fatalf("repeated docs trace returned error: %v", err)
+	}
+	if snapshots[path].Content != original.Content {
+		t.Fatal("docs snapshot content changed during repeated read")
+	}
+
+	if _, _, err := RenderTraceBlocks(session); err != nil {
+		t.Fatalf("render docs trace: %v", err)
+	}
+	if err := db.Model(&structs.Traces{}).Where("chat_id = ? AND path = ?", session.ID, path).Count(&traceCount).Error; err != nil {
+		t.Fatal(err)
+	}
+	if traceCount != 0 {
+		t.Fatalf("render persisted synthetic docs trace: %d", traceCount)
+	}
+}
+
 func TestTraceSuccess(t *testing.T) {
 	db := setupTestDB(t)
 	defer u.Unwrap(db.DB()).Close()

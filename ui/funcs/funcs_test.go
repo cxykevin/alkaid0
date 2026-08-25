@@ -32,18 +32,33 @@ func TestGetChats(t *testing.T) {
 	}
 	oldchats := len(chats)
 
-	// Create some chats
+	// Create visible and hidden chats.
 	chat1 := &structs.Chats{Title: "Chat 1"}
-	chat2 := &structs.Chats{Title: "Chat 2"}
-	db.Create(chat1)
-	db.Create(chat2)
+	chat2 := &structs.Chats{Title: "Chat 2", Hidden: true}
+	if err := db.Create(chat1).Error; err != nil {
+		t.Fatalf("create visible chat: %v", err)
+	}
+	if err := db.Create(chat2).Error; err != nil {
+		t.Fatalf("create hidden chat: %v", err)
+	}
 
 	chats, err = GetChats(db)
 	if err != nil {
 		t.Fatalf("GetChats failed: %v", err)
 	}
-	if len(chats)-oldchats != 2 {
-		t.Errorf("Expected 2 chats, got %d", len(chats)-oldchats)
+	if len(chats)-oldchats != 1 {
+		t.Errorf("Expected 1 visible chat, got %d", len(chats)-oldchats)
+	}
+	if len(chats) != 0 && chats[len(chats)-1].Hidden {
+		t.Error("GetChats returned a hidden chat")
+	}
+
+	found, err := QueryChat(db, chat2.ID)
+	if err != nil {
+		t.Fatalf("QueryChat failed for hidden chat: %v", err)
+	}
+	if !found.Hidden {
+		t.Error("QueryChat did not preserve hidden flag")
 	}
 }
 
@@ -73,6 +88,32 @@ func TestCreateChat(t *testing.T) {
 	}
 	if id == 0 {
 		t.Error("Expected non-zero ID")
+	}
+}
+
+func TestCreateChatHidden(t *testing.T) {
+	db := setupTestDB(t)
+	defer u.Unwrap(db.DB()).Close()
+
+	id, err := CreateChat(db, true)
+	if err != nil {
+		t.Fatalf("CreateChat failed: %v", err)
+	}
+	var chat structs.Chats
+	if err := db.First(&chat, id).Error; err != nil {
+		t.Fatalf("failed to query created chat: %v", err)
+	}
+	if !chat.Hidden {
+		t.Error("CreateChat(db, true) should create a hidden chat")
+	}
+	visible, err := GetChats(db)
+	if err != nil {
+		t.Fatalf("GetChats failed: %v", err)
+	}
+	for _, got := range visible {
+		if got.ID == id {
+			t.Error("hidden chat should not be returned by GetChats")
+		}
 	}
 }
 

@@ -532,9 +532,14 @@ func CollectTracePathsAfter(db *gorm.DB, chatID uint32, agentID string, afterMsg
 				continue
 			}
 			path := toolCallPath(call)
-			if path != "" && path != "@task" {
-				paths[path] = struct{}{}
+			if path == "" || path == "@task" {
+				continue
 			}
+			if toolCallUnread(call) {
+				delete(paths, path)
+				continue
+			}
+			paths[path] = struct{}{}
 		}
 	}
 	return paths, nil
@@ -543,6 +548,7 @@ func CollectTracePathsAfter(db *gorm.DB, chatID uint32, agentID string, afterMsg
 func DetectTraceEvents(db *gorm.DB, session *structs.Chats, agentCode string) error {
 	eventMap := make(map[string]*structs.TraceEvent)
 	prevMap := make(map[string]*structs.TraceEvent)
+	suppressed := make(map[string]bool)
 	recentTurns := 0
 scan:
 	for offsetPage := range maxPage {
@@ -574,6 +580,17 @@ scan:
 				}
 				path := toolCallPath(c)
 				if path == "" {
+					continue
+				}
+				if toolCallUnread(c) {
+					if _, exists := eventMap[path]; exists {
+						continue
+					}
+					suppressed[path] = true
+					delete(prevMap, path)
+					continue
+				}
+				if suppressed[path] {
 					continue
 				}
 				ev := &structs.TraceEvent{
@@ -616,6 +633,18 @@ func toolCallPath(c storedToolCall) string {
 	}
 	p, _ := args["path"].(string)
 	return p
+}
+
+func toolCallUnread(c storedToolCall) bool {
+	if len(c.Parameters) == 0 {
+		return false
+	}
+	var args map[string]any
+	if err := json.Unmarshal(c.Parameters, &args); err != nil {
+		return false
+	}
+	unread, _ := args["unread"].(bool)
+	return unread
 }
 
 // eventInsertGroup 同一事件（一条 assistant 消息）内多个文件的内容块合并为一条 user 消息。

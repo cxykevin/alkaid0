@@ -67,7 +67,7 @@ func cacheTimeout(session *structs.Chats, retentionMinutes int32) bool {
 //   - 内容无变化
 //   - diff 总长度超过原文件（硬条件，强制破坏）
 func decideDiffPlan(path, oldContent, newContent string, timeout bool, mult float32) (DiffPlan, bool) {
-	if timeout || strings.HasPrefix(path, "@temp/") || oldContent == "" || oldContent == newContent {
+	if timeout || strings.HasPrefix(path, "@temp/") || strings.HasPrefix(path, "@docs/") || oldContent == "" || oldContent == newContent {
 		return DiffPlan{}, false
 	}
 	diff := u.UnifiedDiff(oldContent, newContent, path)

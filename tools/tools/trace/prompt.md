@@ -4,7 +4,7 @@ Read a source file (also any text files) or a previously returned `@temp/...` ob
 
 #### Parameters
 
-- `path` (string, required): A workspace-relative source path, or a read-only temporary path beginning with `@temp/`. Absolute paths, `..`, globs, and local-file URLs are not allowed.
+- `path` (string, required): A workspace-relative source path, a read-only temporary path beginning with `@temp/`, or the built-in read-only document `@docs/run/workflow`. Absolute paths, `..`, globs, and local-file URLs are not allowed.
 - `unread` (boolean, optional, default `false`): When `true`, remove the path from this conversation's read context instead of reading it.
 
 #### Limits and behavior
