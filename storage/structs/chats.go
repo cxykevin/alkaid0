@@ -81,6 +81,8 @@ type Chats struct {
 	// PlanPushFn 注册 ACP plan 推送回调（server 层在 loadSession 时注册）。
 	// task 工具每次修改 @task 后调用 PushPlan，向会话所有客户端广播完整 plan 列表。
 	PlanPushFn func(entries []PlanEntry) `gorm:"-" json:"-"`
+	// TerminalPushFn broadcasts a full active-terminal snapshot after background updates.
+	TerminalPushFn func() `gorm:"-" json:"-"`
 }
 
 // PlanEntry ACP plan 更新条目（session/update 通知中 update.sessionUpdate="plan"）。
@@ -180,6 +182,29 @@ func (c *Chats) PushPlan(entries []PlanEntry) {
 	c.planPushMu.RUnlock()
 	if fn != nil {
 		fn(entries)
+	}
+}
+
+// SetTerminalPushFn registers the callback used to broadcast active terminal snapshots.
+func (c *Chats) SetTerminalPushFn(fn func()) {
+	if c == nil {
+		return
+	}
+	c.planPushMu.Lock()
+	defer c.planPushMu.Unlock()
+	c.TerminalPushFn = fn
+}
+
+// PushTerminalUpdate broadcasts a terminal snapshot without holding the callback lock.
+func (c *Chats) PushTerminalUpdate() {
+	if c == nil {
+		return
+	}
+	c.planPushMu.RLock()
+	fn := c.TerminalPushFn
+	c.planPushMu.RUnlock()
+	if fn != nil {
+		fn()
 	}
 }
 

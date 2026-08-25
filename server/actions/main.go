@@ -40,6 +40,8 @@ func InitFuncs(srv *jsonrpc.Server) {
 
 		jsonrpc.Set(srv, "alk.cxykevin.top/session/get_background", SessionGetBackground)
 		jsonrpc.Set(srv, "alk.cxykevin.top/session/get_effort", SessionGetEffort)
+		jsonrpc.Set(srv, "alk.cxykevin.top/session/terminal/list", SessionTerminalList)
+		jsonrpc.Set(srv, "alk.cxykevin.top/session/terminal/stop", SessionTerminalStop)
 
 		jsonrpc.Set(srv, "alk.cxykevin.top/list_subagent", SubAgentList)
 

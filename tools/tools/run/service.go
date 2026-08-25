@@ -54,6 +54,10 @@ type Request struct {
 	RunID string
 	// UpdateFn background 模式的运行状态刷新回调（写入 temp obj）
 	UpdateFn func(content string)
+	// BackgroundKind identifies the terminal's lifecycle kind (for example, background).
+	BackgroundKind string
+	// TerminalUpdateFn requests a full active-terminal snapshot broadcast.
+	TerminalUpdateFn func()
 
 	// 结构化执行字段（Python 类型等）
 	Program        string   // 可执行文件路径（优先于 Shell）
@@ -89,6 +93,14 @@ type Job struct {
 
 	// UpdateFn 后台任务运行状态刷新回调（background 模式，写入 temp obj）
 	UpdateFn func(content string)
+
+	// Ownership and display metadata exposed to private terminal APIs.
+	SessionID        uint32
+	AgentID          string
+	ToolID           string
+	DisplayCommand   string
+	BackgroundKind   string
+	TerminalUpdateFn func()
 
 	killFnMu      sync.Mutex
 	killFn        func()
@@ -170,6 +182,17 @@ type statusReq struct {
 	resp chan *Job
 }
 
+type activeReq struct {
+	sessionID uint32
+	resp      chan []*Job
+}
+
+type stopReq struct {
+	sessionID uint32
+	id        string
+	resp      chan error
+}
+
 // Service 全局后台命令执行服务。
 // 内部运行唯一的全局 goroutine（loop）作为事件循环，串行处理所有
 // 提交/终止/状态请求；每个 job 的命令执行在各自独立 goroutine 中运行，
@@ -178,6 +201,7 @@ type Service struct {
 	reqChan chan serviceReq
 	mu      sync.Mutex
 	jobs    map[string]*Job
+	active  map[string]*Job // running jobs only; completed jobs remain in jobs for wait/status compatibility
 	// runs 记录 background 模式的 runid（temp obj 内部路径）→ job，供 wait 查询
 	runs map[string]*Job
 	seq  int64
@@ -190,6 +214,7 @@ func newService() *Service {
 	s := &Service{
 		reqChan: make(chan serviceReq, 64),
 		jobs:    make(map[string]*Job),
+		active:  make(map[string]*Job),
 		runs:    make(map[string]*Job),
 	}
 	go s.loop()
@@ -231,6 +256,49 @@ func (s *Service) Status(id string) *Job {
 	return <-resp
 }
 
+// Active returns a snapshot of running jobs owned by sessionID.
+func (s *Service) Active(sessionID uint32) []*Job {
+	resp := make(chan []*Job, 1)
+	s.reqChan <- &activeReq{sessionID: sessionID, resp: resp}
+	return <-resp
+}
+
+// ListActive is the descriptive alias for Active.
+func (s *Service) ListActive(sessionID uint32) []*Job { return s.Active(sessionID) }
+
+// Stop terminates a job only when it belongs to sessionID.
+func (s *Service) Stop(sessionID uint32, id string) error {
+	resp := make(chan error, 1)
+	s.reqChan <- &stopReq{sessionID: sessionID, id: id, resp: resp}
+	return <-resp
+}
+
+func (s *Service) doActive(sessionID uint32) []*Job {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	jobs := make([]*Job, 0, len(s.active))
+	for _, job := range s.active {
+		if sessionID == 0 || job.SessionID == sessionID {
+			jobs = append(jobs, job)
+		}
+	}
+	return jobs
+}
+
+func (s *Service) doStop(sessionID uint32, id string) error {
+	s.mu.Lock()
+	job, ok := s.active[id]
+	s.mu.Unlock()
+	if !ok {
+		return fmt.Errorf("job %s not found", id)
+	}
+	if job.SessionID != sessionID {
+		return fmt.Errorf("job %s does not belong to session %d", id, sessionID)
+	}
+	job.kill()
+	return nil
+}
+
 // loop 后台服务唯一的事件循环 goroutine。
 func (s *Service) loop() {
 	for req := range s.reqChan {
@@ -241,6 +309,10 @@ func (s *Service) loop() {
 			r.resp <- s.doKill(r.id)
 		case *statusReq:
 			r.resp <- s.doStatus(r.id)
+		case *activeReq:
+			r.resp <- s.doActive(r.sessionID)
+		case *stopReq:
+			r.resp <- s.doStop(r.sessionID, r.id)
 		}
 	}
 }
@@ -254,16 +326,23 @@ func (s *Service) doSubmit(ctx context.Context, req *Request) *Job {
 		displayCmd = req.DisplayCommand
 	}
 	job := &Job{
-		ID:        id,
-		State:     JobRunning,
-		Command:   displayCmd,
-		Reason:    req.Reason,
-		CreatedAt: time.Now(),
-		done:      make(chan struct{}),
-		UpdateFn:  req.UpdateFn,
-		cleanupFn: req.CleanupFn,
+		ID:               id,
+		State:            JobRunning,
+		Command:          displayCmd,
+		Reason:           req.Reason,
+		CreatedAt:        time.Now(),
+		done:             make(chan struct{}),
+		UpdateFn:         req.UpdateFn,
+		cleanupFn:        req.CleanupFn,
+		SessionID:        req.SessionID,
+		AgentID:          req.AgentID,
+		ToolID:           req.ToolID,
+		DisplayCommand:   displayCmd,
+		BackgroundKind:   req.BackgroundKind,
+		TerminalUpdateFn: req.TerminalUpdateFn,
 	}
 	s.jobs[id] = job
+	s.active[id] = job
 	if req.RunID != "" {
 		s.runs[req.RunID] = job
 	}
@@ -303,6 +382,9 @@ func (s *Service) execute(ctx context.Context, job *Job, req *Request) {
 		}
 	}
 	if job.UpdateFn != nil {
+		if job.TerminalUpdateFn != nil {
+			job.TerminalUpdateFn()
+		}
 		tickerStop = make(chan struct{})
 		tickerDone = make(chan struct{})
 		go func() {
@@ -313,6 +395,9 @@ func (s *Service) execute(ctx context.Context, job *Job, req *Request) {
 				select {
 				case <-t.C:
 					job.UpdateFn(bgRunningContent(job.Command, job.CreatedAt))
+					if job.TerminalUpdateFn != nil {
+						job.TerminalUpdateFn()
+					}
 				case <-tickerStop:
 					return
 				}
@@ -342,7 +427,6 @@ func (s *Service) execute(ctx context.Context, job *Job, req *Request) {
 	if job.UpdateFn != nil {
 		job.UpdateFn(bgFinalContent(job.Command, result))
 	}
-
 	job.resultMu.Lock()
 	job.result = result
 	if result.Killed || job.wasKilled() {
@@ -351,6 +435,14 @@ func (s *Service) execute(ctx context.Context, job *Job, req *Request) {
 		job.State = JobFinished
 	}
 	job.resultMu.Unlock()
+
+	// Remove from active indexes only after result and cleanup are complete.
+	s.mu.Lock()
+	delete(s.active, job.ID)
+	s.mu.Unlock()
+	if job.TerminalUpdateFn != nil {
+		job.TerminalUpdateFn()
+	}
 }
 
 // backgroundUpdateInterval 后台任务 temp obj 运行状态的刷新间隔。

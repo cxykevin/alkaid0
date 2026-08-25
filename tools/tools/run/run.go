@@ -503,6 +503,13 @@ func runTask(session *structs.Chats, mp map[string]*any, cross []*any) (bool, []
 		WritableDirs:     nonEmptyDirs(pythonenv.VenvDir()),
 		RunID:            runid,
 		UpdateFn:         updateFn,
+		BackgroundKind: func() string {
+			if backgroundFlag {
+				return "background"
+			}
+			return ""
+		}(),
+		TerminalUpdateFn: session.PushTerminalUpdate,
 	}
 
 	if backgroundFlag {

@@ -196,6 +196,13 @@ func pythonTask(session *structs.Chats, mp map[string]*any, cross []*any) (bool,
 		RunID:            runid,
 		UpdateFn:         updateFn,
 		CleanupFn:        cleanupFn,
+		BackgroundKind: func() string {
+			if backgroundFlag {
+				return "background"
+			}
+			return ""
+		}(),
+		TerminalUpdateFn: session.PushTerminalUpdate,
 	}
 
 	if backgroundFlag {
