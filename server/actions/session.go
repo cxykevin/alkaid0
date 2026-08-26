@@ -695,12 +695,14 @@ func loadSession(cwd string, id *uint32, knowID bool, hidden ...bool) (*structs.
 		sess.Root = cwd
 
 		// 注册 ACP plan 推送回调：task 工具修改 @task 后触发，向会话所有客户端广播完整 plan。
-		sess.SetTerminalPushFn(func() {
-			if err := broadcastActiveTerminals(sessID, sess); err != nil {
+		sess.SetTerminalPushFn(func(terminalID, status, content string) {
+			if err := broadcastTerminalUpdate(sessID, terminalID, status, content, "incremental", sess); err != nil {
 				logger.Warn("failed to broadcast terminal update: %v", err)
 			}
 		})
-
+		sess.SetWorkflowEventFn(func(runID string, event any) {
+			broadcastWorkflowEvent(sessID, runID, event)
+		})
 		sess.SetPlanPushFn(func(entries []structs.PlanEntry) {
 			err := broadcastSessionUpdate(sessID, SessionUpdate{
 				SessionID: sessID,
@@ -802,7 +804,7 @@ func loadSession(cwd string, id *uint32, knowID bool, hidden ...bool) (*structs.
 			// （审批后 ExecuteToolCalls 阶段 OnHook 写入，session.State=StateToolCalling）。
 			// 任意回调到达时立即广播——不能依赖 session.State 判断（审批后空 AIResponse 与
 			// 新一轮流式存在 State 竞态），按标记最可靠。
-			if finalCtx, finalTyp := sess.TakeFinalToolCalling(); len(finalCtx) != 0 {
+			if finalCtx, finalTyp, finalRunIDs := sess.TakeFinalToolCallingWithRunIDs(); len(finalCtx) != 0 {
 				toolStatus := "pending"
 				if sess.ToolState == 1 {
 					toolStatus = "completed"
@@ -824,6 +826,7 @@ func loadSession(cwd string, id *uint32, knowID bool, hidden ...bool) (*structs.
 							Status:        toolStatus,
 							Title:         fmt.Sprintf("[Call %s]%s", finalTyp[id], s),
 							Content:       val,
+							RunID:         finalRunIDs[id],
 						},
 					}, 0)
 					if err != nil {
@@ -1064,6 +1067,10 @@ func SessionGetBackground(req SessionGetBackgroundRequest, call func(string, any
 
 // broadcastActiveTerminals sends a complete active-terminal snapshot to every client.
 func broadcastActiveTerminals(sessionID string, sess *structs.Chats) error {
+	return broadcastTerminalUpdate(sessionID, "", "", "", "full", sess)
+}
+
+func broadcastTerminalUpdate(sessionID, terminalID, status, content, updateType string, sess *structs.Chats) error {
 	if sess == nil {
 		return nil
 	}
@@ -1071,7 +1078,18 @@ func broadcastActiveTerminals(sessionID string, sess *structs.Chats) error {
 	if err != nil {
 		return err
 	}
-	return broadcastSessionUpdate(sessionID, SessionUpdate{SessionID: sessionID, Update: SessionUpdateUpdate{SessionUpdate: "alk.cxykevin.top/terminal_update", Terminals: resp.Terminals}}, 0)
+	for i := range resp.Terminals {
+		if job := runTool.Default.Status(resp.Terminals[i].TerminalID); job != nil {
+			resp.Terminals[i].Content = job.Content()
+		}
+	}
+	update := SessionUpdateUpdate{SessionUpdate: "alk.cxykevin.top/terminal_update", Terminals: resp.Terminals, TerminalUpdateType: updateType}
+	if terminalID != "" {
+		update.TerminalID = terminalID
+		update.Status = status
+		update.Content = content
+	}
+	return broadcastSessionUpdate(sessionID, SessionUpdate{SessionID: sessionID, Update: update}, 0)
 }
 
 // SessionTerminalListRequest lists active runtime terminals for one session.
@@ -1088,11 +1106,21 @@ type SessionTerminalInfo struct {
 	Reason     string `json:"reason,omitempty"`
 	AgentID    string `json:"agentId,omitempty"`
 	ToolID     string `json:"toolId,omitempty"`
+	Content    string `json:"content,omitempty"`
 	CreatedAt  string `json:"createdAt"`
 }
 
 type SessionTerminalListResponse struct {
 	Terminals []SessionTerminalInfo `json:"terminals"`
+}
+
+type SessionTerminalStatusRequest struct {
+	SessionID  string `json:"sessionId"`
+	TerminalID string `json:"terminalId"`
+}
+
+type SessionTerminalStatusResponse struct {
+	Terminal SessionTerminalInfo `json:"terminal"`
 }
 
 type SessionTerminalStopRequest struct {
@@ -1127,12 +1155,41 @@ func SessionTerminalList(req SessionTerminalListRequest, _ func(string, any, *st
 		if kind == "" {
 			kind = "foreground"
 		}
-		items = append(items, SessionTerminalInfo{TerminalID: job.ID, SessionID: req.SessionID, Kind: kind, Status: job.Status().String(), Command: job.DisplayCommand, Reason: job.Reason, AgentID: job.AgentID, ToolID: job.ToolID, CreatedAt: job.CreatedAt.UTC().Format(time.RFC3339)})
+		items = append(items, SessionTerminalInfo{TerminalID: job.ID, SessionID: req.SessionID, Kind: kind, Status: job.Status().String(), Command: job.DisplayCommand, Reason: job.Reason, AgentID: job.AgentID, ToolID: job.ToolID, Content: job.Content(), CreatedAt: job.CreatedAt.UTC().Format(time.RFC3339)})
 	}
 	slices.SortFunc(items, func(a, b SessionTerminalInfo) int {
 		return strings.Compare(a.CreatedAt+"\x00"+a.TerminalID, b.CreatedAt+"\x00"+b.TerminalID)
 	})
 	return SessionTerminalListResponse{Terminals: items}, nil
+}
+
+func SessionTerminalStatus(req SessionTerminalStatusRequest, call func(string, any, *string) error, connID uint64) (SessionTerminalStatusResponse, error) {
+	id, err := validateTerminalSession(req.SessionID)
+	if err != nil {
+		return SessionTerminalStatusResponse{}, err
+	}
+	if req.TerminalID == "" {
+		return SessionTerminalStatusResponse{}, fmt.Errorf("terminalId is empty")
+	}
+	job := runTool.Default.Status(req.TerminalID)
+	if job == nil {
+		return SessionTerminalStatusResponse{}, fmt.Errorf("terminal %s not found", req.TerminalID)
+	}
+	if job.SessionID != id {
+		return SessionTerminalStatusResponse{}, fmt.Errorf("terminal %s does not belong to session %s", req.TerminalID, req.SessionID)
+	}
+	kind := job.BackgroundKind
+	if kind == "" {
+		kind = "foreground"
+	}
+	terminal := SessionTerminalInfo{TerminalID: job.ID, SessionID: req.SessionID, Kind: kind, Status: job.Status().String(), Command: job.DisplayCommand, Reason: job.Reason, AgentID: job.AgentID, ToolID: job.ToolID, Content: job.Content(), CreatedAt: job.CreatedAt.UTC().Format(time.RFC3339)}
+	// Status also immediately sends the complete current terminal content to the caller.
+	if call != nil {
+		if err := call("session/update", SessionUpdate{SessionID: req.SessionID, Update: SessionUpdateUpdate{SessionUpdate: "alk.cxykevin.top/terminal_update", Terminals: []SessionTerminalInfo{terminal}, TerminalID: terminal.TerminalID, Status: terminal.Status, Content: terminal.Content, TerminalUpdateType: "full"}}, nil); err != nil {
+			return SessionTerminalStatusResponse{}, err
+		}
+	}
+	return SessionTerminalStatusResponse{Terminal: terminal}, nil
 }
 
 func SessionTerminalStop(req SessionTerminalStopRequest, _ func(string, any, *string) error, _ uint64) (SessionTerminalStopResponse, error) {
@@ -1318,25 +1375,28 @@ func SessionNew(req SessionNewRequest, call func(string, any, *string) error, co
 
 // SessionUpdateUpdate 更新会话的参数（ACP v2：messageId 必填、标准事件字段置于顶层）
 type SessionUpdateUpdate struct {
-	SessionUpdate     string                `json:"sessionUpdate"`
-	MessageID         string                `json:"messageId,omitempty"`         // 消息 chunk 与整消息 upsert
-	Content           any                   `json:"content,omitempty"`           // 消息 chunk 的 ContentBlock、tool_call_update 的 content 数组
-	ToolCallID        string                `json:"toolCallId,omitempty"`        // tool_call_update
-	Title             string                `json:"title,omitempty"`             // tool_call_update 标题；session_info_update 会话标题
-	UpdatedAt         string                `json:"updatedAt,omitempty"`         // session_info_update 最后活动时间（RFC 3339）
-	Meta              any                   `json:"_meta,omitempty"`             // session_info_update 扩展元数据
-	Terminals         []SessionTerminalInfo `json:"terminals,omitempty"`         // terminal_update 完整活动列表
-	Kind              string                `json:"kind,omitempty"`              // tool_call_update
-	Status            string                `json:"status,omitempty"`            // tool_call_update
-	State             string                `json:"state,omitempty"`             // state_update
-	StopReason        string                `json:"stopReason,omitempty"`        // state_update idle
-	ConfigOptions     []ConfigOption        `json:"configOptions,omitempty"`     // config_option_update
-	AvailableCommands any                   `json:"availableCommands,omitempty"` // available_commands_update
-	Used              uint64                `json:"used,omitempty"`              // usage_update
-	Size              uint64                `json:"size,omitempty"`              // usage_update
-	Plan              *PlanItems            `json:"plan,omitempty"`              // plan_update（嵌套在 plan 下）
-	ExpandErrorMsg    string                `json:"alk.cxykevin.top/error_msg,omitempty"`
-	AgentStatus       *string               `json:"alk.cxykevin.top/agent_status,omitempty"`
+	SessionUpdate      string                `json:"sessionUpdate"`
+	MessageID          string                `json:"messageId,omitempty"`               // 消息 chunk 与整消息 upsert
+	Content            any                   `json:"content,omitempty"`                 // 消息 chunk 的 ContentBlock、tool_call_update 的 content 数组
+	ToolCallID         string                `json:"toolCallId,omitempty"`              // tool_call_update
+	Title              string                `json:"title,omitempty"`                   // tool_call_update 标题；session_info_update 会话标题
+	UpdatedAt          string                `json:"updatedAt,omitempty"`               // session_info_update 最后活动时间（RFC 3339）
+	Meta               any                   `json:"_meta,omitempty"`                   // session_info_update 扩展元数据
+	Terminals          []SessionTerminalInfo `json:"terminals,omitempty"`               // terminal_update 全量终端列表
+	TerminalID         string                `json:"terminalId,omitempty"`              // terminal_update 增量终端 ID
+	TerminalUpdateType string                `json:"updateType,omitempty"`              // terminal_update: full | incremental
+	RunID              string                `json:"alk.cxykevin.top/run_id,omitempty"` // run background 成功后随工具回调推送
+	Kind               string                `json:"kind,omitempty"`                    // tool_call_update
+	Status             string                `json:"status,omitempty"`                  // tool_call_update
+	State              string                `json:"state,omitempty"`                   // state_update
+	StopReason         string                `json:"stopReason,omitempty"`              // state_update idle
+	ConfigOptions      []ConfigOption        `json:"configOptions,omitempty"`           // config_option_update
+	AvailableCommands  any                   `json:"availableCommands,omitempty"`       // available_commands_update
+	Used               uint64                `json:"used,omitempty"`                    // usage_update
+	Size               uint64                `json:"size,omitempty"`                    // usage_update
+	Plan               *PlanItems            `json:"plan,omitempty"`                    // plan_update（嵌套在 plan 下）
+	ExpandErrorMsg     string                `json:"alk.cxykevin.top/error_msg,omitempty"`
+	AgentStatus        *string               `json:"alk.cxykevin.top/agent_status,omitempty"`
 }
 
 // PlanItems plan_update 内容（ACP v2：{plan: {type:"items", planId, entries}}）
@@ -1420,6 +1480,10 @@ func SessionResume(req SessionResumeRequest, call func(string, any, *string) err
 	bindedSessionOnConnMu.Unlock()
 	// 注册连接的call函数用于后续广播
 	registerConnCall(connID, req.SessionID, call)
+	// 加载会话后向客户端推送当前终端的完整快照。
+	if err := broadcastActiveTerminals(req.SessionID, sess); err != nil {
+		logger.Warn("session resume: failed to broadcast terminal update: %v", err)
+	}
 	// 冷/热加载时把当前任务计划推给新连接（客户端整体替换）。
 	if sess.Task != "" {
 		entries, perr := task.BuildPlanEntries(sess.Task)

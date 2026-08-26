@@ -13,4 +13,6 @@ var Tables = []any{
 	&ClassifySegment{},
 	&KeyMapping{},
 	&CustomMask{},
+	&Workflows{},
+	&WorkflowEvents{},
 }

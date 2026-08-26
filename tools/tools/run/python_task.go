@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path"
+	"regexp"
 	"strconv"
 	"time"
 
@@ -15,6 +16,12 @@ import (
 	"github.com/cxykevin/alkaid0/terminal/sandbox"
 	"github.com/cxykevin/alkaid0/tools/tools/trace"
 )
+
+var dynworkflowImportPattern = regexp.MustCompile(`(?m)^\s*(?:import\s+dynworkflow(?:\s+as\s+\w+)?(?:\s*$)|from\s+dynworkflow(?:\s+import\s+|\s*$))`)
+
+func containsDynworkflowImport(code string) bool {
+	return dynworkflowImportPattern.MatchString(code)
+}
 
 // pythonTask 处理 run 工具的 "python" 类型：在全局 venv 中执行 Python 代码。
 // - command 参数是完整 Python 源码，通过 Python 的 -c 参数执行（不创建临时脚本）。
@@ -96,6 +103,11 @@ func pythonTask(session *structs.Chats, mp map[string]*any, cross []*any) (bool,
 			backgroundFlag = b
 		}
 	}
+	dynworkflow := containsDynworkflowImport(code)
+	if dynworkflow {
+		backgroundFlag = true
+		logger.Info("forcing dynworkflow Python task into background mode")
+	}
 
 	timeoutObj, ok := mp["timeout"]
 	var timeout int32
@@ -140,6 +152,10 @@ func pythonTask(session *structs.Chats, mp map[string]*any, cross []*any) (bool,
 	env = append(env, "SYSTEMD_PAGER=cat")
 	env = append(env, "GIT_PAGER=cat")
 	env = append(env, "DEBIAN_FRONTEND=noninteractive")
+	if dynworkflow {
+		env = append(env, "ALKAID0_WORKFLOW_REPORT=1")
+		env = append(env, fmt.Sprintf("ALKAID0_WORKFLOW_SESSION_ID=%d", session.ID))
+	}
 
 	for k, v := range config.GlobalConfig.Agent.TerminalEnvs {
 		env = append(env, k+"="+v)
@@ -167,6 +183,7 @@ func pythonTask(session *structs.Chats, mp map[string]*any, cross []*any) (bool,
 		logger.Info("python task injected proxy env: base=%s model=%s", baseURL, modelID)
 	}
 
+	toolCallID := fmt.Sprintf("call_%d_%d_%s", session.ID, session.CurrentMessageID, toolID)
 	displayCmd := fmt.Sprintf("python (execute %d bytes code)", len(code))
 	pythonCode := "model = " + strconv.Quote(modelID) + "\n" + code
 	var runid string
@@ -197,12 +214,24 @@ func pythonTask(session *structs.Chats, mp map[string]*any, cross []*any) (bool,
 		UpdateFn:         updateFn,
 		CleanupFn:        cleanupFn,
 		BackgroundKind: func() string {
+			if dynworkflow {
+				return "workflow"
+			}
 			if backgroundFlag {
 				return "background"
 			}
 			return ""
 		}(),
-		TerminalUpdateFn: session.PushTerminalUpdate,
+		TerminalUpdateFn: func(terminalID, status, content string) { session.PushTerminalUpdate(terminalID, status, content) },
+		InteractiveStdin: dynworkflow,
+		WorkflowOutputFn: func(runID, visible string, events []WorkflowEvent) {
+			if visible != "" {
+				session.PushTerminalUpdate(runID, "running", visible)
+			}
+			for _, event := range events {
+				session.PushWorkflowEvent(runID, event)
+			}
+		},
 	}
 
 	if backgroundFlag {
@@ -213,6 +242,7 @@ func pythonTask(session *structs.Chats, mp map[string]*any, cross []*any) (bool,
 			}
 			return false, cross, nil, err
 		}
+		session.SetToolCallingRunID(toolCallID, "@temp/"+runid)
 		logger.Info("run python in background (reason: %s) sandbox:%v openai:%v in ID=%d,agentID=%s runid=%s", reason, sandboxFlag, needsProxy, session.ID, session.CurrentAgentID, runid)
 		boolx := true
 		success := any(boolx)

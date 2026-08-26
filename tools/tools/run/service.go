@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"strings"
 	"sync"
 	"time"
@@ -56,8 +57,11 @@ type Request struct {
 	UpdateFn func(content string)
 	// BackgroundKind identifies the terminal's lifecycle kind (for example, background).
 	BackgroundKind string
-	// TerminalUpdateFn requests a full active-terminal snapshot broadcast.
-	TerminalUpdateFn func()
+	// TerminalUpdateFn reports terminal content/status changes to clients.
+	TerminalUpdateFn func(terminalID, status, content string)
+	// WorkflowOutputFn receives filtered output and dynworkflow events from Python stdout.
+	WorkflowOutputFn func(runID, visible string, events []WorkflowEvent)
+	InteractiveStdin bool
 
 	// 结构化执行字段（Python 类型等）
 	Program        string   // 可执行文件路径（优先于 Shell）
@@ -100,7 +104,13 @@ type Job struct {
 	ToolID           string
 	DisplayCommand   string
 	BackgroundKind   string
-	TerminalUpdateFn func()
+	TerminalUpdateFn func(terminalID, status, content string)
+	WorkflowOutputFn func(runID, visible string, events []WorkflowEvent)
+	stdinMu          sync.Mutex
+	stdinWriter      *io.PipeWriter
+	stdinClosed      bool
+	contentMu        sync.RWMutex
+	content          string
 
 	killFnMu      sync.Mutex
 	killFn        func()
@@ -150,7 +160,40 @@ func (j *Job) Wait(ctx context.Context) *Result {
 	return j.result
 }
 
+// WriteStdin writes one control line to an interactive Python workflow.
+func (j *Job) WriteStdin(data []byte) error {
+	j.stdinMu.Lock()
+	defer j.stdinMu.Unlock()
+	if j.stdinClosed || j.stdinWriter == nil {
+		return fmt.Errorf("job stdin is not available")
+	}
+	_, err := j.stdinWriter.Write(data)
+	return err
+}
+
+func (j *Job) closeStdin() {
+	j.stdinMu.Lock()
+	defer j.stdinMu.Unlock()
+	if !j.stdinClosed && j.stdinWriter != nil {
+		_ = j.stdinWriter.Close()
+		j.stdinClosed = true
+	}
+}
+
 // Status 返回任务当前状态（为 background 预留）。
+func (j *Job) setContent(content string) {
+	j.contentMu.Lock()
+	j.content = content
+	j.contentMu.Unlock()
+}
+
+// Content returns the latest terminal content snapshot.
+func (j *Job) Content() string {
+	j.contentMu.RLock()
+	defer j.contentMu.RUnlock()
+	return j.content
+}
+
 func (j *Job) Status() JobState {
 	j.resultMu.Lock()
 	defer j.resultMu.Unlock()
@@ -340,6 +383,10 @@ func (s *Service) doSubmit(ctx context.Context, req *Request) *Job {
 		DisplayCommand:   displayCmd,
 		BackgroundKind:   req.BackgroundKind,
 		TerminalUpdateFn: req.TerminalUpdateFn,
+		WorkflowOutputFn: req.WorkflowOutputFn,
+	}
+	if req.InteractiveStdin {
+		job.stdinWriter = nil // initialized immediately before command start
 	}
 	s.jobs[id] = job
 	s.active[id] = job
@@ -383,7 +430,7 @@ func (s *Service) execute(ctx context.Context, job *Job, req *Request) {
 	}
 	if job.UpdateFn != nil {
 		if job.TerminalUpdateFn != nil {
-			job.TerminalUpdateFn()
+			job.TerminalUpdateFn(job.ID, "start", job.Content())
 		}
 		tickerStop = make(chan struct{})
 		tickerDone = make(chan struct{})
@@ -394,9 +441,11 @@ func (s *Service) execute(ctx context.Context, job *Job, req *Request) {
 			for {
 				select {
 				case <-t.C:
-					job.UpdateFn(bgRunningContent(job.Command, job.CreatedAt))
+					content := bgRunningContent(job.Command, job.CreatedAt)
+					job.setContent(content)
+					job.UpdateFn(content)
 					if job.TerminalUpdateFn != nil {
-						job.TerminalUpdateFn()
+						job.TerminalUpdateFn(job.ID, "running", content)
 					}
 				case <-tickerStop:
 					return
@@ -406,6 +455,7 @@ func (s *Service) execute(ctx context.Context, job *Job, req *Request) {
 	}
 
 	defer func() {
+		job.closeStdin()
 		stopTicker()
 		if job.cleanupFn != nil {
 			job.cleanupFn()
@@ -425,7 +475,12 @@ func (s *Service) execute(ctx context.Context, job *Job, req *Request) {
 	// 停止定时刷新，写最终结果（命令结束后最后一次更新 temp obj）
 	stopTicker()
 	if job.UpdateFn != nil {
-		job.UpdateFn(bgFinalContent(job.Command, result))
+		content := bgFinalContent(job.Command, result)
+		job.setContent(content)
+		job.UpdateFn(content)
+		if job.TerminalUpdateFn != nil {
+			job.TerminalUpdateFn(job.ID, "stop", content)
+		}
 	}
 	job.resultMu.Lock()
 	job.result = result
@@ -440,8 +495,8 @@ func (s *Service) execute(ctx context.Context, job *Job, req *Request) {
 	s.mu.Lock()
 	delete(s.active, job.ID)
 	s.mu.Unlock()
-	if job.TerminalUpdateFn != nil {
-		job.TerminalUpdateFn()
+	if job.TerminalUpdateFn != nil && job.UpdateFn == nil {
+		job.TerminalUpdateFn(job.ID, "stop", job.Content())
 	}
 }
 
@@ -462,6 +517,10 @@ func bgRunningContent(command string, start time.Time) string {
 func bgFinalContent(command string, r *Result) string {
 	return fmt.Sprintf("[agent execute] $ %s\n\n%s%s[Background] Finished: success=%v\n", command, r.ErrString, r.Output, r.Success)
 }
+
+type writerFunc func([]byte) (int, error)
+
+func (f writerFunc) Write(p []byte) (int, error) { return f(p) }
 
 // runCommand 在沙盒中执行命令（含非沙盒降级），并填充结果。
 func (s *Service) runCommand(ctx context.Context, job *Job, req *Request) *Result {
@@ -545,9 +604,38 @@ func (s *Service) runCommand(ctx context.Context, job *Job, req *Request) *Resul
 	}
 
 	var buf bytes.Buffer
+	var workflowParser WorkflowOutputParser
+	var outputMu sync.Mutex
+	output := io.Writer(&buf)
+	if req.InteractiveStdin {
+		stdinReader, stdinWriter := io.Pipe()
+		job.stdinMu.Lock()
+		job.stdinWriter = stdinWriter
+		job.stdinClosed = false
+		job.stdinMu.Unlock()
+		c.SetStdin(stdinReader)
+	}
+	if req.WorkflowOutputFn != nil && req.Program != "" {
+		output = writerFunc(func(p []byte) (int, error) {
+			outputMu.Lock()
+			defer outputMu.Unlock()
+			visible, events := workflowParser.Feed(p)
+			if visible != "" {
+				_, _ = buf.WriteString(visible)
+			}
+			req.WorkflowOutputFn(req.RunID, visible, events)
+			return len(p), nil
+		})
+	}
 
 	// 监听 context 取消，强制 kill 进程（runCmd 内部处理）
-	err = runCmd(ctx, c, &buf, displayCmd, req.Program == "")
+	err = runCmdWithWriter(ctx, c, output, displayCmd, req.Program == "")
+	if req.WorkflowOutputFn != nil && req.Program != "" {
+		if tail := workflowParser.Flush(); tail != "" {
+			_, _ = buf.WriteString(tail)
+			req.WorkflowOutputFn(req.RunID, tail, nil)
+		}
+	}
 
 	// 只有未显式指定沙盒时，unshare 错误才降级到非沙盒重试
 	if err != nil && req.Sandbox && !req.SandboxSpecified && strings.Contains(err.Error(), "unshare") {

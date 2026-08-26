@@ -35,8 +35,9 @@ var AgentCapabilities = u.H{
 		},
 		"delete": u.H{},
 	},
-	// alkaid0 扩展能力：服务器支持的 alkaid0 扩展协议版本
+	// alkaid0 扩展能力：服务器支持的私有扩展协议版本
 	"alk.cxykevin.top/alkaid0/v0.4": u.H{},
+	"alk.cxykevin.top/alkaid0/v0.5": u.H{},
 }
 
 // AgentInfo 服务端信息常量

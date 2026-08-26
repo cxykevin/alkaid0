@@ -459,6 +459,8 @@ func runTask(session *structs.Chats, mp map[string]*any, cross []*any) (bool, []
 		}
 	}
 
+	toolCallID := fmt.Sprintf("call_%d_%d_%s", session.ID, session.CurrentMessageID, toolID)
+
 	// get shell
 	shell := getShell(config.GlobalConfig.Agent.UseShell)
 
@@ -509,7 +511,7 @@ func runTask(session *structs.Chats, mp map[string]*any, cross []*any) (bool, []
 			}
 			return ""
 		}(),
-		TerminalUpdateFn: session.PushTerminalUpdate,
+		TerminalUpdateFn: func(terminalID, status, content string) { session.PushTerminalUpdate(terminalID, status, content) },
 	}
 
 	if backgroundFlag {
@@ -519,6 +521,7 @@ func runTask(session *structs.Chats, mp map[string]*any, cross []*any) (bool, []
 		if _, err := Default.Submit(context.Background(), req); err != nil {
 			return false, cross, nil, err
 		}
+		session.SetToolCallingRunID(toolCallID, "@temp/"+runid)
 		logger.Info("run shell in background \"%s\"(reason: %s) sandbox:%v in ID=%d,agentID=%s runid=%s", command, reason, sandboxFlag, session.ID, session.CurrentAgentID, runid)
 		boolx := true
 		success := any(boolx)

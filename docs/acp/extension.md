@@ -40,11 +40,12 @@ alkaid0 对于客户端并 **不强制** 要求客户端初始化，这与 [ACP 
     "prompt": { "image": {}, "embeddedContext": {} },
     "delete": {}
   },
-  "alk.cxykevin.top/alkaid0/v0.4": {}
+  "alk.cxykevin.top/alkaid0/v0.4": {},
+  "alk.cxykevin.top/alkaid0/v0.5": {}
 }
 ```
 
-其中 `alk.cxykevin.top/alkaid0/v0.4` 为 alkaid0 扩展协议版本能力标记。
+其中 `alk.cxykevin.top/alkaid0/v0.4` 与 `alk.cxykevin.top/alkaid0/v0.5` 为 alkaid0 扩展协议版本能力标记。v0.5 包含 dynworkflow stdout 握手、workflow stdio 控制、workflow 状态持久化以及 workflow/update_xxx 实时广播协议；v0.4 能力保持兼容。
 
 `session/list`、`session/resume`、`session/close` 是 `session` 基线能力，无需标记。
 
@@ -72,6 +73,63 @@ alkaid0 现在遵循 ACP v2 标准事件，且字段置于 update 对象**顶层
 - **`config_option_update`**：`configOptions` 字段（顶层）。
 - **`available_commands_update`**：`availableCommands` 字段，命令 `input` 形如 `{ "type": "text", "hint": "..." }`。
 - **`session_info_update`**：会话元数据更新（标题/最后活动时间），字段置顶层。`title` 为会话最终展示标题（用户设置的标题优先，其次 AI 生成的标题）；`updatedAt` 为 RFC 3339 最后活动时间。
+- **`tool_call_update` 的 `alk.cxykevin.top/run_id`**：后台 `run` 成功提交后，随对应工具调用回调在 update 顶层返回 run ID；提交失败时不返回。
+
+### 2.2. `alk.cxykevin.top/terminal_update`
+
+终端生命周期与内容更新通知。所有字段位于 `update` 顶层，`terminals` 始终表示当前终端的全量快照。
+
+- `updateType` ***string***：`full` 或 `incremental`，区分全量和增量推送。
+- `terminals` ***object[]***：当前会话活动终端的完整列表；全量推送时包含每个终端的完整 `content`。
+- `terminalId` ***string?***：增量推送涉及的终端 ID。
+- `status` ***string?***：终端状态；`start` 表示创建，`running` 表示运行中，`stop` 表示终端会话结束。
+- `content` ***string?***：指定终端当前内容；状态查询和增量更新均会携带。
+
+全量推送示例：
+
+```json
+{
+  "sessionId": "sess_1:/workspace",
+  "update": {
+    "sessionUpdate": "alk.cxykevin.top/terminal_update",
+    "updateType": "full",
+    "terminals": [
+      {
+        "terminalId": "run_1",
+        "sessionId": "sess_1:/workspace",
+        "kind": "background",
+        "status": "running",
+        "command": "sleep 60",
+        "content": "...",
+        "createdAt": "2025-01-01T00:00:00Z"
+      }
+    ]
+  }
+}
+```
+
+增量推送示例：
+
+```json
+{
+  "update": {
+    "sessionUpdate": "alk.cxykevin.top/terminal_update",
+    "updateType": "incremental",
+    "terminalId": "run_1",
+    "status": "running",
+    "content": "最新终端内容",
+    "terminals": [ ... ]
+  }
+}
+```
+
+触发时机：
+
+- `session/resume` 完成连接注册后立即推送一次 `full` 快照。
+- 终端启动、后台状态刷新、终端结束时推送 `incremental` 更新；`stop` 表示客户端应结束该终端会话。
+- `alk.cxykevin.top/session/terminal/status` 成功调用时，除 RPC 响应外，还会通过请求 callback 立即推送一条 `full` 更新，包含该终端的完整内容。
+
+### 2.3. `alk.cxykevin.top/agent_status`
 
 触发时机：
 
@@ -81,33 +139,70 @@ alkaid0 现在遵循 ACP v2 标准事件，且字段置于 update 对象**顶层
 
 客户端可据此刷新会话列表展示。
 
-### 2.2. `alk.cxykevin.top/summary`
+### 2.4. `alk.cxykevin.top/summary`
 
 - `type` ***string***: 内容类型。固定为 `text`。
 - `text` ***string***: 摘要文本。为空意味着摘要启动生成还未结束。
 
 > 摘要若出现异常则直接停止 loop 并在 loop 级别报错。
 
-### 2.3. `alk.cxykevin.top/agent_status`
-
-- `alk.cxykevin.top/agent_status` ***string?*** 当前所在的 SubAgent。其为 `""` 则为处于主 Agent。
-
-当 `sessionUpdate` 为 `agent_thought_chunk`/`agent_message_chunk`/`agent_thought`/`agent_message` 时，`alk.cxykevin.top/agent_status` 存在。
-
-### 2.4. `alk.cxykevin.top/error_msg`
+### 2.5. `alk.cxykevin.top/error_msg`
 
 - 挂在 `state_update` 等 update 对象顶层的错误信息扩展（v2 无轮次内错误通道）。`state_update idle` 时若存在非空 `alk.cxykevin.top/error_msg` 表示本轮出错（`stopReason` 为 `refusal`）。
 
 ## 3. 方法扩展
 
-### 3.1. `session/resume` 与 `replayFrom`
+### 3.1. `alk.cxykevin.top/session/terminal/list` / `status` / `stop`
 
-`session/load` 已在 v2 移除，alkaid0 使用 `session/resume`。`replayFrom` 参数：
+这三个私有方法均通过 `sessionId` 校验会话，并对 terminal 执行会话归属校验。
+
+#### `alk.cxykevin.top/session/terminal/list`
+
+请求：`{ "sessionId": string }`。返回 `{ "terminals": TerminalInfo[] }`，只包含当前活动终端；每个终端包含 `terminalId`、`sessionId`、`kind`、`status`、`command`、`reason`、`agentId`、`toolId`、`content`、`createdAt`。
+
+#### `alk.cxykevin.top/session/terminal/status`
+
+请求：`{ "sessionId": string, "terminalId": string }`。返回 `{ "terminal": TerminalInfo }`，包含当前终端完整内容。成功时还会通过该请求的 callback 立即发送一条 `alk.cxykevin.top/terminal_update`，其 `updateType` 为 `full`。
+
+#### `alk.cxykevin.top/session/terminal/stop`
+
+请求：`{ "sessionId": string, "terminalId": string }`。返回 `{ "terminalId": string, "status": "kill_requested" }`。终止是异步的，完成清理后通过 `alk.cxykevin.top/terminal_update` 发送 `status: "stop"`。
+
+### 3.2. dynworkflow stdout 与 workflow 私有方法
+
+只有 `run` 工具的 `type: "python"` 可以触发 workflow。Python 源码包含 `import dynworkflow`、`import dynworkflow as ...` 或 `from dynworkflow import ...` 时，服务端强制将任务后台化，并注入 `ALKAID0_WORKFLOW_REPORT=1` 和会话标识。不会注册 workflow/start 方法。
+
+Python run 的 `runId` 是 workflow 的唯一关联标识，同时绑定 Job、terminal、tool call、数据库记录和控制通道。只有已由该 Python run 的合法 stdout 事件登记的 runId 才能使用 workflow 控制协议。
+
+#### stdout 握手与过滤
+
+`Flow.run()` 的 stdout 使用 bracketed-paste 握手：开始标记为 `\u001b[?2004h`，结束标记为 `\u001b[?2004l`。握手帧内每行是一个 JSONL 事件。服务端按增量数据解析，因此标记可以跨 read 分片。握手标记、帧内 JSON、非法协议行以及 dynworkflow 交互内容从 terminal 输出中剔除；帧外普通 stdout 和 stderr 仍作为终端输出。
+
+#### 事件更新
+
+workflow 事件按 runId 持久化 graph、当前 node/agent 状态和日志，并广播为以下顶层 `session/update`：`alk.cxykevin.top/session/terminal/workflow/update_graph`、`update_node`、`update_agents_start`、`update_agent`、`update_node_code`、`update_node_log`。公共字段 `sessionId`、`runId`、`sessionUpdate`、`eventType`、`time`、`workflow` 以及事件字段直接放在 `update` 顶层，不放 `_meta` 或 `body`。graph 是完整快照，其余事件是增量更新。
+
+#### workflow 控制与查询方法
+
+不会注册 `alk.cxykevin.top/session/terminal/workflow/start`。workflow 只能由 Python run 自动产生。提供以下方法：
+
+- `alk.cxykevin.top/session/terminal/workflow/status`：请求 `{ "sessionId": string, "runId": string }`，返回 workflow、terminal、graph、当前 agent 状态和日志。
+- `alk.cxykevin.top/session/terminal/workflow/input`：按 runId 将受校验的控制对象写入 Python stdin。允许 shutdown、node terminate/restart、agent terminate/retry。
+- `alk.cxykevin.top/session/terminal/workflow/stop`：写入 shutdown，必要时复用 terminal kill 强制终止；操作幂等。
+- `alk.cxykevin.top/session/terminal/workflow/list`：请求 `{ "sessionId": string }`，返回当前会话 workflow 列表。
+
+所有方法执行 session、runId 和 terminal 所有权校验。shell、sleep、wait 和普通 Python run 不能作为 workflow 控制目标。input/stop 仅允许活动 workflow，status/list 可读取已结束记录。
+
+#### 数据库
+
+服务端通过 AutoMigrate 保存 `Workflows` 和 `WorkflowEvents`：前者保存 runId、workflowId、ChatID、TerminalID、状态、时间、最新 graph、当前 node/agent 状态和最后日志序号；后者按 runId 和 sequence 保存结构化事件及 payload，用于 status 查询和断线恢复。
+
+### 3.3. `session/resume` 与 `replayFrom`
 
 - 省略或 `null`：仅重连，不重放历史。
 - `{ "type": "start" }`：重放整个对话历史（以 `user_message` / `agent_message` / `agent_thought` 整消息 upsert 形式，携带与直播一致的 `messageId`，客户端据此 upsert 而非重复）。
 
-### 3.2. `session/request_permission`（服务端 → 客户端）
+### 3.4. `session/request_permission`（服务端 → 客户端）
 
 工具待审批（自动审批规则未命中）时，alkaid0 按 [ACP v2 权限](https://agentclientprotocol.com/protocol/v2/tool-calls#requesting-permission) 发起 `session/request_permission` 请求：
 
@@ -150,15 +245,15 @@ alkaid0 现在遵循 ACP v2 标准事件，且字段置于 update 对象**顶层
 - `outcome: "selected"` 且 `optionId: "allow_once"` → 批准，工具执行后继续。
 - `optionId: "reject_once"` 或 `outcome: "cancelled"` → 拒绝（等价 cancel）：待审工具广播 `tool_call_update(status=cancelled)`，随后 `state_update idle(stopReason=cancelled)`，本轮结束，不执行工具。
 
-### 3.3. `alk.cxykevin.top/config/reload`
+### 3.5. `alk.cxykevin.top/config/reload`
 
 重载配置文件。无参数，异步执行。成功时对带 ID 的请求返回 `result: null` 响应（不挂起客户端）。
 
-### 3.4. `alk.cxykevin.top/config/get` `alk.cxykevin.top/config/set`
+### 3.6. `alk.cxykevin.top/config/get` `alk.cxykevin.top/config/set`
 
 获取和设置当前会话的完整配置。这两个方法用于远程读取或修改运行时的配置状态。
 
-#### 3.4.1. `alk.cxykevin.top/config/get`
+#### 3.6.1. `alk.cxykevin.top/config/get`
 
 获取完整的当前配置。
 
@@ -180,7 +275,7 @@ alkaid0 现在遵循 ACP v2 标准事件，且字段置于 update 对象**顶层
 
 > **注意**：返回值为全局配置的直接指针引用，响应内容随后台配置变化实时更新。
 
-#### 3.4.2. `alk.cxykevin.top/config/set`
+#### 3.6.2. `alk.cxykevin.top/config/set`
 
 写入（部分更新）配置并自动持久化。支持**部分更新**——只有请求中显式指定的字段会被覆盖，未指定的字段保持现有值不变。写入成功后自动保存到配置文件，并触发所有已注册的重载钩子（包括配置广播推送到所有已连接的客户端）。
 
@@ -204,13 +299,13 @@ alkaid0 现在遵循 ACP v2 标准事件，且字段置于 update 对象**顶层
   | `config` 不是合法 JSON | `"invalid JSON config"` |
   | JSON 字段与配置结构不匹配 | `"failed to apply config: ..."` |
 
-### 3.5. `alk.cxykevin.top/session/get_background` / `alk.cxykevin.top/session/get_effort`
+### 3.7. `alk.cxykevin.top/session/get_background` / `alk.cxykevin.top/session/get_effort`
 
 - `sessionId` ***string***: 会话 ID。
 
 查询会话后台运行模式（`background` 布尔）与当前推理强度（`effort`，`unset`/`low`/`medium`/`high`/`max`/`xhigh`）。推理强度也可经 `session/set_config_option`（`configId: "thought_level"`）修改。
 
-### 3.6. `alk.cxykevin.top/list_subagent`
+### 3.8. `alk.cxykevin.top/list_subagent`
 
 - `sessionId` ***string***: 会话 ID。
 
@@ -233,7 +328,7 @@ alkaid0 现在遵循 ACP v2 标准事件，且字段置于 update 对象**顶层
   - `prompt` ***string***: Agent Tag LLM 完整提示词。
   - `shortPrompt` ***string***: Agent Tag LLM 简短提示词。在 Agent 激活前使用。
 
-### 3.7. `session/update`（客户端 → 服务端，双向扩展）
+### 3.9. `session/update`（客户端 → 服务端，双向扩展）
 
 ACP v2 中 `session/update` 是服务端 → 客户端的通知（含 `session_info_update` 变体）。alkaid0 同时将其注册为客户端可调用的**请求方法**，用于重命名会话标题。请求体与标准通知同构：
 

@@ -67,7 +67,8 @@ type Chats struct {
 	// ToolCallingStreaming 标记每个工具调用 id 是否为流式增量预览（true）还是最终状态（false）。
 	// OnHook 写入时按 session.State 判定：StateReciving/StateRequesting（AI 正在生成）→ 增量；
 	// StateToolCalling（审批后执行）→ 最终。SetCallback 据此选事件名。
-	ToolCallingStreaming map[string]bool `gorm:"-" json:"-"`
+	ToolCallingStreaming map[string]bool   `gorm:"-" json:"-"`
+	ToolCallingRunID     map[string]string `gorm:"-" json:"-"`
 	// toolCtxMu 保护 ToolCallingContext/ToolCallingType/Latest*/ToolCallingStreaming 的并发访问。
 	// 流式解析阶段 OnHook（loop 主 goroutine 的 solveFunc）写、SetCallback goroutine 读，
 	// 无锁会触发 Go runtime 的 concurrent map read and map write panic。
@@ -82,7 +83,8 @@ type Chats struct {
 	// task 工具每次修改 @task 后调用 PushPlan，向会话所有客户端广播完整 plan 列表。
 	PlanPushFn func(entries []PlanEntry) `gorm:"-" json:"-"`
 	// TerminalPushFn broadcasts a full active-terminal snapshot after background updates.
-	TerminalPushFn func() `gorm:"-" json:"-"`
+	TerminalPushFn  func(terminalID, status, content string) `gorm:"-" json:"-"`
+	WorkflowEventFn func(runID string, event any)            `gorm:"-" json:"-"`
 }
 
 // PlanEntry ACP plan 更新条目（session/update 通知中 update.sessionUpdate="plan"）。
@@ -186,7 +188,7 @@ func (c *Chats) PushPlan(entries []PlanEntry) {
 }
 
 // SetTerminalPushFn registers the callback used to broadcast active terminal snapshots.
-func (c *Chats) SetTerminalPushFn(fn func()) {
+func (c *Chats) SetTerminalPushFn(fn func(terminalID, status, content string)) {
 	if c == nil {
 		return
 	}
@@ -196,7 +198,28 @@ func (c *Chats) SetTerminalPushFn(fn func()) {
 }
 
 // PushTerminalUpdate broadcasts a terminal snapshot without holding the callback lock.
-func (c *Chats) PushTerminalUpdate() {
+func (c *Chats) SetWorkflowEventFn(fn func(runID string, event any)) {
+	if c == nil {
+		return
+	}
+	c.planPushMu.Lock()
+	defer c.planPushMu.Unlock()
+	c.WorkflowEventFn = fn
+}
+
+func (c *Chats) PushWorkflowEvent(runID string, event any) {
+	if c == nil {
+		return
+	}
+	c.planPushMu.RLock()
+	fn := c.WorkflowEventFn
+	c.planPushMu.RUnlock()
+	if fn != nil {
+		fn(runID, event)
+	}
+}
+
+func (c *Chats) PushTerminalUpdate(terminalID, status, content string) {
 	if c == nil {
 		return
 	}
@@ -204,7 +227,7 @@ func (c *Chats) PushTerminalUpdate() {
 	fn := c.TerminalPushFn
 	c.planPushMu.RUnlock()
 	if fn != nil {
-		fn()
+		fn(terminalID, status, content)
 	}
 }
 
@@ -227,10 +250,26 @@ func (c *Chats) SetToolCalling(id string, resp any, typ string) {
 	if c.ToolCallingStreaming == nil {
 		c.ToolCallingStreaming = make(map[string]bool)
 	}
+	if c.ToolCallingRunID == nil {
+		c.ToolCallingRunID = make(map[string]string)
+	}
 	streaming := c.State == state.StateReciving || c.State == state.StateRequesting
 	c.ToolCallingContext[id] = resp
 	c.ToolCallingType[id] = typ
 	c.ToolCallingStreaming[id] = streaming
+}
+
+// SetToolCallingRunID attaches the run ID to the pending tool callback.
+func (c *Chats) SetToolCallingRunID(id, runID string) {
+	if c == nil || id == "" || runID == "" {
+		return
+	}
+	c.toolCtxMu.Lock()
+	defer c.toolCtxMu.Unlock()
+	if c.ToolCallingRunID == nil {
+		c.ToolCallingRunID = make(map[string]string)
+	}
+	c.ToolCallingRunID[id] = runID
 }
 
 // HasToolCalling 判断当前是否存在待广播的工具调用上下文。
@@ -281,6 +320,30 @@ func (c *Chats) TakeFinalToolCalling() (map[string]any, map[string]string) {
 		}
 	}
 	return ctx, typ
+}
+
+// TakeFinalToolCallingWithRunIDs returns final callbacks together with run IDs.
+func (c *Chats) TakeFinalToolCallingWithRunIDs() (map[string]any, map[string]string, map[string]string) {
+	if c == nil {
+		return nil, nil, nil
+	}
+	c.toolCtxMu.Lock()
+	defer c.toolCtxMu.Unlock()
+	ctx := make(map[string]any)
+	typ := make(map[string]string)
+	runIDs := make(map[string]string)
+	for id := range c.ToolCallingContext {
+		if !c.ToolCallingStreaming[id] {
+			ctx[id] = c.ToolCallingContext[id]
+			typ[id] = c.ToolCallingType[id]
+			runIDs[id] = c.ToolCallingRunID[id]
+			delete(c.ToolCallingContext, id)
+			delete(c.ToolCallingType, id)
+			delete(c.ToolCallingStreaming, id)
+			delete(c.ToolCallingRunID, id)
+		}
+	}
+	return ctx, typ, runIDs
 }
 
 // TakeStreamingToolCalling 快照并移除所有流式增量（streaming 标记）条目，保留最终条目。
