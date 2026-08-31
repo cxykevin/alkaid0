@@ -21,6 +21,7 @@ import (
 	"github.com/cxykevin/alkaid0/tools/actions"
 	"github.com/cxykevin/alkaid0/tools/index"
 	"github.com/cxykevin/alkaid0/tools/toolobj"
+	runTool "github.com/cxykevin/alkaid0/tools/tools/run"
 	"github.com/cxykevin/alkaid0/tools/tools/trace"
 	u "github.com/cxykevin/alkaid0/utils"
 )
@@ -40,8 +41,8 @@ var paras = map[string]parser.ToolParameters{
 	},
 	"target": {
 		Type:        parser.ToolTypeString,
-		Required:    true,
-		Description: `Must Be Second Parameter`,
+		Required:    false,
+		Description: `Must Be Second Parameter for file edits; ignored for @temp/run/<id> terminal input.`,
 	},
 	"text": {
 		Type:        parser.ToolTypeString,
@@ -351,6 +352,12 @@ func saveToolCallingContent(session *structs.Chats, toolID string, content []u.H
 
 // CheckPath 处理路径
 func CheckPath(mp map[string]*any) (string, error) {
+	// 后台终端路径由 edit 直接转发输入，不按文件路径校验。
+	if pathPtr, ok := mp["path"]; ok && pathPtr != nil {
+		if path, ok := (*pathPtr).(string); ok && (strings.HasPrefix(path, "@temp/run/") || strings.HasPrefix(path, "run/")) {
+			return path, nil
+		}
+	}
 	// 检查并获取path参数
 	pathPtr, ok := mp["path"]
 	if !ok || pathPtr == nil {
@@ -528,6 +535,25 @@ func writeFile(session *structs.Chats, mp map[string]*any, cross []*any) (bool, 
 	}
 	// 保存原始相对路径，供编辑成功后加入 trace 列表（下面 path 会被改写为绝对路径）
 	origRelPath := path
+
+	// A @temp/run path addresses a live terminal rather than a file. Send the
+	// text bytes unchanged so callers can provide control keys or a newline.
+	if strings.HasPrefix(path, "@temp/run/") || strings.HasPrefix(path, "run/") {
+		textPtr, ok := mp["text"]
+		if !ok || textPtr == nil {
+			return false, cross, map[string]*any{}, errors.New("missing text parameter")
+		}
+		text, ok := (*textPtr).(string)
+		if !ok {
+			return false, cross, map[string]*any{}, errors.New("invalid text parameter")
+		}
+		workspace := filepath.Join(session.Root, session.CurrentActivatePath)
+		if err := runTool.Default.WriteRunStdin(workspace, session.ID, path, []byte(text)); err != nil {
+			return false, cross, map[string]*any{}, fmt.Errorf("failed to write terminal input: %w", err)
+		}
+		success := any(true)
+		return false, cross, map[string]*any{"success": &success}, nil
+	}
 
 	target, text, err := CheckTargetText(mp)
 	if err != nil {

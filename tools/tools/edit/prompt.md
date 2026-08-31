@@ -4,8 +4,8 @@ Edit a workspace file or one of the supported virtual objects. Before changing a
 
 #### Parameters
 
-- `path` (string, required): A workspace-relative file path, or `@tree`, `@task`, `@memory`, or `@memory/global`. Do not use absolute paths, `..`, shell globs, or paths outside the workspace.
-- `target` (string, required): Selects the edit operation below. It is a literal target, not a line-number comment.
+- `path` (string, required): A workspace-relative file path, or `@tree`, `@task`, `@memory`, `@memory/global`, or `@temp/run/<id>`. A `@temp/run/<id>` path sends raw input to the running background terminal. Do not use absolute paths, `..`, shell globs, or paths outside the workspace.
+- `target` (string, optional): Selects the edit operation below. It is ignored when `path` is `@temp/run/<id>`.
 - `text` (string, required): Replacement, inserted, or appended text. Preserve the file's existing format and newline style.
 
 #### Target modes

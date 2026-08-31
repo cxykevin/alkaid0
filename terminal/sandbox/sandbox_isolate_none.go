@@ -41,6 +41,13 @@ func createIsolateNoneCmd(ctx context.Context, name string, args []string, env [
 }
 
 // Start 启动
+func (e *ExecCmd) PID() int {
+	if e.cmd == nil || e.cmd.Process == nil {
+		return 0
+	}
+	return e.cmd.Process.Pid
+}
+
 func (e *ExecCmd) Start() error {
 	return e.cmd.Start()
 }

@@ -37,9 +37,17 @@ func Build(db *gorm.DB, session *storageStructs.Chats) (*reqStruct.ChatCompletio
 			return nil, err
 		}
 	}
-	// 把运行时临时数据（事件映射/内容块）随 chatLine 传给 RequestBody
+	// 把运行时临时数据和一次性内部通知传给 RequestBody。
 	chatLine.TemporyDataOfSession = session.TemporyDataOfSession
-	body, err := RequestBody(session.ID, int32(chatLine.LastModelID), chatLine.NowAgent, tools, db, scopes, traces, session.CurrentAgentConfig, chatLine)
+	addSystemPrompt := scopes
+	if session.SystemPrompt != "" {
+		if addSystemPrompt != "" {
+			addSystemPrompt += "\n\n"
+		}
+		addSystemPrompt += session.SystemPrompt
+		session.SystemPrompt = ""
+	}
+	body, err := RequestBody(session.ID, int32(chatLine.LastModelID), chatLine.NowAgent, tools, db, addSystemPrompt, traces, session.CurrentAgentConfig, chatLine)
 	if err != nil {
 		logger.Error("build request body error %v", err)
 		return nil, err

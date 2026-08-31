@@ -119,7 +119,10 @@ type sessionObj struct {
 	// indexDone 异步索引 goroutine（loadSession 启动）的完成信号。
 	// goroutine 完成后 close 该 channel；测试等它完成后再清理 TempDir，
 	// 避免异步索引在目录清理期间重新打开 codebase.sqlite 导致 Windows 删除失败。
-	indexDone chan struct{}
+	indexDone    chan struct{}
+	loopMu       sync.Mutex
+	loopCallback func(loop.AIResponse)
+	shellStops   map[string]struct{}
 }
 
 // dbObj 数据库对象，包含引用计数用于生命周期管理
@@ -703,6 +706,57 @@ func loadSession(cwd string, id *uint32, knowID bool, hidden ...bool) (*structs.
 		sess.SetWorkflowEventFn(func(runID string, event any) {
 			broadcastWorkflowEvent(sessID, runID, event)
 		})
+		sess.SetShellStopFn(func(runID, command string, result any) {
+			r, ok := result.(*runTool.Result)
+			if !ok || r == nil {
+				return
+			}
+			if err := broadcastSessionUpdate(sessID, SessionUpdate{
+				SessionID: sessID,
+				Update: SessionUpdateUpdate{
+					SessionUpdate: "alk.cxykevin.top/shell_stop",
+					RunID:         runID,
+					TerminalID:    runID,
+					Command:       command,
+					Status:        "stop",
+					Success:       r.Success,
+					Killed:        r.Killed,
+				},
+			}, 0); err != nil {
+				logger.Warn("failed to broadcast shell stop: %v", err)
+			}
+			obj.loopMu.Lock()
+			if _, seen := obj.shellStops[runID]; seen {
+				obj.loopMu.Unlock()
+				return
+			}
+			obj.shellStops[runID] = struct{}{}
+			lp := obj.loop
+			obj.loopMu.Unlock()
+			notice := fmt.Sprintf("Background shell %q stopped: success=%v killed=%v run_id=%s", command, r.Success, r.Killed, runID)
+			if sess.State == state.StateIdle || sess.State == state.StateWaiting {
+				if err := lp.NotifySystem(notice); err == nil {
+					return
+				}
+			} else {
+				// Do not start a concurrent model request while the current loop is active.
+				logger.Debug("shell stop notification deferred while loop is active")
+				return
+			}
+			// The old loop may have exited while the shell was running. Never reuse
+			// its closed channels; rebuild the loop before retrying the notice.
+			obj.loopMu.Lock()
+			if obj.loop == lp {
+				obj.loop = loop.New(sess)
+				obj.loop.SetCallback(obj.loopCallback)
+				go obj.loop.Start(context.Background())
+			}
+			newLoop := obj.loop
+			obj.loopMu.Unlock()
+			if err := newLoop.NotifySystem(notice); err != nil {
+				logger.Debug("shell stop notification deferred: %v", err)
+			}
+		})
 		sess.SetPlanPushFn(func(entries []structs.PlanEntry) {
 			err := broadcastSessionUpdate(sessID, SessionUpdate{
 				SessionID: sessID,
@@ -737,9 +791,10 @@ func loadSession(cwd string, id *uint32, knowID bool, hidden ...bool) (*structs.
 		}()
 
 		obj.loop = loop.New(sess)
+		obj.shellStops = make(map[string]struct{})
 		obj.permDone = make(chan struct{})
 		// 设置回调接收流式响应
-		obj.loop.SetCallback(func(resp loop.AIResponse) {
+		obj.loopCallback = func(resp loop.AIResponse) {
 			logger.Debug("callback respose ID=%d", resp.MsgID)
 			// 处理thinking内容（ACP v2：messageId 必填）
 			if resp.ThinkingContext != "" {
@@ -932,7 +987,8 @@ func loadSession(cwd string, id *uint32, knowID bool, hidden ...bool) (*structs.
 				}()
 			}
 
-		})
+		}
+		obj.loop.SetCallback(obj.loopCallback)
 		go obj.loop.Start(context.Background())
 
 		obj.session = sess
@@ -1386,15 +1442,18 @@ type SessionUpdateUpdate struct {
 	TerminalID         string                `json:"terminalId,omitempty"`              // terminal_update 增量终端 ID
 	TerminalUpdateType string                `json:"updateType,omitempty"`              // terminal_update: full | incremental
 	RunID              string                `json:"alk.cxykevin.top/run_id,omitempty"` // run background 成功后随工具回调推送
-	Kind               string                `json:"kind,omitempty"`                    // tool_call_update
-	Status             string                `json:"status,omitempty"`                  // tool_call_update
-	State              string                `json:"state,omitempty"`                   // state_update
-	StopReason         string                `json:"stopReason,omitempty"`              // state_update idle
-	ConfigOptions      []ConfigOption        `json:"configOptions,omitempty"`           // config_option_update
-	AvailableCommands  any                   `json:"availableCommands,omitempty"`       // available_commands_update
-	Used               uint64                `json:"used,omitempty"`                    // usage_update
-	Size               uint64                `json:"size,omitempty"`                    // usage_update
-	Plan               *PlanItems            `json:"plan,omitempty"`                    // plan_update（嵌套在 plan 下）
+	Command            string                `json:"command,omitempty"`
+	Success            bool                  `json:"success,omitempty"`
+	Killed             bool                  `json:"killed,omitempty"`
+	Kind               string                `json:"kind,omitempty"`              // tool_call_update
+	Status             string                `json:"status,omitempty"`            // tool_call_update
+	State              string                `json:"state,omitempty"`             // state_update
+	StopReason         string                `json:"stopReason,omitempty"`        // state_update idle
+	ConfigOptions      []ConfigOption        `json:"configOptions,omitempty"`     // config_option_update
+	AvailableCommands  any                   `json:"availableCommands,omitempty"` // available_commands_update
+	Used               uint64                `json:"used,omitempty"`              // usage_update
+	Size               uint64                `json:"size,omitempty"`              // usage_update
+	Plan               *PlanItems            `json:"plan,omitempty"`              // plan_update（嵌套在 plan 下）
 	ExpandErrorMsg     string                `json:"alk.cxykevin.top/error_msg,omitempty"`
 	AgentStatus        *string               `json:"alk.cxykevin.top/agent_status,omitempty"`
 }

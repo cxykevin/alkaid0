@@ -59,8 +59,12 @@ type Request struct {
 	BackgroundKind string
 	// TerminalUpdateFn reports terminal content/status changes to clients.
 	TerminalUpdateFn func(terminalID, status, content string)
+	// ShellStopFn reports completion of a background shell job.
+	ShellStopFn func(runID, command string, result *Result)
 	// WorkflowOutputFn receives filtered output and dynworkflow events from Python stdout.
 	WorkflowOutputFn func(runID, visible string, events []WorkflowEvent)
+	// PromoteFn is called when a foreground command is exposed as a background run.
+	PromoteFn        func(runID string, job *Job)
 	InteractiveStdin bool
 
 	// 结构化执行字段（Python 类型等）
@@ -105,10 +109,14 @@ type Job struct {
 	DisplayCommand   string
 	BackgroundKind   string
 	TerminalUpdateFn func(terminalID, status, content string)
+	ShellStopFn      func(runID, command string, result *Result)
 	WorkflowOutputFn func(runID, visible string, events []WorkflowEvent)
 	stdinMu          sync.Mutex
-	stdinWriter      *io.PipeWriter
+	stdinWriter      io.Writer
 	stdinClosed      bool
+	promoteOnce      sync.Once
+	stdinBlocked     chan struct{}
+	stdinBlockOnce   sync.Once
 	contentMu        sync.RWMutex
 	content          string
 
@@ -175,7 +183,9 @@ func (j *Job) closeStdin() {
 	j.stdinMu.Lock()
 	defer j.stdinMu.Unlock()
 	if !j.stdinClosed && j.stdinWriter != nil {
-		_ = j.stdinWriter.Close()
+		if closer, ok := j.stdinWriter.(io.Closer); ok {
+			_ = closer.Close()
+		}
 		j.stdinClosed = true
 	}
 }
@@ -265,12 +275,35 @@ func newService() *Service {
 }
 
 // Find 按 runid（temp obj 路径，如 "@temp/run/xxx" 或 "run/xxx"）查找后台任务。
-func (s *Service) Find(runid string) *Job {
+func normalizeRunID(runid string) string {
 	v, _ := strings.CutPrefix(runid, "@temp/")
-	v = strings.TrimPrefix(v, "/")
+	return strings.TrimPrefix(v, "/")
+}
+
+func runKey(workspace, runid string) string {
+	return workspace + "\x00" + normalizeRunID(runid)
+}
+
+func (s *Service) Find(runid string) *Job {
+	v := normalizeRunID(runid)
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.runs[v]
+	for key, job := range s.runs {
+		if strings.HasSuffix(key, "\x00"+v) {
+			return job
+		}
+	}
+	return nil
+}
+
+// FindInWorkspace resolves a public run ID within its workspace.
+func (s *Service) FindInWorkspace(workspace, runid string) *Job {
+	if workspace == "" {
+		return s.Find(runid)
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.runs[runKey(workspace, runid)]
 }
 
 // Submit 提交一次命令执行：等价于"新建一个后台服务（job）并启动"。
@@ -290,6 +323,78 @@ func (s *Service) Kill(id string) error {
 	resp := make(chan error, 1)
 	s.reqChan <- &killReq{id: id, resp: resp}
 	return <-resp
+}
+
+// PromoteBackground exposes a still-running foreground job as a background run.
+func (s *Service) PromoteBackground(workspace, runID string, job *Job, req *Request) error {
+	if job == nil || req == nil || runID == "" || job.Status() != JobRunning {
+		return fmt.Errorf("job is no longer running")
+	}
+	req.RunID = runID
+	req.BackgroundKind = "shell"
+	job.UpdateFn = req.UpdateFn
+	job.BackgroundKind = req.BackgroundKind
+	job.TerminalUpdateFn = req.TerminalUpdateFn
+	job.ShellStopFn = req.ShellStopFn
+	s.mu.Lock()
+	s.runs[runKey(workspace, runID)] = job
+	s.mu.Unlock()
+	if job.UpdateFn != nil {
+		job.setContent(bgRunningContent(job.Command, job.CreatedAt))
+		job.UpdateFn(job.Content())
+		if job.TerminalUpdateFn != nil {
+			job.TerminalUpdateFn(job.ID, "start", job.Content())
+		}
+		go func() {
+			t := time.NewTicker(backgroundUpdateInterval)
+			defer t.Stop()
+			for {
+				select {
+				case <-t.C:
+					content := bgRunningContent(job.Command, job.CreatedAt)
+					job.setContent(content)
+					job.UpdateFn(content)
+					if job.TerminalUpdateFn != nil {
+						job.TerminalUpdateFn(job.ID, "running", content)
+					}
+				case <-job.Done():
+					return
+				}
+			}
+		}()
+	}
+	return nil
+}
+
+// WriteRunStdin sends raw input bytes to a running background job.
+func (s *Service) WriteRunStdin(workspace string, sessionID uint32, runID string, data []byte) error {
+	job := s.FindInWorkspace(workspace, runID)
+	if job == nil {
+		return fmt.Errorf("run id not found: %s", runID)
+	}
+	if job.SessionID != sessionID {
+		return fmt.Errorf("run %s does not belong to session", runID)
+	}
+	if job.Status() != JobRunning {
+		return fmt.Errorf("run %s is not running", runID)
+	}
+	return job.WriteStdin(data)
+}
+
+// KillRun terminates a background job using its public workspace run ID.
+func (s *Service) KillRun(workspace string, sessionID uint32, runID string) error {
+	runID = normalizeRunID(runID)
+	s.mu.Lock()
+	job, ok := s.runs[runKey(workspace, runID)]
+	s.mu.Unlock()
+	if !ok {
+		return fmt.Errorf("run id not found: %s", runID)
+	}
+	if job.SessionID != sessionID {
+		return fmt.Errorf("run %s does not belong to session", runID)
+	}
+	job.kill()
+	return nil
 }
 
 // Status 按 ID 查询 job（为 background 预留）。
@@ -383,6 +488,7 @@ func (s *Service) doSubmit(ctx context.Context, req *Request) *Job {
 		DisplayCommand:   displayCmd,
 		BackgroundKind:   req.BackgroundKind,
 		TerminalUpdateFn: req.TerminalUpdateFn,
+		ShellStopFn:      req.ShellStopFn,
 		WorkflowOutputFn: req.WorkflowOutputFn,
 	}
 	if req.InteractiveStdin {
@@ -391,7 +497,7 @@ func (s *Service) doSubmit(ctx context.Context, req *Request) *Job {
 	s.jobs[id] = job
 	s.active[id] = job
 	if req.RunID != "" {
-		s.runs[req.RunID] = job
+		s.runs[runKey(req.WorkDir, req.RunID)] = job
 	}
 	s.mu.Unlock()
 
@@ -472,16 +578,8 @@ func (s *Service) execute(ctx context.Context, job *Job, req *Request) {
 
 	result := s.runCommand(ctx, job, req)
 
-	// 停止定时刷新，写最终结果（命令结束后最后一次更新 temp obj）
+	// 停止定时刷新，写最终结果（命令结束后最后一次更新 temp obj）。
 	stopTicker()
-	if job.UpdateFn != nil {
-		content := bgFinalContent(job.Command, result)
-		job.setContent(content)
-		job.UpdateFn(content)
-		if job.TerminalUpdateFn != nil {
-			job.TerminalUpdateFn(job.ID, "stop", content)
-		}
-	}
 	job.resultMu.Lock()
 	job.result = result
 	if result.Killed || job.wasKilled() {
@@ -490,13 +588,27 @@ func (s *Service) execute(ctx context.Context, job *Job, req *Request) {
 		job.State = JobFinished
 	}
 	job.resultMu.Unlock()
+	content := job.Content()
+	if job.UpdateFn != nil {
+		content = bgFinalContent(job.Command, result)
+		job.setContent(content)
+		job.UpdateFn(content)
+	}
 
-	// Remove from active indexes only after result and cleanup are complete.
+	// Remove the job before broadcasting the final snapshot, otherwise the
+	// snapshot still reports this finished job as active/running.
 	s.mu.Lock()
 	delete(s.active, job.ID)
 	s.mu.Unlock()
-	if job.TerminalUpdateFn != nil && job.UpdateFn == nil {
-		job.TerminalUpdateFn(job.ID, "stop", job.Content())
+	if job.TerminalUpdateFn != nil {
+		job.TerminalUpdateFn(job.ID, "stop", content)
+	}
+	if req.ShellStopFn != nil && req.BackgroundKind == "shell" {
+		runID := req.RunID
+		if runID == "" {
+			runID = job.ID
+		}
+		req.ShellStopFn(runID, job.DisplayCommand, result)
 	}
 }
 
@@ -629,7 +741,7 @@ func (s *Service) runCommand(ctx context.Context, job *Job, req *Request) *Resul
 	}
 
 	// 监听 context 取消，强制 kill 进程（runCmd 内部处理）
-	err = runCmdWithWriter(ctx, c, output, displayCmd, req.Program == "")
+	err = runCmdWithWriter(ctx, c, output, displayCmd, req.Program == "", job)
 	if req.WorkflowOutputFn != nil && req.Program != "" {
 		if tail := workflowParser.Flush(); tail != "" {
 			_, _ = buf.WriteString(tail)

@@ -54,6 +54,7 @@ type Chats struct {
 	CurrentActivatePath      string              `gorm:"-" json:"-"`
 	EnableScopes             map[string]bool     `gorm:"-" json:"-"`
 	TemporyDataOfRequest     map[string]any      `gorm:"-" json:"-"`
+	SystemPrompt             string              `gorm:"-" json:"-"`
 	TemporyDataOfSession     map[string]any      `gorm:"-" json:"-"`
 	InTestFlag               bool                `gorm:"-" json:"-"`
 	ReferCount               int32               `gorm:"-" json:"-"`
@@ -85,6 +86,7 @@ type Chats struct {
 	// TerminalPushFn broadcasts a full active-terminal snapshot after background updates.
 	TerminalPushFn  func(terminalID, status, content string) `gorm:"-" json:"-"`
 	WorkflowEventFn func(runID string, event any)            `gorm:"-" json:"-"`
+	ShellStopFn     func(runID, command string, result any)  `gorm:"-" json:"-"`
 }
 
 // PlanEntry ACP plan 更新条目（session/update 通知中 update.sessionUpdate="plan"）。
@@ -205,6 +207,27 @@ func (c *Chats) SetWorkflowEventFn(fn func(runID string, event any)) {
 	c.planPushMu.Lock()
 	defer c.planPushMu.Unlock()
 	c.WorkflowEventFn = fn
+}
+
+func (c *Chats) SetShellStopFn(fn func(runID, command string, result any)) {
+	if c == nil {
+		return
+	}
+	c.planPushMu.Lock()
+	defer c.planPushMu.Unlock()
+	c.ShellStopFn = fn
+}
+
+func (c *Chats) PushShellStop(runID, command string, result any) {
+	if c == nil {
+		return
+	}
+	c.planPushMu.RLock()
+	fn := c.ShellStopFn
+	c.planPushMu.RUnlock()
+	if fn != nil {
+		fn(runID, command, result)
+	}
 }
 
 func (c *Chats) PushWorkflowEvent(runID string, event any) {
@@ -378,6 +401,14 @@ func (c *Chats) ClearToolCalling() {
 	c.ToolCallingContext = make(map[string]any)
 	c.ToolCallingType = make(map[string]string)
 	c.ToolCallingStreaming = make(map[string]bool)
+}
+
+// AppendSystemPrompt adds a transient internal notice to the next model request.
+func (c *Chats) AppendSystemPrompt(notice string) {
+	if c == nil || notice == "" {
+		return
+	}
+	c.SystemPrompt += notice + "\n"
 }
 
 // ResetLatest 重置最近一次工具调用快照（审批/拒绝完成、新一轮用户输入前调用）。

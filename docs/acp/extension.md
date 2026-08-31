@@ -73,14 +73,14 @@ alkaid0 现在遵循 ACP v2 标准事件，且字段置于 update 对象**顶层
 - **`config_option_update`**：`configOptions` 字段（顶层）。
 - **`available_commands_update`**：`availableCommands` 字段，命令 `input` 形如 `{ "type": "text", "hint": "..." }`。
 - **`session_info_update`**：会话元数据更新（标题/最后活动时间），字段置顶层。`title` 为会话最终展示标题（用户设置的标题优先，其次 AI 生成的标题）；`updatedAt` 为 RFC 3339 最后活动时间。
-- **`tool_call_update` 的 `alk.cxykevin.top/run_id`**：后台 `run` 成功提交后，随对应工具调用回调在 update 顶层返回 run ID；提交失败时不返回。
+- **`tool_call_update` 的 `alk.cxykevin.top/run_id`**：后台 `run` 成功提交后，随对应工具调用回调在 update 顶层返回 run ID；提交失败时不返回。该 ID 形如 `@temp/run/1`，只保证在当前 workspace 内唯一，使用 base36 序列以便 AI 在后续 `wait` 调用中引用。
 
 ### 2.2. `alk.cxykevin.top/terminal_update`
 
-终端生命周期与内容更新通知。所有字段位于 `update` 顶层，`terminals` 始终表示当前终端的全量快照。
+终端生命周期与内容更新通知。所有字段位于 `update` 顶层，`terminals` 始终表示当前终端的全量快照。后台 shell 的 `terminalId` 使用工具返回的 `@temp/run/<id>`，因此客户端可直接用同一个 ID 查询或停止终端。
 
 - `updateType` ***string***：`full` 或 `incremental`，区分全量和增量推送。
-- `terminals` ***object[]***：当前会话活动终端的完整列表；全量推送时包含每个终端的完整 `content`。
+- `terminals` ***object[]***：当前会话活动终端的完整列表；全量推送时包含每个终端的完整 `content`。任务结束后发送的 `stop` 更新中，该任务已从活动终端列表移除。
 - `terminalId` ***string?***：增量推送涉及的终端 ID。
 - `status` ***string?***：终端状态；`start` 表示创建，`running` 表示运行中，`stop` 表示终端会话结束。
 - `content` ***string?***：指定终端当前内容；状态查询和增量更新均会携带。
@@ -129,7 +129,37 @@ alkaid0 现在遵循 ACP v2 标准事件，且字段置于 update 对象**顶层
 - 终端启动、后台状态刷新、终端结束时推送 `incremental` 更新；`stop` 表示客户端应结束该终端会话。
 - `alk.cxykevin.top/session/terminal/status` 成功调用时，除 RPC 响应外，还会通过请求 callback 立即推送一条 `full` 更新，包含该终端的完整内容。
 
-### 2.3. `alk.cxykevin.top/agent_status`
+### 2.3. `alk.cxykevin.top/shell_stop`
+
+后台 `run` 工具创建的 shell 任务结束时，服务端广播该事件。事件字段位于 `update` 顶层，不写入 `_meta` 或 `body`：
+
+- `runId` ***string***：后台任务 ID。
+- `terminalId` ***string***：对应终端 ID，与后台 `run` 返回的 `@temp/run/<id>` 相同。
+- `command` ***string***：脱敏后的展示命令。
+- `status` ***string***：固定为 `stop`。
+- `success` ***boolean***：命令是否成功结束。
+- `killed` ***boolean***：命令是否因停止/取消而结束。
+
+当会话处于 `idle` 或等待状态时，服务端会把 shell 停止信息作为内部运行时事件重新注入 loop，并触发新一轮模型请求；该通知不是用户消息，不会写入对话历史。若原 loop 已退出，服务端会创建新的 loop 后再注入通知，不复用已关闭的生命周期通道。loop 正在请求模型、执行工具或等待审批时不会并发打断当前轮次。
+
+示例：
+
+```json
+{
+  "sessionId": "sess_1:/workspace",
+  "update": {
+    "sessionUpdate": "alk.cxykevin.top/shell_stop",
+    "runId": "run_1",
+    "terminalId": "run_1",
+    "command": "npm test",
+    "status": "stop",
+    "success": true,
+    "killed": false
+  }
+}
+```
+
+### 2.4. `alk.cxykevin.top/agent_status`
 
 触发时机：
 
@@ -139,14 +169,14 @@ alkaid0 现在遵循 ACP v2 标准事件，且字段置于 update 对象**顶层
 
 客户端可据此刷新会话列表展示。
 
-### 2.4. `alk.cxykevin.top/summary`
+### 2.5. `alk.cxykevin.top/summary`
 
 - `type` ***string***: 内容类型。固定为 `text`。
 - `text` ***string***: 摘要文本。为空意味着摘要启动生成还未结束。
 
 > 摘要若出现异常则直接停止 loop 并在 loop 级别报错。
 
-### 2.5. `alk.cxykevin.top/error_msg`
+### 2.6. `alk.cxykevin.top/error_msg`
 
 - 挂在 `state_update` 等 update 对象顶层的错误信息扩展（v2 无轮次内错误通道）。`state_update idle` 时若存在非空 `alk.cxykevin.top/error_msg` 表示本轮出错（`stopReason` 为 `refusal`）。
 

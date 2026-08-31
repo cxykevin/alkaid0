@@ -11,7 +11,7 @@ Workflow usage:
 - For a single subagent or a simple sequential task, workflow is not required unless the task otherwise meets the conditions above.
 
 
-- `type` (string, required): One of `shell`, `sleep`, `wait`, or `python`.
+- `type` (string, required): One of `shell`, `sleep`, `wait`, `kill`, or `python`.
 - `reason` (string, required): A short reason for the operation (20 words or fewer).
 - `command` (string, required): The shell command for `shell`, an integer number of seconds for `sleep`, the `run_id` returned by a background run for `wait`, or complete Python source code for `python`.
 - `timeout` (number, optional): For `shell` and `python`. Defaults to 60 seconds for foreground runs. Foreground values must be less than 300 seconds; a background run defaults to no timeout. A non-positive foreground value falls back to 60 seconds.
@@ -27,7 +27,7 @@ Workflow usage:
 
 #### Background jobs
 
-Set `background: true` for a command that may outlive the current request. The tool returns a `run_id`/`@temp` path immediately. Use `wait` when you need a definitive completion or failure result; use `read` to inspect progress without waiting. Do not infer completion from elapsed time or repeat the same command. Background jobs may continue after the session stops and are governed by their timeout and process lifecycle.
+Set `background: true` for a command that may outlive the current request. Interactive shell commands that remain blocked for 10 seconds are automatically promoted to background and return a `run_id`/`@temp` path. Use `wait` when you need a definitive completion or failure result; use `read` to inspect progress without waiting. Do not infer completion from elapsed time or repeat the same command. Background jobs may continue after the session stops and are governed by their timeout and process lifecycle.
 
 #### Safety and scope
 

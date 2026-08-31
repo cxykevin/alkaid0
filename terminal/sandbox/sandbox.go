@@ -217,6 +217,22 @@ func (c *Command) SetStderr(w io.Writer) {
 	c.cmd.SetStderr(w)
 }
 
+// PID returns the child process ID when available.
+func (c *Command) PID() int {
+	if p, ok := c.cmd.(interface{ PID() int }); ok {
+		return p.PID()
+	}
+	return 0
+}
+
+// StdinBlocked reports whether the child is blocked reading terminal input.
+func (c *Command) StdinBlocked() bool {
+	if p, ok := c.cmd.(interface{ IsStdinBlocked() bool }); ok {
+		return p.IsStdinBlocked()
+	}
+	return false
+}
+
 // Start 启动命令
 func (c *Command) Start() error {
 	logger.Debug("starting command: %s", c.name)

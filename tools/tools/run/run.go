@@ -50,11 +50,24 @@ var templateSys = prompts.Load("tools:run:sys", promptSys)
 
 var logger = log.New("tools:run")
 
+// backgroundRunSeq is deliberately scoped to each workspace.
+var backgroundRunSeqMu sync.Mutex
+var backgroundRunSeq = make(map[string]uint64)
+
+// backgroundRunID returns the shortest ID that is unique within one workspace.
+func backgroundRunID(workspace string) string {
+	backgroundRunSeqMu.Lock()
+	backgroundRunSeq[workspace]++
+	seq := backgroundRunSeq[workspace]
+	backgroundRunSeqMu.Unlock()
+	return "run/" + strconv.FormatUint(seq, 36)
+}
+
 var paras = map[string]parser.ToolParameters{
 	"type": {
 		Type:        parser.ToolTypeString,
 		Required:    true,
-		Description: "A Enum decided which type of task want to do. Must Be First Parameter. Enum: [\"shell\", \"sleep\", \"wait\", \"python\"]",
+		Description: "A Enum decided which type of task want to do. Must Be First Parameter. Enum: [\"shell\", \"sleep\", \"wait\", \"kill\", \"python\"]",
 	},
 	"reason": {
 		Type:        parser.ToolTypeString,
@@ -304,7 +317,7 @@ func waitTask(session *structs.Chats, mp map[string]*any, cross []*any) (bool, [
 		return errResult("[System] Parameter Error: command must be string(run id) for type 'wait'", cross)
 	}
 
-	job := Default.Find(runID)
+	job := Default.FindInWorkspace(path.Join(session.Root, session.CurrentActivatePath), runID)
 	if job == nil {
 		return errResult(fmt.Sprintf("[System] Run id not found: %s", runID), cross)
 	}
@@ -335,6 +348,30 @@ func waitTask(session *structs.Chats, mp map[string]*any, cross []*any) (bool, [
 	return false, cross, res, nil
 }
 
+// killTask terminates a previously submitted background run by its public run ID.
+func killTask(session *structs.Chats, mp map[string]*any, cross []*any) (bool, []*any, map[string]*any, error) {
+	runIDObj, ok := mp["command"]
+	if !ok || runIDObj == nil {
+		return errResult("[System] Parameter Error: command(run id) is required for type 'kill'", cross)
+	}
+	runID, ok := asString(runIDObj)
+	if !ok || runID == "" {
+		return errResult("[System] Parameter Error: command must be string(run id) for type 'kill'", cross)
+	}
+	if err := Default.KillRun(path.Join(session.Root, session.CurrentActivatePath), session.ID, runID); err != nil {
+		return errResult(fmt.Sprintf("[System] Failed to kill run %s: %v", runID, err), cross)
+	}
+	logger.Info("kill runid %s in ID=%d,agentID=%s", runID, session.ID, session.CurrentAgentID)
+	success := any(true)
+	killed := any(true)
+	out := any(runID)
+	return false, cross, map[string]*any{
+		"success": &success,
+		"killed":  &killed,
+		"run_id":  &out,
+	}, nil
+}
+
 func runTask(session *structs.Chats, mp map[string]*any, cross []*any) (bool, []*any, map[string]*any, error) {
 	runTypeObj, ok := mp["type"]
 	if !ok || runTypeObj == nil {
@@ -344,8 +381,8 @@ func runTask(session *structs.Chats, mp map[string]*any, cross []*any) (bool, []
 	if !ok {
 		return errResult("[System] Parameter Error: type must be string", cross)
 	}
-	if runType != "shell" && runType != "sleep" && runType != "wait" && runType != "python" {
-		return errResult(fmt.Sprintf("[System] Parameter Error: type '%s' not supported, only 'shell', 'sleep', 'wait', and 'python' are allowed", runType), cross)
+	if runType != "shell" && runType != "sleep" && runType != "wait" && runType != "kill" && runType != "python" {
+		return errResult(fmt.Sprintf("[System] Parameter Error: type '%s' not supported, only 'shell', 'sleep', 'wait', 'kill', and 'python' are allowed", runType), cross)
 	}
 
 	if runType == "sleep" {
@@ -353,6 +390,9 @@ func runTask(session *structs.Chats, mp map[string]*any, cross []*any) (bool, []
 	}
 	if runType == "wait" {
 		return waitTask(session, mp, cross)
+	}
+	if runType == "kill" {
+		return killTask(session, mp, cross)
 	}
 	if runType == "python" {
 		return pythonTask(session, mp, cross)
@@ -482,8 +522,9 @@ func runTask(session *structs.Chats, mp map[string]*any, cross []*any) (bool, []
 	// background 模式：runid = temp obj 路径，作为后台任务的唯一标识
 	var runid string
 	var updateFn func(string)
+	workspace := path.Join(session.Root, session.CurrentActivatePath)
 	if backgroundFlag {
-		runid = "run/" + toolID + "-" + time.Now().Format("20060102-150405")
+		runid = backgroundRunID(workspace)
 		updateFn = func(content string) {
 			_ = trace.UpdateTempObject(session, runid, content)
 		}
@@ -504,14 +545,18 @@ func runTask(session *structs.Chats, mp map[string]*any, cross []*any) (bool, []
 		SandboxSpecified: sandboxSpecified,
 		WritableDirs:     nonEmptyDirs(pythonenv.VenvDir()),
 		RunID:            runid,
+		InteractiveStdin: true,
 		UpdateFn:         updateFn,
 		BackgroundKind: func() string {
 			if backgroundFlag {
-				return "background"
+				return "shell"
 			}
 			return ""
 		}(),
 		TerminalUpdateFn: func(terminalID, status, content string) { session.PushTerminalUpdate(terminalID, status, content) },
+		ShellStopFn: func(runID, command string, result *Result) {
+			session.PushShellStop(runID, command, result)
+		},
 	}
 
 	if backgroundFlag {
@@ -550,7 +595,7 @@ func runTask(session *structs.Chats, mp map[string]*any, cross []*any) (bool, []
 
 	logger.Info("run shell \"%s\"(reason: %s)(%ds) sandbox:%v in ID=%d,agentID=%s job=%s", command, reason, timeout, sandboxFlag, session.ID, session.CurrentAgentID, job.ID)
 
-	// 等待后台服务响应
+	// 等待后台服务响应；只有检测到 stdin 实际阻塞时才应自动转后台。
 	result := job.Wait(ctx)
 
 	if result.CreateErr != nil {
@@ -580,8 +625,7 @@ func runTask(session *structs.Chats, mp map[string]*any, cross []*any) (bool, []
 	// AI 可经 <tracedFiles> topBlock 读取本次命令输出；output 字段摘要同步直接返回，
 	// 让 AI 第一眼看到结果，避免"结果已返回但看不到、反复重试同一命令"的循环。
 	outStr := "[agent execute] $ " + command + "\n\n" + result.ErrString + result.Output
-	timeStr := time.Now().Format("20060102-150405")
-	tracePath := "run/" + toolID + "-" + timeStr
+	tracePath := backgroundRunID(path.Join(session.Root, session.CurrentActivatePath))
 	_ = trace.AddTempObject(session, tracePath, outStr, true)
 	logger.Info("command execution finished, output saved to: %s", tracePath)
 	outPth := "@temp/" + tracePath
@@ -615,10 +659,16 @@ func runTask(session *structs.Chats, mp map[string]*any, cross []*any) (bool, []
 // runCmd 内部处理 context 取消监听和输出收集。
 // usePTY 为 shell 命令启用 PTY；结构化 Python 执行使用管道，避免 PTY
 // 把 stdin 预置内容替换成终端从端而导致进程一直等待输入。
-func runCmd(ctx context.Context, c *sandbox.Command, buf *bytes.Buffer, command string, usePTYOpt ...bool) error {
+func runCmd(ctx context.Context, c *sandbox.Command, buf *bytes.Buffer, command string, options ...any) error {
 	usePTY := true
-	if len(usePTYOpt) > 0 {
-		usePTY = usePTYOpt[0]
+	var job *Job
+	for _, option := range options {
+		switch value := option.(type) {
+		case bool:
+			usePTY = value
+		case *Job:
+			job = value
+		}
 	}
 	if !usePTY {
 		contextDone := make(chan struct{})
@@ -663,6 +713,12 @@ func runCmd(ctx context.Context, c *sandbox.Command, buf *bytes.Buffer, command 
 			return err
 		}
 		_ = slave.Close()
+		if job != nil {
+			job.stdinMu.Lock()
+			job.stdinWriter = master
+			job.stdinClosed = false
+			job.stdinMu.Unlock()
+		}
 
 		var copyWg sync.WaitGroup
 		copyWg.Go(func() {

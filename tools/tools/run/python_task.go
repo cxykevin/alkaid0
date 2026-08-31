@@ -189,7 +189,7 @@ func pythonTask(session *structs.Chats, mp map[string]*any, cross []*any) (bool,
 	var runid string
 	var updateFn func(string)
 	if backgroundFlag {
-		runid = "run/" + toolID + "-" + time.Now().Format("20060102-150405.000000000")
+		runid = backgroundRunID(path.Join(session.Root, session.CurrentActivatePath))
 		updateFn = func(content string) {
 			_ = trace.UpdateTempObject(session, runid, content)
 		}
@@ -297,8 +297,7 @@ func pythonTask(session *structs.Chats, mp map[string]*any, cross []*any) (bool,
 	}
 
 	outStr := "[agent execute] " + displayCmd + "\n\n" + result.ErrString + result.Output
-	timeStr := time.Now().Format("20060102-150405.000000000")
-	tracePath := "run/" + toolID + "-" + timeStr
+	tracePath := backgroundRunID(path.Join(session.Root, session.CurrentActivatePath))
 	_ = trace.AddTempObject(session, tracePath, outStr, true)
 	logger.Info("python execution finished, output saved to: %s", tracePath)
 	outPth := "@temp/" + tracePath

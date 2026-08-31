@@ -67,6 +67,7 @@ const (
 	// msgActionSummary 摘要
 	msgActionSummary
 	msgActionApprove
+	msgActionSystem
 )
 
 type msgObj struct {
@@ -80,6 +81,7 @@ type msgObj struct {
 // Object 循环对象
 type Object struct {
 	sendQueue      chan msgObj
+	systemQueue    chan string
 	recvQueue      chan AIResponse
 	recvSyncQueue  chan struct{}
 	lock           sync.Mutex
@@ -101,6 +103,7 @@ const queueSize = 100
 func New(session *structs.Chats) *Object {
 	return &Object{
 		sendQueue:     make(chan msgObj, queueSize),
+		systemQueue:   make(chan string, queueSize),
 		recvQueue:     make(chan AIResponse, queueSize),
 		recvSyncQueue: make(chan struct{}, 1),
 		lock:          sync.Mutex{},
@@ -367,6 +370,9 @@ func (p *Object) Start(ctx context.Context) {
 		var callObj msgObj
 
 		select {
+		case notice := <-p.systemQueue:
+			input = notice
+			callObj = msgObj{Command: msgActionSystem}
 		case callObj = <-p.sendQueue:
 			input = callObj.Msg
 		case <-p.ctx.Done():
@@ -376,6 +382,11 @@ func (p *Object) Start(ctx context.Context) {
 			return
 		}
 		switch callObj.Command {
+		case msgActionSystem:
+			// Internal runtime notices are not persisted as user messages.
+			session.AppendSystemPrompt(input)
+			session.ResetLatest()
+			runResponseLoop()
 		case msgActionSummary:
 			logger.Info("start summary in session=%d", session.ID)
 			call(AIResponse{
@@ -591,6 +602,29 @@ func (p *Object) runWithToolCancel(session *structs.Chats) func() {
 
 // Chat 将用户消息发送到循环的处理队列。队列满时返回错误而非阻塞。
 // refers 参数用于消息引用（前端指定上下文片段）。
+// NotifySystem queues an internal runtime notice without persisting a user message.
+func (p *Object) NotifySystem(notice string) error {
+	if strings.TrimSpace(notice) == "" {
+		return fmt.Errorf("system notice is empty")
+	}
+	select {
+	case <-p.done:
+		return fmt.Errorf("loop is stopped")
+	default:
+	}
+	select {
+	case <-p.done:
+		return fmt.Errorf("loop is stopped")
+	case p.systemQueue <- notice:
+		return nil
+	default:
+		return fmt.Errorf("system notice queue full")
+	}
+}
+
+// Done returns a channel closed when the loop lifecycle ends.
+func (p *Object) Done() <-chan struct{} { return p.done }
+
 func (p *Object) Chat(msg string, refers []any) error {
 	obj := msgObj{
 		Msg:    msg,
