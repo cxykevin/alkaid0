@@ -28,6 +28,14 @@ func createIsolateNoneCmd(ctx context.Context, name string, args []string, env [
 	return &ExecCmd{cmd: cmd, clean: func() {}}
 }
 
+// PID returns the child process ID when available.
+func (e *ExecCmd) PID() int {
+	if e.cmd == nil || e.cmd.Process == nil {
+		return 0
+	}
+	return e.cmd.Process.Pid
+}
+
 // Start 启动
 func (e *ExecCmd) Start() error {
 	return e.cmd.Start()
