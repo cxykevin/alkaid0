@@ -228,8 +228,15 @@ func initialize(ctx context.Context, cfg structs.PythonConfig, configPath string
 
 func findPython(ctx context.Context, configured string) (string, error) {
 	if strings.TrimSpace(configured) != "" {
-		path, err := exec.LookPath(configured)
-		if err != nil {
+		// Keep explicit existing paths intact so Windows tests can use a stub executable.
+		path := configured
+		if !filepath.IsAbs(path) && !strings.ContainsAny(path, `/\\`) {
+			var err error
+			path, err = exec.LookPath(path)
+			if err != nil {
+				return "", fmt.Errorf("pythonenv: configured Python is not executable: %w", err)
+			}
+		} else if _, err := os.Stat(path); err != nil {
 			return "", fmt.Errorf("pythonenv: configured Python is not executable: %w", err)
 		}
 		if err := validateExecutable(path); err != nil {
