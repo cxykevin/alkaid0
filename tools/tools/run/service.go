@@ -123,6 +123,7 @@ type Job struct {
 	killFnMu      sync.Mutex
 	killFn        func()
 	killRequested bool
+	killCancel    context.CancelFunc
 
 	cleanupFn func() // 任务结束时的清理回调（销毁临时 key 等）
 }
@@ -144,6 +145,9 @@ func (j *Job) kill() {
 	j.killRequested = true
 	if j.killFn != nil {
 		j.killFn()
+	}
+	if j.killCancel != nil {
+		j.killCancel()
 	}
 	j.killFnMu.Unlock()
 }
@@ -474,6 +478,7 @@ func (s *Service) doSubmit(ctx context.Context, req *Request) *Job {
 		displayCmd = req.DisplayCommand
 	}
 	job := &Job{
+		stdinBlocked:     make(chan struct{}),
 		ID:               id,
 		State:            JobRunning,
 		Command:          displayCmd,
