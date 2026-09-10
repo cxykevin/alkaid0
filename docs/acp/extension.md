@@ -210,13 +210,15 @@ Python run 的 `runId` 是 workflow 的唯一关联标识，同时绑定 Job、t
 
 #### 事件更新
 
-workflow 事件按 runId 持久化 graph、当前 node/agent 状态和日志，并广播为以下顶层 `session/update`：`alk.cxykevin.top/session/terminal/workflow/update_graph`、`update_node`、`update_agents_start`、`update_agent`、`update_node_code`、`update_node_log`。公共字段 `sessionId`、`runId`、`sessionUpdate`、`eventType`、`time`、`workflow` 以及事件字段直接放在 `update` 顶层，不放 `_meta` 或 `body`。graph 是完整快照，其余事件是增量更新。
+workflow 事件按 runId 持久化完整 graph、当前 node/agent 状态和有序事件日志，并广播为以下顶层 `session/update`：`alk.cxykevin.top/session/terminal/workflow/update_graph`、`update_node`、`update_agents_start`、`update_agent`、`update_node_code`、`update_node_log`。公共字段 `sessionId`、`runId`、`sessionUpdate`、`eventType`、`time`、`workflow` 以及事件字段直接放在 `update` 顶层，不放 `_meta` 或 `body`。graph 是完整快照，其余事件是增量更新。
+
+持久化查询不依赖客户端断线恢复：客户端需要状态时直接调用 status，从数据库读取最新快照和完整事件日志。服务端不保证通过 resume 重放 workflow 事件。
 
 #### workflow 控制与查询方法
 
 不会注册 `alk.cxykevin.top/session/terminal/workflow/start`。workflow 只能由 Python run 自动产生。提供以下方法：
 
-- `alk.cxykevin.top/session/terminal/workflow/status`：请求 `{ "sessionId": string, "runId": string }`，返回 workflow、terminal、graph、当前 agent 状态和日志。
+- `alk.cxykevin.top/session/terminal/workflow/status`：请求 `{ "sessionId": string, "runId": string }`，从持久化数据库返回完整 workflow、terminal、graph、当前 agent 状态和日志；workflow 已结束或当前不在内存中时也可查询。响应中的 `workflow` 包含 `workflowId`、`runId`、`terminalId`、`name`、`status`、`currentNode`、`currentAgent`、`lastSequence`、时间及可选的 `error` / `resultPath`；`graph` 和 `agentState` 为 JSON 快照，`logs` 按 `sequence` 升序返回事件日志。
 - `alk.cxykevin.top/session/terminal/workflow/input`：按 runId 将受校验的控制对象写入 Python stdin。允许 shutdown、node terminate/restart、agent terminate/retry。
 - `alk.cxykevin.top/session/terminal/workflow/stop`：写入 shutdown，必要时复用 terminal kill 强制终止；操作幂等。
 - `alk.cxykevin.top/session/terminal/workflow/list`：请求 `{ "sessionId": string }`，返回当前会话 workflow 列表。
@@ -225,7 +227,7 @@ workflow 事件按 runId 持久化 graph、当前 node/agent 状态和日志，�
 
 #### 数据库
 
-服务端通过 AutoMigrate 保存 `Workflows` 和 `WorkflowEvents`：前者保存 runId、workflowId、ChatID、TerminalID、状态、时间、最新 graph、当前 node/agent 状态和最后日志序号；后者按 runId 和 sequence 保存结构化事件及 payload，用于 status 查询和断线恢复。
+服务端通过 AutoMigrate 保存 `Workflows` 和 `WorkflowEvents`：前者保存 runId、workflowId、ChatID、TerminalID、状态、时间、最新 graph、当前 node/agent 状态和最后日志序号；后者按 runId 和 sequence 保存结构化事件及 payload，用于 status 查询。查询优先使用数据库中的持久化状态；workflow 仍在内存运行时，仅用活动 Job 状态覆盖返回的状态字段。
 
 ### 3.3. `session/resume` 与 `replayFrom`
 

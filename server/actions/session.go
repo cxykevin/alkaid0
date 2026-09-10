@@ -93,6 +93,12 @@ type SessionResumeResponse struct {
 // 内网/127 回环部署，100ms 粒度足够实时且开销极小。
 const toolStreamInterval = 100 * time.Millisecond
 
+type activeAgentMessage struct {
+	Thinking string
+	Content  string
+	AgentID  *string
+}
+
 type sessionObj struct {
 	cwd      string
 	id       uint32
@@ -123,6 +129,9 @@ type sessionObj struct {
 	loopMu       sync.Mutex
 	loopCallback func(loop.AIResponse)
 	shellStops   map[string]struct{}
+	streamMu     sync.Mutex
+	// activeAgentMessages 保存正在流式输出的消息，供中途加入的连接补齐。
+	activeAgentMessages map[uint64]*activeAgentMessage
 }
 
 // dbObj 数据库对象，包含引用计数用于生命周期管理
@@ -792,10 +801,29 @@ func loadSession(cwd string, id *uint32, knowID bool, hidden ...bool) (*structs.
 
 		obj.loop = loop.New(sess)
 		obj.shellStops = make(map[string]struct{})
+		obj.activeAgentMessages = make(map[uint64]*activeAgentMessage)
 		obj.permDone = make(chan struct{})
 		// 设置回调接收流式响应
 		obj.loopCallback = func(resp loop.AIResponse) {
 			logger.Debug("callback respose ID=%d", resp.MsgID)
+			// 串行化快照和广播：新连接要么先看到本次广播，要么从快照补齐，不能出现空档。
+			obj.streamMu.Lock()
+			if resp.MsgID != 0 && (resp.ThinkingContext != "" || resp.Content != "") {
+				active := obj.activeAgentMessages[resp.MsgID]
+				if active == nil {
+					active = &activeAgentMessage{}
+					// 数据库可能已经刷写了本轮较早的内容，先纳入快照再追加本次 delta。
+					var persisted structs.Messages
+					if err := sess.DB.Where("id = ? AND chat_id = ?", resp.MsgID, sess.ID).First(&persisted).Error; err == nil {
+						active.Content = persisted.Delta
+						active.Thinking = persisted.ThinkingDelta
+					}
+					obj.activeAgentMessages[resp.MsgID] = active
+				}
+				active.Thinking += resp.ThinkingContext
+				active.Content += resp.Content
+				active.AgentID = resp.AgentID
+			}
 			// 处理thinking内容（ACP v2：messageId 必填）
 			if resp.ThinkingContext != "" {
 				err = broadcastSessionUpdate(sessID, SessionUpdate{
@@ -803,18 +831,14 @@ func loadSession(cwd string, id *uint32, knowID bool, hidden ...bool) (*structs.
 					Update: SessionUpdateUpdate{
 						SessionUpdate: "agent_thought_chunk",
 						MessageID:     msgID(resp.MsgID),
-						Content: u.H{
-							"type": "text",
-							"text": resp.ThinkingContext,
-						},
-						AgentStatus: new(u.ValDefault(resp.AgentID, "")),
+						Content:       u.H{"type": "text", "text": resp.ThinkingContext},
+						AgentStatus:   new(u.ValDefault(resp.AgentID, "")),
 					},
 				}, 0)
 				if err != nil {
 					logger.Warn("failed to broadcast session update: %v", err)
 				}
 			}
-
 			// 处理内容delta（ACP v2：messageId 必填）
 			if resp.Content != "" {
 				err = broadcastSessionUpdate(sessID, SessionUpdate{
@@ -822,17 +846,15 @@ func loadSession(cwd string, id *uint32, knowID bool, hidden ...bool) (*structs.
 					Update: SessionUpdateUpdate{
 						SessionUpdate: "agent_message_chunk",
 						MessageID:     msgID(resp.MsgID),
-						Content: u.H{
-							"type": "text",
-							"text": resp.Content,
-						},
-						AgentStatus: new(u.ValDefault(resp.AgentID, "")),
+						Content:       u.H{"type": "text", "text": resp.Content},
+						AgentStatus:   new(u.ValDefault(resp.AgentID, "")),
 					},
 				}, 0)
 				if err != nil {
 					logger.Warn("failed to broadcast session update: %v", err)
 				}
 			}
+			obj.streamMu.Unlock()
 
 			if resp.SummaryFlag {
 				err = broadcastSessionUpdate(sessID, SessionUpdate{
@@ -941,6 +963,12 @@ func loadSession(cwd string, id *uint32, knowID bool, hidden ...bool) (*structs.
 			// 停止分支：广播 idle state_update（stopReason）并结束本轮。
 			// 错误也并入 idle（stopReason=refusal + 私有 error_msg）。
 			if resp.StopReason != loop.StopReasonNone && resp.StopReason != loop.StopReasonPendingTool {
+				// 本轮结束后不再把消息视为活跃流，后续 resume 应从持久化历史回放。
+				if resp.MsgID != 0 {
+					obj.streamMu.Lock()
+					delete(obj.activeAgentMessages, resp.MsgID)
+					obj.streamMu.Unlock()
+				}
 				var errMsg string
 				if resp.Error != nil {
 					errMsg = resp.Error.Error()
@@ -1539,6 +1567,33 @@ func SessionResume(req SessionResumeRequest, call func(string, any, *string) err
 	bindedSessionOnConnMu.Unlock()
 	// 注册连接的call函数用于后续广播
 	registerConnCall(connID, req.SessionID, call)
+	// 先补发正在进行的流式消息。此快照与后续 chunk 共用 streamMu，避免加入连接错过内容。
+	activeMessageIDs := make(map[uint64]struct{})
+	if obj, ok := sessions[req.SessionID]; ok {
+		obj.streamMu.Lock()
+		for id, active := range obj.activeAgentMessages {
+			activeMessageIDs[id] = struct{}{}
+			if active.Thinking != "" {
+				if err := call("session/update", SessionUpdate{SessionID: req.SessionID, Update: SessionUpdateUpdate{
+					SessionUpdate: "agent_thought", MessageID: msgID(id),
+					Content:     []u.H{{"type": "text", "text": active.Thinking}},
+					AgentStatus: new(u.ValDefault(active.AgentID, "")),
+				}}, nil); err != nil {
+					obj.streamMu.Unlock()
+					return SessionResumeResponse{}, err
+				}
+			}
+			if err := call("session/update", SessionUpdate{SessionID: req.SessionID, Update: SessionUpdateUpdate{
+				SessionUpdate: "agent_message", MessageID: msgID(id),
+				Content:     []u.H{{"type": "text", "text": active.Content}},
+				AgentStatus: new(u.ValDefault(active.AgentID, "")),
+			}}, nil); err != nil {
+				obj.streamMu.Unlock()
+				return SessionResumeResponse{}, err
+			}
+		}
+		obj.streamMu.Unlock()
+	}
 	// 加载会话后向客户端推送当前终端的完整快照。
 	if err := broadcastActiveTerminals(req.SessionID, sess); err != nil {
 		logger.Warn("session resume: failed to broadcast terminal update: %v", err)
@@ -1587,6 +1642,13 @@ func SessionResume(req SessionResumeRequest, call func(string, any, *string) err
 					return SessionResumeResponse{}, err
 				}
 			case structs.MessagesRoleAgent:
+				// 活跃流已向新连接补发完整快照；历史回放跳过同一 message，避免重复。
+				if _, active := activeMessageIDs[val.ID]; active {
+					previousToolJSON = val.ToolCallingJSONString
+					previousToolContent = val.ToolCallingContent
+					prevMsgID = val.ID
+					continue
+				}
 				if val.ThinkingDelta != "" {
 					err := call("session/update", SessionUpdate{
 						SessionID: req.SessionID,

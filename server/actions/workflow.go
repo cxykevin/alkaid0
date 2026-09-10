@@ -10,6 +10,7 @@ import (
 	"time"
 
 	runTool "github.com/cxykevin/alkaid0/tools/tools/run"
+	"gorm.io/gorm"
 )
 
 const workflowUpdatePrefix = "alk.cxykevin.top/session/terminal/workflow/update_"
@@ -146,13 +147,62 @@ func workflowJob(req SessionWorkflowRequest) (*runTool.Job, error) {
 	return job, nil
 }
 
+func decodeWorkflowJSON(raw string) any {
+	if raw == "" {
+		return nil
+	}
+	var value any
+	if json.Unmarshal([]byte(raw), &value) != nil {
+		return nil
+	}
+	return value
+}
+
+func workflowSnapshot(db *gorm.DB, chatID uint32, runID, activeStatus string) (SessionWorkflowStatusResponse, error) {
+	var row structs.Workflows
+	if err := db.Where("chat_id = ? AND run_id = ?", chatID, runID).First(&row).Error; err != nil {
+		return SessionWorkflowStatusResponse{}, err
+	}
+	status := row.Status
+	if activeStatus != "" {
+		status = activeStatus
+	}
+	var events []structs.WorkflowEvents
+	if err := db.Where("chat_id = ? AND workflow_id = ?", chatID, runID).Order("sequence ASC").Find(&events).Error; err != nil {
+		return SessionWorkflowStatusResponse{}, err
+	}
+	logs := make([]any, 0, len(events))
+	for _, event := range events {
+		logs = append(logs, map[string]any{"sequence": event.Sequence, "type": event.Type, "nodeId": event.NodeID, "agentIndex": event.AgentIndex, "payload": decodeWorkflowJSON(event.PayloadJSON), "raw": decodeWorkflowJSON(event.RawJSON), "createdAt": event.CreatedAt.UTC().Format(time.RFC3339Nano)})
+	}
+	workflow := map[string]any{"workflowId": row.WorkflowID, "runId": row.RunID, "terminalId": row.TerminalID, "name": row.Name, "status": status, "currentNode": row.CurrentNode, "currentAgent": row.CurrentAgent, "lastSequence": row.LastSequence, "createdAt": row.CreatedAt.UTC().Format(time.RFC3339Nano), "updatedAt": row.UpdatedAt.UTC().Format(time.RFC3339Nano)}
+	if row.Error != "" {
+		workflow["error"] = row.Error
+	}
+	if row.ResultPath != "" {
+		workflow["resultPath"] = row.ResultPath
+	}
+	return SessionWorkflowStatusResponse{RunID: runID, TerminalID: row.TerminalID, Status: status, Workflow: workflow, Graph: decodeWorkflowJSON(row.GraphJSON), AgentState: decodeWorkflowJSON(row.AgentStateJSON), Logs: logs}, nil
+}
+
 func SessionWorkflowStatus(req SessionWorkflowRequest, _ func(string, any, *string) error, _ uint64) (SessionWorkflowStatusResponse, error) {
-	job, err := workflowJob(req)
+	cwd, chatID, err := sessionID2Cwd(req.SessionID)
 	if err != nil {
 		return SessionWorkflowStatusResponse{}, err
 	}
-	status := job.Status().String()
-	return SessionWorkflowStatusResponse{RunID: req.RunID, TerminalID: job.ID, Status: status, Workflow: map[string]any{"runId": req.RunID, "status": status}}, nil
+	if req.RunID == "" {
+		return SessionWorkflowStatusResponse{}, fmt.Errorf("runId is empty")
+	}
+	db, err := loadDB(cwd)
+	if err != nil {
+		return SessionWorkflowStatusResponse{}, err
+	}
+	defer closeDB(cwd)
+	activeStatus := ""
+	if job := runTool.Default.Find(req.RunID); job != nil && job.SessionID == chatID && job.BackgroundKind == "workflow" {
+		activeStatus = job.Status().String()
+	}
+	return workflowSnapshot(db, chatID, req.RunID, activeStatus)
 }
 
 func SessionWorkflowInput(req SessionWorkflowInputRequest, _ func(string, any, *string) error, _ uint64) (SessionWorkflowInputResponse, error) {
