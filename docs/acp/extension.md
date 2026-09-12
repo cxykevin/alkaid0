@@ -133,6 +133,7 @@ alkaid0 现在遵循 ACP v2 标准事件，且字段置于 update 对象**顶层
 - 终端启动、后台状态刷新、终端结束时推送 `incremental` 更新；`stop` 表示客户端应结束该终端会话。
 - `alk.cxykevin.top/session/terminal/status` 成功调用时，除 RPC 响应外，还会通过请求 callback 立即推送一条 `full` 更新，包含该终端的完整内容。
 - 终端结束后会从活动终端列表（`terminals`）移除；其内容同时持久化在 `@temp/run/<n>`（见 §3.1 `terminal/history`），客户端可用 `alk.cxykevin.top/session/terminal/history` 按 `terminalId` 取回——服务端重启后依然可查。
+- 推送的终端是 workflow（或该终端已变为 workflow，`kind` 为 `workflow`）时，服务端会在同一条推送之外**附带一条 workflow 快照通知**（`alk.cxykevin.top/session/terminal/workflow/snapshot`，见 §3.2），携带该 workflow 当前的状态、graph 与 agent 状态；同一事件序号只推一次。
 
 ### 2.3. `alk.cxykevin.top/shell_stop`
 
@@ -193,11 +194,11 @@ alkaid0 现在遵循 ACP v2 标准事件，且字段置于 update 对象**顶层
 
 #### `alk.cxykevin.top/session/terminal/list`
 
-请求：`{ "sessionId": string }`。返回 `{ "terminals": TerminalInfo[] }`，只包含当前活动终端；每个终端包含 `terminalId`（统一为 `@temp/run/<n>`，见 §5.4）、`sessionId`、`kind`、`status`、`command`、`reason`、`agentId`、`toolId`、`content`、`createdAt`。
+请求：`{ "sessionId": string }`。返回 `{ "terminals": TerminalInfo[] }`，只包含当前活动终端；每个终端包含 `terminalId`（统一为 `@temp/run/<n>`，见 §5.4）、`sessionId`、`kind`、`status`、`command`、`reason`、`agentId`、`toolId`、`content`、`createdAt`，以及 `workflow`（***boolean?***，为 `true` 表示该终端是 workflow，见 §3.2）。列表中的 workflow 终端会各自附带一条 workflow 快照通知（§3.2）。
 
 #### `alk.cxykevin.top/session/terminal/status`
 
-请求：`{ "sessionId": string, "terminalId": string }`（`terminalId` 为统一的 `@temp/run/<n>`，服务端校验前缀；ID 只在工作目录内唯一，故必须带 `sessionId` 才能定位到该会话工作目录下的终端）。返回 `{ "terminal": TerminalInfo }`，包含当前终端完整内容。成功时还会通过该请求的 callback 立即发送一条 `alk.cxykevin.top/terminal_update`，其 `updateType` 为 `full`。
+请求：`{ "sessionId": string, "terminalId": string }`（`terminalId` 为统一的 `@temp/run/<n>`，服务端校验前缀；ID 只在工作目录内唯一，故必须带 `sessionId` 才能定位到该会话工作目录下的终端）。返回 `{ "terminal": TerminalInfo }`，包含当前终端完整内容。成功时还会通过该请求的 callback 立即发送一条 `alk.cxykevin.top/terminal_update`，其 `updateType` 为 `full`；若该终端是 workflow，则再附带一条 workflow 快照通知（§3.2），客户端无需另行请求 `workflow/status` 即可渲染。
 
 #### `alk.cxykevin.top/session/terminal/stop`
 
@@ -214,7 +215,7 @@ alkaid0 现在遵循 ACP v2 标准事件，且字段置于 update 对象**顶层
 
 > `terminalId` 统一为 `@temp/run/<n>`（见 §5.4）；由于 ID 只在工作目录内唯一，本方法与 `status` / `stop` 一样必须带 `sessionId`，由服务端解析出该会话的工作目录后在其中定位终端。
 
-`restored` ***boolean?***：仅本方法可能返回，为 `true` 表示该条目来自持久化副本（服务端重启后内存中已无该终端），此时只有 `terminalId` / `sessionId` / `content` 可信。
+`restored` ***boolean?***：仅本方法可能返回，为 `true` 表示该条目来自持久化副本（服务端重启后内存中已无该终端），此时只有 `terminalId` / `sessionId` / `content` 可信；该条目的 `workflow` 由持久化的 workflow 记录判定。
 
 成功时除 RPC 响应外，还会通过该请求的 callback 推送一条 `alk.cxykevin.top/terminal_update`：`updateType` 为 `full`，`terminals` 为本次返回的终端（含完整内容）。只返回一个终端时，该更新顶层同时携带 `terminalId`、`status`（固定为 `stop`）与 `content`，与 `status` 方法的即时推送同构；返回多个终端时不带这三个顶层字段，客户端按 `terminals` 中的 `terminalId` 归并。
 
@@ -256,6 +257,17 @@ workflow 事件按 runId 持久化完整 graph、当前 node/agent 状态和有�
 - `alk.cxykevin.top/session/terminal/workflow/list`：请求 `{ "sessionId": string }`，返回当前会话 workflow 列表。
 
 所有方法执行 session、runId 和 terminal 所有权校验。shell、sleep、wait 和普通 Python run 不能作为 workflow 控制目标。input/stop 仅允许活动 workflow，status/list 可读取已结束记录。
+
+#### 快照通知 `alk.cxykevin.top/session/terminal/workflow/snapshot`
+
+除按事件增量推送外，服务端还会在**涉及某个 terminal 的查询与推送**中主动通知前端该终端是 workflow：字段与 `workflow/status` 响应同构，直接置于 `update` 顶层——`sessionId`、`sessionUpdate`、`runId` / `terminalId`（两者都是该终端的统一 ID）、`time`、`workflow`（含 `workflowId`、`status`、`currentNode`、`currentAgent`、`lastSequence` 等）、`graph`（完整快照）、`agentState`。**不含 `logs`**：需要完整事件日志时调用 `workflow/status`。
+
+触发时机：
+
+- `alk.cxykevin.top/session/terminal/status` / `history` 取回的终端是 workflow 时，除 `terminal_update` 外对该连接再推一条快照。
+- 终端全量/增量推送（含 `session/resume` 的 full 快照）中出现的 workflow 终端，随推送广播快照。
+- 该终端"变为 workflow"（`kind` 变为 `workflow`）时同样按上述规则通知；服务端以**当前 job 的 kind** 或持久化 `Workflows` 记录判定（后者使服务端重启后、内存中已无该 job 的终端也能被识别）。
+- 广播按 `lastSequence` **去重**：同一事件序号只推一次，避免终端周期刷新（60s ticker）重复推送未变化的 workflow 状态；直接查询（status/history）引发的单连接推送不去重。
 
 #### 数据库
 

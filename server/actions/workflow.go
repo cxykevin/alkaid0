@@ -15,6 +15,10 @@ import (
 
 const workflowUpdatePrefix = "alk.cxykevin.top/session/terminal/workflow/update_"
 
+// workflowSnapshotUpdate workflow 快照通知类型：与 workflow/status 响应同构，
+// 在查询/推送 workflow 终端时附带推送（见 pushWorkflowSnapshot / broadcastWorkflowSnapshot）。
+const workflowSnapshotUpdate = "alk.cxykevin.top/session/terminal/workflow/snapshot"
+
 func persistWorkflowEvent(sessionID, runID string, ev runTool.WorkflowEvent) {
 	cwd, chatID, err := sessionID2Cwd(sessionID)
 	if err != nil {
@@ -267,6 +271,138 @@ func SessionWorkflowList(req SessionWorkflowListRequest, _ func(string, any, *st
 		out = append(out, SessionWorkflowStatusResponse{RunID: job.ID, TerminalID: job.ID, Status: job.Status().String()})
 	}
 	return SessionWorkflowListResponse{Workflows: out}, nil
+}
+
+// workflowJob 校验 runId 指向的 job 确为该会话的 workflow 终端。
+func isWorkflowTerminal(job *runTool.Job) bool {
+	return job != nil && job.BackgroundKind == "workflow"
+}
+
+// workflowLastSequence 取快照中的最后事件序号（用于去重推送）。
+func workflowLastSequence(snap SessionWorkflowStatusResponse) uint64 {
+	workflow, ok := snap.Workflow.(map[string]any)
+	if !ok {
+		return 0
+	}
+	switch v := workflow["lastSequence"].(type) {
+	case uint64:
+		return v
+	case uint:
+		return uint64(v)
+	case int:
+		return uint64(v)
+	case int64:
+		return uint64(v)
+	case float64:
+		return uint64(v)
+	}
+	return 0
+}
+
+// workflowSnapshotNotification 构造 workflow 快照通知（推送用，不含事件日志——
+// 客户端需要完整日志时再调用 alk.cxykevin.top/session/terminal/workflow/status）。
+// 字段与 workflow/status 响应同构，直接置于 update 顶层。
+func workflowSnapshotNotification(sessionID, runID string, snap SessionWorkflowStatusResponse) map[string]any {
+	payload := map[string]any{
+		"sessionUpdate": workflowSnapshotUpdate,
+		"sessionId":     sessionID,
+		"runId":         runID,
+		"terminalId":    runID,
+		"time":          time.Now().UTC().Format(time.RFC3339Nano),
+	}
+	if snap.Workflow != nil {
+		payload["workflow"] = snap.Workflow
+	}
+	if snap.Graph != nil {
+		payload["graph"] = snap.Graph
+	}
+	if snap.AgentState != nil {
+		payload["agentState"] = snap.AgentState
+	}
+	return payload
+}
+
+// loadWorkflowSnapshot 读取 workflow 的持久化快照（含当前 graph 与 agent 状态）。
+// 活动 job 的实时状态覆盖持久化状态；事件尚未落库时以 job 状态合成最小快照，
+// 保证「该终端是 workflow」这件事本身也能通知到前端。
+func loadWorkflowSnapshot(sessionID, cwd string, chatID uint32, runID string, job *runTool.Job) (SessionWorkflowStatusResponse, bool) {
+	activeStatus := ""
+	if isWorkflowTerminal(job) && job.SessionID == chatID {
+		activeStatus = job.Status().String()
+	}
+	db, err := loadDB(cwd)
+	if err != nil {
+		return SessionWorkflowStatusResponse{}, false
+	}
+	defer closeDB(cwd)
+	snap, err := workflowSnapshot(db, chatID, runID, activeStatus)
+	if err != nil {
+		if activeStatus == "" {
+			// 既没有 workflow 记录、内存中也不是 workflow 终端
+			return SessionWorkflowStatusResponse{}, false
+		}
+		return SessionWorkflowStatusResponse{
+			RunID:      runID,
+			TerminalID: runID,
+			Status:     activeStatus,
+			Workflow:   map[string]any{"workflowId": runID, "runId": runID, "terminalId": runID, "status": activeStatus, "lastSequence": 0},
+		}, true
+	}
+	return snap, true
+}
+
+// pushWorkflowSnapshot 向单个连接推送一条 workflow 快照通知
+// （terminal/status、terminal/history 返回 workflow 终端时附带）。
+func pushWorkflowSnapshot(call func(string, any, *string) error, sessionID, cwd string, chatID uint32, runID string, job *runTool.Job) {
+	if call == nil {
+		return
+	}
+	snap, ok := loadWorkflowSnapshot(sessionID, cwd, chatID, runID, job)
+	if !ok {
+		return
+	}
+	if err := call("session/update", SessionUpdate{SessionID: sessionID, Update: workflowSnapshotNotification(sessionID, runID, snap)}, nil); err != nil {
+		logger.Warn("push workflow snapshot failed: %v", err)
+	}
+}
+
+// markWorkflowSnapshotPushed 记录已推送的 workflow 事件序号，返回是否应当推送。
+// 同一序号（最后一次事件未变化）不重复广播：终端周期刷新（60s ticker）会反复触发推送。
+func markWorkflowSnapshotPushed(obj *sessionObj, runID string, seq uint64) bool {
+	if obj == nil {
+		return true
+	}
+	obj.workflowSnapMu.Lock()
+	defer obj.workflowSnapMu.Unlock()
+	if obj.workflowSnapSeq == nil {
+		obj.workflowSnapSeq = make(map[string]uint64)
+	}
+	if last, ok := obj.workflowSnapSeq[runID]; ok && last == seq {
+		return false
+	}
+	obj.workflowSnapSeq[runID] = seq
+	return true
+}
+
+// broadcastWorkflowSnapshot 向会话所有连接广播 workflow 快照通知
+// （终端全量/增量推送里出现 workflow 终端时附带；同一事件序号只推一次）。
+func broadcastWorkflowSnapshot(sessionID string, chatID uint32, cwd, runID string, job *runTool.Job) {
+	sessLock.Lock()
+	obj := sessions[sessionID]
+	sessLock.Unlock()
+	if obj == nil {
+		return
+	}
+	snap, ok := loadWorkflowSnapshot(sessionID, cwd, chatID, runID, job)
+	if !ok {
+		return
+	}
+	if !markWorkflowSnapshotPushed(obj, runID, workflowLastSequence(snap)) {
+		return
+	}
+	if err := broadcastSessionUpdate(sessionID, SessionUpdate{SessionID: sessionID, Update: workflowSnapshotNotification(sessionID, runID, snap)}, 0); err != nil {
+		logger.Warn("broadcast workflow snapshot failed: %v", err)
+	}
 }
 
 func workflowError(runID string, err error) error { return fmt.Errorf("workflow %s: %w", runID, err) }

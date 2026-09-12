@@ -129,7 +129,11 @@ type sessionObj struct {
 	loopMu       sync.Mutex
 	loopCallback func(loop.AIResponse)
 	shellStops   map[string]struct{}
-	streamMu     sync.Mutex
+	// workflowSnapMu 保护 workflowSnapSeq：workflow 快照通知的已推送事件序号
+	// （同一序号不重复广播，避免终端周期刷新重复推送未变化的 workflow 状态）。
+	workflowSnapMu  sync.Mutex
+	workflowSnapSeq map[string]uint64
+	streamMu        sync.Mutex
 	// activeAgentMessages 保存正在流式输出的消息，供中途加入的连接补齐。
 	activeAgentMessages map[uint64]*activeAgentMessage
 }
@@ -1167,8 +1171,15 @@ func broadcastTerminalUpdate(sessionID, terminalID, status, content, updateType 
 	// 终端 ID 在工作目录内唯一：按该会话的工作目录取内容快照。
 	if workspace, werr := sessionWorkspaceOf(sessionID); werr == nil {
 		for i := range resp.Terminals {
-			if job := runTool.Default.Status(workspace, resp.Terminals[i].TerminalID); job != nil {
-				resp.Terminals[i].Content = job.Content()
+			job := runTool.Default.Status(workspace, resp.Terminals[i].TerminalID)
+			if job == nil {
+				continue
+			}
+			resp.Terminals[i].Content = job.Content()
+			// 该终端是 workflow（或已变为 workflow）时，随推送附带 workflow 快照通知。
+			if isWorkflowTerminal(job) {
+				resp.Terminals[i].Workflow = true
+				broadcastWorkflowSnapshot(sessionID, sess.ID, sess.Root, resp.Terminals[i].TerminalID, job)
 			}
 		}
 	}
@@ -1200,6 +1211,10 @@ type SessionTerminalInfo struct {
 	// Restored 标记该条目来自持久化副本（服务端重启后内存中已无该终端），
 	// 此时只有 content 可信，kind/command/时间等元数据为空。
 	Restored bool `json:"restored,omitempty"`
+	// Workflow 标记该终端是 workflow（run type=python 且 import dynworkflow）：
+	// terminalId 即该 workflow 的 runId，可用 workflow/status 取完整 graph 与事件日志。
+	// 服务端在返回/推送该终端时还会附带一条 workflow 快照通知（见 §3.2）。
+	Workflow bool `json:"workflow,omitempty"`
 }
 
 type SessionTerminalListResponse struct {
@@ -1267,7 +1282,7 @@ func terminalInfo(job *runTool.Job, sessionID string) SessionTerminalInfo {
 	if kind == "" {
 		kind = "foreground"
 	}
-	return SessionTerminalInfo{TerminalID: job.ID, SessionID: sessionID, Kind: kind, Status: job.Status().String(), Command: job.DisplayCommand, Reason: job.Reason, AgentID: job.AgentID, ToolID: job.ToolID, Content: job.Content(), CreatedAt: job.CreatedAt.UTC().Format(time.RFC3339)}
+	return SessionTerminalInfo{TerminalID: job.ID, SessionID: sessionID, Kind: kind, Status: job.Status().String(), Command: job.DisplayCommand, Reason: job.Reason, AgentID: job.AgentID, ToolID: job.ToolID, Content: job.Content(), CreatedAt: job.CreatedAt.UTC().Format(time.RFC3339), Workflow: isWorkflowTerminal(job)}
 }
 
 // sortTerminalInfos 按创建时间（再按终端 ID）排序，保证同一会话的返回顺序稳定。
@@ -1277,8 +1292,12 @@ func sortTerminalInfos(items []SessionTerminalInfo) {
 	})
 }
 
-func SessionTerminalList(req SessionTerminalListRequest, _ func(string, any, *string) error, _ uint64) (SessionTerminalListResponse, error) {
+func SessionTerminalList(req SessionTerminalListRequest, call func(string, any, *string) error, _ uint64) (SessionTerminalListResponse, error) {
 	id, err := validateTerminalSession(req.SessionID)
+	if err != nil {
+		return SessionTerminalListResponse{}, err
+	}
+	workspace, err := sessionWorkspaceOf(req.SessionID)
 	if err != nil {
 		return SessionTerminalListResponse{}, err
 	}
@@ -1288,6 +1307,15 @@ func SessionTerminalList(req SessionTerminalListRequest, _ func(string, any, *st
 		items = append(items, terminalInfo(job, req.SessionID))
 	}
 	sortTerminalInfos(items)
+	// 列表中的 workflow 终端同样附推快照通知，客户端无需再逐个调用 workflow/status。
+	if call != nil {
+		for i := range items {
+			if !items[i].Workflow {
+				continue
+			}
+			pushWorkflowSnapshot(call, req.SessionID, workspace, id, items[i].TerminalID, runTool.Default.Status(workspace, items[i].TerminalID))
+		}
+	}
 	return SessionTerminalListResponse{Terminals: items}, nil
 }
 
@@ -1316,6 +1344,10 @@ func SessionTerminalStatus(req SessionTerminalStatusRequest, call func(string, a
 	if call != nil {
 		if err := call("session/update", SessionUpdate{SessionID: req.SessionID, Update: SessionUpdateUpdate{SessionUpdate: "alk.cxykevin.top/terminal_update", Terminals: []SessionTerminalInfo{terminal}, TerminalID: terminal.TerminalID, Status: terminal.Status, Content: terminal.Content, TerminalUpdateType: "full"}}, nil); err != nil {
 			return SessionTerminalStatusResponse{}, err
+		}
+		// workflow 终端：附带 workflow 快照，客户端无需再单独请求即可渲染 workflow 视图。
+		if terminal.Workflow {
+			pushWorkflowSnapshot(call, req.SessionID, workspace, id, terminal.TerminalID, job)
 		}
 	}
 	return SessionTerminalStatusResponse{Terminal: terminal}, nil
@@ -1388,24 +1420,30 @@ type SessionTerminalHistoryResponse struct {
 	Terminals []SessionTerminalInfo `json:"terminals"`
 }
 
-// terminalStoredContent 读取终端内容的持久化副本（run 工具写入的 @temp/<runPath> temp obj）。
+// terminalStoredContent 读取终端内容的持久化副本（run 工具写入的 @temp/<runPath> temp obj），
+// 并按持久化 Workflows 记录判断该终端是否为 workflow（内存 job 已不在时也能识别）。
 // 终端结束后内存中的任务仍在（未截断内容优先），服务端重启后则由该副本提供内容。
-func terminalStoredContent(cwd string, chatID uint32, terminalID string) (string, bool) {
+// 返回值：内容、是否为 workflow、是否找到。
+func terminalStoredContent(cwd string, chatID uint32, terminalID string) (string, bool, bool) {
 	// TempPath 同时校验 @temp/run/<n> 前缀，只允许查该前缀下的持久化副本。
 	runPath, ok := runTool.TempPath(terminalID)
 	if !ok {
-		return "", false
+		return "", false, false
 	}
 	db, err := loadDB(cwd)
 	if err != nil {
-		return "", false
+		return "", false, false
 	}
 	defer closeDB(cwd)
 	var file structs.ReferFiles
 	if err := db.Where("chat_id = ? AND path = ?", chatID, runPath).First(&file).Error; err != nil {
-		return "", false
+		return "", false, false
 	}
-	return file.Content, true
+	var workflowCount int64
+	if err := db.Model(&structs.Workflows{}).Where("chat_id = ? AND run_id = ?", chatID, terminalID).Count(&workflowCount).Error; err != nil {
+		logger.Warn("check workflow record failed: %v", err)
+	}
+	return file.Content, workflowCount > 0, true
 }
 
 // listStoredTerminals 列出会话已持久化内容的终端（按写入顺序），用于服务端重启后恢复历史。
@@ -1421,13 +1459,24 @@ func listStoredTerminals(cwd, sessionID string, chatID uint32) []SessionTerminal
 		logger.Warn("list stored terminals failed: %v", err)
 		return nil
 	}
+	// 持久化记录里能查到 workflow 行的终端就是 workflow（内存 job 已不在时也能识别）。
+	workflowRuns := map[string]struct{}{}
+	var workflows []structs.Workflows
+	if err := db.Where("chat_id = ?", chatID).Find(&workflows).Error; err == nil {
+		for i := range workflows {
+			if terminalID, ok := runTool.NormalizeID(workflows[i].RunID); ok {
+				workflowRuns[terminalID] = struct{}{}
+			}
+		}
+	}
 	out := make([]SessionTerminalInfo, 0, len(files))
 	for i := range files {
 		terminalID, ok := runTool.NormalizeID(files[i].Path)
 		if !ok {
 			continue
 		}
-		out = append(out, SessionTerminalInfo{TerminalID: terminalID, SessionID: sessionID, Status: "finished", Content: files[i].Content, Restored: true})
+		_, isWorkflow := workflowRuns[terminalID]
+		out = append(out, SessionTerminalInfo{TerminalID: terminalID, SessionID: sessionID, Status: "finished", Content: files[i].Content, Restored: true, Workflow: isWorkflow})
 	}
 	return out
 }
@@ -1466,11 +1515,11 @@ func SessionTerminalHistory(req SessionTerminalHistoryRequest, call func(string,
 			}
 			terminals = append(terminals, terminalInfo(job, req.SessionID))
 		} else {
-			content, ok := terminalStoredContent(cwd, chatID, terminalID)
+			content, isWorkflow, ok := terminalStoredContent(cwd, chatID, terminalID)
 			if !ok {
 				return SessionTerminalHistoryResponse{}, fmt.Errorf("terminal %s not found", terminalID)
 			}
-			terminals = append(terminals, SessionTerminalInfo{TerminalID: terminalID, SessionID: req.SessionID, Status: "finished", Content: content, Restored: true})
+			terminals = append(terminals, SessionTerminalInfo{TerminalID: terminalID, SessionID: req.SessionID, Status: "finished", Content: content, Restored: true, Workflow: isWorkflow})
 		}
 	} else {
 		// 内存中的终端优先（元数据齐全），再补齐只剩持久化副本的终端。
@@ -1503,6 +1552,18 @@ func SessionTerminalHistory(req SessionTerminalHistoryRequest, call func(string,
 		}
 		if err := call("session/update", SessionUpdate{SessionID: req.SessionID, Update: update}, nil); err != nil {
 			return SessionTerminalHistoryResponse{}, err
+		}
+		// workflow 终端：逐条附带 workflow 快照通知（内存 job 优先，其次按持久化记录判断），
+		// 使客户端在回看已结束终端时也能拿到 workflow 的 graph / 状态。
+		for i := range terminals {
+			if !terminals[i].Workflow {
+				continue
+			}
+			var job *runTool.Job
+			if workspace, werr := sessionWorkspaceOf(req.SessionID); werr == nil {
+				job = runTool.Default.Status(workspace, terminals[i].TerminalID)
+			}
+			pushWorkflowSnapshot(call, req.SessionID, cwd, chatID, terminals[i].TerminalID, job)
 		}
 	}
 	return SessionTerminalHistoryResponse{Terminals: terminals}, nil
