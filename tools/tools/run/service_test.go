@@ -3,6 +3,7 @@ package run
 import (
 	"context"
 	"os"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"sync"
@@ -197,6 +198,14 @@ func setupTestDB(t *testing.T) *gorm.DB {
 	if err != nil {
 		t.Fatalf("Failed to open test database: %v", err)
 	}
+	// ":memory:" 下每个连接都是一个独立空库：后台任务 goroutine（UpdateFn/定时刷新）
+	// 与测试 goroutine 并发查询时，连接池可能新建连接从而读到空库（写入静默丢失、
+	// 报 no such table），表现为 TestRunTaskBackground 之类的偶发失败。固定单连接。
+	sqlDB, err := db.DB()
+	if err != nil {
+		t.Fatalf("Failed to get sql.DB: %v", err)
+	}
+	sqlDB.SetMaxOpenConns(1)
 	if err := db.AutoMigrate(&structs.Traces{}, &structs.Chats{}, &structs.ReferFiles{}); err != nil {
 		t.Fatalf("Failed to migrate: %v", err)
 	}
@@ -541,7 +550,9 @@ func TestServiceListEnded(t *testing.T) {
 
 // TestRunIDHelpers 验证统一 ID（@temp/run/<n>）的分配、校验与内部路径换算。
 func TestRunIDHelpers(t *testing.T) {
-	const workspace = "/tmp/alkaid0-id-test"
+	// 每次运行都用全新的工作目录：序号按工作目录保存在进程内，
+	// 复用固定路径会在 -count=N 重复运行时沿用上次的序号。
+	workspace := filepath.Join(t.TempDir(), "ws")
 
 	id := NewRunID(workspace)
 	if !strings.HasPrefix(id, RunIDPrefix) {
@@ -551,7 +562,7 @@ func TestRunIDHelpers(t *testing.T) {
 	if next := NewRunID(workspace); next == id {
 		t.Errorf("run id should increase within a workspace: %q", next)
 	}
-	if first := NewRunID("/tmp/alkaid0-id-test-other"); first != RunIDPrefix+"1" {
+	if first := NewRunID(filepath.Join(t.TempDir(), "ws")); first != RunIDPrefix+"1" {
 		t.Errorf("run id should reset per workspace, got %q", first)
 	}
 

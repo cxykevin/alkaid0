@@ -657,6 +657,19 @@ func runTask(session *structs.Chats, mp map[string]*any, cross []*any) (bool, []
 
 }
 
+// killCommandIfJobKilled 命令启动后补一次终止检查。
+// Job.kill() 在进程启动前调用 Kill 是无效的，若恰好落在"注册 killFn"与"进程启动"之间，
+// 任务会继续执行到结束；启动后按 killRequested 再杀一次即可关掉这个竞态窗口。
+func killCommandIfJobKilled(c *sandbox.Command, job *Job) {
+	if c == nil || job == nil {
+		return
+	}
+	if job.wasKilled() {
+		logger.Info("job %s killed before command start completed, killing started process", job.ID)
+		_ = c.Kill()
+	}
+}
+
 // runCmd 执行命令，优先使用 PTY，否则回退到缓冲区模式。
 // runCmd 内部处理 context 取消监听和输出收集。
 // usePTY 为 shell 命令启用 PTY；结构化 Python 执行使用管道，避免 PTY
@@ -714,6 +727,9 @@ func runCmd(ctx context.Context, c *sandbox.Command, buf *bytes.Buffer, command 
 			_ = slave.Close()
 			return err
 		}
+		// kill 可能落在 killFn 注册之后、进程真正启动之前（对未启动进程 Kill 无效），
+		// 启动后补一次检查，避免已被终止的任务继续跑到超时。
+		killCommandIfJobKilled(c, job)
 		_ = slave.Close()
 		if job != nil {
 			job.stdinMu.Lock()
