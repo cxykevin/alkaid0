@@ -42,5 +42,5 @@ Set `background: true` for a command that may outlive the current request. Inter
 - Python with OpenAI: `{"type":"python","reason":"generate code summary","command":"from openai import OpenAI\nimport os\nclient = OpenAI()\nprint(client.models.list())"}`
 - Python without OpenAI: `{"type":"python","reason":"calculate stats","command":"import statistics\ndata=[1,2,3,4,5]\nprint(statistics.mean(data))"}`
 - Delayed check: `{"type":"sleep","reason":"wait before retry","command":"5"}`
-- Definitive background wait: `{"type":"wait","reason":"await build completion","command":"run/run-20260101-120000"}`
+- Definitive background wait: `{"type":"wait","reason":"await build completion","command":"@temp/run/1"}` (use the `run_id` returned by the background run; it is the same ID as the terminal ID)
 - Background server: `{"type":"shell","reason":"start development server","command":"go run .","background":true}`

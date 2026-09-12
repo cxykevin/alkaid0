@@ -41,11 +41,12 @@ alkaid0 对于客户端并 **不强制** 要求客户端初始化，这与 [ACP 
     "delete": {}
   },
   "alk.cxykevin.top/alkaid0/v0.4": {},
-  "alk.cxykevin.top/alkaid0/v0.5": {}
+  "alk.cxykevin.top/alkaid0/v0.5": {},
+  "alk.cxykevin.top/alkaid0/v0.6": {}
 }
 ```
 
-其中 `alk.cxykevin.top/alkaid0/v0.4` 与 `alk.cxykevin.top/alkaid0/v0.5` 为 alkaid0 扩展协议版本能力标记。v0.5 包含 dynworkflow stdout 握手、workflow stdio 控制、workflow 状态持久化以及 workflow/update_xxx 实时广播协议；v0.4 能力保持兼容。
+其中 `alk.cxykevin.top/alkaid0/v0.4`、`alk.cxykevin.top/alkaid0/v0.5` 与 `alk.cxykevin.top/alkaid0/v0.6` 为 alkaid0 扩展协议版本能力标记。v0.6 包含已结束终端会话内容查询（`alk.cxykevin.top/session/terminal/history`）、`tool_call_update` 顶层的 `alk.cxykevin.top/terminal_id`（终端 ID 与 run id 统一为 `@temp/run/<n>`，终端内容持久化于该路径，见 §5.4）；v0.5 包含 dynworkflow stdout 握手、workflow stdio 控制、workflow 状态持久化以及 workflow/update_xxx 实时广播协议；v0.4 能力保持兼容。
 
 `session/list`、`session/resume`、`session/close` 是 `session` 基线能力，无需标记。
 
@@ -73,15 +74,18 @@ alkaid0 现在遵循 ACP v2 标准事件，且字段置于 update 对象**顶层
 - **`config_option_update`**：`configOptions` 字段（顶层）。
 - **`available_commands_update`**：`availableCommands` 字段，命令 `input` 形如 `{ "type": "text", "hint": "..." }`。
 - **`session_info_update`**：会话元数据更新（标题/最后活动时间），字段置顶层。`title` 为会话最终展示标题（用户设置的标题优先，其次 AI 生成的标题）；`updatedAt` 为 RFC 3339 最后活动时间。
-- **`tool_call_update` 的 `alk.cxykevin.top/run_id`**：后台 `run` 成功提交后，随对应工具调用回调在 update 顶层返回 run ID；提交失败时不返回。该 ID 形如 `@temp/run/1`，只保证在当前 workspace 内唯一，使用 base36 序列以便 AI 在后续 `wait` 调用中引用。
+- **`tool_call_update` 的 `alk.cxykevin.top/run_id`**：`run` 提交后随对应工具调用回调在 update 顶层返回 run ID；提交失败时不返回。该 ID 形如 `@temp/run/1`（与终端 ID 是**同一个值**，见 §5.4），供 AI 在后续 `wait` / `kill` 调用中引用。
+- **`tool_call_update` 的 `alk.cxykevin.top/terminal_id`**：`run` 工具调用对应的**终端 ID**（形如 `@temp/run/1`，与 `run_id` 同值）。前台与后台任务都会返回——工具提交任务后立即写入，因此该字段随最终状态（审批后/执行后）的 `tool_call_update` 广播。历史回放（`session/resume` + `replayFrom: { "type": "start" }`）的 `run` 工具调用同样携带该字段：直播时取自内存，回放时由落库的工具结果 `@temp/run/<n>` 反推。客户端据此把历史工具调用与终端对应起来，再用 `alk.cxykevin.top/session/terminal/history` 取回该终端的（持久化）内容，无需服务端再维护终端清单。
 
 ### 2.2. `alk.cxykevin.top/terminal_update`
 
-终端生命周期与内容更新通知。所有字段位于 `update` 顶层，`terminals` 始终表示当前终端的全量快照。后台 shell 的 `terminalId` 使用工具返回的 `@temp/run/<id>`，因此客户端可直接用同一个 ID 查询或停止终端。
+终端生命周期与内容更新通知。所有字段位于 `update` 顶层，`terminals` 始终表示当前终端的全量快照。
+
+> **终端 ID 与 run ID 是同一个标识**：统一为 `@temp/run/<n>`（形如 `@temp/run/1`），`terminal_update` 的 `terminalId`、`terminal/list` / `status` / `stop` / `history`、`tool_call_update` 的 `alk.cxykevin.top/run_id` 与 `terminal_id`、`wait` / `kill` 的 `command` 参数用的都是它。它同时是终端内容的持久化路径（内部路径 `run/<n>`），因此客户端凭该 ID 就能取回终端的持久化内容。序号按**工作目录**（workspace）重置，ID 在工作目录内唯一——一个工作目录可以有多个会话，因此**查询终端时必须带 `sessionId`**，服务端据此解析出该会话的工作目录并在其中匹配（详见 §5.4）。
 
 - `updateType` ***string***：`full` 或 `incremental`，区分全量和增量推送。
-- `terminals` ***object[]***：当前会话活动终端的完整列表；全量推送时包含每个终端的完整 `content`。任务结束后发送的 `stop` 更新中，该任务已从活动终端列表移除。
-- `terminalId` ***string?***：增量推送涉及的终端 ID。
+- `terminals` ***object[]***：当前会话活动终端的完整列表；全量推送时包含每个终端的完整 `content`。任务结束后发送的 `stop` 更新中，该任务已从活动终端列表移除。例外：`alk.cxykevin.top/session/terminal/history` 的全量推送中，`terminals` 为本次取回的**已结束**终端。
+- `terminalId` ***string?***：增量推送涉及的终端 ID（统一为 `@temp/run/<n>`，见 §5.4）。
 - `status` ***string?***：终端状态；`start` 表示创建，`running` 表示运行中，`stop` 表示终端会话结束。
 - `content` ***string?***：指定终端当前内容；状态查询和增量更新均会携带。
 
@@ -95,7 +99,7 @@ alkaid0 现在遵循 ACP v2 标准事件，且字段置于 update 对象**顶层
     "updateType": "full",
     "terminals": [
       {
-        "terminalId": "run_1",
+        "terminalId": "@temp/run/1",
         "sessionId": "sess_1:/workspace",
         "kind": "background",
         "status": "running",
@@ -115,7 +119,7 @@ alkaid0 现在遵循 ACP v2 标准事件，且字段置于 update 对象**顶层
   "update": {
     "sessionUpdate": "alk.cxykevin.top/terminal_update",
     "updateType": "incremental",
-    "terminalId": "run_1",
+    "terminalId": "@temp/run/1",
     "status": "running",
     "content": "最新终端内容",
     "terminals": [ ... ]
@@ -128,13 +132,14 @@ alkaid0 现在遵循 ACP v2 标准事件，且字段置于 update 对象**顶层
 - `session/resume` 完成连接注册后立即推送一次 `full` 快照。
 - 终端启动、后台状态刷新、终端结束时推送 `incremental` 更新；`stop` 表示客户端应结束该终端会话。
 - `alk.cxykevin.top/session/terminal/status` 成功调用时，除 RPC 响应外，还会通过请求 callback 立即推送一条 `full` 更新，包含该终端的完整内容。
+- 终端结束后会从活动终端列表（`terminals`）移除；其内容同时持久化在 `@temp/run/<n>`（见 §3.1 `terminal/history`），客户端可用 `alk.cxykevin.top/session/terminal/history` 按 `terminalId` 取回——服务端重启后依然可查。
 
 ### 2.3. `alk.cxykevin.top/shell_stop`
 
 后台 `run` 工具创建的 shell 任务结束时，服务端广播该事件。事件字段位于 `update` 顶层，不写入 `_meta` 或 `body`：
 
-- `runId` ***string***：后台任务 ID。
-- `terminalId` ***string***：对应终端 ID，与后台 `run` 返回的 `@temp/run/<id>` 相同。
+- `runId` ***string***：后台任务的 run id，形如 `@temp/run/1`。
+- `terminalId` ***string***：对应终端 ID，与 `runId` 同值（见 §5.4）。
 - `command` ***string***：脱敏后的展示命令。
 - `status` ***string***：固定为 `stop`。
 - `success` ***boolean***：命令是否成功结束。
@@ -149,8 +154,8 @@ alkaid0 现在遵循 ACP v2 标准事件，且字段置于 update 对象**顶层
   "sessionId": "sess_1:/workspace",
   "update": {
     "sessionUpdate": "alk.cxykevin.top/shell_stop",
-    "runId": "run_1",
-    "terminalId": "run_1",
+    "runId": "@temp/run/1",
+    "terminalId": "@temp/run/1",
     "command": "npm test",
     "status": "stop",
     "success": true,
@@ -182,21 +187,48 @@ alkaid0 现在遵循 ACP v2 标准事件，且字段置于 update 对象**顶层
 
 ## 3. 方法扩展
 
-### 3.1. `alk.cxykevin.top/session/terminal/list` / `status` / `stop`
+### 3.1. `alk.cxykevin.top/session/terminal/list` / `status` / `stop` / `history`
 
-这三个私有方法均通过 `sessionId` 校验会话，并对 terminal 执行会话归属校验。
+这四个私有方法均通过 `sessionId` 校验会话，并对 terminal 执行会话归属校验。
 
 #### `alk.cxykevin.top/session/terminal/list`
 
-请求：`{ "sessionId": string }`。返回 `{ "terminals": TerminalInfo[] }`，只包含当前活动终端；每个终端包含 `terminalId`、`sessionId`、`kind`、`status`、`command`、`reason`、`agentId`、`toolId`、`content`、`createdAt`。
+请求：`{ "sessionId": string }`。返回 `{ "terminals": TerminalInfo[] }`，只包含当前活动终端；每个终端包含 `terminalId`（统一为 `@temp/run/<n>`，见 §5.4）、`sessionId`、`kind`、`status`、`command`、`reason`、`agentId`、`toolId`、`content`、`createdAt`。
 
 #### `alk.cxykevin.top/session/terminal/status`
 
-请求：`{ "sessionId": string, "terminalId": string }`。返回 `{ "terminal": TerminalInfo }`，包含当前终端完整内容。成功时还会通过该请求的 callback 立即发送一条 `alk.cxykevin.top/terminal_update`，其 `updateType` 为 `full`。
+请求：`{ "sessionId": string, "terminalId": string }`（`terminalId` 为统一的 `@temp/run/<n>`，服务端校验前缀；ID 只在工作目录内唯一，故必须带 `sessionId` 才能定位到该会话工作目录下的终端）。返回 `{ "terminal": TerminalInfo }`，包含当前终端完整内容。成功时还会通过该请求的 callback 立即发送一条 `alk.cxykevin.top/terminal_update`，其 `updateType` 为 `full`。
 
 #### `alk.cxykevin.top/session/terminal/stop`
 
-请求：`{ "sessionId": string, "terminalId": string }`。返回 `{ "terminalId": string, "status": "kill_requested" }`。终止是异步的，完成清理后通过 `alk.cxykevin.top/terminal_update` 发送 `status: "stop"`。
+请求：`{ "sessionId": string, "terminalId": string }`（同一个统一 ID，前缀校验同上）。返回 `{ "terminalId": string, "status": "kill_requested" }`。终止是异步的，完成清理后通过 `alk.cxykevin.top/terminal_update` 发送 `status: "stop"`。
+
+#### `alk.cxykevin.top/session/terminal/history`
+
+查询**已结束**终端会话的内容。终端结束后会从活动终端列表移除，增量推送只带最后一次内容；客户端错过推送、重连或想回看已结束终端时用本方法取回。
+
+请求：`{ "sessionId": string, "terminalId"?: string }`。返回 `{ "terminals": TerminalInfo[] }`，只包含已结束（`status` 为 `finished` 或 `killed`）的终端，字段与 `list` / `status` 一致（另见下方 `restored`）。
+
+- 省略或 `null` `terminalId`：返回该会话全部已结束终端（内存中仍存活的任务 + 仅剩持久化副本的终端），统一按 `createdAt`（再按 `terminalId`）升序；持久化副本条目 `createdAt` 为空，因此排在最前。
+- 指定 `terminalId`：只返回该终端；ID 前缀不符（非 `@temp/run/<n>`）、终端不存在、不属于该会话或仍在运行时返回错误。
+
+> `terminalId` 统一为 `@temp/run/<n>`（见 §5.4）；由于 ID 只在工作目录内唯一，本方法与 `status` / `stop` 一样必须带 `sessionId`，由服务端解析出该会话的工作目录后在其中定位终端。
+
+`restored` ***boolean?***：仅本方法可能返回，为 `true` 表示该条目来自持久化副本（服务端重启后内存中已无该终端），此时只有 `terminalId` / `sessionId` / `content` 可信。
+
+成功时除 RPC 响应外，还会通过该请求的 callback 推送一条 `alk.cxykevin.top/terminal_update`：`updateType` 为 `full`，`terminals` 为本次返回的终端（含完整内容）。只返回一个终端时，该更新顶层同时携带 `terminalId`、`status`（固定为 `stop`）与 `content`，与 `status` 方法的即时推送同构；返回多个终端时不带这三个顶层字段，客户端按 `terminals` 中的 `terminalId` 归并。
+
+#### 内容来源与持久化
+
+终端结束时 `run` 工具会把输出写入该终端的持久化路径 `@temp/run/<n>`（对应数据库 `ReferFiles` 表，键为 ChatID + `run/<n>`；见 §5.4），因此**服务端重启后仍可查询**：
+
+- 终端还在服务端内存中（同一次服务端运行周期内）：`content` 为内存中未截断的最终内容快照，与终端全量推送完全一致，`kind` / `command` / `reason` / `agentId` / `toolId` / `createdAt` 等元数据齐全。
+- 服务端重启后内存中已无该终端：读取上述持久化副本（`AddTempObject` 会截取末尾 5000 行），此时条目带 `restored: true`，只有 `terminalId` / `sessionId` / `content` 可信，`status` 固定为 `finished`，其余元数据为空。
+- 运行中的终端不属于已结束历史，其持久化副本同样不会出现在结果中。
+
+> 客户端通常无需先调用本方法的列表形式：历史工具调用回放时，每条 `run` 调用都带 `alk.cxykevin.top/terminal_id`（见 §2.1），直接用该 ID 查询即可。`restored` 条目缺少元数据也正是因为元数据由工具调用侧提供。
+
+`list` 只返回活动终端，始终不包含已结束终端。
 
 ### 3.2. dynworkflow stdout 与 workflow 私有方法
 
@@ -443,3 +475,18 @@ modelId 遵从以下格式：
 
 - DB 消息（用户/Agent/Thought）：`msg_<dbID>`，`dbID` 为 `Messages` 表自增 ID。直播与 `session/resume` 回放使用同一推导，客户端据此 upsert。
 - 斜杠命令用户消息（不入库）：`cmd_<chatID>_<seq>`，`seq` 为服务端递增序号。
+
+### 5.4 `terminalId` / run id（统一标识）
+
+终端 ID 与 run id 是**同一个标识**，格式统一为：
+
+```text
+@temp/run/<seq>     例如 @temp/run/7
+```
+
+- **workspace 指工作目录，不是会话**：序号（base36）在同一工作目录内从 1 递增，换工作目录重新从 1 开始，因此同名 ID 可能出现在不同工作目录。一个工作目录下可以有多个会话，它们共享同一序号空间（同一目录内的 ID 互不相同）。
+- 所有终端查询接口都要求带 `sessionId`（`session/terminal/list` / `status` / `stop` / `history` 与 workflow 控制方法均是如此）：服务端由 `sessionId` 得到该会话的工作目录，在该目录内匹配 ID，并校验终端归属该会话——不会跨工作目录命中其它同名终端。
+- 服务端**校验前缀**：ID 必须是 `@temp/run/<n>`（序号非空、不含路径分隔符）。前缀不符时查询接口返回 `invalid terminalId "...": expected @temp/run/<n>`；提交侧（`run` 工具显式指定 run id 时）由 `Submit` 直接拒绝。
+- 该 ID 同时是终端内容的持久化位置：temp obj 的内部路径为 `run/<seq>`（数据库 `ReferFiles` 的 `ChatID` + `run/<seq>`，对外即 `@temp/run/<seq>`）。终端结束时 `run` 工具把输出写入该路径，因此服务端重启后仍可按该 ID 取回内容（见 §3.1 `terminal/history`）。内容随会话（ChatID）落库，跨会话只共享 ID 空间、不共享内容。
+- 出现位置：`terminal_update` 的 `terminalId`、`terminal/list` / `status` / `stop` / `history`、`tool_call_update` 的 `alk.cxykevin.top/run_id` 与 `alk.cxykevin.top/terminal_id`、`run` 工具结果的 `path` / `run_id`、`wait` / `kill` 的 `command` 参数、`shell_stop` 的 `runId` / `terminalId`。
+

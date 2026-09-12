@@ -133,13 +133,18 @@ func workflowJob(req SessionWorkflowRequest) (*runTool.Job, error) {
 	if req.RunID == "" {
 		return nil, fmt.Errorf("runId is empty")
 	}
-	job := runTool.Default.Find(req.RunID)
-	if job == nil {
-		return nil, fmt.Errorf("workflow run %s not found", req.RunID)
-	}
 	id, err := validateTerminalSession(req.SessionID)
 	if err != nil {
 		return nil, err
+	}
+	// run 序号按工作目录重置，因此按该会话的工作目录查询（runId 与 terminal id 统一为 @temp/run/<n>）。
+	workspace, err := sessionWorkspaceOf(req.SessionID)
+	if err != nil {
+		return nil, err
+	}
+	job := runTool.Default.Status(workspace, req.RunID)
+	if job == nil {
+		return nil, fmt.Errorf("workflow run %s not found", req.RunID)
 	}
 	if job.SessionID != id || job.BackgroundKind != "workflow" {
 		return nil, fmt.Errorf("run does not belong to session")
@@ -199,8 +204,10 @@ func SessionWorkflowStatus(req SessionWorkflowRequest, _ func(string, any, *stri
 	}
 	defer closeDB(cwd)
 	activeStatus := ""
-	if job := runTool.Default.Find(req.RunID); job != nil && job.SessionID == chatID && job.BackgroundKind == "workflow" {
-		activeStatus = job.Status().String()
+	if workspace, werr := sessionWorkspaceOf(req.SessionID); werr == nil {
+		if job := runTool.Default.Status(workspace, req.RunID); job != nil && job.SessionID == chatID && job.BackgroundKind == "workflow" {
+			activeStatus = job.Status().String()
+		}
 	}
 	return workflowSnapshot(db, chatID, req.RunID, activeStatus)
 }

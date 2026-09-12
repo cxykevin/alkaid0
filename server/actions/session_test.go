@@ -7,6 +7,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -17,6 +18,7 @@ import (
 	"github.com/cxykevin/alkaid0/context/codebase"
 	"github.com/cxykevin/alkaid0/storage"
 	"github.com/cxykevin/alkaid0/storage/structs"
+	runTool "github.com/cxykevin/alkaid0/tools/tools/run"
 	"github.com/cxykevin/alkaid0/ui/funcs"
 	"github.com/cxykevin/alkaid0/ui/loop"
 	"github.com/cxykevin/alkaid0/ui/state"
@@ -1560,6 +1562,434 @@ func TestScheduleReleaseBackgroundOff(t *testing.T) {
 	sessLock.Unlock()
 	if ok {
 		t.Error("session should be released when background mode is off, even if state is active")
+	}
+}
+
+// terminalHistoryTestJob 提交一次前台命令并等待结束，返回任务。
+func terminalHistoryTestJob(t *testing.T, chatID uint32, cwd, command string) *runTool.Job {
+	t.Helper()
+	job, err := runTool.Default.Submit(context.Background(), &runTool.Request{
+		SessionID: chatID,
+		Command:   command,
+		Shell:     "sh",
+		WorkDir:   cwd,
+		Sandbox:   false,
+	})
+	if err != nil {
+		t.Fatalf("submit %q failed: %v", command, err)
+	}
+	job.Wait(context.Background())
+	return job
+}
+
+// replayTestDelta 构造 MessagesRoleTool.Delta 格式的工具结果（[{"name","id","return"}]）。
+func replayTestDelta(t *testing.T, entries ...map[string]any) string {
+	t.Helper()
+	raw, err := json.Marshal(entries)
+	if err != nil {
+		t.Fatalf("marshal tool results failed: %v", err)
+	}
+	return string(raw)
+}
+
+// replayTestResult 构造单个工具结果 JSON 字符串（return 字段的内容）。
+func replayTestResult(t *testing.T, res map[string]any) string {
+	t.Helper()
+	raw, err := json.Marshal(res)
+	if err != nil {
+		t.Fatalf("marshal tool result failed: %v", err)
+	}
+	return string(raw)
+}
+
+// TestReplayRunTerminalIDs 验证从持久化的工具结果反推 run 调用的终端 ID。
+func TestReplayRunTerminalIDs(t *testing.T) {
+	delta := replayTestDelta(t,
+		// 后台 run：run_id 与 path 均为 @temp/run/<n>
+		map[string]any{"name": "run", "id": "tool_bg", "return": replayTestResult(t, map[string]any{"success": true, "background": true, "path": "@temp/run/3", "run_id": "@temp/run/3"})},
+		// 前台 run：只有 path
+		map[string]any{"name": "run", "id": "tool_fg", "return": replayTestResult(t, map[string]any{"success": true, "path": "@temp/run/7", "output": "hi"})},
+		// 降级路径：path 是输出文本，不构成终端
+		map[string]any{"name": "run", "id": "tool_fallback", "return": replayTestResult(t, map[string]any{"success": true, "path": "command output text"})},
+		// 非 run 工具即便 path 形如 run/1 也不推导
+		map[string]any{"name": "edit", "id": "tool_edit", "return": replayTestResult(t, map[string]any{"path": "run/1"})},
+	)
+
+	ids := replayRunTerminalIDs(delta)
+	if ids["tool_bg"] != "@temp/run/3" {
+		t.Errorf("tool_bg terminal id = %q, want @temp/run/3", ids["tool_bg"])
+	}
+	if ids["tool_fg"] != "@temp/run/7" {
+		t.Errorf("tool_fg terminal id = %q, want @temp/run/7", ids["tool_fg"])
+	}
+	if _, ok := ids["tool_fallback"]; ok {
+		t.Error("降级路径（path 为输出文本）不应产生 terminal id")
+	}
+	if _, ok := ids["tool_edit"]; ok {
+		t.Error("非 run 工具不应产生 terminal id")
+	}
+	if len(replayRunTerminalIDs("")) != 0 || len(replayRunTerminalIDs("not json")) != 0 {
+		t.Error("空/非法结果应返回空映射")
+	}
+}
+
+// TestSessionResumeReplayTerminalID 验证历史回放的 run 工具调用同样携带 terminal id：
+// 服务端重启后客户端凭回放的工具调用即可查询终端内容。
+func TestSessionResumeReplayTerminalID(t *testing.T) {
+	oldSessions := sessions
+	oldDbs := dbs
+	sessions = map[string]*sessionObj{}
+	dbs = map[string]*dbObj{}
+	defer func() {
+		sessLock.Lock()
+		sessions = oldSessions
+		sessLock.Unlock()
+		dbLock.Lock()
+		dbs = oldDbs
+		dbLock.Unlock()
+	}()
+	if config.GlobalConfig == nil {
+		config.GlobalConfigSwap(cfgStructs.Config{})
+	}
+
+	tmpDir := t.TempDir()
+	t.Cleanup(func() { _ = codebase.CloseDirectory(tmpDir) })
+	db, err := storage.InitStorage(path.Join(tmpDir, ".alkaid0"), "")
+	if err != nil {
+		t.Fatalf("InitStorage failed: %v", err)
+	}
+	defer u.Unwrap(db.DB()).Close()
+	chatID, err := funcs.CreateChat(db)
+	if err != nil {
+		t.Fatalf("CreateChat failed: %v", err)
+	}
+	sessionID := cwd2SessionID(tmpDir, chatID)
+
+	// 落库一条 run 工具调用与它的结果（格式与生产一致）
+	calls, err := json.Marshal([]map[string]any{{
+		"name":       "run",
+		"id":         "tool_1",
+		"parameters": map[string]any{"type": "shell", "reason": "t", "command": "echo hi"},
+	}})
+	if err != nil {
+		t.Fatalf("marshal tool calling failed: %v", err)
+	}
+	if err := db.Create(&structs.Messages{
+		ChatID:                chatID,
+		Type:                  structs.MessagesRoleAgent,
+		Delta:                 "running command",
+		ToolCallingJSONString: string(calls),
+	}).Error; err != nil {
+		t.Fatalf("insert agent message failed: %v", err)
+	}
+	if err := db.Create(&structs.Messages{
+		ChatID: chatID,
+		Type:   structs.MessagesRoleTool,
+		Delta: replayTestDelta(t, map[string]any{
+			"name":   "run",
+			"id":     "tool_1",
+			"return": replayTestResult(t, map[string]any{"success": true, "path": "@temp/run/9"}),
+		}),
+	}).Error; err != nil {
+		t.Fatalf("insert tool message failed: %v", err)
+	}
+
+	var replayed []SessionUpdateUpdate
+	call := func(method string, params any, _ *string) error {
+		if method != "session/update" {
+			return nil
+		}
+		if update, ok := params.(SessionUpdate); ok {
+			if val, ok := update.Update.(SessionUpdateUpdate); ok {
+				replayed = append(replayed, val)
+			}
+		}
+		return nil
+	}
+	if _, err := SessionResume(SessionResumeRequest{
+		Cwd:        tmpDir,
+		SessionID:  sessionID,
+		ReplayFrom: &ReplayFrom{Type: "start"},
+	}, call, 1); err != nil {
+		t.Fatalf("SessionResume replay failed: %v", err)
+	}
+
+	found := false
+	for _, update := range replayed {
+		if update.SessionUpdate != "tool_call_update" || update.ToolCallID == "" {
+			continue
+		}
+		if update.Kind == "execute" {
+			found = true
+			if update.ToolTerminalID != "@temp/run/9" {
+				t.Errorf("回放的 run 工具调用应携带 terminal id @temp/run/9，实际 %q", update.ToolTerminalID)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("回放应包含 run 工具调用（execute），实际 %+v", replayed)
+	}
+
+	// 等待异步索引并释放会话（避免 TempDir 清理时文件被占用）
+	sessLock.Lock()
+	obj := sessions[sessionID]
+	sessLock.Unlock()
+	if obj != nil && obj.indexDone != nil {
+		select {
+		case <-obj.indexDone:
+		case <-time.After(10 * time.Second):
+			t.Error("timeout waiting for async index goroutine")
+		}
+	}
+	closeSession(sessionID)
+}
+
+// TestToolCallUpdateCarriesTerminalID 验证 tool_call_update 顶层携带
+// alk.cxykevin.top/terminal_id（终端内容查询用），且不占用标准 terminalId 字段。
+func TestToolCallUpdateCarriesTerminalID(t *testing.T) {
+	raw, err := json.Marshal(SessionUpdateUpdate{
+		SessionUpdate:  "tool_call_update",
+		ToolCallID:     "call_1",
+		RunID:          "@temp/run/7",
+		ToolTerminalID: "@temp/run/7",
+	})
+	if err != nil {
+		t.Fatalf("marshal failed: %v", err)
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal(raw, &decoded); err != nil {
+		t.Fatalf("unmarshal failed: %v", err)
+	}
+	if decoded["alk.cxykevin.top/terminal_id"] != "@temp/run/7" {
+		t.Errorf("expected alk.cxykevin.top/terminal_id=@temp/run/7, got %v", decoded)
+	}
+	if decoded["alk.cxykevin.top/run_id"] != "@temp/run/7" {
+		t.Errorf("expected alk.cxykevin.top/run_id=@temp/run/7, got %v", decoded)
+	}
+	if _, ok := decoded["terminalId"]; ok {
+		t.Errorf("tool_call_update 不应占用标准 terminalId 字段: %v", decoded)
+	}
+}
+
+// TestSessionTerminalHistory 验证已结束终端内容查询：
+// 只返回已结束终端、携带最终完整内容，并通过 callback 复用终端全量推送。
+func TestSessionTerminalHistory(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("跳过 Windows")
+	}
+
+	const chatID uint32 = 471100
+	cwd := t.TempDir()
+	sessionID := registerTestSession(t, cwd, chatID)
+
+	// 已结束的前台终端
+	ended := terminalHistoryTestJob(t, chatID, cwd, "echo history-ended")
+	if ended.Status() == runTool.JobRunning {
+		t.Fatalf("expected job %s to be finished", ended.ID)
+	}
+
+	// 运行中的终端：不进入已结束列表
+	runningReq := &runTool.Request{SessionID: chatID, Command: "sleep 10", Shell: "sh", WorkDir: cwd}
+	running, err := runTool.Default.Submit(context.Background(), runningReq)
+	if err != nil {
+		t.Fatalf("submit running job failed: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = runTool.Default.Kill(cwd, running.ID)
+		<-running.Done()
+	})
+
+	// 其它会话的已结束终端：不应混入
+	const otherChatID uint32 = 471101
+	otherSessionID := registerTestSession(t, cwd, otherChatID)
+	other := terminalHistoryTestJob(t, otherChatID, cwd, "echo history-other")
+
+	var pushed []SessionUpdateUpdate
+	call := func(method string, params any, _ *string) error {
+		if method != "session/update" {
+			return nil
+		}
+		update, ok := params.(SessionUpdate)
+		if !ok {
+			t.Errorf("unexpected session/update payload type %T", params)
+			return nil
+		}
+		if u, ok := update.Update.(SessionUpdateUpdate); ok {
+			pushed = append(pushed, u)
+		}
+		return nil
+	}
+
+	// 1) 按会话列出全部已结束终端
+	resp, err := SessionTerminalHistory(SessionTerminalHistoryRequest{SessionID: sessionID}, call, 1)
+	if err != nil {
+		t.Fatalf("SessionTerminalHistory failed: %v", err)
+	}
+	ids := make(map[string]SessionTerminalInfo, len(resp.Terminals))
+	for _, item := range resp.Terminals {
+		ids[item.TerminalID] = item
+	}
+	got, ok := ids[ended.ID]
+	if !ok {
+		t.Fatalf("expected ended terminal %s in history, got %+v", ended.ID, resp.Terminals)
+	}
+	if !strings.Contains(got.Content, "history-ended") {
+		t.Errorf("expected history content to include command output, got %q", got.Content)
+	}
+	if got.Status != "finished" {
+		t.Errorf("expected status finished, got %q", got.Status)
+	}
+	if got.Kind != "foreground" {
+		t.Errorf("expected kind foreground, got %q", got.Kind)
+	}
+	if _, ok := ids[running.ID]; ok {
+		t.Error("history should not contain a running terminal")
+	}
+	if _, ok := ids[other.ID]; ok {
+		t.Error("history should not contain terminals of another session")
+	}
+
+	// 复用终端全量推送：一条 updateType=full 的 terminal_update
+	if len(pushed) != 1 {
+		t.Fatalf("expected exactly one pushed terminal update, got %d", len(pushed))
+	}
+	if pushed[0].SessionUpdate != "alk.cxykevin.top/terminal_update" || pushed[0].TerminalUpdateType != "full" {
+		t.Errorf("unexpected pushed update: %+v", pushed[0])
+	}
+	if len(pushed[0].Terminals) != len(resp.Terminals) {
+		t.Errorf("pushed terminals = %d, want %d", len(pushed[0].Terminals), len(resp.Terminals))
+	}
+
+	// 2) 按 terminalId 取单个已结束终端：顶层带 terminalId/status/content
+	pushed = nil
+	single, err := SessionTerminalHistory(SessionTerminalHistoryRequest{SessionID: sessionID, TerminalID: ended.ID}, call, 1)
+	if err != nil {
+		t.Fatalf("SessionTerminalHistory(single) failed: %v", err)
+	}
+	if len(single.Terminals) != 1 || single.Terminals[0].TerminalID != ended.ID {
+		t.Fatalf("expected only terminal %s, got %+v", ended.ID, single.Terminals)
+	}
+	if !strings.Contains(single.Terminals[0].Content, "history-ended") {
+		t.Errorf("expected single history content, got %q", single.Terminals[0].Content)
+	}
+	if len(pushed) != 1 {
+		t.Fatalf("expected one pushed update for single query, got %d", len(pushed))
+	}
+	if pushed[0].TerminalID != ended.ID || pushed[0].Status != "stop" {
+		t.Errorf("unexpected single push header: %+v", pushed[0])
+	}
+	if pushed[0].Content != single.Terminals[0].Content {
+		t.Error("pushed content should equal the queried terminal content")
+	}
+
+	// 3) 错误分支：前缀不合法的 ID / 未知终端 / 其它会话终端 / 仍在运行
+	if _, err := SessionTerminalHistory(SessionTerminalHistoryRequest{SessionID: sessionID, TerminalID: "run_1"}, call, 1); err == nil {
+		t.Error("expected error for terminalId without @temp/run/ prefix")
+	}
+	if _, err := SessionTerminalHistory(SessionTerminalHistoryRequest{SessionID: sessionID, TerminalID: "@temp/run/does-not-exist"}, call, 1); err == nil {
+		t.Error("expected error for unknown terminalId")
+	}
+	if _, err := SessionTerminalHistory(SessionTerminalHistoryRequest{SessionID: otherSessionID, TerminalID: ended.ID}, call, 1); err == nil {
+		t.Error("expected error for terminal of another session")
+	}
+	if _, err := SessionTerminalHistory(SessionTerminalHistoryRequest{SessionID: sessionID, TerminalID: running.ID}, call, 1); err == nil {
+		t.Error("expected error for still running terminal")
+	}
+	if _, err := SessionTerminalHistory(SessionTerminalHistoryRequest{}, call, 1); err == nil {
+		t.Error("expected error for empty sessionId")
+	}
+}
+
+// TestSessionTerminalHistoryRestored 验证服务端重启后（内存中已无该终端）仍能按
+// terminal id 从持久化副本（ReferFiles 中的 @temp/run/<n>）取回终端内容。
+func TestSessionTerminalHistoryRestored(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("跳过 Windows")
+	}
+
+	cwd := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(cwd, ".alkaid0"), 0o755); err != nil {
+		t.Fatalf("create .alkaid0: %v", err)
+	}
+	db, err := loadDB(cwd)
+	if err != nil {
+		t.Fatalf("loadDB failed: %v", err)
+	}
+	defer closeDB(cwd)
+	chatID, err := funcs.CreateChat(db, false)
+	if err != nil {
+		t.Fatalf("CreateChat failed: %v", err)
+	}
+	sessionID := registerTestSession(t, cwd, chatID)
+
+	// 模拟"重启前的终端"：内存中没有对应 job，只有持久化副本。
+	// 新分配的 ID 不会被任何存活任务占用；temp obj 内部路径为 run/<n>。
+	terminalID := runTool.NewRunID(cwd)
+	runPath, ok := runTool.TempPath(terminalID)
+	if !ok {
+		t.Fatalf("invalid run id: %s", terminalID)
+	}
+	const stored = "restored terminal output"
+	if err := db.Create(&structs.ReferFiles{ChatID: chatID, Path: runPath, Content: stored, ReadOnly: true}).Error; err != nil {
+		t.Fatalf("insert refer file failed: %v", err)
+	}
+
+	var pushed []SessionUpdateUpdate
+	call := func(method string, params any, _ *string) error {
+		if method != "session/update" {
+			return nil
+		}
+		if update, ok := params.(SessionUpdate); ok {
+			if u, ok := update.Update.(SessionUpdateUpdate); ok {
+				pushed = append(pushed, u)
+			}
+		}
+		return nil
+	}
+
+	// 1) 按 terminal id 取回持久化内容
+	resp, err := SessionTerminalHistory(SessionTerminalHistoryRequest{SessionID: sessionID, TerminalID: terminalID}, call, 1)
+	if err != nil {
+		t.Fatalf("SessionTerminalHistory failed: %v", err)
+	}
+	if len(resp.Terminals) != 1 {
+		t.Fatalf("expected 1 terminal, got %+v", resp.Terminals)
+	}
+	got := resp.Terminals[0]
+	if got.Content != stored {
+		t.Errorf("content = %q, want %q", got.Content, stored)
+	}
+	if !got.Restored {
+		t.Error("持久化恢复的条目应标记 restored")
+	}
+	if got.TerminalID != terminalID || got.SessionID != sessionID {
+		t.Errorf("unexpected terminal identity: %+v", got)
+	}
+	if len(pushed) != 1 || pushed[0].TerminalID != terminalID || pushed[0].Status != "stop" || pushed[0].Content != stored {
+		t.Errorf("unexpected pushed update: %+v", pushed)
+	}
+
+	// 2) 列表查询同样包含该终端（无需 terminalId）
+	list, err := SessionTerminalHistory(SessionTerminalHistoryRequest{SessionID: sessionID}, nil, 1)
+	if err != nil {
+		t.Fatalf("SessionTerminalHistory(list) failed: %v", err)
+	}
+	found := false
+	for _, item := range list.Terminals {
+		if item.TerminalID == terminalID {
+			found = true
+			if item.Content != stored {
+				t.Errorf("list content = %q, want %q", item.Content, stored)
+			}
+		}
+	}
+	if !found {
+		t.Errorf("list 应包含持久化恢复的终端 %s，实际 %+v", terminalID, list.Terminals)
+	}
+
+	// 3) 无持久化副本的终端仍报 not found
+	if _, err := SessionTerminalHistory(SessionTerminalHistoryRequest{SessionID: sessionID, TerminalID: "run_does_not_exist"}, call, 1); err == nil {
+		t.Error("expected error for unknown terminalId")
 	}
 }
 

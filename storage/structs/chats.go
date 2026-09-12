@@ -70,6 +70,10 @@ type Chats struct {
 	// StateToolCalling（审批后执行）→ 最终。SetCallback 据此选事件名。
 	ToolCallingStreaming map[string]bool   `gorm:"-" json:"-"`
 	ToolCallingRunID     map[string]string `gorm:"-" json:"-"`
+	// ToolCallingTerminalID 记录每个工具调用对应的终端 ID（统一为 @temp/run/<n>），
+	// 随 tool_call_update 顶层 alk.cxykevin.top/terminal_id 广播，
+	// 客户端据此在终端结束后取回该终端的持久化内容。
+	ToolCallingTerminalID map[string]string `gorm:"-" json:"-"`
 	// toolCtxMu 保护 ToolCallingContext/ToolCallingType/Latest*/ToolCallingStreaming 的并发访问。
 	// 流式解析阶段 OnHook（loop 主 goroutine 的 solveFunc）写、SetCallback goroutine 读，
 	// 无锁会触发 Go runtime 的 concurrent map read and map write panic。
@@ -295,6 +299,19 @@ func (c *Chats) SetToolCallingRunID(id, runID string) {
 	c.ToolCallingRunID[id] = runID
 }
 
+// SetToolCallingTerminalID attaches the terminal ID (unified as @temp/run/<n>) to the pending tool callback.
+func (c *Chats) SetToolCallingTerminalID(id, terminalID string) {
+	if c == nil || id == "" || terminalID == "" {
+		return
+	}
+	c.toolCtxMu.Lock()
+	defer c.toolCtxMu.Unlock()
+	if c.ToolCallingTerminalID == nil {
+		c.ToolCallingTerminalID = make(map[string]string)
+	}
+	c.ToolCallingTerminalID[id] = terminalID
+}
+
 // HasToolCalling 判断当前是否存在待广播的工具调用上下文。
 func (c *Chats) HasToolCalling() bool {
 	if c == nil {
@@ -345,28 +362,31 @@ func (c *Chats) TakeFinalToolCalling() (map[string]any, map[string]string) {
 	return ctx, typ
 }
 
-// TakeFinalToolCallingWithRunIDs returns final callbacks together with run IDs.
-func (c *Chats) TakeFinalToolCallingWithRunIDs() (map[string]any, map[string]string, map[string]string) {
+// TakeFinalToolCallingWithIDs returns final callbacks together with run IDs and terminal IDs.
+func (c *Chats) TakeFinalToolCallingWithIDs() (map[string]any, map[string]string, map[string]string, map[string]string) {
 	if c == nil {
-		return nil, nil, nil
+		return nil, nil, nil, nil
 	}
 	c.toolCtxMu.Lock()
 	defer c.toolCtxMu.Unlock()
 	ctx := make(map[string]any)
 	typ := make(map[string]string)
 	runIDs := make(map[string]string)
+	terminalIDs := make(map[string]string)
 	for id := range c.ToolCallingContext {
 		if !c.ToolCallingStreaming[id] {
 			ctx[id] = c.ToolCallingContext[id]
 			typ[id] = c.ToolCallingType[id]
 			runIDs[id] = c.ToolCallingRunID[id]
+			terminalIDs[id] = c.ToolCallingTerminalID[id]
 			delete(c.ToolCallingContext, id)
 			delete(c.ToolCallingType, id)
 			delete(c.ToolCallingStreaming, id)
 			delete(c.ToolCallingRunID, id)
+			delete(c.ToolCallingTerminalID, id)
 		}
 	}
-	return ctx, typ, runIDs
+	return ctx, typ, runIDs, terminalIDs
 }
 
 // TakeStreamingToolCalling 快照并移除所有流式增量（streaming 标记）条目，保留最终条目。

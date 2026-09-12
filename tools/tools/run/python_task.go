@@ -186,12 +186,24 @@ func pythonTask(session *structs.Chats, mp map[string]*any, cross []*any) (bool,
 	toolCallID := fmt.Sprintf("call_%d_%d_%s", session.ID, session.CurrentMessageID, toolID)
 	displayCmd := fmt.Sprintf("python (execute %d bytes code)", len(code))
 	pythonCode := "model = " + strconv.Quote(modelID) + "\n" + code
-	var runid string
+	// 终端 ID 与 run id 统一为 @temp/run/<n>。ID 的命名空间是**工作目录**（session.Root，
+	// 一个目录可有多个会话），因此序号按工作目录重置；进程工作目录仍包含激活路径。
+	// 前台命令结束时同样把输出写入该 ID 对应的 temp obj，客户端事后可按 terminal id 取回内容。
+	workspace := session.Root
+	workDir := path.Join(session.Root, session.CurrentActivatePath)
+	runID := NewRunID(workspace)
+	// temp obj 内部路径（@temp/run/7 → run/7）
+	tempPath, ok := TempPath(runID)
+	if !ok {
+		if cleanupFn != nil {
+			cleanupFn()
+		}
+		return errResult(fmt.Sprintf("[System] Invalid run id: %s", runID), cross)
+	}
 	var updateFn func(string)
 	if backgroundFlag {
-		runid = backgroundRunID(path.Join(session.Root, session.CurrentActivatePath))
 		updateFn = func(content string) {
-			_ = trace.UpdateTempObject(session, runid, content)
+			_ = trace.UpdateTempObject(session, tempPath, content)
 		}
 	}
 
@@ -205,12 +217,13 @@ func pythonTask(session *structs.Chats, mp map[string]*any, cross []*any) (bool,
 		Stdin:            "",
 		DisplayCommand:   displayCmd,
 		Env:              env,
-		WorkDir:          path.Join(session.Root, session.CurrentActivatePath),
+		WorkDir:          workDir,
 		Timeout:          time.Duration(timeout) * time.Second,
 		Sandbox:          sandboxFlag,
 		SandboxSpecified: sandboxSpecified,
 		WritableDirs:     nonEmptyDirs(pythonenv.VenvDir()),
-		RunID:            runid,
+		RunID:            runID,
+		Workspace:        workspace,
 		UpdateFn:         updateFn,
 		CleanupFn:        cleanupFn,
 		BackgroundKind: func() string {
@@ -226,6 +239,7 @@ func pythonTask(session *structs.Chats, mp map[string]*any, cross []*any) (bool,
 		InteractiveStdin: dynworkflow,
 		WorkflowOutputFn: func(runID, visible string, events []WorkflowEvent) {
 			if visible != "" {
+				// 终端推送与 workflow 事件都使用统一的 run id / terminal id（@temp/run/<n>）。
 				session.PushTerminalUpdate(runID, "running", visible)
 			}
 			for _, event := range events {
@@ -235,20 +249,23 @@ func pythonTask(session *structs.Chats, mp map[string]*any, cross []*any) (bool,
 	}
 
 	if backgroundFlag {
-		_ = trace.AddTempObject(session, runid, bgInitialContent(displayCmd), true)
-		if _, err := Default.Submit(context.Background(), req); err != nil {
+		_ = trace.AddTempObject(session, tempPath, bgInitialContent(displayCmd), true)
+		job, err := Default.Submit(context.Background(), req)
+		if err != nil {
 			if cleanupFn != nil {
 				cleanupFn()
 			}
 			return false, cross, nil, err
 		}
-		session.SetToolCallingRunID(toolCallID, "@temp/"+runid)
-		logger.Info("run python in background (reason: %s) sandbox:%v openai:%v in ID=%d,agentID=%s runid=%s", reason, sandboxFlag, needsProxy, session.ID, session.CurrentAgentID, runid)
+		// 工具调用 ACP 携带 run id / terminal id（两者统一为同一个 @temp/run/<n>）。
+		session.SetToolCallingRunID(toolCallID, job.ID)
+		session.SetToolCallingTerminalID(toolCallID, job.ID)
+		logger.Info("run python in background (reason: %s) sandbox:%v openai:%v in ID=%d,agentID=%s runid=%s", reason, sandboxFlag, needsProxy, session.ID, session.CurrentAgentID, job.ID)
 		boolx := true
 		success := any(boolx)
 		bgAny := any(true)
 		reasonAny := any(reason)
-		outAny := any("@temp/" + runid)
+		outAny := any(job.ID)
 		res := map[string]*any{
 			"success":    &success,
 			"background": &bgAny,
@@ -268,7 +285,11 @@ func pythonTask(session *structs.Chats, mp map[string]*any, cross []*any) (bool,
 		return false, cross, nil, err
 	}
 
-	session.SetToolKillFn(func() { _ = Default.Kill(job.ID) })
+	// 工具调用 ACP 携带 run id / terminal id：终端结束后客户端可据此取回持久化内容。
+	session.SetToolCallingRunID(toolCallID, job.ID)
+	session.SetToolCallingTerminalID(toolCallID, job.ID)
+
+	session.SetToolKillFn(func() { _ = Default.Kill(workspace, job.ID) })
 	defer session.SetToolKillFn(nil)
 
 	logger.Info("run python (reason: %s)(%ds) sandbox:%v openai:%v in ID=%d,agentID=%s job=%s", reason, timeout, sandboxFlag, needsProxy, session.ID, session.CurrentAgentID, job.ID)
@@ -297,10 +318,10 @@ func pythonTask(session *structs.Chats, mp map[string]*any, cross []*any) (bool,
 	}
 
 	outStr := "[agent execute] " + displayCmd + "\n\n" + result.ErrString + result.Output
-	tracePath := backgroundRunID(path.Join(session.Root, session.CurrentActivatePath))
-	_ = trace.AddTempObject(session, tracePath, outStr, true)
-	logger.Info("python execution finished, output saved to: %s", tracePath)
-	outPth := "@temp/" + tracePath
+	// 写入本次任务自己的持久化 temp obj：终端结束后仍可按 terminal id 取回。
+	_ = trace.AddTempObject(session, tempPath, outStr, true)
+	logger.Info("python execution finished, output saved to: %s", tempPath)
+	outPth := runID
 	outAny := any(outPth)
 	reasonAny := any(reason)
 	output := outStr

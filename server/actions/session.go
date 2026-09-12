@@ -724,12 +724,13 @@ func loadSession(cwd string, id *uint32, knowID bool, hidden ...bool) (*structs.
 				SessionID: sessID,
 				Update: SessionUpdateUpdate{
 					SessionUpdate: "alk.cxykevin.top/shell_stop",
-					RunID:         runID,
-					TerminalID:    runID,
-					Command:       command,
-					Status:        "stop",
-					Success:       r.Success,
-					Killed:        r.Killed,
+					// runId 与 terminalId 统一为同一个 @temp/run/<n>。
+					RunID:      runID,
+					TerminalID: runID,
+					Command:    command,
+					Status:     "stop",
+					Success:    r.Success,
+					Killed:     r.Killed,
 				},
 			}, 0); err != nil {
 				logger.Warn("failed to broadcast shell stop: %v", err)
@@ -881,7 +882,7 @@ func loadSession(cwd string, id *uint32, knowID bool, hidden ...bool) (*structs.
 			// （审批后 ExecuteToolCalls 阶段 OnHook 写入，session.State=StateToolCalling）。
 			// 任意回调到达时立即广播——不能依赖 session.State 判断（审批后空 AIResponse 与
 			// 新一轮流式存在 State 竞态），按标记最可靠。
-			if finalCtx, finalTyp, finalRunIDs := sess.TakeFinalToolCallingWithRunIDs(); len(finalCtx) != 0 {
+			if finalCtx, finalTyp, finalRunIDs, finalTerminalIDs := sess.TakeFinalToolCallingWithIDs(); len(finalCtx) != 0 {
 				toolStatus := "pending"
 				if sess.ToolState == 1 {
 					toolStatus = "completed"
@@ -897,13 +898,14 @@ func loadSession(cwd string, id *uint32, knowID bool, hidden ...bool) (*structs.
 					err = broadcastSessionUpdate(sessID, SessionUpdate{
 						SessionID: sessID,
 						Update: SessionUpdateUpdate{
-							SessionUpdate: "tool_call_update",
-							ToolCallID:    id,
-							Kind:          ToolNameToTypeMap[finalTyp[id]],
-							Status:        toolStatus,
-							Title:         fmt.Sprintf("[Call %s]%s", finalTyp[id], s),
-							Content:       val,
-							RunID:         finalRunIDs[id],
+							SessionUpdate:  "tool_call_update",
+							ToolCallID:     id,
+							Kind:           ToolNameToTypeMap[finalTyp[id]],
+							Status:         toolStatus,
+							Title:          fmt.Sprintf("[Call %s]%s", finalTyp[id], s),
+							Content:        val,
+							RunID:          finalRunIDs[id],
+							ToolTerminalID: finalTerminalIDs[id],
 						},
 					}, 0)
 					if err != nil {
@@ -1162,9 +1164,12 @@ func broadcastTerminalUpdate(sessionID, terminalID, status, content, updateType 
 	if err != nil {
 		return err
 	}
-	for i := range resp.Terminals {
-		if job := runTool.Default.Status(resp.Terminals[i].TerminalID); job != nil {
-			resp.Terminals[i].Content = job.Content()
+	// 终端 ID 在工作目录内唯一：按该会话的工作目录取内容快照。
+	if workspace, werr := sessionWorkspaceOf(sessionID); werr == nil {
+		for i := range resp.Terminals {
+			if job := runTool.Default.Status(workspace, resp.Terminals[i].TerminalID); job != nil {
+				resp.Terminals[i].Content = job.Content()
+			}
 		}
 	}
 	update := SessionUpdateUpdate{SessionUpdate: "alk.cxykevin.top/terminal_update", Terminals: resp.Terminals, TerminalUpdateType: updateType}
@@ -1192,6 +1197,9 @@ type SessionTerminalInfo struct {
 	ToolID     string `json:"toolId,omitempty"`
 	Content    string `json:"content,omitempty"`
 	CreatedAt  string `json:"createdAt"`
+	// Restored 标记该条目来自持久化副本（服务端重启后内存中已无该终端），
+	// 此时只有 content 可信，kind/command/时间等元数据为空。
+	Restored bool `json:"restored,omitempty"`
 }
 
 type SessionTerminalListResponse struct {
@@ -1216,6 +1224,31 @@ type SessionTerminalStopResponse struct {
 	Status     string `json:"status"`
 }
 
+// sessionWorkspaceOf 返回会话的**工作目录**（终端 ID 的命名空间）。
+// workspace 是一个工作目录而不是会话：同一目录下可以有多个会话，共享同一序号空间，
+// 因此终端 ID 在工作目录内唯一；服务端按会话解析出其工作目录后在该目录内匹配终端。
+func sessionWorkspaceOf(sessionID string) (string, error) {
+	// 会话的工作目录即其 sessionId 中的 cwd（session.Root）。
+	workspace, _, err := sessionID2Cwd(sessionID)
+	if err != nil {
+		return "", fmt.Errorf("invalid sessionId: %v", err)
+	}
+	return workspace, nil
+}
+
+// validateTerminalID 校验并规范化终端 ID：必须是统一格式 @temp/run/<n>
+// （也接受 temp obj 内部路径 run/<n>），前缀不符即拒绝。
+func validateTerminalID(terminalID string) (string, error) {
+	if terminalID == "" {
+		return "", fmt.Errorf("terminalId is empty")
+	}
+	id, ok := runTool.NormalizeID(terminalID)
+	if !ok {
+		return "", fmt.Errorf("invalid terminalId %q: expected %s<n>", terminalID, runTool.RunIDPrefix)
+	}
+	return id, nil
+}
+
 func validateTerminalSession(sessionID string) (uint32, error) {
 	if sessionID == "" {
 		return 0, fmt.Errorf("sessionId is empty")
@@ -1227,6 +1260,23 @@ func validateTerminalSession(sessionID string) (uint32, error) {
 	return id, nil
 }
 
+// terminalInfo 把一次 run 任务转换为终端信息（list / status / history 共用同一份描述，
+// 内容取自任务的内容快照，即终端全量推送所使用的数据）。
+func terminalInfo(job *runTool.Job, sessionID string) SessionTerminalInfo {
+	kind := job.BackgroundKind
+	if kind == "" {
+		kind = "foreground"
+	}
+	return SessionTerminalInfo{TerminalID: job.ID, SessionID: sessionID, Kind: kind, Status: job.Status().String(), Command: job.DisplayCommand, Reason: job.Reason, AgentID: job.AgentID, ToolID: job.ToolID, Content: job.Content(), CreatedAt: job.CreatedAt.UTC().Format(time.RFC3339)}
+}
+
+// sortTerminalInfos 按创建时间（再按终端 ID）排序，保证同一会话的返回顺序稳定。
+func sortTerminalInfos(items []SessionTerminalInfo) {
+	slices.SortFunc(items, func(a, b SessionTerminalInfo) int {
+		return strings.Compare(a.CreatedAt+"\x00"+a.TerminalID, b.CreatedAt+"\x00"+b.TerminalID)
+	})
+}
+
 func SessionTerminalList(req SessionTerminalListRequest, _ func(string, any, *string) error, _ uint64) (SessionTerminalListResponse, error) {
 	id, err := validateTerminalSession(req.SessionID)
 	if err != nil {
@@ -1235,15 +1285,9 @@ func SessionTerminalList(req SessionTerminalListRequest, _ func(string, any, *st
 	jobs := runTool.Default.ListActive(id)
 	items := make([]SessionTerminalInfo, 0, len(jobs))
 	for _, job := range jobs {
-		kind := job.BackgroundKind
-		if kind == "" {
-			kind = "foreground"
-		}
-		items = append(items, SessionTerminalInfo{TerminalID: job.ID, SessionID: req.SessionID, Kind: kind, Status: job.Status().String(), Command: job.DisplayCommand, Reason: job.Reason, AgentID: job.AgentID, ToolID: job.ToolID, Content: job.Content(), CreatedAt: job.CreatedAt.UTC().Format(time.RFC3339)})
+		items = append(items, terminalInfo(job, req.SessionID))
 	}
-	slices.SortFunc(items, func(a, b SessionTerminalInfo) int {
-		return strings.Compare(a.CreatedAt+"\x00"+a.TerminalID, b.CreatedAt+"\x00"+b.TerminalID)
-	})
+	sortTerminalInfos(items)
 	return SessionTerminalListResponse{Terminals: items}, nil
 }
 
@@ -1252,21 +1296,22 @@ func SessionTerminalStatus(req SessionTerminalStatusRequest, call func(string, a
 	if err != nil {
 		return SessionTerminalStatusResponse{}, err
 	}
-	if req.TerminalID == "" {
-		return SessionTerminalStatusResponse{}, fmt.Errorf("terminalId is empty")
+	terminalID, err := validateTerminalID(req.TerminalID)
+	if err != nil {
+		return SessionTerminalStatusResponse{}, err
 	}
-	job := runTool.Default.Status(req.TerminalID)
+	workspace, err := sessionWorkspaceOf(req.SessionID)
+	if err != nil {
+		return SessionTerminalStatusResponse{}, err
+	}
+	job := runTool.Default.Status(workspace, terminalID)
 	if job == nil {
-		return SessionTerminalStatusResponse{}, fmt.Errorf("terminal %s not found", req.TerminalID)
+		return SessionTerminalStatusResponse{}, fmt.Errorf("terminal %s not found", terminalID)
 	}
 	if job.SessionID != id {
-		return SessionTerminalStatusResponse{}, fmt.Errorf("terminal %s does not belong to session %s", req.TerminalID, req.SessionID)
+		return SessionTerminalStatusResponse{}, fmt.Errorf("terminal %s does not belong to session %s", terminalID, req.SessionID)
 	}
-	kind := job.BackgroundKind
-	if kind == "" {
-		kind = "foreground"
-	}
-	terminal := SessionTerminalInfo{TerminalID: job.ID, SessionID: req.SessionID, Kind: kind, Status: job.Status().String(), Command: job.DisplayCommand, Reason: job.Reason, AgentID: job.AgentID, ToolID: job.ToolID, Content: job.Content(), CreatedAt: job.CreatedAt.UTC().Format(time.RFC3339)}
+	terminal := terminalInfo(job, req.SessionID)
 	// Status also immediately sends the complete current terminal content to the caller.
 	if call != nil {
 		if err := call("session/update", SessionUpdate{SessionID: req.SessionID, Update: SessionUpdateUpdate{SessionUpdate: "alk.cxykevin.top/terminal_update", Terminals: []SessionTerminalInfo{terminal}, TerminalID: terminal.TerminalID, Status: terminal.Status, Content: terminal.Content, TerminalUpdateType: "full"}}, nil); err != nil {
@@ -1276,18 +1321,210 @@ func SessionTerminalStatus(req SessionTerminalStatusRequest, call func(string, a
 	return SessionTerminalStatusResponse{Terminal: terminal}, nil
 }
 
+// runToolName 是 run 工具在工具调用记录中的名称（见 maps.go 的 ToolNameToTypeMap）。
+const runToolName = "run"
+
+// terminalIDFromRunResult 从持久化的 run 工具结果 JSON（run_id / path，形如
+// @temp/run/<n>）推导终端 ID，用于历史回放时为工具调用补上 terminal id。
+func terminalIDFromRunResult(raw string) string {
+	if strings.TrimSpace(raw) == "" {
+		return ""
+	}
+	var res map[string]any
+	if err := json.Unmarshal([]byte(raw), &res); err != nil {
+		return ""
+	}
+	for _, key := range []string{"run_id", "path"} {
+		value, ok := res[key].(string)
+		if !ok {
+			continue
+		}
+		// 校验前缀：只接受统一的 @temp/run/<n>（兼容内部路径 run/<n>）
+		if terminalID, ok := runTool.NormalizeID(value); ok {
+			return terminalID
+		}
+	}
+	return ""
+}
+
+// replayRunTerminalIDs 解析持久化的工具结果（MessagesRoleTool.Delta，格式
+// [{"name","id","return"}]），返回 run 工具调用 ID → 终端 ID 的映射。
+// 直播时 terminal id 由 ToolCallingTerminalID（内存）随工具调用广播；回放时没有该内存
+// 状态，因此从结果里的 @temp/run/<n> 反推，保证回放的每个 run 调用同样携带 terminal id。
+func replayRunTerminalIDs(delta string) map[string]string {
+	out := map[string]string{}
+	if strings.TrimSpace(delta) == "" {
+		return out
+	}
+	var items []struct {
+		Name   string `json:"name"`
+		ID     string `json:"id"`
+		Return string `json:"return"`
+	}
+	if err := json.Unmarshal([]byte(delta), &items); err != nil {
+		logger.Warn("error when replay session unmarshal tool results: %v", err)
+		return out
+	}
+	for _, item := range items {
+		if item.Name != runToolName || item.ID == "" {
+			continue
+		}
+		if terminalID := terminalIDFromRunResult(item.Return); terminalID != "" {
+			out[item.ID] = terminalID
+		}
+	}
+	return out
+}
+
+// SessionTerminalHistoryRequest 查询已结束终端内容的请求。
+// TerminalID 省略（或为空）时返回该会话全部已结束终端。
+type SessionTerminalHistoryRequest struct {
+	SessionID  string `json:"sessionId"`
+	TerminalID string `json:"terminalId,omitempty"`
+}
+
+// SessionTerminalHistoryResponse 已结束终端列表（含最终完整内容）。
+type SessionTerminalHistoryResponse struct {
+	Terminals []SessionTerminalInfo `json:"terminals"`
+}
+
+// terminalStoredContent 读取终端内容的持久化副本（run 工具写入的 @temp/<runPath> temp obj）。
+// 终端结束后内存中的任务仍在（未截断内容优先），服务端重启后则由该副本提供内容。
+func terminalStoredContent(cwd string, chatID uint32, terminalID string) (string, bool) {
+	// TempPath 同时校验 @temp/run/<n> 前缀，只允许查该前缀下的持久化副本。
+	runPath, ok := runTool.TempPath(terminalID)
+	if !ok {
+		return "", false
+	}
+	db, err := loadDB(cwd)
+	if err != nil {
+		return "", false
+	}
+	defer closeDB(cwd)
+	var file structs.ReferFiles
+	if err := db.Where("chat_id = ? AND path = ?", chatID, runPath).First(&file).Error; err != nil {
+		return "", false
+	}
+	return file.Content, true
+}
+
+// listStoredTerminals 列出会话已持久化内容的终端（按写入顺序），用于服务端重启后恢复历史。
+func listStoredTerminals(cwd, sessionID string, chatID uint32) []SessionTerminalInfo {
+	db, err := loadDB(cwd)
+	if err != nil {
+		return nil
+	}
+	defer closeDB(cwd)
+	var files []structs.ReferFiles
+	// rowid 即写入顺序：run 序号的字典序（run/10 < run/2）与时间序不一致，不能按 path 排序。
+	if err := db.Where("chat_id = ? AND path LIKE ?", chatID, "run/%").Order("rowid ASC").Find(&files).Error; err != nil {
+		logger.Warn("list stored terminals failed: %v", err)
+		return nil
+	}
+	out := make([]SessionTerminalInfo, 0, len(files))
+	for i := range files {
+		terminalID, ok := runTool.NormalizeID(files[i].Path)
+		if !ok {
+			continue
+		}
+		out = append(out, SessionTerminalInfo{TerminalID: terminalID, SessionID: sessionID, Status: "finished", Content: files[i].Content, Restored: true})
+	}
+	return out
+}
+
+// SessionTerminalHistory 返回已结束（finished / killed）终端会话的完整内容。
+// 终端结束后会从活动终端列表移除，增量推送只带最后一次内容；客户端在错过推送、
+// 重连或想回看已结束终端时，用本方法按 sessionId（可再按 terminalId）取回内容。
+// 内容优先取内存中未截断的内容快照（与终端全量推送同一份数据）；服务端重启后内存
+// 中已无该终端，则回退到终端结束时持久化的 temp obj 副本（@temp/run/<n>）。
+// 成功时除 RPC 响应外，还会通过该请求的 callback 推送一条 updateType=full 的
+// alk.cxykevin.top/terminal_update，携带同一份内容。
+func SessionTerminalHistory(req SessionTerminalHistoryRequest, call func(string, any, *string) error, _ uint64) (SessionTerminalHistoryResponse, error) {
+	if req.SessionID == "" {
+		return SessionTerminalHistoryResponse{}, fmt.Errorf("sessionId is empty")
+	}
+	cwd, chatID, err := sessionID2Cwd(req.SessionID)
+	if err != nil {
+		return SessionTerminalHistoryResponse{}, fmt.Errorf("invalid sessionId: %v", err)
+	}
+	terminals := make([]SessionTerminalInfo, 0, 1)
+	if req.TerminalID != "" {
+		terminalID, err := validateTerminalID(req.TerminalID)
+		if err != nil {
+			return SessionTerminalHistoryResponse{}, err
+		}
+		workspace, werr := sessionWorkspaceOf(req.SessionID)
+		if werr != nil {
+			return SessionTerminalHistoryResponse{}, werr
+		}
+		if job := runTool.Default.Status(workspace, terminalID); job != nil {
+			if job.SessionID != chatID {
+				return SessionTerminalHistoryResponse{}, fmt.Errorf("terminal %s does not belong to session %s", terminalID, req.SessionID)
+			}
+			if job.Status() == runTool.JobRunning {
+				return SessionTerminalHistoryResponse{}, fmt.Errorf("terminal %s is still running", terminalID)
+			}
+			terminals = append(terminals, terminalInfo(job, req.SessionID))
+		} else {
+			content, ok := terminalStoredContent(cwd, chatID, terminalID)
+			if !ok {
+				return SessionTerminalHistoryResponse{}, fmt.Errorf("terminal %s not found", terminalID)
+			}
+			terminals = append(terminals, SessionTerminalInfo{TerminalID: terminalID, SessionID: req.SessionID, Status: "finished", Content: content, Restored: true})
+		}
+	} else {
+		// 内存中的终端优先（元数据齐全），再补齐只剩持久化副本的终端。
+		seen := make(map[string]struct{})
+		for _, job := range runTool.Default.ListEnded(chatID) {
+			terminals = append(terminals, terminalInfo(job, req.SessionID))
+			seen[job.ID] = struct{}{}
+		}
+		for _, job := range runTool.Default.ListActive(chatID) {
+			// 运行中的终端不属于已结束历史，其持久化副本也要排除。
+			seen[job.ID] = struct{}{}
+		}
+		for _, item := range listStoredTerminals(cwd, req.SessionID, chatID) {
+			if _, dup := seen[item.TerminalID]; dup {
+				continue
+			}
+			terminals = append(terminals, item)
+		}
+	}
+	sortTerminalInfos(terminals)
+	// 复用终端全量推送：把取回的已结束终端连同完整内容推给该请求的连接。
+	if call != nil && len(terminals) > 0 {
+		update := SessionUpdateUpdate{SessionUpdate: "alk.cxykevin.top/terminal_update", Terminals: terminals, TerminalUpdateType: "full"}
+		if len(terminals) == 1 {
+			// 单终端查询与 status 的推送同构：顶层带 terminalId / status / content。
+			// 已结束终端在 terminal_update 生命周期中对应 stop。
+			update.TerminalID = terminals[0].TerminalID
+			update.Status = "stop"
+			update.Content = terminals[0].Content
+		}
+		if err := call("session/update", SessionUpdate{SessionID: req.SessionID, Update: update}, nil); err != nil {
+			return SessionTerminalHistoryResponse{}, err
+		}
+	}
+	return SessionTerminalHistoryResponse{Terminals: terminals}, nil
+}
+
 func SessionTerminalStop(req SessionTerminalStopRequest, _ func(string, any, *string) error, _ uint64) (SessionTerminalStopResponse, error) {
 	id, err := validateTerminalSession(req.SessionID)
 	if err != nil {
 		return SessionTerminalStopResponse{}, err
 	}
-	if req.TerminalID == "" {
-		return SessionTerminalStopResponse{}, fmt.Errorf("terminalId is empty")
-	}
-	if err := runTool.Default.Stop(id, req.TerminalID); err != nil {
+	terminalID, err := validateTerminalID(req.TerminalID)
+	if err != nil {
 		return SessionTerminalStopResponse{}, err
 	}
-	return SessionTerminalStopResponse{TerminalID: req.TerminalID, Status: "kill_requested"}, nil
+	workspace, err := sessionWorkspaceOf(req.SessionID)
+	if err != nil {
+		return SessionTerminalStopResponse{}, err
+	}
+	if err := runTool.Default.Stop(id, workspace, terminalID); err != nil {
+		return SessionTerminalStopResponse{}, err
+	}
+	return SessionTerminalStopResponse{TerminalID: terminalID, Status: "kill_requested"}, nil
 }
 
 // SessionGetEffortRequest 获取推理强度设置的请求
@@ -1470,20 +1707,23 @@ type SessionUpdateUpdate struct {
 	TerminalID         string                `json:"terminalId,omitempty"`              // terminal_update 增量终端 ID
 	TerminalUpdateType string                `json:"updateType,omitempty"`              // terminal_update: full | incremental
 	RunID              string                `json:"alk.cxykevin.top/run_id,omitempty"` // run background 成功后随工具回调推送
-	Command            string                `json:"command,omitempty"`
-	Success            bool                  `json:"success,omitempty"`
-	Killed             bool                  `json:"killed,omitempty"`
-	Kind               string                `json:"kind,omitempty"`              // tool_call_update
-	Status             string                `json:"status,omitempty"`            // tool_call_update
-	State              string                `json:"state,omitempty"`             // state_update
-	StopReason         string                `json:"stopReason,omitempty"`        // state_update idle
-	ConfigOptions      []ConfigOption        `json:"configOptions,omitempty"`     // config_option_update
-	AvailableCommands  any                   `json:"availableCommands,omitempty"` // available_commands_update
-	Used               uint64                `json:"used,omitempty"`              // usage_update
-	Size               uint64                `json:"size,omitempty"`              // usage_update
-	Plan               *PlanItems            `json:"plan,omitempty"`              // plan_update（嵌套在 plan 下）
-	ExpandErrorMsg     string                `json:"alk.cxykevin.top/error_msg,omitempty"`
-	AgentStatus        *string               `json:"alk.cxykevin.top/agent_status,omitempty"`
+	// ToolTerminalID 顶层 alk.cxykevin.top/terminal_id：run 工具调用的终端 ID（run_1），
+	// 终端结束后客户端可据此取回该终端的持久化内容。
+	ToolTerminalID    string         `json:"alk.cxykevin.top/terminal_id,omitempty"`
+	Command           string         `json:"command,omitempty"`
+	Success           bool           `json:"success,omitempty"`
+	Killed            bool           `json:"killed,omitempty"`
+	Kind              string         `json:"kind,omitempty"`              // tool_call_update
+	Status            string         `json:"status,omitempty"`            // tool_call_update
+	State             string         `json:"state,omitempty"`             // state_update
+	StopReason        string         `json:"stopReason,omitempty"`        // state_update idle
+	ConfigOptions     []ConfigOption `json:"configOptions,omitempty"`     // config_option_update
+	AvailableCommands any            `json:"availableCommands,omitempty"` // available_commands_update
+	Used              uint64         `json:"used,omitempty"`              // usage_update
+	Size              uint64         `json:"size,omitempty"`              // usage_update
+	Plan              *PlanItems     `json:"plan,omitempty"`              // plan_update（嵌套在 plan 下）
+	ExpandErrorMsg    string         `json:"alk.cxykevin.top/error_msg,omitempty"`
+	AgentStatus       *string        `json:"alk.cxykevin.top/agent_status,omitempty"`
 }
 
 // PlanItems plan_update 内容（ACP v2：{plan: {type:"items", planId, entries}}）
@@ -1703,6 +1943,9 @@ func SessionResume(req SessionResumeRequest, call func(string, any, *string) err
 							logger.Warn("error when replay session unmarshal tool content: %v", err)
 						}
 					}
+					// 工具结果里带 @temp/run/<n>：回放时为 run 调用补上 terminal id，
+					// 客户端才能在历史里把工具调用与终端内容对应起来。
+					replayTerminalIDs := replayRunTerminalIDs(val.Delta)
 					for _, obj := range jsonObj {
 						toolName, ok := u.GetH[string](obj, "name")
 						if !ok {
@@ -1718,12 +1961,13 @@ func SessionResume(req SessionResumeRequest, call func(string, any, *string) err
 						err = call("session/update", SessionUpdate{
 							SessionID: req.SessionID,
 							Update: SessionUpdateUpdate{
-								SessionUpdate: "tool_call_update",
-								ToolCallID:    fmt.Sprintf("call_%d_%d_%s", sess.ID, prevMsgID, toolID),
-								Title:         fmt.Sprintf("[Call %s]%s", toolName, toolID),
-								Kind:          u.Default(ToolNameToTypeMap, toolName, "other"),
-								Status:        "completed",
-								Content:       content,
+								SessionUpdate:  "tool_call_update",
+								ToolCallID:     fmt.Sprintf("call_%d_%d_%s", sess.ID, prevMsgID, toolID),
+								Title:          fmt.Sprintf("[Call %s]%s", toolName, toolID),
+								Kind:           u.Default(ToolNameToTypeMap, toolName, "other"),
+								Status:         "completed",
+								Content:        content,
+								ToolTerminalID: replayTerminalIDs[toolID],
 							},
 						}, nil)
 						if err != nil {

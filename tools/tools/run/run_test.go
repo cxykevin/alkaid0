@@ -994,6 +994,62 @@ func TestRunTaskWritesTrace(t *testing.T) {
 	}
 }
 
+// TestRunTaskWritesTerminalID 验证 run 工具调用携带终端 ID，且终端内容写入同源的
+// 持久化路径（@temp/run/<n>）：客户端据此在终端结束后取回内容。
+func TestRunTaskWritesTerminalID(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("跳过 Windows")
+	}
+	oldDisable := config.GlobalConfig.Agent.DisableSandbox
+	config.GlobalConfig.Agent.DisableSandbox = true
+	defer func() { config.GlobalConfig.Agent.DisableSandbox = oldDisable }()
+
+	session := runOutputSession(t)
+	const toolID = "terminalid"
+	mp := map[string]*any{
+		"type":    new(any("shell")),
+		"reason":  new(any("test terminal id")),
+		"command": new(any("echo alkaid0-terminal-id")),
+		"_id":     new(any(toolID)),
+	}
+	if _, _, _, err := runTask(session, mp, []*any{}); err != nil {
+		t.Fatalf("runTask: %v", err)
+	}
+
+	toolCallID := fmt.Sprintf("call_%d_%d_%s", session.ID, session.CurrentMessageID, toolID)
+	terminalID := session.ToolCallingTerminalID[toolCallID]
+	if terminalID == "" {
+		t.Fatal("工具调用应携带 terminal id")
+	}
+	// 终端 ID 与 run id 统一为 @temp/run/<n>
+	if !strings.HasPrefix(terminalID, RunIDPrefix) {
+		t.Fatalf("terminal id 应为 %s<n> 形式，实际 %q", RunIDPrefix, terminalID)
+	}
+	runPath, ok := TempPath(terminalID)
+	if !ok {
+		t.Fatalf("terminal id 不合法: %q", terminalID)
+	}
+
+	// 内容应已持久化到该路径（服务端重启后可据此取回）
+	var file storageStructs.ReferFiles
+	if err := session.DB.Where("chat_id = ? AND path = ?", session.ID, runPath).First(&file).Error; err != nil {
+		t.Fatalf("持久化内容缺失（path=%s）: %v", runPath, err)
+	}
+	if !strings.Contains(file.Content, "alkaid0-terminal-id") {
+		t.Errorf("持久化内容应包含命令输出，实际 %q", file.Content)
+	}
+
+	// 最终工具调用快照应带出 run id / terminal id（同一值，ACP tool_call_update 顶层字段）
+	session.SetToolCalling(toolCallID, map[string]any{"name": "run"}, "run")
+	_, _, runIDs, terminalIDs := session.TakeFinalToolCallingWithIDs()
+	if terminalIDs[toolCallID] != terminalID {
+		t.Errorf("TakeFinalToolCallingWithIDs terminal id = %q, want %q", terminalIDs[toolCallID], terminalID)
+	}
+	if runIDs[toolCallID] != terminalID {
+		t.Errorf("run id 应与 terminal id 统一，得到 %q, want %q", runIDs[toolCallID], terminalID)
+	}
+}
+
 func TestUpdateInfoStringCommand(t *testing.T) {
 	session := &storageStructs.Chats{
 		TemporyDataOfRequest: make(map[string]any),

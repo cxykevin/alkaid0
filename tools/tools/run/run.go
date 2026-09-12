@@ -50,19 +50,6 @@ var templateSys = prompts.Load("tools:run:sys", promptSys)
 
 var logger = log.New("tools:run")
 
-// backgroundRunSeq is deliberately scoped to each workspace.
-var backgroundRunSeqMu sync.Mutex
-var backgroundRunSeq = make(map[string]uint64)
-
-// backgroundRunID returns the shortest ID that is unique within one workspace.
-func backgroundRunID(workspace string) string {
-	backgroundRunSeqMu.Lock()
-	backgroundRunSeq[workspace]++
-	seq := backgroundRunSeq[workspace]
-	backgroundRunSeqMu.Unlock()
-	return "run/" + strconv.FormatUint(seq, 36)
-}
-
 var paras = map[string]parser.ToolParameters{
 	"type": {
 		Type:        parser.ToolTypeString,
@@ -317,7 +304,7 @@ func waitTask(session *structs.Chats, mp map[string]*any, cross []*any) (bool, [
 		return errResult("[System] Parameter Error: command must be string(run id) for type 'wait'", cross)
 	}
 
-	job := Default.FindInWorkspace(path.Join(session.Root, session.CurrentActivatePath), runID)
+	job := Default.FindInWorkspace(session.Root, runID)
 	if job == nil {
 		return errResult(fmt.Sprintf("[System] Run id not found: %s", runID), cross)
 	}
@@ -358,7 +345,7 @@ func killTask(session *structs.Chats, mp map[string]*any, cross []*any) (bool, [
 	if !ok || runID == "" {
 		return errResult("[System] Parameter Error: command must be string(run id) for type 'kill'", cross)
 	}
-	if err := Default.KillRun(path.Join(session.Root, session.CurrentActivatePath), session.ID, runID); err != nil {
+	if err := Default.KillRun(session.Root, session.ID, runID); err != nil {
 		return errResult(fmt.Sprintf("[System] Failed to kill run %s: %v", runID, err), cross)
 	}
 	logger.Info("kill runid %s in ID=%d,agentID=%s", runID, session.ID, session.CurrentAgentID)
@@ -519,14 +506,21 @@ func runTask(session *structs.Chats, mp map[string]*any, cross []*any) (bool, []
 		env = append(env, k+"="+v)
 	}
 
-	// background 模式：runid = temp obj 路径，作为后台任务的唯一标识
-	var runid string
+	// 终端 ID 与 run id 统一为 @temp/run/<n>。ID 的命名空间是**工作目录**（session.Root，
+	// 一个目录可有多个会话），因此序号按工作目录重置；进程工作目录仍包含激活路径。
+	// 前台命令结束时同样把输出写入该 ID 对应的 temp obj，客户端事后可按 terminal id 取回内容。
+	workspace := session.Root
+	workDir := path.Join(session.Root, session.CurrentActivatePath)
+	runID := NewRunID(workspace)
+	// temp obj 内部路径（@temp/run/7 → run/7）
+	tempPath, ok := TempPath(runID)
+	if !ok {
+		return errResult(fmt.Sprintf("[System] Invalid run id: %s", runID), cross)
+	}
 	var updateFn func(string)
-	workspace := path.Join(session.Root, session.CurrentActivatePath)
 	if backgroundFlag {
-		runid = backgroundRunID(workspace)
 		updateFn = func(content string) {
-			_ = trace.UpdateTempObject(session, runid, content)
+			_ = trace.UpdateTempObject(session, tempPath, content)
 		}
 	}
 
@@ -539,12 +533,13 @@ func runTask(session *structs.Chats, mp map[string]*any, cross []*any) (bool, []
 		Reason:           reason,
 		Shell:            shell,
 		Env:              env,
-		WorkDir:          path.Join(session.Root, session.CurrentActivatePath),
+		WorkDir:          workDir,
 		Timeout:          time.Duration(timeout) * time.Second,
 		Sandbox:          sandboxFlag,
 		SandboxSpecified: sandboxSpecified,
 		WritableDirs:     nonEmptyDirs(pythonenv.VenvDir()),
-		RunID:            runid,
+		RunID:            runID,
+		Workspace:        workspace,
 		InteractiveStdin: true,
 		UpdateFn:         updateFn,
 		BackgroundKind: func() string {
@@ -560,19 +555,22 @@ func runTask(session *structs.Chats, mp map[string]*any, cross []*any) (bool, []
 	}
 
 	if backgroundFlag {
-		// 先创建 temp obj 并立即返回其路径作为 runid（命令在后台执行）。
+		// 先创建 temp obj 并立即返回其路径作为 run id（命令在后台执行）。
 		// 进 trace 表：AddTempObject 内部截后 2000 行，run 结果全部进 trace，AI 可经 <tracedFiles> 读取。
-		_ = trace.AddTempObject(session, runid, bgInitialContent(command), true)
-		if _, err := Default.Submit(context.Background(), req); err != nil {
+		_ = trace.AddTempObject(session, tempPath, bgInitialContent(command), true)
+		job, err := Default.Submit(context.Background(), req)
+		if err != nil {
 			return false, cross, nil, err
 		}
-		session.SetToolCallingRunID(toolCallID, "@temp/"+runid)
-		logger.Info("run shell in background \"%s\"(reason: %s) sandbox:%v in ID=%d,agentID=%s runid=%s", command, reason, sandboxFlag, session.ID, session.CurrentAgentID, runid)
+		// 工具调用 ACP 携带 run id / terminal id（两者统一为同一个 @temp/run/<n>）。
+		session.SetToolCallingRunID(toolCallID, job.ID)
+		session.SetToolCallingTerminalID(toolCallID, job.ID)
+		logger.Info("run shell in background \"%s\"(reason: %s) sandbox:%v in ID=%d,agentID=%s runid=%s", command, reason, sandboxFlag, session.ID, session.CurrentAgentID, job.ID)
 		boolx := true
 		success := any(boolx)
 		bgAny := any(true)
 		reasonAny := any(reason)
-		outAny := any("@temp/" + runid)
+		outAny := any(job.ID)
 		res := map[string]*any{
 			"success":    &success,
 			"background": &bgAny,
@@ -589,8 +587,12 @@ func runTask(session *structs.Chats, mp map[string]*any, cross []*any) (bool, []
 		return false, cross, nil, err
 	}
 
+	// 工具调用 ACP 携带 run id / terminal id：终端结束后客户端可据此取回持久化内容。
+	session.SetToolCallingRunID(toolCallID, job.ID)
+	session.SetToolCallingTerminalID(toolCallID, job.ID)
+
 	// 注册停止回调，使 loop.Stop() 能直接 kill 此后台任务
-	session.SetToolKillFn(func() { _ = Default.Kill(job.ID) })
+	session.SetToolKillFn(func() { _ = Default.Kill(workspace, job.ID) })
 	defer session.SetToolKillFn(nil)
 
 	logger.Info("run shell \"%s\"(reason: %s)(%ds) sandbox:%v in ID=%d,agentID=%s job=%s", command, reason, timeout, sandboxFlag, session.ID, session.CurrentAgentID, job.ID)
@@ -625,10 +627,10 @@ func runTask(session *structs.Chats, mp map[string]*any, cross []*any) (bool, []
 	// AI 可经 <tracedFiles> topBlock 读取本次命令输出；output 字段摘要同步直接返回，
 	// 让 AI 第一眼看到结果，避免"结果已返回但看不到、反复重试同一命令"的循环。
 	outStr := "[agent execute] $ " + command + "\n\n" + result.ErrString + result.Output
-	tracePath := backgroundRunID(path.Join(session.Root, session.CurrentActivatePath))
-	_ = trace.AddTempObject(session, tracePath, outStr, true)
-	logger.Info("command execution finished, output saved to: %s", tracePath)
-	outPth := "@temp/" + tracePath
+	// 写入本次任务自己的持久化 temp obj：终端结束后仍可按 terminal id 取回。
+	_ = trace.AddTempObject(session, tempPath, outStr, true)
+	logger.Info("command execution finished, output saved to: %s", tempPath)
+	outPth := runID
 	outAny := any(outPth)
 	reasonAny := any(reason)
 	// 命令输出直接随工具结果返回（截断到 maxRunOutputChars），AI 在 role:tool 消息里

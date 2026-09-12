@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -37,6 +38,51 @@ func (s JobState) String() string {
 	}
 }
 
+// RunIDPrefix 终端 ID 与 run id 统一的格式前缀：两者同为 @temp/run/<n>。
+const RunIDPrefix = "@temp/run/"
+
+// runSeq 每个工作目录（workspace）独立的 run 序号：同一目录内递增，换目录重新从 1 开始。
+// workspace 是一个工作目录（一个目录可以有多个会话），因此终端 ID/run id（@temp/run/<n>）
+// 在**工作目录**内唯一；服务端按会话解析出其工作目录后在该目录内匹配（见 Service.Status / Stop / Kill）。
+var runSeqMu sync.Mutex
+var runSeq = make(map[string]uint64)
+
+// NewRunID 为指定工作目录分配下一个终端 ID / run id
+// （@temp/run/<n>，序号 base36，按工作目录重置）。
+func NewRunID(workspace string) string {
+	runSeqMu.Lock()
+	runSeq[workspace]++
+	n := strconv.FormatUint(runSeq[workspace], 36)
+	runSeqMu.Unlock()
+	return RunIDPrefix + n
+}
+
+// NormalizeID 校验并规范化终端 ID / run id：
+//   - 规范形式 @temp/run/<n>；
+//   - 兼容 temp obj 内部路径形式 run/<n>（内部调用与历史记录）。
+//
+// 前缀不符、序号为空或含路径分隔符时返回 ok=false。
+func NormalizeID(id string) (string, bool) {
+	suffix, ok := strings.CutPrefix(id, RunIDPrefix)
+	if !ok {
+		suffix, ok = strings.CutPrefix(id, "run/")
+	}
+	if !ok || suffix == "" || strings.ContainsAny(suffix, "/\\") {
+		return "", false
+	}
+	return RunIDPrefix + suffix, true
+}
+
+// TempPath 把统一的终端 ID / run id 转换为 temp obj 内部路径（@temp/run/7 → run/7）。
+// 前缀不合法时返回 ok=false。
+func TempPath(id string) (string, bool) {
+	suffix, ok := strings.CutPrefix(id, RunIDPrefix)
+	if !ok || suffix == "" || strings.ContainsAny(suffix, "/\\") {
+		return "", false
+	}
+	return "run/" + suffix, true
+}
+
 // Request 一次命令执行请求。
 type Request struct {
 	SessionID        uint32
@@ -51,8 +97,12 @@ type Request struct {
 	Sandbox          bool
 	SandboxSpecified bool
 	WritableDirs     []string
-	// RunID background 模式的 temp obj 内部路径（如 "run/xxx"），作为 runid 供 wait 查询
+	// RunID 该终端的 ID（@temp/run/<n>，与 run id 统一）：同时作为 wait/kill 的 run id
+	// 与终端内容持久化路径（内部路径为 run/<n>）。留空时由服务按 Workspace 分配。
 	RunID string
+	// Workspace 该终端所属的**工作目录**（终端 ID 的命名空间；一个工作目录可有多个会话，
+	// 它们共享同一序号空间）。留空时退回 WorkDir（进程工作目录）。
+	Workspace string
 	// UpdateFn background 模式的运行状态刷新回调（写入 temp obj）
 	UpdateFn func(content string)
 	// BackgroundKind identifies the terminal's lifecycle kind (for example, background).
@@ -88,7 +138,11 @@ type Result struct {
 // Job 一次后台命令执行服务实例。
 // 每次运行命令即创建一个 Job（后台服务），调用方通过 Wait 等待其响应。
 type Job struct {
-	ID        string
+	// ID 终端 ID / run id（统一为 @temp/run/<n>）：终端推送、终端查询接口、wait/kill
+	// 与终端内容持久化路径（内部路径 TempPath(ID)）都用它。
+	ID string
+	// Workspace 该终端的工作目录：ID 在工作目录内唯一，因此服务以 (Workspace, ID) 索引任务。
+	Workspace string
 	State     JobState
 	Command   string
 	Reason    string
@@ -230,13 +284,16 @@ type submitReq struct {
 }
 
 type killReq struct {
-	id   string
-	resp chan error
+	sessionID uint32
+	workspace string
+	id        string
+	resp      chan error
 }
 
 type statusReq struct {
-	id   string
-	resp chan *Job
+	workspace string
+	id        string
+	resp      chan *Job
 }
 
 type activeReq struct {
@@ -244,8 +301,15 @@ type activeReq struct {
 	resp      chan []*Job
 }
 
+// endedReq 查询已结束任务（terminal/history 私有接口使用）。
+type endedReq struct {
+	sessionID uint32
+	resp      chan []*Job
+}
+
 type stopReq struct {
 	sessionID uint32
+	workspace string
 	id        string
 	resp      chan error
 }
@@ -257,11 +321,18 @@ type stopReq struct {
 type Service struct {
 	reqChan chan serviceReq
 	mu      sync.Mutex
-	jobs    map[string]*Job
-	active  map[string]*Job // running jobs only; completed jobs remain in jobs for wait/status compatibility
-	// runs 记录 background 模式的 runid（temp obj 内部路径）→ job，供 wait 查询
+	// jobs/active 以 (工作目录, 终端 ID) 为键：run 序号按工作目录重置，
+	// 因此 ID 只在工作目录内唯一（一个工作目录可以有多个会话）。
+	jobs   map[string]*Job
+	active map[string]*Job // running jobs only; completed jobs remain in jobs for wait/status compatibility
+	// runs 记录 (workspace, runid) → job，供 wait / kill 按 run id 查询
 	runs map[string]*Job
-	seq  int64
+}
+
+// jobKey 任务键：终端 ID 在工作目录内唯一，故以 (工作目录, ID) 索引
+// （与 runid → job 的 runs 索引同一个键）。
+func jobKey(workspace, id string) string {
+	return runKey(workspace, id)
 }
 
 // Default 全局后台命令执行服务单例。
@@ -312,7 +383,19 @@ func (s *Service) FindInWorkspace(workspace, runid string) *Job {
 
 // Submit 提交一次命令执行：等价于"新建一个后台服务（job）并启动"。
 // 立即返回 job，调用方通过 job.Wait 等待响应。
+// req.RunID 非空时校验其格式（必须是 @temp/run/<n>，也接受内部路径 run/<n>）。
+// 任务以 (Workspace, RunID) 索引；Workspace 留空时退回 WorkDir。
 func (s *Service) Submit(ctx context.Context, req *Request) (*Job, error) {
+	if req.Workspace == "" {
+		req.Workspace = req.WorkDir
+	}
+	if req.RunID != "" {
+		id, ok := NormalizeID(req.RunID)
+		if !ok {
+			return nil, fmt.Errorf("invalid run id %q: expected %s<n>", req.RunID, RunIDPrefix)
+		}
+		req.RunID = id
+	}
 	resp := make(chan *Job, 1)
 	s.reqChan <- &submitReq{req: req, ctx: ctx, resp: resp}
 	job := <-resp
@@ -322,10 +405,10 @@ func (s *Service) Submit(ctx context.Context, req *Request) (*Job, error) {
 	return job, nil
 }
 
-// Kill 终止指定 job（幂等）。
-func (s *Service) Kill(id string) error {
+// Kill 终止指定工作目录内的 job（幂等）。终端 ID 在工作目录内唯一，因此按工作目录定位。
+func (s *Service) Kill(workspace, id string) error {
 	resp := make(chan error, 1)
-	s.reqChan <- &killReq{id: id, resp: resp}
+	s.reqChan <- &killReq{workspace: workspace, id: id, resp: resp}
 	return <-resp
 }
 
@@ -336,6 +419,7 @@ func (s *Service) PromoteBackground(workspace, runID string, job *Job, req *Requ
 	}
 	req.RunID = runID
 	req.BackgroundKind = "shell"
+	job.Workspace = workspace
 	job.UpdateFn = req.UpdateFn
 	job.BackgroundKind = req.BackgroundKind
 	job.TerminalUpdateFn = req.TerminalUpdateFn
@@ -401,10 +485,11 @@ func (s *Service) KillRun(workspace string, sessionID uint32, runID string) erro
 	return nil
 }
 
-// Status 按 ID 查询 job（为 background 预留）。
-func (s *Service) Status(id string) *Job {
+// Status 按 (工作目录, 终端 ID/run id) 查询 job：序号按工作目录重置，同名 ID 可能出现在
+// 不同工作目录，因此调用方必须给出工作目录（服务端在 actions 层由 sessionId 解析得到）。
+func (s *Service) Status(workspace, id string) *Job {
 	resp := make(chan *Job, 1)
-	s.reqChan <- &statusReq{id: id, resp: resp}
+	s.reqChan <- &statusReq{workspace: workspace, id: id, resp: resp}
 	return <-resp
 }
 
@@ -418,10 +503,19 @@ func (s *Service) Active(sessionID uint32) []*Job {
 // ListActive is the descriptive alias for Active.
 func (s *Service) ListActive(sessionID uint32) []*Job { return s.Active(sessionID) }
 
-// Stop terminates a job only when it belongs to sessionID.
-func (s *Service) Stop(sessionID uint32, id string) error {
+// ListEnded returns ended jobs (finished or killed) owned by sessionID.
+// The content of each job is the final terminal snapshot written when the
+// command ended, which is the same data the terminal full push carries.
+func (s *Service) ListEnded(sessionID uint32) []*Job {
+	resp := make(chan []*Job, 1)
+	s.reqChan <- &endedReq{sessionID: sessionID, resp: resp}
+	return <-resp
+}
+
+// Stop terminates a job located by (工作目录, 终端 ID)，并校验其归属会话。
+func (s *Service) Stop(sessionID uint32, workspace, id string) error {
 	resp := make(chan error, 1)
-	s.reqChan <- &stopReq{sessionID: sessionID, id: id, resp: resp}
+	s.reqChan <- &stopReq{sessionID: sessionID, workspace: workspace, id: id, resp: resp}
 	return <-resp
 }
 
@@ -437,9 +531,23 @@ func (s *Service) doActive(sessionID uint32) []*Job {
 	return jobs
 }
 
-func (s *Service) doStop(sessionID uint32, id string) error {
+// doListEnded 收集指定会话中已结束（非 running）的任务。
+func (s *Service) doListEnded(sessionID uint32) []*Job {
 	s.mu.Lock()
-	job, ok := s.active[id]
+	defer s.mu.Unlock()
+	jobs := make([]*Job, 0, len(s.jobs))
+	for _, job := range s.jobs {
+		if job.SessionID != sessionID || job.Status() == JobRunning {
+			continue
+		}
+		jobs = append(jobs, job)
+	}
+	return jobs
+}
+
+func (s *Service) doStop(sessionID uint32, workspace, id string) error {
+	s.mu.Lock()
+	job, ok := s.active[jobKey(workspace, id)]
 	s.mu.Unlock()
 	if !ok {
 		return fmt.Errorf("job %s not found", id)
@@ -458,28 +566,33 @@ func (s *Service) loop() {
 		case *submitReq:
 			r.resp <- s.doSubmit(r.ctx, r.req)
 		case *killReq:
-			r.resp <- s.doKill(r.id)
+			r.resp <- s.doKill(r.workspace, r.id)
 		case *statusReq:
-			r.resp <- s.doStatus(r.id)
+			r.resp <- s.doStatus(r.workspace, r.id)
 		case *activeReq:
 			r.resp <- s.doActive(r.sessionID)
+		case *endedReq:
+			r.resp <- s.doListEnded(r.sessionID)
 		case *stopReq:
-			r.resp <- s.doStop(r.sessionID, r.id)
+			r.resp <- s.doStop(r.sessionID, r.workspace, r.id)
 		}
 	}
 }
 
 func (s *Service) doSubmit(ctx context.Context, req *Request) *Job {
+	// 终端 ID 与 run id 统一：调用方（run 工具）指定时沿用，否则按工作目录分配下一个序号。
+	terminalID := req.RunID
+	if terminalID == "" {
+		terminalID = NewRunID(req.Workspace)
+	}
 	s.mu.Lock()
-	s.seq++
-	id := fmt.Sprintf("run_%d", s.seq)
 	displayCmd := req.Command
 	if req.DisplayCommand != "" {
 		displayCmd = req.DisplayCommand
 	}
 	job := &Job{
 		stdinBlocked:     make(chan struct{}),
-		ID:               id,
+		ID:               terminalID,
 		State:            JobRunning,
 		Command:          displayCmd,
 		Reason:           req.Reason,
@@ -488,6 +601,7 @@ func (s *Service) doSubmit(ctx context.Context, req *Request) *Job {
 		UpdateFn:         req.UpdateFn,
 		cleanupFn:        req.CleanupFn,
 		SessionID:        req.SessionID,
+		Workspace:        req.Workspace,
 		AgentID:          req.AgentID,
 		ToolID:           req.ToolID,
 		DisplayCommand:   displayCmd,
@@ -499,21 +613,21 @@ func (s *Service) doSubmit(ctx context.Context, req *Request) *Job {
 	if req.InteractiveStdin {
 		job.stdinWriter = nil // initialized immediately before command start
 	}
-	s.jobs[id] = job
-	s.active[id] = job
-	if req.RunID != "" {
-		s.runs[runKey(req.WorkDir, req.RunID)] = job
-	}
+	// 以 (工作目录, 终端 ID) 为键：序号按工作目录重置，因此 ID 只在工作目录内唯一。
+	s.jobs[jobKey(req.Workspace, terminalID)] = job
+	s.active[jobKey(req.Workspace, terminalID)] = job
+	// 同一索引同时供 wait / kill 按 run id 查询。
+	s.runs[jobKey(req.Workspace, terminalID)] = job
 	s.mu.Unlock()
 
-	logger.Info("background service: new job %s (session=%d, agent=%s, runid=%s) cmd=%q", id, req.SessionID, req.AgentID, req.RunID, displayCmd)
+	logger.Info("background service: new job %s (session=%d, agent=%s, runid=%s) cmd=%q", terminalID, req.SessionID, req.AgentID, terminalID, displayCmd)
 	go s.execute(ctx, job, req)
 	return job
 }
 
-func (s *Service) doKill(id string) error {
+func (s *Service) doKill(workspace, id string) error {
 	s.mu.Lock()
-	job, ok := s.jobs[id]
+	job, ok := s.jobs[jobKey(workspace, id)]
 	s.mu.Unlock()
 	if !ok {
 		return fmt.Errorf("job %s not found", id)
@@ -522,10 +636,10 @@ func (s *Service) doKill(id string) error {
 	return nil
 }
 
-func (s *Service) doStatus(id string) *Job {
+func (s *Service) doStatus(workspace, id string) *Job {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.jobs[id]
+	return s.jobs[jobKey(workspace, id)]
 }
 
 // execute 在独立 goroutine 中执行命令并写入结果，最后关闭 done。
@@ -593,27 +707,24 @@ func (s *Service) execute(ctx context.Context, job *Job, req *Request) {
 		job.State = JobFinished
 	}
 	job.resultMu.Unlock()
-	content := job.Content()
+	// 最终内容快照对前台/后台任务都写入：终端全量推送与已结束终端内容查询
+	// （alk.cxykevin.top/session/terminal/history）共用这一份数据。
+	content := bgFinalContent(job.Command, result)
+	job.setContent(content)
 	if job.UpdateFn != nil {
-		content = bgFinalContent(job.Command, result)
-		job.setContent(content)
 		job.UpdateFn(content)
 	}
 
 	// Remove the job before broadcasting the final snapshot, otherwise the
 	// snapshot still reports this finished job as active/running.
 	s.mu.Lock()
-	delete(s.active, job.ID)
+	delete(s.active, jobKey(job.Workspace, job.ID))
 	s.mu.Unlock()
 	if job.TerminalUpdateFn != nil {
 		job.TerminalUpdateFn(job.ID, "stop", content)
 	}
 	if req.ShellStopFn != nil && req.BackgroundKind == "shell" {
-		runID := req.RunID
-		if runID == "" {
-			runID = job.ID
-		}
-		req.ShellStopFn(runID, job.DisplayCommand, result)
+		req.ShellStopFn(job.ID, job.DisplayCommand, result)
 	}
 }
 
@@ -740,7 +851,7 @@ func (s *Service) runCommand(ctx context.Context, job *Job, req *Request) *Resul
 			if visible != "" {
 				_, _ = buf.WriteString(visible)
 			}
-			req.WorkflowOutputFn(req.RunID, visible, events)
+			req.WorkflowOutputFn(job.ID, visible, events)
 			return len(p), nil
 		})
 	}
@@ -750,7 +861,7 @@ func (s *Service) runCommand(ctx context.Context, job *Job, req *Request) *Resul
 	if req.WorkflowOutputFn != nil && req.Program != "" {
 		if tail := workflowParser.Flush(); tail != "" {
 			_, _ = buf.WriteString(tail)
-			req.WorkflowOutputFn(req.RunID, tail, nil)
+			req.WorkflowOutputFn(job.ID, tail, nil)
 		}
 	}
 

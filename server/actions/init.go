@@ -38,6 +38,8 @@ var AgentCapabilities = u.H{
 	// alkaid0 扩展能力：服务器支持的私有扩展协议版本
 	"alk.cxykevin.top/alkaid0/v0.4": u.H{},
 	"alk.cxykevin.top/alkaid0/v0.5": u.H{},
+	// v0.6：已结束终端会话内容查询（alk.cxykevin.top/session/terminal/history）
+	"alk.cxykevin.top/alkaid0/v0.6": u.H{},
 }
 
 // AgentInfo 服务端信息常量
