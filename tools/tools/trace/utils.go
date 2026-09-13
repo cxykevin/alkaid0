@@ -1,29 +1,9 @@
 package trace
 
-import (
-	"bytes"
-	"io"
-
-	"golang.org/x/net/html/charset"
-	"golang.org/x/text/transform"
-)
-
-// fileContentToString 将文件内容转换为字符串
+// fileContentToString 将文件内容转换为字符串（编码检测见 DecodeText）。
+// 判定为二进制时返回空串，调用方据此给出"可能是二进制文件"的提示，
+// 而不是把乱码喂给模型。
 func fileContentToString(content []byte) string {
-	if len(content) == 0 {
-		return ""
-	}
-
-	// 使用 golang.org/x/net/html/charset 自动检测编码
-	// 它会处理 BOM 并尝试预测编码
-	e, _, _ := charset.DetermineEncoding(content, "")
-	reader := transform.NewReader(bytes.NewReader(content), e.NewDecoder())
-
-	decoded, err := io.ReadAll(reader)
-	if err != nil {
-		// 如果转换失败，兜底使用原始 string 转换
-		return string(content)
-	}
-
-	return string(decoded)
+	text, _ := DecodeText(content)
+	return text
 }
