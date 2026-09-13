@@ -114,6 +114,43 @@ func TestToolCallingTerminalID(t *testing.T) {
 	nilChats.SetToolCallingTerminalID("call_1", "@temp/run/1")
 }
 
+// TestToolCallingRawParams 验证原始参数（用于把展示 content 规范化成完整参数渲染）的
+// 存取与清空语义，以及工具调用 ID 解析（call_<chatID>_<msgID>_<toolID>）。
+func TestToolCallingRawParams(t *testing.T) {
+	c := &Chats{}
+	c.SetToolCallingRawParams("call_9_42_tool_a", map[string]any{"command": "echo hi"})
+	if raw, ok := c.TakeToolCallingRawParams("call_9_42_tool_a").(map[string]any); !ok || raw["command"] != "echo hi" {
+		t.Errorf("TakeToolCallingRawParams = %v, want command=echo hi", c.TakeToolCallingRawParams("call_9_42_tool_a"))
+	}
+	// 取出后即清空，重复取返回 nil
+	if raw := c.TakeToolCallingRawParams("call_9_42_tool_a"); raw != nil {
+		t.Errorf("原始参数取出后应清空，实际 %v", raw)
+	}
+	// 空 id / nil 值不写入
+	c.SetToolCallingRawParams("", map[string]any{"a": 1})
+	c.SetToolCallingRawParams("call_1", nil)
+	if len(c.ToolCallingRawParams) != 0 {
+		t.Errorf("空 id/nil 值不应写入: %v", c.ToolCallingRawParams)
+	}
+
+	// ClearToolCalling 一并清理未消费的原始参数
+	c.SetToolCallingRawParams("call_1", map[string]any{"a": 1})
+	c.ClearToolCalling()
+	if len(c.ToolCallingRawParams) != 0 {
+		t.Errorf("ClearToolCalling 应清空原始参数: %v", c.ToolCallingRawParams)
+	}
+
+	// 工具调用 ID 解析
+	if msgID, toolID := splitToolCallingID("call_9_42_tool_a"); msgID != 42 || toolID != "tool_a" {
+		t.Errorf("splitToolCallingID = (%d, %q), want (42, tool_a)", msgID, toolID)
+	}
+	for _, bad := range []string{"", "call_9", "tool_9_42_a", "call_9_x_a"} {
+		if msgID, toolID := splitToolCallingID(bad); msgID != 0 || toolID != "" {
+			t.Errorf("splitToolCallingID(%q) = (%d, %q), want (0, \"\")", bad, msgID, toolID)
+		}
+	}
+}
+
 // TestSetToolCallingNilReceiver 空指针调用封装方法不应 panic。
 func TestSetToolCallingNilReceiver(t *testing.T) {
 	var c *Chats

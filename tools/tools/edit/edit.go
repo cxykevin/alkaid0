@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"bytes"
 	_ "embed" // embed
-	"encoding/json"
 	"errors"
 	"fmt"
 	"mime"
@@ -319,34 +318,6 @@ func buildDiffContent(absPath string, oldContent, newContent string, isNew bool)
 			"format": "git_patch",
 			"text":   patchText,
 		},
-	}
-}
-
-// saveToolCallingContent 将工具调用的展示 content（含 Diffs 段）持久化到当前消息，
-// 按工具调用 ID 索引（map JSON），供会话还原时按 ID 重放 Content。
-func saveToolCallingContent(session *structs.Chats, toolID string, content []u.H) {
-	if session == nil || session.DB == nil {
-		return
-	}
-	var msg structs.Messages
-	if err := session.DB.First(&msg, session.CurrentMessageID).Error; err != nil {
-		logger.Warn("failed to load message %d for tool content: %v", session.CurrentMessageID, err)
-		return
-	}
-	contentMap := map[string]any{}
-	if msg.ToolCallingContent != "" {
-		if err := json.Unmarshal([]byte(msg.ToolCallingContent), &contentMap); err != nil {
-			logger.Warn("failed to unmarshal tool content: %v", err)
-		}
-	}
-	contentMap[toolID] = content
-	b, err := json.Marshal(contentMap)
-	if err != nil {
-		logger.Warn("failed to marshal tool content: %v", err)
-		return
-	}
-	if err := session.DB.Model(&structs.Messages{}).Where("id = ?", session.CurrentMessageID).Update("tool_calling_content", string(b)).Error; err != nil {
-		logger.Warn("failed to save tool content: %v", err)
 	}
 }
 
@@ -705,8 +676,9 @@ func writeFile(session *structs.Chats, mp map[string]*any, cross []*any) (bool, 
 	if toolIDPtr, ok := mp["_id"]; ok && toolIDPtr != nil {
 		if toolID, ok := (*toolIDPtr).(string); ok && toolID != "" {
 			toolCallID := fmt.Sprintf("call_%d_%d_%s", session.ID, session.CurrentMessageID, toolID)
+			// SetToolCalling 内部会把最终展示内容（含 Diffs 段）按工具调用 ID 落库，
+			// 供 session/resume 历史回放重放，无需额外保存。
 			session.SetToolCalling(toolCallID, respObj, "edit")
-			saveToolCallingContent(session, toolID, respObj)
 		}
 	}
 

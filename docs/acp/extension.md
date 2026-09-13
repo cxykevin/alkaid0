@@ -69,6 +69,7 @@ alkaid0 现在遵循 ACP v2 标准事件，且字段置于 update 对象**顶层
 - **消息**：`user_message` / `agent_message` / `agent_thought`（整消息 upsert，携带 `messageId` 与完整 `content` 数组）；`user_message_chunk` / `agent_message_chunk` / `agent_thought_chunk`（流式 chunk，携带 `messageId` 与单个 content 块）。
 - **`state_update`**：`state` 为 `running` / `idle` / `requires_action`；`idle` 时携带 `stopReason`（`end_turn` / `max_tokens` / `max_turn_requests` / `refusal` / `cancelled`）。`session/prompt` 返回 `{}` 后按此驱动轮次状态。
 - **`tool_call_update`**：首次出现某 `toolCallId` 创建调用，后续按 omit/`null`/value patch。`status` 取值 `pending` / `streaming` / `completed` / `cancelled`（`streaming` 为 alkaid0 的流式增量预览，0.1s 限流推送完整快照）。
+- **`rawInput` / `rawOutput` 不发送**：标准 ACP 的这两个字段 alkaid0 **一律不填**（`tool_call_update` 与 `session/request_permission` 的 `subject.toolCall` 都不带）。工具入参统一由 `content` 给出——文本块（完整参数的 `Key: value` 渲染）与 `alk.cxykevin.top/calling_info.args`（见 §4.1），两者内容相同且**参数不省略**；客户端按 `content` 渲染即可，不需要也不再期望 `rawInput`。
 - **`plan_update`**：`plan` 字段形如 `{ "type": "items", "planId": "plan_<chatID>", "entries": [...] }`。
 - **`usage_update`**：`used` / `size`（`used` = 累计 token，`size` = 当前模型 `TokenLimit`）。
 - **`config_option_update`**：`configOptions` 字段（顶层）。
@@ -441,11 +442,22 @@ ACP v2 中 `session/update` 是服务端 → 客户端的通知（含 `session_i
 `tool_call_update` 的 `content` 为 `ToolCallContent[]` 数组。alkaid0 每个元素为：
 
 - `type="content"` 的标准内容块（`content` 内为 `{ "type": "text", "text": ... }`）。
-- `type="alk.cxykevin.top/calling_info"` ***object*** 对工具原始调用参数的对象格式的表示。该字段对于 alkaid0 工具调用 **必然存在**。
+- `type="alk.cxykevin.top/calling_info"` ***object*** 对工具原始调用参数的对象格式的表示。该字段对于 alkaid0 工具调用 **必然存在**——工具自身没有写展示内容时（无 OnHook 的工具、或因 scope 未启用的 hook），服务端会按同一格式补一份参数推送，因此任何一次工具调用（直播与回放）都能拿到完整参数，协议里不存在单独的 `rawInput`/`rawOutput` 字段。
 
   - `name` ***string***: 工具原始名称。
   - `messageID` ***number(uint64)***: 工具原始调用消息 ID。
-  - `args` ***object***: 工具调用参数。
+  - `args` ***object***: 工具调用的**完整原始参数**。协议不发 `rawInput`（见 §2.1），参数只从这里与文本块给出。
+
+**参数不省略**：文本块与 `args` 都按模型实际发出的**全部**参数生成，不会因为"面向 AI 的
+历史回放会截断参数"（`provider/request/build` 的 `maxReplayArgRunes`，超阈值的历史参数
+对 AI 显示为 `...`）而对人省略任何一个参数。
+
+**直播与回放逐字节一致**：服务端在工具调用进入最终状态时，用同一份渲染规范化展示 content
+（文本块 = 完整参数的 `Key: value` 行、键排序；`calling_info.args` = 完整参数），
+再随消息落库（`messages.tool_calling_content`，按工具调用 ID 索引）；
+`session/resume` 按 ID 原样重放，早期数据（该列为空）则用同一个渲染函数从落库参数重建。
+`streaming` 预览、最终状态、`cancelled` 与 `session/resume` 回放四条路径产出的 `content`
+完全相同，客户端无需区分来源。
 
 > 注：ACP v2 约定实现自定义 type 以 `_` 开头，`alk.cxykevin.top/calling_info` 不含 `_`。因该字段为 alkaid0 自有客户端消费，维持现状（已知合规性问题）。
 

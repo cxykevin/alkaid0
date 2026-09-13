@@ -4,6 +4,9 @@ import (
 	"bytes"
 	"database/sql/driver"
 	"encoding/gob"
+	"encoding/json"
+
+	"gorm.io/gorm"
 )
 
 // MessagesReferType 消息引用类型
@@ -102,4 +105,31 @@ type Messages struct {
 	CompletionTokens uint32
 	TotalTokens      uint32
 	CachedTokens     uint32
+}
+
+// SaveToolCallingContent 把单个工具调用的展示 content 按工具调用 ID 合并写入消息的
+// tool_calling_content 列（格式 {"<toolID>": [content...]}），供 session/resume 历史回放
+// 按 ID 重放 content（含 alk.cxykevin.top/calling_info 参数）。db 为空、messageID 为 0
+// 或 toolID 为空时静默跳过，返回 nil。
+func SaveToolCallingContent(db *gorm.DB, messageID uint64, toolID string, content any) error {
+	if db == nil || messageID == 0 || toolID == "" || content == nil {
+		return nil
+	}
+	var msg Messages
+	if err := db.First(&msg, messageID).Error; err != nil {
+		return err
+	}
+	contentMap := map[string]any{}
+	if msg.ToolCallingContent != "" {
+		if err := json.Unmarshal([]byte(msg.ToolCallingContent), &contentMap); err != nil {
+			// 旧数据损坏时丢弃，避免单个工具调用写坏整列。
+			contentMap = map[string]any{}
+		}
+	}
+	contentMap[toolID] = content
+	b, err := json.Marshal(contentMap)
+	if err != nil {
+		return err
+	}
+	return db.Model(&Messages{}).Where("id = ?", messageID).Update("tool_calling_content", string(b)).Error
 }

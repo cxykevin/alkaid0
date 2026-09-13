@@ -107,6 +107,28 @@ func ExecToolOnHook(session *structs.Chats, name string, args map[string]*any, t
 		return nil
 	}
 
+	// 记录本次工具调用的原始参数，供 server 层把展示 content 规范化成"完整参数"渲染
+	// （文本块与 calling_info.args；协议不发送 rawInput）。
+	// 按 session.CurrentToolID 暂存：调用方（流式解析 / 审批执行）在调用前已按同一 ID 设置。
+	// 浅拷贝避免后续 hook 增删参数影响已记录的原始输入。
+	if session != nil && session.CurrentToolID != "" {
+		session.SetToolCallingRawParams(session.CurrentToolID, maps.Clone(args))
+	}
+
+	// 兜底：每次工具调用都必须把参数推给客户端。工具的 OnHook 没有写展示内容时
+	// （tree/date/task/memory 等无 OnHook 的工具，或 hook 因 scope 被跳过），
+	// 在这里按统一的 calling_info 格式补一份——直播与 session/resume 回放因此同形，
+	// 参数也不会因为"这个工具没写展示内容"而缺失。
+	defer func() {
+		if session == nil || session.CurrentToolID == "" {
+			return
+		}
+		if session.HasToolCallingFor(session.CurrentToolID) {
+			return
+		}
+		session.SetToolCalling(session.CurrentToolID, structs.BuildToolCallingContent(name, session.CurrentMessageID, args), name)
+	}()
+
 	hookTmp := toolobj.GetToolHooks(name)
 
 	// 将tmp中的钩子按Priority排序

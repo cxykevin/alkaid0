@@ -140,9 +140,11 @@ func updateAgentInfo(session *structs.Chats, mp map[string]*any, cross []*any, t
 	return true, cross, nil
 }
 
-// updateInfo 处理激活/停用子代理的调用信息记录
-func updateInfo(session *structs.Chats, mp map[string]*any, cross []*any, toolID string) (bool, []*any, error) {
-	currToolName := u.Ternary(session.CurrentAgentID == "", "activate_agent", "deactivate_agent")
+// updateInfo 处理激活/停用子代理的调用信息记录。
+// toolDisplayName 为模型实际调用的工具名（activate_agent / deactivate_agent）：
+// 展示名必须以调用名为准，否则直播的标题/名称依赖 session 状态，与 session/resume
+// 回放（只能用落库的工具名）不一致。
+func updateInfo(session *structs.Chats, mp map[string]*any, cross []*any, toolID string, toolDisplayName string) (bool, []*any, error) {
 	toolCallID := fmt.Sprintf("call_%d_%d_%s", session.ID, session.CurrentMessageID, toolID)
 	respString := ""
 	var nameVal *string
@@ -167,16 +169,25 @@ func updateInfo(session *structs.Chats, mp map[string]*any, cross []*any, toolID
 		},
 	}, {
 		"type":      "alk.cxykevin.top/calling_info",
-		"name":      currToolName,
+		"name":      toolDisplayName,
 		"messageID": session.CurrentMessageID,
 		"args": u.H{
 			"name":   nameVal,
 			"prompt": promptVal,
 		},
 	}}
-	session.SetToolCalling(toolCallID, respObj, currToolName)
-	// editAgent 处理子代理的创建或更新操作
+	session.SetToolCalling(toolCallID, respObj, toolDisplayName)
 	return true, cross, nil
+}
+
+// updateActivateInfo 注册给 activate_agent 的 OnHook。
+func updateActivateInfo(session *structs.Chats, mp map[string]*any, cross []*any, toolID string) (bool, []*any, error) {
+	return updateInfo(session, mp, cross, toolID, "activate_agent")
+}
+
+// updateDeactivateInfo 注册给 deactivate_agent 的 OnHook。
+func updateDeactivateInfo(session *structs.Chats, mp map[string]*any, cross []*any, toolID string) (bool, []*any, error) {
+	return updateInfo(session, mp, cross, toolID, "deactivate_agent")
 }
 
 func editAgent(session *structs.Chats, mp map[string]*any, cross []*any) (bool, []*any, map[string]*any, error) {
@@ -536,7 +547,7 @@ func load() string {
 		},
 		OnHook: toolobj.OnHookFunction{
 			Priority: 100,
-			Func:     updateInfo,
+			Func:     updateActivateInfo,
 		},
 		PostHook: toolobj.PostHookFunction{
 			Priority: 100,
@@ -553,7 +564,7 @@ func load() string {
 		},
 		OnHook: toolobj.OnHookFunction{
 			Priority: 100,
-			Func:     updateInfo,
+			Func:     updateDeactivateInfo,
 		},
 		PostHook: toolobj.PostHookFunction{
 			Priority: 100,

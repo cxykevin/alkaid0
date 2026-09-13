@@ -303,7 +303,9 @@ func TestUpdateInfo_ActivateMode(t *testing.T) {
 		"name":   anyPtr("coder-agent"),
 		"prompt": anyPtr("activate prompt"),
 	}
-	updateInfo(session, mp, nil, "tool_3")
+	// 展示名取自模型实际调用的工具名，不再依赖 session.CurrentAgentID 推断
+	// （后者会让直播标题/名称与 session/resume 回放不一致）。
+	updateActivateInfo(session, mp, nil, "tool_3")
 
 	toolCallID := "call_1_0_tool_3"
 	if _, ok := session.ToolCallingContext[toolCallID]; !ok {
@@ -317,13 +319,15 @@ func TestUpdateInfo_ActivateMode(t *testing.T) {
 func TestUpdateInfo_DeactivateMode(t *testing.T) {
 	db := setupTestDB(t)
 	session := setupTestSession(t, db)
+	// session 上挂着活跃子代理时，修复前的实现会把展示名推断成 activate_agent；
+	// 现在必须以实际调用名（deactivate_agent）为准，直播与回放才一致。
 	session.CurrentAgentID = "active-agent"
 
 	mp := map[string]*any{
 		"name":   anyPtr("active-agent"),
 		"prompt": anyPtr("deactivate prompt"),
 	}
-	updateInfo(session, mp, nil, "tool_4")
+	updateDeactivateInfo(session, mp, nil, "tool_4")
 
 	toolCallID := "call_1_0_tool_4"
 	if session.ToolCallingType[toolCallID] != "deactivate_agent" {

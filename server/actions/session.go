@@ -461,6 +461,7 @@ func broadcastToolCallCancelled(sessionID string, pending *[]funcs.ToolCall) {
 	}
 	for _, tool := range *pending {
 		toolCallID := fmt.Sprintf("call_%d_%d_%s", obj.session.ID, obj.session.CurrentMessageID, tool.ID)
+		// 与直播最终状态、session/resume 回放共用同一份规范化 content/参数渲染。
 		_ = broadcastSessionUpdate(sessionID, SessionUpdate{
 			SessionID: sessionID,
 			Update: SessionUpdateUpdate{
@@ -469,7 +470,7 @@ func broadcastToolCallCancelled(sessionID string, pending *[]funcs.ToolCall) {
 				Title:         fmt.Sprintf("[Call %s]%s", tool.Name, tool.ID),
 				Kind:          u.Default(ToolNameToTypeMap, tool.Name, "other"),
 				Status:        "cancelled",
-				Content:       []u.H{{"type": "alk.cxykevin.top/calling_info", "name": tool.Name, "args": tool.Parameters}},
+				Content:       structs.BuildToolCallingContent(tool.Name, obj.session.CurrentMessageID, tool.Parameters),
 			},
 		}, 0)
 	}
@@ -528,7 +529,7 @@ func requestPermission(obj *sessionObj, pending *[]funcs.ToolCall) (bool, error)
 				Title:      fmt.Sprintf("[Call %s]%s", tool.Name, tool.ID),
 				Kind:       u.Default(ToolNameToTypeMap, tool.Name, "other"),
 				Status:     "pending",
-				Content:    []u.H{{"type": "alk.cxykevin.top/calling_info", "name": tool.Name, "args": tool.Parameters}},
+				Content:    structs.BuildToolCallingContent(tool.Name, obj.session.CurrentMessageID, tool.Parameters),
 			},
 		},
 		Options: []PermissionOption{
@@ -934,6 +935,9 @@ func loadSession(cwd string, id *uint32, knowID bool, hidden ...bool) (*structs.
 						if len(stx) == 4 {
 							s = stx[3]
 						}
+						// 流式预览同样用完整参数规范化：预览、最终状态与 session/resume
+						// 回放的 content 一致，客户端不会在完成时看到内容跳变。
+						rawParams := sess.TakeToolCallingRawParams(id)
 						err = broadcastSessionUpdate(sessID, SessionUpdate{
 							SessionID: sessID,
 							Update: SessionUpdateUpdate{
@@ -942,7 +946,7 @@ func loadSession(cwd string, id *uint32, knowID bool, hidden ...bool) (*structs.
 								Kind:          ToolNameToTypeMap[typ[id]],
 								Status:        "streaming",
 								Title:         fmt.Sprintf("[Call %s]%s", typ[id], s),
-								Content:       val,
+								Content:       structs.NormalizeToolCallingContent(val, rawParams),
 							},
 						}, 0)
 						if err != nil {
@@ -1770,12 +1774,15 @@ type SessionUpdateUpdate struct {
 	RunID              string                `json:"alk.cxykevin.top/run_id,omitempty"` // run background 成功后随工具回调推送
 	// ToolTerminalID 顶层 alk.cxykevin.top/terminal_id：run 工具调用的终端 ID（run_1），
 	// 终端结束后客户端可据此取回该终端的持久化内容。
-	ToolTerminalID    string         `json:"alk.cxykevin.top/terminal_id,omitempty"`
-	Command           string         `json:"command,omitempty"`
-	Success           bool           `json:"success,omitempty"`
-	Killed            bool           `json:"killed,omitempty"`
-	Kind              string         `json:"kind,omitempty"`              // tool_call_update
-	Status            string         `json:"status,omitempty"`            // tool_call_update
+	ToolTerminalID string `json:"alk.cxykevin.top/terminal_id,omitempty"`
+	Command        string `json:"command,omitempty"`
+	Success        bool   `json:"success,omitempty"`
+	Killed         bool   `json:"killed,omitempty"`
+	Kind           string `json:"kind,omitempty"`   // tool_call_update
+	Status         string `json:"status,omitempty"` // tool_call_update
+	// 说明：标准 ACP 的 rawInput/rawOutput 字段 alkaid0 **不发送**——工具入参经
+	// content 里的文本块与 alk.cxykevin.top/calling_info.args 完整给出（见
+	// docs/acp/extension.md §4.1），避免同一份参数在客户端重复渲染。
 	State             string         `json:"state,omitempty"`             // state_update
 	StopReason        string         `json:"stopReason,omitempty"`        // state_update idle
 	ConfigOptions     []ConfigOption `json:"configOptions,omitempty"`     // config_option_update
@@ -2018,7 +2025,14 @@ func SessionResume(req SessionResumeRequest, call func(string, any, *string) err
 							logger.Warn("error when replay session without tool id: %v", err)
 							continue
 						}
-						content, _ := contentMap[toolID]
+						// 原始参数（落库的 tool_calling_json_string.parameters）：重建展示内容的数据来源。
+						params, _ := u.GetH[any](obj, "parameters")
+						content, hasContent := contentMap[toolID]
+						if !hasContent || content == nil {
+							// 兜底：早期数据的 tool_calling_content 为空（历史上只有 edit 落库），
+							// 用与直播同一份渲染从完整参数重建，保证两端展示一致、参数不省略。
+							content = structs.BuildToolCallingContent(toolName, prevMsgID, params)
+						}
 						err = call("session/update", SessionUpdate{
 							SessionID: req.SessionID,
 							Update: SessionUpdateUpdate{

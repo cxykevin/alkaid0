@@ -98,7 +98,9 @@ func updateInfo(session *structs.Chats, mp map[string]*any, cross []*any, toolID
 			"unread": unreadVal,
 		},
 	}}
-	session.SetToolCalling(toolCallID, respObj, "trace")
+	// 类型用模型实际调用的工具名（read）：直播的标题/kind 因此与 session/resume
+	// 回放（从落库工具名重建）完全一致。
+	session.SetToolCalling(toolCallID, respObj, toolName)
 	return true, cross, nil
 }
 

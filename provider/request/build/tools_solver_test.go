@@ -91,12 +91,20 @@ func TestToolsSolverStreamingOnHook(t *testing.T) {
 		t.Fatal("流式阶段 partial 调用后 ToolCallingContext 应为非空（增量流式已恢复）")
 	}
 	ctx, typ, streaming := session.SnapshotToolCalling()
-	if len(ctx) != 1 || typ["call_1_1_tid"] != "test_tool" {
-		t.Errorf("ToolCallingContext 内容错误: ctx=%v typ=%v", ctx, typ)
+	if len(ctx) == 0 {
+		t.Fatal("流式阶段 partial 调用后 ToolCallingContext 不应为空")
 	}
-	// State=StateReciving 下 partial 写入应为流式增量（streaming=true）
-	if !streaming["call_1_1_tid"] {
-		t.Error("State=StateReciving 下 OnHook 写入应标记为流式增量（streaming=true）")
+	// 测试工具把内容写死在 call_1_1_* 上（真实工具写的是 session.CurrentToolID）；
+	// ExecToolOnHook 的兜底会为当前工具调用补一份 calling_info 参数推送，
+	// 因此当前 ID 必然有内容，且同样标记为流式增量。
+	if _, ok := ctx["call_1_100_tid"]; !ok {
+		t.Errorf("当前工具调用应有展示内容: ctx=%v", ctx)
+	}
+	if !streaming["call_1_100_tid"] {
+		t.Error("State=StateReciving 下写入应标记为流式增量（streaming=true）")
+	}
+	if typ["call_1_1_tid"] != "test_tool" {
+		t.Errorf("测试工具写入条目类型错误: typ=%v", typ)
 	}
 }
 

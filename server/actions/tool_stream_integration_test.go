@@ -1,7 +1,9 @@
 package actions
 
 import (
+	"encoding/json"
 	"os"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -9,9 +11,20 @@ import (
 	"github.com/cxykevin/alkaid0/config"
 	cfgStructs "github.com/cxykevin/alkaid0/config/structs"
 	"github.com/cxykevin/alkaid0/mock/openai"
+	"github.com/cxykevin/alkaid0/storage/structs"
 	"github.com/cxykevin/alkaid0/tools/index"
 	u "github.com/cxykevin/alkaid0/utils"
 )
+
+// updateWireJSON 把更新序列化为线上 JSON，用于断言协议字段是否出现。
+func updateWireJSON(t *testing.T, upd SessionUpdateUpdate) string {
+	t.Helper()
+	b, err := json.Marshal(upd)
+	if err != nil {
+		t.Fatalf("marshal update failed: %v", err)
+	}
+	return string(b)
+}
 
 // TestToolCallStreaming 验证原生 tool_calls 增量流式广播：
 // mock 返回 delta.tool_calls 参数增量 → solver 增量解析 →
@@ -92,6 +105,10 @@ func TestToolCallStreaming(t *testing.T) {
 	if streamUpd.Content == nil {
 		t.Fatal("streaming event content should not be nil")
 	}
+	// 协议不发送 rawInput：流式预览的参数同样只走 content。
+	if wire := updateWireJSON(t, streamUpd); strings.Contains(wire, "\"rawInput\"") {
+		t.Errorf("streaming tool_call_update 不应携带 rawInput: %s", wire)
+	}
 	t.Logf("received streaming event: toolCallId=%s kind=%s", streamUpd.ToolCallID, streamUpd.Kind)
 
 	// 等待最终 tool_call（审批自动通过后 ExecuteToolCalls 完成触发）。
@@ -114,8 +131,65 @@ func TestToolCallStreaming(t *testing.T) {
 		}
 		return upd.SessionUpdate == "tool_call_update" && upd.ToolCallID != "" && upd.Status == "completed"
 	}
-	if _, ok := waitForUpdate(calls2, matchFinal, 20*time.Second); !ok {
+	finalCall, ok := waitForUpdate(calls2, matchFinal, 20*time.Second)
+	if !ok {
 		t.Fatal("did not receive final tool_call_update event")
+	}
+	finalSu, ok := finalCall.Data.(SessionUpdate)
+	if !ok {
+		t.Fatalf("final update 类型错误: %T", finalCall.Data)
+	}
+	finalUpd, ok := finalSu.Update.(SessionUpdateUpdate)
+	if !ok {
+		t.Fatalf("final update 载荷类型错误: %T", finalSu.Update)
+	}
+	if wire := updateWireJSON(t, finalUpd); strings.Contains(wire, "\"rawInput\"") {
+		t.Errorf("最终 tool_call_update 不应携带 rawInput（参数经 content 给出）: %s", wire)
+	}
+	// 最终 content 必须是模型实际发出的完整参数（mock 分片流式给出 path/target/text）：
+	// 文本块按完整参数渲染，calling_info.args 同样完整。
+	contentJSON, err := json.Marshal(finalUpd.Content)
+	if err != nil {
+		t.Fatalf("marshal content failed: %v", err)
+	}
+	gotArgs := map[string]any{}
+	for _, block := range finalUpd.Content.([]u.H) {
+		if block["type"] != structs.ToolCallingInfoType {
+			continue
+		}
+		args, ok := block["args"].(map[string]any)
+		if !ok {
+			t.Fatalf("calling_info.args 不是对象: %s", contentJSON)
+		}
+		gotArgs = args
+	}
+	if len(gotArgs) == 0 {
+		t.Fatalf("最终 content 缺少 calling_info：%s", contentJSON)
+	}
+	for key, want := range map[string]string{"path": "a.txt", "target": "x", "text": "hello"} {
+		if got, _ := gotArgs[key].(string); got != want {
+			t.Errorf("最终 calling_info.args[%s] = %q, want %q（实际 %s）", key, got, want, contentJSON)
+		}
+	}
+
+	// 最终展示内容应已随消息落库：session/resume 回放按工具调用 ID 从这里重放
+	// content（含 alk.cxykevin.top/calling_info 参数与 edit 的 Diffs 段）。
+	sessLock.Lock()
+	obj := sessions[sessionID]
+	sessLock.Unlock()
+	if obj == nil || obj.session == nil || obj.session.DB == nil {
+		t.Fatal("session not registered")
+	}
+	var stored structs.Messages
+	if err := obj.session.DB.Where("chat_id = ? AND tool_calling_json_string != ''", obj.session.ID).
+		Order("id DESC").First(&stored).Error; err != nil {
+		t.Fatalf("load tool calling message failed: %v", err)
+	}
+	if !strings.Contains(stored.ToolCallingContent, "call_mock_1") {
+		t.Errorf("最终工具调用展示内容应落库（key=call_mock_1），实际 %q", stored.ToolCallingContent)
+	}
+	if !strings.Contains(stored.ToolCallingContent, "calling_info") {
+		t.Errorf("落库内容应包含 alk.cxykevin.top/calling_info，实际 %q", stored.ToolCallingContent)
 	}
 
 	closeSession(sessionID)

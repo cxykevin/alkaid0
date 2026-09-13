@@ -3,13 +3,18 @@ package structs
 import (
 	"context"
 	"maps"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/cxykevin/alkaid0/config/structs"
+	"github.com/cxykevin/alkaid0/log"
 	"github.com/cxykevin/alkaid0/ui/state"
 	"gorm.io/gorm"
 )
+
+var logger = log.New("storage")
 
 // // ChatAlivePolicy 对话存活策略
 // type ChatAlivePolicy uint16
@@ -70,6 +75,11 @@ type Chats struct {
 	// StateToolCalling（审批后执行）→ 最终。SetCallback 据此选事件名。
 	ToolCallingStreaming map[string]bool   `gorm:"-" json:"-"`
 	ToolCallingRunID     map[string]string `gorm:"-" json:"-"`
+	// ToolCallingRawParams 记录每个工具调用的**原始参数**，仅用于把展示 content 规范化成
+	// "完整参数"渲染（文本块与 calling_info.args），不对外发送（协议里没有 rawInput 字段）。
+	// 由 tools.ExecToolOnHook 在 OnHook 前按 CurrentToolID 写入；未取出的条目在
+	// ClearToolCalling 时清理。
+	ToolCallingRawParams map[string]any `gorm:"-" json:"-"`
 	// ToolCallingTerminalID 记录每个工具调用对应的终端 ID（统一为 @temp/run/<n>），
 	// 随 tool_call_update 顶层 alk.cxykevin.top/terminal_id 广播，
 	// 客户端据此在终端结束后取回该终端的持久化内容。
@@ -267,7 +277,6 @@ func (c *Chats) SetToolCalling(id string, resp any, typ string) {
 		return
 	}
 	c.toolCtxMu.Lock()
-	defer c.toolCtxMu.Unlock()
 	if c.ToolCallingContext == nil {
 		c.ToolCallingContext = make(map[string]any)
 	}
@@ -281,9 +290,95 @@ func (c *Chats) SetToolCalling(id string, resp any, typ string) {
 		c.ToolCallingRunID = make(map[string]string)
 	}
 	streaming := c.State == state.StateReciving || c.State == state.StateRequesting
+	if !streaming {
+		// 最终状态（审批后执行 / 工具 PostHook）：用完整原始参数规范化展示内容——
+		// 文本块与 calling_info.args 都改成"参数不省略"的渲染；归一化后的参数回写，
+		// 直播广播的 content 与 session/resume 回放的完全一致即由此保证。
+		if normalized := NormalizeToolCallingParams(c.ToolCallingRawParams[id]); normalized != nil {
+			resp = NormalizeToolCallingContent(resp, normalized)
+			c.ToolCallingRawParams[id] = normalized
+		}
+	}
 	c.ToolCallingContext[id] = resp
 	c.ToolCallingType[id] = typ
 	c.ToolCallingStreaming[id] = streaming
+	c.toolCtxMu.Unlock()
+
+	// 最终状态（审批后执行/工具 PostHook）的展示内容随消息落库：
+	// session/resume 历史回放只能读数据库，此前仅 edit 工具自行持久化，
+	// 其余工具的 content（含 calling_info 参数）在还原时全部丢失。
+	// 流式增量预览（streaming=true）不落库，避免每 100ms 一次写入。
+	if !streaming {
+		c.persistToolCallingContent(id, resp)
+	}
+}
+
+// persistToolCallingContent 把最终状态的工具调用展示内容按工具调用 ID 合并持久化到
+// 对应消息行，供 session/resume 回放按 ID 重放 content。工具调用 ID 形如
+// call_<chatID>_<msgID>_<toolID>，从中解出消息 ID 与工具 ID；ID 非该格式时回退到
+// CurrentMessageID + 整个 ID（仍可回放，只是不与工具结果按 ID 配对）。
+func (c *Chats) persistToolCallingContent(id string, content any) {
+	if c == nil || c.DB == nil || content == nil || id == "" {
+		return
+	}
+	msgID, toolID := splitToolCallingID(id)
+	if msgID == 0 {
+		msgID = c.CurrentMessageID
+	}
+	if toolID == "" {
+		toolID = id
+	}
+	if err := SaveToolCallingContent(c.DB, msgID, toolID, content); err != nil {
+		logger.Warn("failed to persist tool calling content for %s: %v", id, err)
+	}
+}
+
+// splitToolCallingID 解析工具调用 ID（call_<chatID>_<msgID>_<toolID>），
+// 返回消息 ID 与工具 ID；格式不符时返回 (0, "")。
+func splitToolCallingID(id string) (uint64, string) {
+	parts := strings.SplitN(id, "_", 4)
+	if len(parts) != 4 || parts[0] != "call" {
+		return 0, ""
+	}
+	msgID, err := strconv.ParseUint(parts[2], 10, 64)
+	if err != nil {
+		return 0, ""
+	}
+	return msgID, parts[3]
+}
+
+// SetToolCallingRawParams 记录工具调用的原始参数，供展示 content 规范化使用。
+// 由 tools.ExecToolOnHook 在 OnHook 执行前按 session.CurrentToolID 写入。
+// 这里只做浅拷贝（流式阶段每次 chunk 都会调用，深拷贝会随参数增长变成 O(n²)）；
+// JSON 形态归一化推迟到最终状态与广播时做。
+func (c *Chats) SetToolCallingRawParams(id string, raw any) {
+	if c == nil || id == "" || raw == nil {
+		return
+	}
+	c.toolCtxMu.Lock()
+	defer c.toolCtxMu.Unlock()
+	if c.ToolCallingRawParams == nil {
+		c.ToolCallingRawParams = make(map[string]any)
+	}
+	c.ToolCallingRawParams[id] = raw
+}
+
+// TakeToolCallingRawParams 取出并移除指定工具调用的原始参数（展示 content 规范化用）。
+// 未记录时返回 nil；返回值已归一化为 JSON 形态，与回放时从落库 JSON 解出的参数一致。
+func (c *Chats) TakeToolCallingRawParams(id string) any {
+	if c == nil || id == "" {
+		return nil
+	}
+	c.toolCtxMu.Lock()
+	raw, ok := c.ToolCallingRawParams[id]
+	if ok {
+		delete(c.ToolCallingRawParams, id)
+	}
+	c.toolCtxMu.Unlock()
+	if !ok {
+		return nil
+	}
+	return NormalizeToolCallingParams(raw)
 }
 
 // SetToolCallingRunID attaches the run ID to the pending tool callback.
@@ -312,6 +407,18 @@ func (c *Chats) SetToolCallingTerminalID(id, terminalID string) {
 	c.ToolCallingTerminalID[id] = terminalID
 }
 
+// HasToolCallingFor 判断指定工具调用是否已经有展示内容（工具 OnHook 是否写过）。
+// 供 tools.ExecToolOnHook 判断是否需要补一份统一的参数推送。
+func (c *Chats) HasToolCallingFor(id string) bool {
+	if c == nil || id == "" {
+		return false
+	}
+	c.toolCtxMu.RLock()
+	defer c.toolCtxMu.RUnlock()
+	_, ok := c.ToolCallingContext[id]
+	return ok
+}
+
 // HasToolCalling 判断当前是否存在待广播的工具调用上下文。
 func (c *Chats) HasToolCalling() bool {
 	if c == nil {
@@ -336,6 +443,7 @@ func (c *Chats) SnapshotToolCalling() (map[string]any, map[string]string, map[st
 	c.ToolCallingContext = make(map[string]any)
 	c.ToolCallingType = make(map[string]string)
 	c.ToolCallingStreaming = make(map[string]bool)
+	c.ToolCallingRawParams = make(map[string]any)
 	return ctx, typ, streaming
 }
 
@@ -421,6 +529,7 @@ func (c *Chats) ClearToolCalling() {
 	c.ToolCallingContext = make(map[string]any)
 	c.ToolCallingType = make(map[string]string)
 	c.ToolCallingStreaming = make(map[string]bool)
+	c.ToolCallingRawParams = make(map[string]any)
 }
 
 // AppendSystemPrompt adds a transient internal notice to the next model request.

@@ -777,3 +777,65 @@ func TestExecToolGetPromptsParameters(t *testing.T) {
 		t.Errorf("parameter 'c' has wrong type: %+v", val)
 	}
 }
+
+// TestExecToolOnHookPushesParamsWithoutContent 验证没有写展示内容的工具
+// （tree/date/task/memory 等）也会按统一 calling_info 格式推送完整参数：
+// 直播与 session/resume 回放因此同形，参数不会缺失。
+func TestExecToolOnHookPushesParamsWithoutContent(t *testing.T) {
+	initTestEnv()
+	actions.AddScope("scope1", "Scope 1 prompt")
+	actions.AddTool(&toolobj.Tools{
+		Name:            "TestNoContentTool",
+		ID:              "TestNoContentTool",
+		UserDescription: "A test tool without content push",
+		Hooks: []toolobj.Hook{
+			{
+				Scope: "scope1",
+				OnHook: toolobj.OnHookFunction{
+					Func: func(*storageStructs.Chats, map[string]*any, []*any, string) (bool, []*any, error) {
+						// 纯展示不写 ToolCallingContext
+						return true, nil, nil
+					},
+				},
+			},
+		},
+	})
+	testChat := &storageStructs.Chats{ID: 1, EnableScopes: map[string]bool{"scope1": true}}
+	testChat.CurrentMessageID = 42
+	testChat.CurrentToolID = "call_1_42_tool_x"
+
+	cmd := any("ls -la")
+	args := map[string]*any{"command": &cmd}
+	if err := ExecToolOnHook(testChat, "TestNoContentTool", args, "tool_x"); err != nil {
+		t.Fatalf("ExecToolOnHook failed: %v", err)
+	}
+
+	ctx, _, _ := testChat.SnapshotToolCalling()
+	content, ok := ctx["call_1_42_tool_x"].([]u.H)
+	if !ok {
+		t.Fatalf("应写入展示内容，实际 %#v", ctx)
+	}
+	var hasText, hasInfo bool
+	for _, block := range content {
+		switch block["type"] {
+		case "content":
+			inner, _ := block["content"].(u.H)
+			if text, _ := inner["text"].(string); text != "Command: ls -la\n" {
+				t.Errorf("文本块应为完整参数渲染，实际 %q", text)
+			}
+			hasText = true
+		case storageStructs.ToolCallingInfoType:
+			builtArgs, _ := block["args"].(map[string]any)
+			if got, _ := builtArgs["command"].(string); got != "ls -la" {
+				t.Errorf("calling_info.args[command] = %q, want ls -la", got)
+			}
+			if block["name"] != "TestNoContentTool" {
+				t.Errorf("calling_info.name = %v, want TestNoContentTool", block["name"])
+			}
+			hasInfo = true
+		}
+	}
+	if !hasText || !hasInfo {
+		t.Errorf("content 应同时含文本块与 calling_info，实际 %#v", content)
+	}
+}
