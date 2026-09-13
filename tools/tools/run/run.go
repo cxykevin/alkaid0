@@ -218,6 +218,11 @@ const maxSleepSeconds = 3600
 // 本次调用的命令输出，避免"结果已返回但 AI 看不到、只能反复重试同一命令"的循环。
 const maxRunOutputChars = 2000
 
+// ptyDrainTimeout 子进程退出后等待 PTY 输出排空的上限。
+// 正常情况（无残留后台进程）瞬时完成；超时说明命令留下了仍持有终端的进程，
+// 此时放弃排空直接关闭 master，避免整个任务被卡住。
+const ptyDrainTimeout = 2 * time.Second
+
 func nonEmptyDirs(dir string) []string {
 	if dir == "" {
 		return nil
@@ -745,8 +750,23 @@ func runCmd(ctx context.Context, c *sandbox.Command, out io.Writer, command stri
 			_, _ = io.Copy(out, master)
 		})
 		err := c.Wait()
+		// 子进程退出时 PTY master 的缓冲区里可能还有没被读走的输出。必须先等读端排空
+		// （子进程退出且没有别的进程持有 slave 时，master 读到 EOF/EIO，io.Copy 自行返回），
+		// 再关闭 master——否则最后一段输出会随 Close 一起丢掉，表现为长输出被截断
+		// （TestRunTaskOutputTruncated 偶发失败就是这个竞态）。
+		// 命令若留下仍持有 PTY 的后台进程，排空永远不会结束，用一个上限兜底。
+		drained := make(chan struct{})
+		go func() {
+			copyWg.Wait()
+			close(drained)
+		}()
+		select {
+		case <-drained:
+		case <-time.After(ptyDrainTimeout):
+			logger.Warn("pty output not drained within %s, closing master (command: %s)", ptyDrainTimeout, command)
+		}
 		_ = master.Close()
-		copyWg.Wait()
+		copyWg.Wait() // Close 之后读端必然返回，确保 goroutine 退出
 		return err
 	}
 
