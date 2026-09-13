@@ -20,4 +20,7 @@ CLAUDE.md
 AGENTS.md
 __lessmem_*.db
 
+# 测试运行期写入的用量统计（非源码产物）
+ui/loop/usage.json
+
 .claude/

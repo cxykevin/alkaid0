@@ -644,44 +644,11 @@ func (s *Service) doStatus(workspace, id string) *Job {
 
 // execute 在独立 goroutine 中执行命令并写入结果，最后关闭 done。
 func (s *Service) execute(ctx context.Context, job *Job, req *Request) {
-	// background 模式：每 backgroundUpdateInterval 刷新一次 temp obj 运行状态
-	var tickerStop, tickerDone chan struct{}
-	stopTicker := func() {
-		if tickerStop != nil {
-			close(tickerStop)
-			<-tickerDone
-			tickerStop = nil
-		}
-	}
-	if job.UpdateFn != nil {
-		if job.TerminalUpdateFn != nil {
-			job.TerminalUpdateFn(job.ID, "start", job.Content())
-		}
-		tickerStop = make(chan struct{})
-		tickerDone = make(chan struct{})
-		go func() {
-			defer close(tickerDone)
-			t := time.NewTicker(backgroundUpdateInterval)
-			defer t.Stop()
-			for {
-				select {
-				case <-t.C:
-					content := bgRunningContent(job.Command, job.CreatedAt)
-					job.setContent(content)
-					job.UpdateFn(content)
-					if job.TerminalUpdateFn != nil {
-						job.TerminalUpdateFn(job.ID, "running", content)
-					}
-				case <-tickerStop:
-					return
-				}
-			}
-		}()
-	}
+	// 运行期的内容刷新（首帧 start / 输出节流刷新 / 心跳 elapsed）由 runCommand 中的
+	// contentFlusher 负责：它拿到实时输出，因此前端与 AI 都能看到中间结果。
 
 	defer func() {
 		job.closeStdin()
-		stopTicker()
 		if job.cleanupFn != nil {
 			job.cleanupFn()
 		}
@@ -697,8 +664,7 @@ func (s *Service) execute(ctx context.Context, job *Job, req *Request) {
 
 	result := s.runCommand(ctx, job, req)
 
-	// 停止定时刷新，写最终结果（命令结束后最后一次更新 temp obj）。
-	stopTicker()
+	// 命令结束：写最终结果（runCommand 内的实时刷新已随其返回停止）。
 	job.resultMu.Lock()
 	job.result = result
 	if result.Killed || job.wasKilled() {
@@ -728,8 +694,155 @@ func (s *Service) execute(ctx context.Context, job *Job, req *Request) {
 	}
 }
 
-// backgroundUpdateInterval 后台任务 temp obj 运行状态的刷新间隔。
+// backgroundUpdateInterval 后台任务状态（elapsed）的心跳刷新间隔：
+// 命令长时间没有输出时也刷新一次内容快照。
 var backgroundUpdateInterval = 60 * time.Second
+
+// contentFlushInterval 运行期内容快照（job.content / 临时对象 / 前端推送）的节流间隔。
+// 命令输出是流式的，若只在结束时写入，前端与 AI 在任务运行期间看不到任何中间结果。
+var contentFlushInterval = 500 * time.Millisecond
+
+// contentSnapshotTail 运行期内容快照保留的最大输出行数（超出部分以 (omitted) 代替），
+// 避免长输出任务每次刷新都复制整段输出。
+const contentSnapshotTail = 2000
+
+// bgStreamContent 运行中的内容快照：命令头 + 当前实时输出 + 运行状态行。
+func bgStreamContent(command string, output []byte, start time.Time) string {
+	return fmt.Sprintf("[agent execute] $ %s\n\n%s[Background] Running... (elapsed: %s)\n", command, tailLines(output, contentSnapshotTail), time.Since(start).Round(time.Second))
+}
+
+// tailLines 返回 b 末尾至多 maxLines 行；超出时以 "(omitted)" 前缀标记。
+// 只扫描/复制尾部，避免每次刷新复制整段输出。
+func tailLines(b []byte, maxLines int) string {
+	if maxLines <= 0 || len(b) == 0 {
+		return string(b)
+	}
+	// 反向找 maxLines+1 个换行：第 maxLines+1 个换行之后就是最后 maxLines 行的起点
+	// （末尾换行本身算一个），找不到说明行数未超限，原样返回。
+	idx := len(b)
+	for range maxLines + 1 {
+		next := bytes.LastIndexByte(b[:idx], '\n')
+		if next < 0 {
+			return string(b)
+		}
+		idx = next
+	}
+	return "(omitted)\n" + string(b[idx+1:])
+}
+
+// contentPumpInterval 内容发布协程的检查间隔：输出先标记为"待发布"，
+// 由该协程在节流窗口后补发（尾沿触发），保证"只输出一次就静默"的命令也能及时可见。
+const contentPumpInterval = 100 * time.Millisecond
+
+// contentFlusher 把命令运行期的实时输出节流成"内容快照"，同时写回三处：
+//   - job.content：终端列表 / terminal/status / terminal/history 的内容来源；
+//   - job.UpdateFn：临时对象（AI 可实时读取 @temp/<run> 看到中间结果）；
+//   - job.TerminalUpdateFn：推送给前端（首帧 start，其后 running，内容均为完整快照）。
+//
+// 输出按 contentFlushInterval 节流发布：写入方只 markPending，由 pump 协程在窗口后补发，
+// 因此不会出现"输出被节流吞掉、直到命令结束才一次性可见"的情况。
+// 命令结束后由调用方写入最终内容（bgFinalContent）；stop() 之后不再刷新。
+type contentFlusher struct {
+	job   *Job
+	buf   *bytes.Buffer
+	bufMu *sync.Mutex
+
+	mu      sync.Mutex // 保护 last / started / pending / done
+	last    time.Time
+	started bool
+	pending bool
+	done    bool
+}
+
+func newContentFlusher(job *Job, buf *bytes.Buffer, bufMu *sync.Mutex) *contentFlusher {
+	return &contentFlusher{job: job, buf: buf, bufMu: bufMu}
+}
+
+// markPending 标记有新输出待发布（每次输出块调用，尽量轻量）。
+func (f *contentFlusher) markPending() {
+	f.mu.Lock()
+	f.pending = true
+	f.mu.Unlock()
+}
+
+// tick 由 pump 协程调用：有新输出且已过发布窗口时发布；长时间无输出时刷新 elapsed 心跳。
+func (f *contentFlusher) tick() {
+	f.mu.Lock()
+	if f.done {
+		f.mu.Unlock()
+		return
+	}
+	now := time.Now()
+	switch {
+	case f.pending && now.Sub(f.last) >= contentFlushInterval:
+	case now.Sub(f.last) >= backgroundUpdateInterval:
+	default:
+		f.mu.Unlock()
+		return
+	}
+	f.pending = false
+	f.mu.Unlock()
+	f.publish()
+}
+
+// publish 立即写回一次内容快照（首帧与 tick 共用）。
+func (f *contentFlusher) publish() {
+	f.mu.Lock()
+	if f.done {
+		f.mu.Unlock()
+		return
+	}
+	status := "running"
+	if !f.started {
+		status = "start"
+		f.started = true
+	}
+	f.last = time.Now()
+	f.mu.Unlock()
+
+	f.bufMu.Lock()
+	content := bgStreamContent(f.job.Command, f.buf.Bytes(), f.job.CreatedAt)
+	f.bufMu.Unlock()
+
+	f.job.setContent(content)
+	if f.job.UpdateFn != nil {
+		f.job.UpdateFn(content)
+	}
+	if f.job.TerminalUpdateFn != nil {
+		f.job.TerminalUpdateFn(f.job.ID, status, content)
+	}
+}
+
+// start 发布首帧（start）并启动发布协程；返回的 stop 停止协程并禁止后续刷新。
+func (f *contentFlusher) start() (stop func()) {
+	f.publish()
+	stopCh := make(chan struct{})
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		t := time.NewTicker(contentPumpInterval)
+		defer t.Stop()
+		for {
+			select {
+			case <-t.C:
+				f.tick()
+			case <-stopCh:
+				return
+			}
+		}
+	}()
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			f.mu.Lock()
+			f.done = true
+			f.mu.Unlock()
+			close(stopCh)
+			wg.Wait()
+		})
+	}
+}
 
 // bgInitialContent 后台任务提交时的初始状态文本（由 runTask 创建 temp obj 时写入）。
 func bgInitialContent(command string) string {
@@ -834,7 +947,17 @@ func (s *Service) runCommand(ctx context.Context, job *Job, req *Request) *Resul
 	var buf bytes.Buffer
 	var workflowParser WorkflowOutputParser
 	var outputMu sync.Mutex
-	output := io.Writer(&buf)
+	// 实时内容刷新：命令一有输出就写回 job.content / 临时对象 / 前端推送（节流）。
+	flusher := newContentFlusher(job, &buf, &outputMu)
+	stopFlusher := flusher.start()
+	defer stopFlusher()
+	output := io.Writer(writerFunc(func(p []byte) (int, error) {
+		outputMu.Lock()
+		_, _ = buf.Write(p)
+		outputMu.Unlock()
+		flusher.markPending()
+		return len(p), nil
+	}))
 	if req.InteractiveStdin {
 		stdinReader, stdinWriter := io.Pipe()
 		job.stdinMu.Lock()
@@ -845,19 +968,22 @@ func (s *Service) runCommand(ctx context.Context, job *Job, req *Request) *Resul
 	}
 	if req.WorkflowOutputFn != nil && req.Program != "" {
 		output = writerFunc(func(p []byte) (int, error) {
+			// 握手标记 / 帧内 JSON 从终端输出中剔除，只把可见输出写入内容快照；
+			// workflow 事件另行推送（网络 I/O 放在锁外）。
 			outputMu.Lock()
-			defer outputMu.Unlock()
 			visible, events := workflowParser.Feed(p)
 			if visible != "" {
 				_, _ = buf.WriteString(visible)
 			}
+			outputMu.Unlock()
 			req.WorkflowOutputFn(job.ID, visible, events)
+			flusher.markPending()
 			return len(p), nil
 		})
 	}
 
 	// 监听 context 取消，强制 kill 进程（runCmd 内部处理）
-	err = runCmdWithWriter(ctx, c, output, displayCmd, req.Program == "", job)
+	err = runCmd(ctx, c, output, displayCmd, req.Program == "", job)
 	if req.WorkflowOutputFn != nil && req.Program != "" {
 		if tail := workflowParser.Flush(); tail != "" {
 			_, _ = buf.WriteString(tail)
@@ -912,7 +1038,8 @@ func (s *Service) runCommand(ctx context.Context, job *Job, req *Request) *Resul
 		}
 
 		var buf2 bytes.Buffer
-		err2 = runCmd(ctx, c2, &buf2, displayCmd, req.Program == "")
+		// 降级路径同样实时刷新内容快照（同时保留一份结果输出）。
+		err2 = runCmd(ctx, c2, io.MultiWriter(&buf2, output), displayCmd, req.Program == "", job)
 
 		if err2 != nil {
 			errString += fmt.Sprintf("[System] Command Execute Error: %v\n", err2)

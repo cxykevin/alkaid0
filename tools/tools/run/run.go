@@ -1,7 +1,6 @@
 package run
 
 import (
-	"bytes"
 	"context"
 	_ "embed" // embed
 	"fmt"
@@ -670,11 +669,13 @@ func killCommandIfJobKilled(c *sandbox.Command, job *Job) {
 	}
 }
 
-// runCmd 执行命令，优先使用 PTY，否则回退到缓冲区模式。
-// runCmd 内部处理 context 取消监听和输出收集。
+// runCmd 执行命令，优先使用 PTY，否则回退到管道模式。
+// runCmd 内部处理 context 取消监听与输出转发：输出以**流式**写入 out，
+// 调用方可据此实时刷新终端内容（此前 PTY 输出会先攒进缓冲、命令结束才转发，
+// 导致后台任务在运行期间看不到任何中间结果）。
 // usePTY 为 shell 命令启用 PTY；结构化 Python 执行使用管道，避免 PTY
 // 把 stdin 预置内容替换成终端从端而导致进程一直等待输入。
-func runCmd(ctx context.Context, c *sandbox.Command, buf *bytes.Buffer, command string, options ...any) error {
+func runCmd(ctx context.Context, c *sandbox.Command, out io.Writer, command string, options ...any) error {
 	usePTY := true
 	var job *Job
 	for _, option := range options {
@@ -696,8 +697,8 @@ func runCmd(ctx context.Context, c *sandbox.Command, buf *bytes.Buffer, command 
 			}
 		}()
 		defer close(contextDone)
-		c.SetStdout(buf)
-		c.SetStderr(buf)
+		c.SetStdout(out)
+		c.SetStderr(out)
 		return c.Run()
 	}
 
@@ -738,9 +739,10 @@ func runCmd(ctx context.Context, c *sandbox.Command, buf *bytes.Buffer, command 
 			job.stdinMu.Unlock()
 		}
 
+		// 流式转发 PTY 输出：随到随写，调用方按节流实时刷新内容快照。
 		var copyWg sync.WaitGroup
 		copyWg.Go(func() {
-			_, _ = io.Copy(buf, master)
+			_, _ = io.Copy(out, master)
 		})
 		err := c.Wait()
 		_ = master.Close()
@@ -748,7 +750,7 @@ func runCmd(ctx context.Context, c *sandbox.Command, buf *bytes.Buffer, command 
 		return err
 	}
 
-	// 非 PTY 模式（Windows/fallback）：使用缓冲区直接收集输出
+	// 非 PTY 模式（Windows/fallback）：stdout/stderr 直接流式写入 out
 	contextDone := make(chan struct{})
 	go func() {
 		select {
@@ -759,8 +761,8 @@ func runCmd(ctx context.Context, c *sandbox.Command, buf *bytes.Buffer, command 
 		}
 	}()
 	defer close(contextDone)
-	c.SetStdout(buf)
-	c.SetStderr(buf)
+	c.SetStdout(out)
+	c.SetStderr(out)
 	return c.Run()
 }
 

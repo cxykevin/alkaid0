@@ -428,17 +428,18 @@ func TestRunTaskBackground(t *testing.T) {
 
 	internalPath := strings.TrimPrefix(runID, "@temp/")
 
-	// 初始 temp obj 应立即存在
+	// temp obj 应立即存在：命令尚未启动时是 "[Background] Submitted..."，
+	// 命令启动后会被实时内容快照（Running...）覆盖，两者都算正常。
 	var rf structs.ReferFiles
 	if err := db.Where("chat_id = ? AND path = ?", session.ID, internalPath).First(&rf).Error; err != nil {
 		t.Fatalf("initial temp object not found: %v", err)
 	}
-	if !strings.Contains(rf.Content, "Submitted") {
-		t.Errorf("expected initial content to contain Submitted, got %q", rf.Content)
+	if !strings.Contains(rf.Content, "[agent execute] $") {
+		t.Errorf("expected initial content to contain the command header, got %q", rf.Content)
 	}
 
 	// 等待命令结束后 temp obj 更新为最终结果
-	job := Default.Find(runID)
+	job := Default.FindInWorkspace(session.Root, runID)
 	if job == nil {
 		t.Fatal("runid not registered in service")
 	}
@@ -590,6 +591,141 @@ func TestRunIDHelpers(t *testing.T) {
 	// 内部路径形式不被 TempPath 接受（它要求规范前缀）
 	if _, ok := TempPath(tempPath); ok {
 		t.Errorf("TempPath(%q) 要求 %s 前缀，应失败", tempPath, RunIDPrefix)
+	}
+}
+
+// TestTailLines 验证运行期内容快照的尾部截断（避免每次刷新复制整段输出）。
+func TestTailLines(t *testing.T) {
+	long := "1\n2\n3\n4\n5\n"
+	if got := tailLines([]byte(long), 2); got != "(omitted)\n4\n5\n" {
+		t.Errorf("tailLines = %q", got)
+	}
+	if got := tailLines([]byte("a\nb\n"), 5); got != "a\nb\n" {
+		t.Errorf("行数未超限时应原样返回，得到 %q", got)
+	}
+	if got := tailLines(nil, 3); got != "" {
+		t.Errorf("空输出应返回空串，得到 %q", got)
+	}
+	if got := tailLines([]byte("no-newline"), 2); got != "no-newline" {
+		t.Errorf("无换行时应返回原串，得到 %q", got)
+	}
+}
+
+// TestServiceStreamsOutputWhileRunning 验证后台任务运行期间即可看到中间结果：
+// 内容快照（job.content）、临时对象（UpdateFn）与前端推送（TerminalUpdateFn）
+// 都随实时输出刷新，而不是等命令结束才一次性写入。
+func TestServiceStreamsOutputWhileRunning(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("跳过 Windows")
+	}
+
+	oldInterval := contentFlushInterval
+	contentFlushInterval = 20 * time.Millisecond
+	defer func() { contentFlushInterval = oldInterval }()
+
+	const sessionID uint32 = 4247
+	workspace := t.TempDir()
+
+	// 命令用脚本文件承载：命令头里不会出现输出文本，便于断言"中间结果"确实来自输出。
+	script := filepath.Join(workspace, "stream.sh")
+	if err := os.WriteFile(script, []byte("echo first-line\nsleep 1.2\necho second-line\n"), 0o755); err != nil {
+		t.Fatalf("write script failed: %v", err)
+	}
+
+	var mu sync.Mutex
+	var tempObject, pushed []string
+	runID := NewRunID(workspace)
+	req := testRunRequest("sh " + script)
+	req.SessionID = sessionID
+	req.Workspace = workspace
+	req.RunID = runID
+	req.BackgroundKind = "shell"
+	req.UpdateFn = func(content string) {
+		mu.Lock()
+		tempObject = append(tempObject, content)
+		mu.Unlock()
+	}
+	req.TerminalUpdateFn = func(terminalID, status, content string) {
+		if terminalID != runID {
+			t.Errorf("terminal id = %q, want %q", terminalID, runID)
+		}
+		mu.Lock()
+		pushed = append(pushed, status+"|"+content)
+		mu.Unlock()
+	}
+
+	job, err := Default.Submit(context.Background(), req)
+	if err != nil {
+		t.Fatalf("Submit failed: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = Default.Kill(workspace, job.ID)
+		<-job.Done()
+	})
+
+	// 第一条输出应（在节流窗口内）立即出现在内容快照里，此时命令仍在运行。
+	// 内容快照与前端推送先后发生，因此两者都轮询等待。
+	pushSeen := func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		for _, item := range pushed {
+			if strings.HasPrefix(item, "running|") && strings.Contains(item, "first-line") {
+				return true
+			}
+		}
+		return false
+	}
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) && (!strings.Contains(job.Content(), "first-line") || !pushSeen()) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if !strings.Contains(job.Content(), "first-line") {
+		t.Fatalf("运行期间内容快照应包含已产生的输出，实际 %q", job.Content())
+	}
+	if job.Status() != JobRunning {
+		t.Fatalf("此时命令应仍在运行，实际 %v", job.Status())
+	}
+	if strings.Contains(job.Content(), "second-line") {
+		t.Errorf("尚未产生的输出不应出现: %q", job.Content())
+	}
+	// 临时对象（AI 侧 @temp/<run>）与前端推送同样应已拿到中间结果
+	mu.Lock()
+	sawTempMid, sawPushMid, firstStatus := false, false, ""
+	for _, content := range tempObject {
+		if strings.Contains(content, "first-line") {
+			sawTempMid = true
+		}
+	}
+	for _, item := range pushed {
+		if strings.HasPrefix(item, "running|") && strings.Contains(item, "first-line") {
+			sawPushMid = true
+		}
+	}
+	if len(pushed) > 0 {
+		firstStatus = strings.SplitN(pushed[0], "|", 2)[0]
+	}
+	mu.Unlock()
+	if !sawTempMid {
+		t.Error("运行期间应通过 UpdateFn 更新临时对象（AI 可实时看到中间结果）")
+	}
+	if !sawPushMid {
+		t.Error("运行期间应向前端推送 running 增量（内容为完整快照）")
+	}
+	if firstStatus != "start" {
+		t.Errorf("首帧状态应为 start，实际 %q", firstStatus)
+	}
+
+	// 命令结束后：最终内容包含全部输出与结束标记
+	result := job.Wait(context.Background())
+	if result == nil || !result.Success {
+		t.Fatalf("expected success, got %+v", result)
+	}
+	final := job.Content()
+	if !strings.Contains(final, "first-line") || !strings.Contains(final, "second-line") {
+		t.Errorf("最终内容应包含全部输出，实际 %q", final)
+	}
+	if !strings.Contains(final, "Finished: success=true") {
+		t.Errorf("最终内容应带结束标记，实际 %q", final)
 	}
 }
 

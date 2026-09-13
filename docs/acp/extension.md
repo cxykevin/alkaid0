@@ -130,7 +130,8 @@ alkaid0 现在遵循 ACP v2 标准事件，且字段置于 update 对象**顶层
 触发时机：
 
 - `session/resume` 完成连接注册后立即推送一次 `full` 快照。
-- 终端启动、后台状态刷新、终端结束时推送 `incremental` 更新；`stop` 表示客户端应结束该终端会话。
+- 终端启动、运行期输出刷新、终端结束时推送 `incremental` 更新；`stop` 表示客户端应结束该终端会话。
+- **运行期实时内容**：命令一有输出就按节流（默认 500ms；无输出时每 60s 心跳一次）推送 `incremental`：首帧 `start`，其后 `running`。`content` 与 `terminals[].content` 都是**当前完整内容快照**（`[agent execute] $ <命令>` + 最近输出 + `[Background] Running... (elapsed: …)`），客户端整体替换即可；输出超过 2000 行时快照以 `(omitted)` 开头只保留末尾。命令结束时推送 `stop`，内容为完整最终结果。前台终端在运行期间同样会推送实时内容（此前只在结束时推送一次）。
 - `alk.cxykevin.top/session/terminal/status` 成功调用时，除 RPC 响应外，还会通过请求 callback 立即推送一条 `full` 更新，包含该终端的完整内容。
 - 终端结束后会从活动终端列表（`terminals`）移除；其内容同时持久化在 `@temp/run/<n>`（见 §3.1 `terminal/history`），客户端可用 `alk.cxykevin.top/session/terminal/history` 按 `terminalId` 取回——服务端重启后依然可查。
 - 推送的终端是 workflow（或该终端已变为 workflow，`kind` 为 `workflow`）时，服务端会在同一条推送之外**附带一条 workflow 快照通知**（`alk.cxykevin.top/session/terminal/workflow/snapshot`，见 §3.2），携带该 workflow 当前的状态、graph 与 agent 状态；同一事件序号只推一次。
@@ -223,7 +224,9 @@ alkaid0 现在遵循 ACP v2 标准事件，且字段置于 update 对象**顶层
 
 终端结束时 `run` 工具会把输出写入该终端的持久化路径 `@temp/run/<n>`（对应数据库 `ReferFiles` 表，键为 ChatID + `run/<n>`；见 §5.4），因此**服务端重启后仍可查询**：
 
-- 终端还在服务端内存中（同一次服务端运行周期内）：`content` 为内存中未截断的最终内容快照，与终端全量推送完全一致，`kind` / `command` / `reason` / `agentId` / `toolId` / `createdAt` 等元数据齐全。
+- 终端还在服务端内存中（同一次服务端运行周期内）：`content` 为内存内容快照，与终端全量推送完全一致，`kind` / `command` / `reason` / `agentId` / `toolId` / `createdAt` 等元数据齐全。
+  - 已结束终端：完整的最终内容（命令头 + 全部输出 + `[Background] Finished: success=…`）。
+  - 未结束的终端不会被本方法返回；若用 `terminal/status` 或 `list` 查询运行中的终端，拿到的同样是 §2.2 描述的**实时内容快照**（末尾 2000 行 + `Running... (elapsed)`），因此前端与 LLM 都能在命令结束前看到中间结果；LLM 侧对应 `@temp/run/<n>` 临时对象，运行期按同一节流刷新。
 - 服务端重启后内存中已无该终端：读取上述持久化副本（`AddTempObject` 会截取末尾 5000 行），此时条目带 `restored: true`，只有 `terminalId` / `sessionId` / `content` 可信，`status` 固定为 `finished`，其余元数据为空。
 - 运行中的终端不属于已结束历史，其持久化副本同样不会出现在结果中。
 

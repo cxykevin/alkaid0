@@ -238,10 +238,7 @@ func pythonTask(session *structs.Chats, mp map[string]*any, cross []*any) (bool,
 		TerminalUpdateFn: func(terminalID, status, content string) { session.PushTerminalUpdate(terminalID, status, content) },
 		InteractiveStdin: dynworkflow,
 		WorkflowOutputFn: func(runID, visible string, events []WorkflowEvent) {
-			if visible != "" {
-				// 终端推送与 workflow 事件都使用统一的 run id / terminal id（@temp/run/<n>）。
-				session.PushTerminalUpdate(runID, "running", visible)
-			}
+			// 可见输出已由服务层实时内容刷新（完整快照）推送，这里只广播 workflow 事件。
 			for _, event := range events {
 				session.PushWorkflowEvent(runID, event)
 			}

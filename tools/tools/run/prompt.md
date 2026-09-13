@@ -27,7 +27,7 @@ Workflow usage:
 
 #### Background jobs
 
-Set `background: true` for a command that may outlive the current request. Interactive shell commands that remain blocked for 10 seconds are automatically promoted to background and return a `run_id`/`@temp` path. Use `wait` when you need a definitive completion or failure result; use `read` to inspect progress without waiting. Do not infer completion from elapsed time or repeat the same command. Background jobs may continue after the session stops and are governed by their timeout and process lifecycle.
+Set `background: true` for a command that may outlive the current request. Interactive shell commands that remain blocked for 10 seconds are automatically promoted to background and return a `run_id`/`@temp` path. Use `wait` when you need a definitive completion or failure result; use `read` to inspect progress without waiting — the temporary object is refreshed with the command's live output while it runs (about twice per second), so partial results are visible before it finishes. Do not infer completion from elapsed time or repeat the same command. Background jobs may continue after the session stops and are governed by their timeout and process lifecycle.
 
 #### Safety and scope
 
