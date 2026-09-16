@@ -873,7 +873,13 @@ func ExecuteToolCalls(session *storageStructs.Chats, toolCallingJSON string) (bo
 		}
 		return true, err
 	}
-	for _, call := range calls {
+	// 每个调用必须带各自独立的 Index：NativeToolCallAccumulator 以 index 为键维护
+	// 单次调用的流式状态（nativeCallState）。若全部沿用零值 index，一轮中的多个调用会
+	// 塌缩到同一个 state——首个调用 finalized 之后，后续调用在 AddDelta 里命中
+	// "已 finalize" 分支被静默丢弃：既不执行 PostHook 也不产生 role:tool 结果。
+	// 表现即"同一轮发起多个工具调用时只有第一个生效"（如并行读取多个文件只成功一个），
+	// 且 assistant 的 tool_calls 缺少配对结果，严格校验的 Provider 会直接 400。
+	for i, call := range calls {
 		parameters := call.Parameters
 		if parameters == nil {
 			parameters = make(map[string]*any)
@@ -887,7 +893,8 @@ func ExecuteToolCalls(session *storageStructs.Chats, toolCallingJSON string) (bo
 			return true, err
 		}
 		if err := solver.AddNativeToolCallDelta([]structs.StreamToolCall{{
-			ID: call.ID,
+			Index: i,
+			ID:    call.ID,
 			Function: &structs.StreamToolCallFunc{
 				Name:      call.Name,
 				Arguments: string(arguments),

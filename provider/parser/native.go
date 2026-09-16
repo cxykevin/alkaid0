@@ -126,6 +126,14 @@ func (a *NativeToolCallAccumulator) AddDelta(index int, id, name, arguments stri
 		}
 	}
 	if arguments == "" || state.invalid || state.finalized {
+		// 已 finalize 的 index 又收到非空 arguments：调用方把同一个 index 复用给了另一次
+		// 调用。该增量会被丢弃，对应的工具既不会执行也不会产生 role:tool 结果（表现为
+		// "同一轮多个工具调用只有第一个生效"），因此必须告警而不是静默返回。
+		// 每个 index 只能对应一次调用，调用方须分配独立 index（见 ExecuteToolCalls）。
+		if state.finalized && arguments != "" {
+			logger.Warn("native tool call: index %d already finalized (id=%s), arguments of id=%s ignored; each call needs its own index",
+				state.index, state.id, id)
+		}
 		// name/id 可能晚于 arguments 到达：即使本片无新 arguments，也派发已有解析数据
 		if state.jsonParser != nil && !state.finalized && !state.invalid {
 			return a.dispatch(state)
