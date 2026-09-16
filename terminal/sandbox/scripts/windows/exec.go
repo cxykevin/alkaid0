@@ -12,11 +12,15 @@ import (
 	"runtime"
 	"sync"
 	"sync/atomic"
+	"time"
 	"unsafe"
 
+	"github.com/cxykevin/alkaid0/log"
 	winExtra "github.com/cxykevin/alkaid0/terminal/sandbox/scripts/windows/windows_extra"
 	"golang.org/x/sys/windows"
 )
+
+var logger = log.New("sandbox:windows")
 
 type osProcess struct {
 	Pid     int
@@ -70,6 +74,17 @@ type Cmd struct {
 
 	// Context 取消用的同步信号
 	waitDone chan struct{}
+
+	// job 命令的整棵进程树（Job Object）。为 nil 时退化为只终止直接子进程。
+	// 用 atomic.Pointer：Kill 可能来自其它 goroutine，且可能并发于 Start。
+	job atomic.Pointer[winExtra.JobObject]
+	// killRequested 记录"进程启动前就已被要求终止"，Start 完成后立即补杀。
+	killRequested atomic.Bool
+	// copyClosers 输出/输入搬运协程使用的管道句柄：排空超时后关闭它们，
+	// 使挂起的 ReadFile/WriteFile 被 CancelIoEx 取消，从而结束 Wait。
+	copyClosers []io.Closer
+	// drainForced 是否因排空超时强制关闭了管道（此时忽略搬运协程的 IO 错误）。
+	drainForced atomic.Bool
 }
 
 // Command 执行程序
@@ -192,6 +207,9 @@ func (c *Cmd) handleFor(rw any, isInput bool) (windows.Handle, error) {
 	} else {
 		hChild, hParent = windows.Handle(pw.Fd()), windows.Handle(pr.Fd())
 		c.closeAfterWait = append(c.closeAfterWait, pw)
+		// 记录搬运协程持有的一端：子进程退出后若其后代仍持有另一端，
+		// 此处 ReadFile 会一直挂起，排空超时后需要关掉它才能结束 Wait。
+		c.copyClosers = append(c.copyClosers, pr)
 		c.goroutineWait.Go(func() {
 			_, err := io.Copy(rw.(io.Writer), pr)
 			pr.Close()
@@ -229,9 +247,18 @@ func (c *Cmd) handleFor(rw any, isInput bool) (windows.Handle, error) {
 // }
 
 // Start 启动程序
-func (c *Cmd) Start() error {
+func (c *Cmd) Start() (err error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	// 进程创建失败时 Start 返回错误、Wait 不会被调用，此处释放 Job Object 句柄
+	defer func() {
+		if err != nil {
+			if job := c.job.Load(); job != nil {
+				_ = job.Close()
+				c.job.Store(nil)
+			}
+		}
+	}()
 	if c.started {
 		return errors.New("exec: already started")
 	}
@@ -251,6 +278,16 @@ func (c *Cmd) Start() error {
 
 	c.started = true
 	c.waitDone = make(chan struct{})
+
+	// 进程树：先建 Job Object，子进程创建后立即加入，使 Kill 能终止整棵树。
+	// Windows 没有进程组语义，只杀直接子进程会留下继续持有管道句柄的后代。
+	if c.job.Load() == nil {
+		if job, jerr := winExtra.NewJobObject(); jerr == nil {
+			c.job.Store(job)
+		} else {
+			logger.Warn("create job object failed, fallback to killing direct child only: %v", jerr)
+		}
+	}
 
 	// argvPtr, _ := windows.UTF16PtrFromString(c.argvString())
 	// var dirPtr *uint16
@@ -420,12 +457,27 @@ func (c *Cmd) Start() error {
 
 	c.Process = newProcessFromHandle(int(pi.ProcessId), pi.Process)
 
+	// 加入 Job Object：失败（嵌套 Job 受限等）时退化为只终止直接子进程，
+	// 排空超时兜底仍能保证任务不会永远停在 running。
+	if job := c.job.Load(); job != nil {
+		if aerr := job.Assign(pi.Process); aerr != nil {
+			logger.Warn("assign process %d to job object failed, fallback to killing direct child only: %v", pi.ProcessId, aerr)
+			_ = job.Close()
+			c.job.Store(nil)
+		}
+	}
+	// 进程启动前就已被要求终止：此刻补杀，关掉 kill 早于 start 的竞态窗口
+	if c.killRequested.Load() {
+		_ = c.Kill()
+	}
+
 	// 3. 启动 Context 监控协程
 	if c.ctx != nil {
 		go func() {
 			select {
 			case <-c.ctx.Done():
-				c.Process.Kill()
+				// 终止整棵进程树（只杀直接子进程会留下继承管道句柄的后代）
+				_ = c.Kill()
 			case <-c.waitDone:
 				// 进程正常退出，结束监控协程
 			}
@@ -458,8 +510,34 @@ func (c *Cmd) Wait() error {
 		close(c.waitDone)
 	}
 
+	// 关掉父进程持有的写端副本：子进程退出且没有别的进程持有写端时，
+	// 读端立刻 EOF，搬运协程瞬时结束（正常路径）。
 	c.closePipes()
-	c.goroutineWait.Wait()
+
+	// 排空输出：命令可能留下仍持有写端句柄的后代进程（powershell 启动的
+	// node/npm、常驻服务等），此时 EOF 永远不会到来。无限等待会让整条命令
+	// 永远停在 running 且 kill/ESC 都不再生效，因此用上限兜底：超时后关闭
+	// 搬运协程持有的管道句柄（internal/poll 会 CancelIoEx 取消挂起的读写），
+	// 让协程返回，与 os/exec 的 WaitDelay / PTY 路径的 ptyDrainTimeout 同理。
+	drained := make(chan struct{})
+	go func() {
+		c.goroutineWait.Wait()
+		close(drained)
+	}()
+	select {
+	case <-drained:
+	case <-time.After(winExtra.DrainTimeout):
+		c.drainForced.Store(true)
+		logger.Warn("pipe not drained within %s, force close copy handles (command: %s)", winExtra.DrainTimeout, c.Path)
+		c.forceCloseCopyHandles()
+		c.goroutineWait.Wait()
+	}
+
+	// 命令已结束：释放 Job Object 句柄（不终止其中进程，与 Unix 语义一致，
+	// 命令自行脱离的后台进程继续存活）。
+	if job := c.job.Load(); job != nil {
+		_ = job.Close()
+	}
 
 	// 优先返回 Context 错误
 	if c.ctx != nil && c.ctx.Err() != nil {
@@ -469,10 +547,24 @@ func (c *Cmd) Wait() error {
 	if err == nil && !state.Success() {
 		err = &exec.ExitError{ProcessState: state}
 	}
-	if c.goroutineErr != nil && err == nil {
+	// 强制关闭管道造成的 IO 错误是排空兜底的副产物，不代表命令失败。
+	if c.goroutineErr != nil && err == nil && !c.drainForced.Load() {
 		return c.goroutineErr
 	}
 	return err
+}
+
+// forceCloseCopyHandles 关闭搬运协程持有的管道句柄，解除其挂起的读写。
+// os.File.Close 在 Windows 上会对管道句柄调用 CancelIoEx，
+// 因此阻塞中的 ReadFile/WriteFile 会立刻返回，协程得以退出。
+func (c *Cmd) forceCloseCopyHandles() {
+	c.mu.Lock()
+	closers := c.copyClosers
+	c.copyClosers = nil
+	c.mu.Unlock()
+	for _, cl := range closers {
+		_ = cl.Close()
+	}
 }
 
 // Run 启动程序并等待结束
@@ -570,9 +662,27 @@ func (c *Cmd) SetStderr(w io.Writer) {
 
 // Clean 清理
 func (c *Cmd) Clean() {
+	if job := c.job.Load(); job != nil {
+		_ = job.Close()
+	}
 }
 
-// Kill 终止进程
+// Kill 终止命令：优先终止 Job Object 内的整棵进程树，
+// 无法使用 Job Object 时退化为只终止直接子进程。
+//
+// 直接子进程通常是 powershell/cmd，真正干活的是其后代（npm/node/python）：
+// 只杀直接子进程既杀不掉实际进程，也让后代继续持有继承来的 stdout/stderr
+// 句柄，任务会一直卡在 running。
 func (c *Cmd) Kill() error {
+	// 进程可能尚未启动（Kill 早于 Start）：记录请求，Start 完成后立即补杀
+	c.killRequested.Store(true)
+	if job := c.job.Load(); job != nil {
+		if terr := job.Terminate(); terr == nil {
+			return nil
+		}
+	}
+	if c.Process == nil {
+		return errors.New("exec: process not started")
+	}
 	return c.Process.Kill()
 }

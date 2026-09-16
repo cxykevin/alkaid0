@@ -4,14 +4,21 @@ package sandbox
 
 import (
 	"context"
+	"errors"
 	"io"
 	"os/exec"
+	"sync/atomic"
+
+	winExtra "github.com/cxykevin/alkaid0/terminal/sandbox/scripts/windows/windows_extra"
 )
 
 // ExecCmd 执行对象
 type ExecCmd struct {
 	cmd   *exec.Cmd
 	clean func()
+	// job 命令的整棵进程树（Job Object）；为 nil 时退化为只终止直接子进程。
+	// 用 atomic.Pointer：Kill 可能来自其它 goroutine，且可能并发于 Start/Wait。
+	job atomic.Pointer[winExtra.JobObject]
 }
 
 // CreateExecFromCmd exec.Cmd 包装器
@@ -20,12 +27,27 @@ func CreateExecFromCmd(cmd *exec.Cmd, clean func()) *ExecCmd {
 }
 
 func createIsolateNoneCmd(ctx context.Context, name string, args []string, env []string, dir string) *ExecCmd {
-
 	cmd := exec.CommandContext(ctx, name, args...)
 	cmd.Dir = dir
 	cmd.Env = env
+	// 子进程退出后管道未必立刻 EOF：命令可能留下仍持有继承句柄的后代进程
+	// （典型：powershell/cmd 启动的 node、npm、常驻服务）。此时 Wait 会无限
+	// 阻塞，任务永远停在 running、kill/ESC 都不再生效。WaitDelay 让 Wait 在
+	// 超时后关闭管道并返回（ErrWaitDelay 在 Wait 中按"命令已结束"处理）。
+	cmd.WaitDelay = winExtra.DrainTimeout
 
-	return &ExecCmd{cmd: cmd, clean: func() {}}
+	e := &ExecCmd{cmd: cmd, clean: func() {}}
+	// Windows 没有进程组语义，只杀直接子进程会留下存活且继续持有管道的后代，
+	// 因此用 Job Object 管理整棵进程树（见 windows_extra.JobObject）。
+	if job, err := winExtra.NewJobObject(); err == nil {
+		e.job.Store(job)
+		// exec.CommandContext 默认的 Cancel 只 kill 直接子进程，改为终止整棵树
+		cmd.Cancel = func() error { return e.Kill() }
+	} else {
+		logger.Warn("create job object failed, fallback to killing direct child only: %v", err)
+	}
+
+	return e
 }
 
 // PID returns the child process ID when available.
@@ -38,17 +60,50 @@ func (e *ExecCmd) PID() int {
 
 // Start 启动
 func (e *ExecCmd) Start() error {
-	return e.cmd.Start()
+	if err := e.cmd.Start(); err != nil {
+		// 进程未创建成功：释放 Job Object 句柄（Wait 不会被调用）
+		if job := e.job.Load(); job != nil {
+			_ = job.Close()
+			e.job.Store(nil)
+		}
+		return err
+	}
+	// 进程创建后立即加入 Job Object：此后它派生的所有后代都属于同一个 Job，
+	// Kill 时可一次性终止整棵树。加入失败（嵌套 Job 受限等）时退化为只杀直接子进程，
+	// 此时仍有 WaitDelay 兜底保证任务不会永远停在 running。
+	if job := e.job.Load(); job != nil && e.cmd.Process != nil {
+		if err := job.AssignPID(e.cmd.Process.Pid); err != nil {
+			logger.Warn("assign pid %d to job object failed, fallback to killing direct child only: %v", e.cmd.Process.Pid, err)
+			_ = job.Close()
+			e.job.Store(nil)
+		}
+	}
+	return nil
 }
 
 // Wait 等待
 func (e *ExecCmd) Wait() error {
-	return e.cmd.Wait()
+	err := e.cmd.Wait()
+	if job := e.job.Load(); job != nil {
+		_ = job.Close()
+	}
+	// 子进程已退出，只是其后代仍持有输出管道：命令本身已经结束了，
+	// 若退出码为 0 则视为成功（输出可能被截断，不能因为排空兜底而误报失败）。
+	if errors.Is(err, exec.ErrWaitDelay) {
+		logger.Warn("output pipe still held by descendant process after exit, output may be truncated (state: %v)", e.cmd.ProcessState)
+		if state := e.cmd.ProcessState; state != nil && state.Success() {
+			return nil
+		}
+	}
+	return err
 }
 
 // Run 执行
 func (e *ExecCmd) Run() error {
-	return e.cmd.Run()
+	if err := e.Start(); err != nil {
+		return err
+	}
+	return e.Wait()
 }
 
 // SetStdin 设置标准输入
@@ -66,9 +121,20 @@ func (e *ExecCmd) SetStderr(w io.Writer) {
 	e.cmd.Stderr = w
 }
 
-// Kill 终止进程（Windows 上直接 kill 进程自身，无进程组概念）
+// Kill 终止进程：优先终止 Job Object 内的整棵进程树，
+// 无 Job Object 时退化为只终止直接子进程。
 func (e *ExecCmd) Kill() error {
-	if e.cmd == nil || e.cmd.Process == nil {
+	if e.cmd == nil {
+		return nil
+	}
+	// 先终止 Job：即使进程尚未 Start（Process 为 nil），Start 后加入 Job 的
+	// 进程也会随即被终止，避免"kill 早于 start"漏杀。
+	if job := e.job.Load(); job != nil {
+		if err := job.Terminate(); err == nil {
+			return nil
+		}
+	}
+	if e.cmd.Process == nil {
 		return nil
 	}
 	return e.cmd.Process.Kill()
@@ -76,6 +142,9 @@ func (e *ExecCmd) Kill() error {
 
 // Clean 清理
 func (e *ExecCmd) Clean() {
+	if job := e.job.Load(); job != nil {
+		_ = job.Close()
+	}
 	e.clean()
 	e.cmd = nil
 }
