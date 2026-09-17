@@ -766,7 +766,14 @@ func runCmd(ctx context.Context, c *sandbox.Command, out io.Writer, command stri
 			logger.Warn("pty output not drained within %s, closing master (command: %s)", ptyDrainTimeout, command)
 		}
 		_ = master.Close()
-		copyWg.Wait() // Close 之后读端必然返回，确保 goroutine 退出
+		// master 以非阻塞方式打开（见 terminal/pty）：Close 会取消挂起的 Read，
+		// 读取协程随即退出。这里再加一层上限兜底，任何平台上都不允许"任务永远
+		// 停在 running"（宁可放弃阻塞的读取协程，也不让整个任务陪葬）。
+		select {
+		case <-drained:
+		case <-time.After(ptyDrainTimeout):
+			logger.Error("pty reader did not exit after master.Close within %s, abandoning reader (command: %s)", ptyDrainTimeout, command)
+		}
 		return err
 	}
 

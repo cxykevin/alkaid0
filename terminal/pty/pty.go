@@ -26,6 +26,22 @@ type Config struct {
 	Cols uint16
 }
 
+// setWinsizeFile 设置终端大小，且不把文件切回阻塞模式。
+// 不能直接用 File.Fd()：对由 Go 自己设为非阻塞的 fd，Fd() 会把它切回阻塞模式
+// （见 os.File.fd），从而失去 poller 的可取消读能力——命令留下持有从端的后代进程时，
+// 读取协程将无法被 Close 唤醒。
+func setWinsizeFile(f *os.File, cols, rows int) error {
+	rc, err := f.SyscallConn()
+	if err != nil {
+		return err
+	}
+	var ierr error
+	if cerr := rc.Control(func(fd uintptr) { ierr = setWinsize(int(fd), cols, rows) }); cerr != nil {
+		return cerr
+	}
+	return ierr
+}
+
 // New 创建一个新的PTY，仅打开伪终端主端文件描述符
 func New(cfg Config) (*PTY, *os.File, error) {
 	// 设置默认终端大小
@@ -50,7 +66,7 @@ func New(cfg Config) (*PTY, *os.File, error) {
 	}
 
 	if cfg.Rows > 0 && cfg.Cols > 0 {
-		_ = setWinsize(int(master.Fd()), int(cfg.Cols), int(cfg.Rows))
+		_ = setWinsizeFile(master, int(cfg.Cols), int(cfg.Rows))
 	}
 
 	return p, master, nil
@@ -71,7 +87,7 @@ func Open(cfg Config) (master, slave *os.File, err error) {
 		return nil, nil, err
 	}
 	if cfg.Rows > 0 && cfg.Cols > 0 {
-		_ = setWinsize(int(master.Fd()), int(cfg.Cols), int(cfg.Rows))
+		_ = setWinsizeFile(master, int(cfg.Cols), int(cfg.Rows))
 	}
 	return master, slave, nil
 }
@@ -153,7 +169,7 @@ func (p *PTY) Resize(rows, cols uint16) error {
 		return errors.New("PTY not initialized")
 	}
 
-	if err := setWinsize(int(p.fd.Fd()), int(cols), int(rows)); err != nil {
+	if err := setWinsizeFile(p.fd, int(cols), int(rows)); err != nil {
 		return err
 	}
 	p.rows = rows

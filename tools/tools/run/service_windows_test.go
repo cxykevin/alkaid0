@@ -6,6 +6,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -186,5 +187,33 @@ func TestServiceKillRunProcessTreeTwice(t *testing.T) {
 	}
 	if job.Status() != JobKilled {
 		t.Errorf("expected job killed, got %v", job.Status())
+	}
+}
+
+// TestServiceInteractiveStdinDoesNotHang 回归：run 工具给每个 shell 请求都设置
+// InteractiveStdin=true，修复前 stdin 用 io.Pipe（内存管道）交给命令，必然产生
+// 一个阻塞在 Read 上的搬运 goroutine；写入端要等 runCommand 返回后才由 execute
+// 关闭，于是命令退出后 Wait 永远等不到它结束，任务停在 running（Windows 无 PTY
+// 路径必现）。修复后 stdin 使用 os.Pipe（真实 fd，不需要搬运 goroutine）。
+func TestServiceInteractiveStdinDoesNotHang(t *testing.T) {
+	req := testRunRequest("Write-Output alkaid0-interactive-stdin")
+	req.InteractiveStdin = true
+	req.BackgroundKind = "shell"
+
+	job, err := Default.Submit(context.Background(), req)
+	if err != nil {
+		t.Fatalf("Submit failed: %v", err)
+	}
+	waitJobDone(t, job, 60*time.Second)
+
+	if job.Status() != JobFinished {
+		t.Errorf("expected job finished, got %v", job.Status())
+	}
+	result := job.Wait(context.Background())
+	if result == nil || !result.Success {
+		t.Fatalf("expected success result, got %+v", result)
+	}
+	if !strings.Contains(result.Output, "alkaid0-interactive-stdin") {
+		t.Errorf("expected command output, got %q", result.Output)
 	}
 }

@@ -246,6 +246,16 @@ func (c *Cmd) handleFor(rw any, isInput bool) (windows.Handle, error) {
 
 // }
 
+// interfaceEqual 比较两个接口值，动态类型不可比较（如函数类型）时返回 false。
+//
+// 直接写 a == b 会在动态类型相同且不可比较时 panic：
+// run 工具把 stdout/stderr 都设为同一个 writerFunc（函数类型），
+// Windows 沙盒路径因此每条命令都 panic（runtime error: comparing uncomparable type）。
+func interfaceEqual(a, b any) bool {
+	defer func() { _ = recover() }()
+	return a == b
+}
+
 // Start 启动程序
 func (c *Cmd) Start() (err error) {
 	c.mu.Lock()
@@ -341,7 +351,7 @@ func (c *Cmd) Start() (err error) {
 		if si.StdInput, err = c.handleFor(c.Stdin, true); err != nil {
 			return err
 		}
-		if c.Stdout != nil && c.Stdout == c.Stderr {
+		if c.Stdout != nil && interfaceEqual(c.Stdout, c.Stderr) {
 			h, err := c.handleFor(c.Stdout, false)
 			if err != nil {
 				return err

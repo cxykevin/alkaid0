@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -959,12 +960,23 @@ func (s *Service) runCommand(ctx context.Context, job *Job, req *Request) *Resul
 		return len(p), nil
 	}))
 	if req.InteractiveStdin {
-		stdinReader, stdinWriter := io.Pipe()
-		job.stdinMu.Lock()
-		job.stdinWriter = stdinWriter
-		job.stdinClosed = false
-		job.stdinMu.Unlock()
-		c.SetStdin(stdinReader)
+		// 必须用 os.Pipe（真实 fd）而不是 io.Pipe（内存管道）：内存管道交给命令后必然
+		// 产生一个阻塞在 Read 上的搬运 goroutine，而 Wait 会一直等它结束；写入端要到
+		// runCommand 返回后才由 execute 关闭，于是命令退出后任务永远停在 running
+		// （Windows 无 PTY 路径必现）。os.Pipe 的句柄由 exec/沙盒直接交给子进程，
+		// 不需要任何搬运 goroutine。
+		stdinReader, stdinWriter, perr := os.Pipe()
+		if perr != nil {
+			logger.Warn("create stdin pipe failed, interactive stdin disabled: %v", perr)
+		} else {
+			defer stdinReader.Close() // 父进程侧读端随命令结束关闭
+			defer stdinWriter.Close()
+			job.stdinMu.Lock()
+			job.stdinWriter = stdinWriter
+			job.stdinClosed = false
+			job.stdinMu.Unlock()
+			c.SetStdin(stdinReader)
+		}
 	}
 	if req.WorkflowOutputFn != nil && req.Program != "" {
 		output = writerFunc(func(p []byte) (int, error) {

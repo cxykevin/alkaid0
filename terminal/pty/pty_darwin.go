@@ -5,13 +5,17 @@ package pty
 import (
 	"fmt"
 	"os"
+	"syscall"
 	"unsafe"
 
 	"golang.org/x/sys/unix"
 )
 
 func openPTY() (ptyFile, ttyFile *os.File, err error) {
-	ptyFile, err = os.OpenFile("/dev/ptmx", os.O_RDWR, 0)
+	// master 以非阻塞方式打开（syscall.O_NONBLOCK）：os.OpenFile 会把 fd 交给 runtime
+	// poller 管理，Close/SetReadDeadline 才能取消挂起的 Read；否则命令留下持有从端的
+	// 后代进程时读取协程会永远卡住，任务停在 running。
+	ptyFile, err = os.OpenFile("/dev/ptmx", os.O_RDWR|syscall.O_NONBLOCK, 0)
 	if err != nil {
 		return nil, nil, err
 	}
