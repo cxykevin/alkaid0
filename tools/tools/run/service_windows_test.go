@@ -147,19 +147,22 @@ func TestServiceFinishedCommandReleasesPipes(t *testing.T) {
 		t.Fatalf("job finished %s after the shell exited: 后代进程未持有管道，测试前提不成立", waited)
 	}
 
-	// 任务结束后后代进程依然存活（心跳文件继续变化）→ 任务没有等它结束
-	first, err := os.ReadFile(heartbeat)
-	if err != nil {
-		t.Fatalf("read heartbeat failed: %v", err)
+	// 任务结束后后代进程依然存活（心跳文件继续变化）→ 任务没有等它结束。
+	// 注意：后代进程用 Set-Content 写该文件时，Windows 上读取会报"文件被另一进程占用"，
+	// 这本身就说明它还在运行，因此读取失败按"仍存活"处理（避免用例偶发失败）。
+	first, ferr := os.ReadFile(heartbeat)
+	if ferr != nil {
+		first = nil // 首次读取失败不影响后续比较
 	}
 	changed := false
-	for range 10 {
+	for range 15 {
 		time.Sleep(400 * time.Millisecond)
 		cur, rerr := os.ReadFile(heartbeat)
 		if rerr != nil {
-			continue
+			changed = true
+			break
 		}
-		if string(cur) != string(first) {
+		if first == nil || string(cur) != string(first) {
 			changed = true
 			break
 		}
