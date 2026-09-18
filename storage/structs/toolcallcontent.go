@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"maps"
+	"math"
 	"slices"
 	"strings"
 	"unicode"
@@ -114,10 +115,18 @@ func NormalizeToolCallingContent(content any, raw any) any {
 		return content
 	}
 	text := RenderToolCallingText(raw)
-	out := make([]u.H, 0, len(blocks)+1)
+	outCap := len(blocks)
+	if outCap < math.MaxInt {
+		outCap++
+	}
+	out := make([]u.H, 0, outCap)
 	textReplaced := false
 	for _, block := range blocks {
-		clone := make(u.H, len(block)+1)
+		cloneSize := len(block)
+		if cloneSize < math.MaxInt {
+			cloneSize++
+		}
+		clone := make(u.H, cloneSize)
 		maps.Copy(clone, block)
 		switch typ, _ := block["type"].(string); typ {
 		case "content":
