@@ -35,10 +35,10 @@ var traceTempate *template.Template
 var logger = log.New("tools:trace")
 
 // MaxFileLine 最大文件行数
-const MaxFileLine = 5000
+const MaxFileLine = 10000
 
 // MaxFileSize 最大文件大小
-const MaxFileSize = 50 * 1024 // 50KB
+const MaxFileSize = 256 * 1024 // 256KB
 
 func init() {
 	traceTempate = prompts.Load("tools:trace:trace", tracePrompt)

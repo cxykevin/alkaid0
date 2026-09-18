@@ -367,8 +367,8 @@ func TestTraceFileTooLarge(t *testing.T) {
 	tmpDir := t.TempDir()
 	testFile := filepath.Join(tmpDir, "large.txt")
 
-	// 创建一个超过50KB的文件
-	largeContent := make([]byte, 51*1024)
+	// 创建一个超过256KB的文件
+	largeContent := make([]byte, 260*1024)
 	for i := range largeContent {
 		largeContent[i] = 'a'
 	}
