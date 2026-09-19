@@ -539,6 +539,20 @@ func writeFile(session *structs.Chats, mp map[string]*any, cross []*any) (bool, 
 
 	path = filepath.Join(session.Root, filepath.Join(session.CurrentActivatePath, path))
 
+	// CheckPath 只做纯词法校验，挡不住工作区内的符号链接：os.ReadFile/os.WriteFile
+	// 会跟随链接，从而读写工作区之外的文件。这里再按"解析符号链接 + 保护 .alkaid0"
+	// 校验一次（与 fs RPC 的 validatePath 对齐；此前 edit 完全没有这一层）。
+	workspace := filepath.Join(session.Root, session.CurrentActivatePath)
+	if err := u.EnsureWorkspacePath(workspace, path, ".alkaid0"); err != nil {
+		boolx := false
+		success := any(boolx)
+		errMsg := any(err.Error())
+		return false, cross, map[string]*any{
+			"success": &success,
+			"error":   &errMsg,
+		}, nil
+	}
+
 	// 读取文件内容
 	var content string
 	lines := []string{}
@@ -852,7 +866,9 @@ func handleRegexEdit(content, target, text string) (string, error) {
 	global := strings.Contains(flags, "g")
 
 	if global {
-		newContent := re.ReplaceAllString(content, text)
+		// 必须用字面量替换：ReplaceAllString 会把替换文本里的 $name / ${name}
+		// 当作展开模板，模型写 shell/Makefile/正则片段（$VAR、$1）时内容会被静默改写。
+		newContent := re.ReplaceAllLiteralString(content, text)
 		return newContent, nil
 	}
 	// éå¨å±æ¨¡å¼åªæ¿æ¢ç¬¬ä¸ä¸ªå¹éé¡¹

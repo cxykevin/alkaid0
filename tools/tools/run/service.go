@@ -745,7 +745,7 @@ const contentPumpInterval = 100 * time.Millisecond
 // 命令结束后由调用方写入最终内容（bgFinalContent）；stop() 之后不再刷新。
 type contentFlusher struct {
 	job   *Job
-	buf   *bytes.Buffer
+	buf   *cappedBuffer
 	bufMu *sync.Mutex
 
 	mu      sync.Mutex // 保护 last / started / pending / done
@@ -755,7 +755,7 @@ type contentFlusher struct {
 	done    bool
 }
 
-func newContentFlusher(job *Job, buf *bytes.Buffer, bufMu *sync.Mutex) *contentFlusher {
+func newContentFlusher(job *Job, buf *cappedBuffer, bufMu *sync.Mutex) *contentFlusher {
 	return &contentFlusher{job: job, buf: buf, bufMu: bufMu}
 }
 
@@ -945,7 +945,8 @@ func (s *Service) runCommand(ctx context.Context, job *Job, req *Request) *Resul
 		return &Result{Success: false, ErrString: "[System] Command killed before start\n", Killed: true}
 	}
 
-	var buf bytes.Buffer
+	// 有上限的捕获缓冲：见 capture.go（防止一条刷屏命令吃光内存）
+	var buf cappedBuffer
 	var workflowParser WorkflowOutputParser
 	var outputMu sync.Mutex
 	// 实时内容刷新：命令一有输出就写回 job.content / 临时对象 / 前端推送（节流）。
@@ -1049,7 +1050,8 @@ func (s *Service) runCommand(ctx context.Context, job *Job, req *Request) *Resul
 			return &Result{Success: false, ErrString: errString + "[System] Command killed before start\n", Killed: true}
 		}
 
-		var buf2 bytes.Buffer
+		// 降级路径同样使用有上限的捕获缓冲
+		var buf2 cappedBuffer
 		// 降级路径同样实时刷新内容快照（同时保留一份结果输出）。
 		err2 = runCmd(ctx, c2, io.MultiWriter(&buf2, output), displayCmd, req.Program == "", job)
 

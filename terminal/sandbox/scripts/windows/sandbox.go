@@ -14,7 +14,15 @@ import (
 	"golang.org/x/sys/windows/registry"
 )
 
-// getToken 获取令牌
+// getToken 获取当前进程令牌。
+//
+// 注意：调用方**必须**在拿到令牌后 defer tkn.Close()。OpenProcessToken 返回的是
+// 一个真实的内核句柄（windows.Token 底层就是 Handle，Close 走 CloseHandle），
+// 不关闭就会每次调用泄漏一个句柄 —— 而 GetDACL/GetDenyDACL 是每个沙盒命令、
+// 每个可写目录都要调用一次的，泄漏速度很快。
+//
+// 关闭句柄不影响已经取出的数据：GetTokenUser 返回的 TOKEN_USER 是 x/sys 在 Go
+// 堆上分配的副本（getInfo 里 make([]byte, n)），与句柄生命周期无关。
 func getToken() (*windows.Token, error) {
 	process := windows.CurrentProcess()
 	var token windows.Token
@@ -330,6 +338,7 @@ func grantCurrentUserAssignLogonRight() error {
 	if err != nil {
 		return err
 	}
+	defer tkn.Close() // OpenProcessToken 的句柄必须关闭，否则每次调用泄漏一个
 	usr, err := tkn.GetTokenUser()
 	if err != nil {
 		return err
@@ -535,6 +544,7 @@ func GetDACL() (*windows.ACL, error) {
 	if err != nil {
 		return nil, err
 	}
+	defer tkn.Close() // OpenProcessToken 的句柄必须关闭，否则每次调用泄漏一个
 	usr, err := tkn.GetTokenUser()
 	if err != nil {
 		return nil, err
@@ -595,6 +605,7 @@ func GetDenyDACL() (*windows.ACL, error) {
 	if err != nil {
 		return nil, err
 	}
+	defer tkn.Close() // OpenProcessToken 的句柄必须关闭，否则每次调用泄漏一个
 	usr, err := tkn.GetTokenUser()
 	if err != nil {
 		return nil, err
@@ -661,6 +672,7 @@ func addPrivilegeToCurrentToken(priv string) error {
 	if err != nil {
 		return err
 	}
+	defer tkn.Close() // OpenProcessToken 的句柄必须关闭，否则每次调用泄漏一个
 	privLUID, err := getPrivilegeLUID(priv)
 	if err != nil {
 		return err
@@ -804,19 +816,9 @@ func SetLimitToWorkdir(workDir string) (func() error, error) {
 		return cleanFunc, err
 	}
 
-	_, err = os.Stat(path.Join(workDir, ".alkaid0"))
-	// os.IsExist 只对"已存在"类错误返回 true，对成功 Stat（err==nil）恒为 false，
-	// 必须用 err==nil 判断目录存在，否则保护规则目录的 DenyDACL 永远不会被应用。
-	if err == nil {
-		DenyDACL, err := GetDenyDACL()
-		if err != nil {
-			return cleanFunc, err
-		}
-		err = ApplyDACL(path.Join(workDir, ".alkaid0"), DenyDACL)
-		if err != nil {
-			return cleanFunc, err
-		}
-	}
+	// workDir 已被改动，立刻把 cleanFunc 换成真正的还原逻辑：
+	// 之后任何一步失败（.alkaid0 的 GetDenyDACL/ApplyDACL）都必须能回滚 workDir，
+	// 否则调用方一旦失败返回，授予沙盒账户的写权限就永久留在了 workDir 上。
 	cleanFunc = func() error {
 		// 优先恢复原始 DACL，避免目录的继承 ACE（SYSTEM/Users 等）被永久移除
 		if origDACL != nil {
@@ -833,25 +835,78 @@ func SetLimitToWorkdir(workDir string) (func() error, error) {
 		return nil
 	}
 
+	_, err = os.Stat(path.Join(workDir, ".alkaid0"))
+	// os.IsExist 只对"已存在"类错误返回 true，对成功 Stat（err==nil）恒为 false，
+	// 必须用 err==nil 判断目录存在，否则保护规则目录的 DenyDACL 永远不会被应用。
+	if err == nil {
+		DenyDACL, err := GetDenyDACL()
+		if err != nil {
+			return cleanFunc, err
+		}
+		err = ApplyDACL(path.Join(workDir, ".alkaid0"), DenyDACL)
+		if err != nil {
+			return cleanFunc, err
+		}
+	}
+
 	return cleanFunc, nil
 }
 
-// SetLimitToDir 设置一般权限
+// SetLimitToDir 为给定的若干目录临时授予沙盒账户访问权限，返回清理函数。
+//
+// 清理语义必须与 SetLimitToWorkdir 保持一致：**恢复每个目录的原始 DACL**。
+//
+// 这里绝对不能回填 GetDenyDACL()。ApplyDACL 带 PROTECTED_DACL_SECURITY_INFORMATION，
+// 会整体替换目标目录的 DACL 并切断继承；而 GetDenyDACL 只包含三条 ACE
+// （拒绝沙盒账户 + 授予 Administrators + 授予当前用户）。用它做"清理"意味着：
+//   - 目标目录原有的继承 ACE（SYSTEM、Users、以及任何自定义授权）被永久删除；
+//   - 由于该 DACL 带 SUB_CONTAINERS_AND_OBJECTS_INHERIT，破坏会向下传播到整棵子树
+//     （例如 %TEMP% 与整个工作区），备份/索引/杀毒等以 SYSTEM 身份运行的组件从此
+//     失去访问权；
+//   - 若同时 SetLimitToWorkdir 恢复了 workDir，后执行的这一步会把恢复结果重新覆盖掉。
+//
+// 唯一"应当保留拒绝"的地方是 <workDir>/.alkaid0：那是会话数据库所在目录，
+// 由 SetLimitToWorkdir 单独施加 DenyDACL 且刻意不恢复（见 GetDenyDACL 注释）。
+// 因此调用方必须把 workDir 排除在本函数的列表之外（见 sandbox_windows.go）。
 func SetLimitToDir(workDir []string) (func() error, error) {
+	// 每个已施加限制的目录及其原始 DACL 快照；origDACL 为 nil 表示快照失败。
+	type daclSnapshot struct {
+		dir      string
+		origDACL *windows.ACL
+	}
+	snapshots := make([]daclSnapshot, 0, len(workDir))
+
 	cleanFunc := func() error {
-		for _, dir := range workDir {
-			DenyDACL, err := GetDenyDACL()
-			if err != nil {
-				return err
+		var firstErr error
+		// 逆序恢复，与施加顺序相反
+		for i := len(snapshots) - 1; i >= 0; i-- {
+			snap := snapshots[i]
+			var err error
+			if snap.origDACL != nil {
+				err = restoreDACL(snap.dir, snap.origDACL)
+			} else {
+				// 读取原始 DACL 失败时无法还原：退化为收紧沙盒账户权限。
+				// 失败要"关闭"而不是把写权限留给沙盒账户（与 SetLimitToWorkdir 一致）。
+				var denyDACL *windows.ACL
+				if denyDACL, err = GetDenyDACL(); err == nil {
+					err = ApplyDACL(snap.dir, denyDACL)
+				}
 			}
-			err = ApplyDACL(dir, DenyDACL)
-			if err != nil {
-				return err
+			if err != nil && firstErr == nil {
+				firstErr = err
 			}
 		}
-		return nil
+		// 幂等：重复调用不再重复恢复（例如错误路径已回滚过一次）
+		snapshots = snapshots[:0]
+		return firstErr
 	}
+
 	for _, dir := range workDir {
+		origDACL, err := saveDACL(dir)
+		if err != nil {
+			// 与 SetLimitToWorkdir 相同：快照失败不阻塞限制设置，清理时退化为 DenyDACL
+			origDACL = nil
+		}
 		DACL, err := GetDACL()
 		if err != nil {
 			return cleanFunc, err
@@ -860,6 +915,7 @@ func SetLimitToDir(workDir []string) (func() error, error) {
 		if err != nil {
 			return cleanFunc, err
 		}
+		snapshots = append(snapshots, daclSnapshot{dir: dir, origDACL: origDACL})
 	}
 
 	return cleanFunc, nil

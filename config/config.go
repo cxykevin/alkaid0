@@ -13,8 +13,16 @@ import (
 	"github.com/cxykevin/alkaid0/product"
 )
 
-// GlobalConfig 配置文件对象。注意：Load/Save/Reload 会写锁保护，直接读字段是线程安全的
-// （写操作发生在启动时和管理 RPC 中），但严格并发安全应使用 GlobalConfig() 函数。
+// GlobalConfig 当前生效的配置对象。
+//
+// 不变量（写时复制 / copy-on-write）：对象一旦发布，*structs.Config 及其内部的
+// map/slice 就**不再被修改**。所有写入方必须先克隆副本（GlobalConfigForWrite）
+// 或构造全新对象（Load / GlobalConfigSwap），然后整体替换指针。
+//
+// 正因为如此，全仓库 200+ 处 config.GlobalConfig 直接读取才不需要加锁。
+// 任何"就地修改已发布对象"的写法（例如 *GlobalConfig = x 或
+// GlobalConfig.Model.Models[k] = v）都会与正在遍历这些 map 的读者并发，
+// 触发 Go 运行时的 fatal("concurrent map read and map write") 并终止整个进程。
 var GlobalConfig = &structs.Config{}
 
 const defaultConfigPath = "~/.config/alkaid0/config.json"
@@ -25,29 +33,85 @@ var (
 	configPath     string
 )
 
-// GlobalConfig 返回当前配置的读安全快照
-// 多次调用可能返回不同版本，但保证指针有效且无数据竞争
+// GlobalConfigSafe 返回当前配置快照。
+// 由于配置采用写时复制，返回的指针在其生命周期内不会再被修改，可安全读取；
+// 但它不保证是"最新版本"——多次调用可能拿到不同的配置对象。
 func GlobalConfigSafe() *structs.Config {
 	globalConfigMu.RLock()
 	defer globalConfigMu.RUnlock()
 	return GlobalConfig
 }
 
-// GlobalConfigForWrite 返回写锁下的配置指针，调用者必须调用解锁函数
-func GlobalConfigForWrite() (*structs.Config, func()) {
-	globalConfigMu.Lock()
-	return GlobalConfig, func() { globalConfigMu.Unlock() }
+// SnapshotJSON 在读锁内把当前配置序列化为 JSON 快照。
+// 供 RPC 层返回配置：调用方拿到的是与后续写入完全解耦的字节流，
+// 不会在序列化过程中被并发写改到（json.Marshal 会遍历各 map）。
+func SnapshotJSON() (json.RawMessage, error) {
+	globalConfigMu.RLock()
+	defer globalConfigMu.RUnlock()
+	b, err := json.Marshal(GlobalConfig)
+	if err != nil {
+		return nil, err
+	}
+	return json.RawMessage(b), nil
 }
 
-// GlobalConfigSwap 原子替换配置并返回恢复函数。适合测试使用
+// cloneConfig 深拷贝配置（JSON 往返）。配置结构体全部可由 JSON 无损往返：
+// 无 json:"-" 字段、无自定义 Marshal、无接口类型字段。
+func cloneConfig(cfg *structs.Config) (*structs.Config, error) {
+	b, err := json.Marshal(cfg)
+	if err != nil {
+		return nil, err
+	}
+	out := &structs.Config{}
+	if err := json.Unmarshal(b, out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// GlobalConfigForWrite 以写时复制方式修改配置，返回当前配置的深拷贝。
+//
+// 调用方修改副本后必须调用 commit() 发布，或调用 discard() 放弃；
+// 二者都只能在修改完成后立即调用一次。函数内部持有写锁直到 commit/discard，
+// 因此"读-改-写"整体互斥，不会丢失并发更新（与旧的解锁函数语义一致），
+// 区别是改动只会在 commit 时以整体替换指针的方式发布。
+func GlobalConfigForWrite() (cfg *structs.Config, commit func(), discard func()) {
+	globalConfigMu.Lock()
+	clone, err := cloneConfig(GlobalConfig)
+	if err != nil {
+		// 理论上不可达（配置结构体全部可 JSON 往返）。退化为旧的就地修改语义，
+		// 仍然保证锁一定被释放，调用方流程不倒挂。
+		clone = GlobalConfig
+	}
+	done := false
+	commit = func() {
+		if done {
+			return
+		}
+		done = true
+		GlobalConfig = clone
+		globalConfigMu.Unlock()
+	}
+	discard = func() {
+		if done {
+			return
+		}
+		done = true
+		globalConfigMu.Unlock()
+	}
+	return clone, commit, discard
+}
+
+// GlobalConfigSwap 原子替换配置并返回恢复函数。适合测试使用。
+// 写时复制：直接替换指针，绝不就地改写已发布的对象。
 func GlobalConfigSwap(cfg structs.Config) func() {
 	globalConfigMu.Lock()
-	old := *GlobalConfig
-	*GlobalConfig = cfg
+	old := GlobalConfig
+	GlobalConfig = &cfg
 	globalConfigMu.Unlock()
 	return func() {
 		globalConfigMu.Lock()
-		*GlobalConfig = old
+		GlobalConfig = old
 		globalConfigMu.Unlock()
 	}
 }
@@ -75,14 +139,14 @@ func generateKey() string {
 // ensureKey 检查 Server.Key 是否为空，若为空则自动生成并保存配置
 // 在写锁下修改 Server.Key，避免与运行时无锁读的字段（如各 RPC handler）形成数据竞争
 func ensureKey() {
-	cfg, unlock := GlobalConfigForWrite()
+	cfg, commit, discard := GlobalConfigForWrite()
 	if cfg.Server.Key == "" {
 		cfg.Server.Key = generateKey()
-		unlock()
+		commit()
 		Save()
 		return
 	}
-	unlock()
+	discard()
 }
 
 // Load 加载配置文件。
@@ -143,12 +207,13 @@ func Load() {
 		return
 	}
 
-	// 解析成功，将临时配置复制到 GlobalConfig（缺失字段填充 OnlineSearch 默认值，
-	// 依据原始 JSON 实际出现过的键，保留用户显式配置）
+	// 解析成功：先把默认值补齐到**尚未发布**的 tempConfig 上，再整体替换指针发布。
+	// 注意不能写成 *GlobalConfig = *tempConfig —— 那会就地改写已经发布出去的对象，
+	// 与正在遍历其 map 的读者并发时 Go 运行时会 fatal 终止进程（写时复制不变量）。
+	EnsureOnlineSearchDefaults(tempConfig, json.RawMessage(data))
+	EnsureCacheDefaults(tempConfig, json.RawMessage(data))
 	globalConfigMu.Lock()
-	*GlobalConfig = *tempConfig
-	EnsureOnlineSearchDefaults(GlobalConfig, json.RawMessage(data))
-	EnsureCacheDefaults(GlobalConfig, json.RawMessage(data))
+	GlobalConfig = tempConfig
 	globalConfigMu.Unlock()
 
 	// 加载完成后检查密钥，为空则自动生成

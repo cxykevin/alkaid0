@@ -3,7 +3,15 @@
         ToolCall.Name == "edit" ||
         ToolCall.Name == "read"
     ) && regex(
-        "(^|/)(\\.env($|\\.)|\\.npmrc$|\\.pypirc$|\\.netrc$|\\.git-credentials$|\\.aws/credentials$|\\.kube/config$|\\.ssh/|id_rsa$|id_dsa$|id_ed25519$|authorized_keys$|known_hosts$|\\.(pem|key|crt|p12|pfx|der|jks|keystore)$|\\.alkaid0/)",
+        // 说明：
+        //  - 分隔符同时接受 / 与 \（Windows 上模型与用户都可能给出反斜杠路径，
+        //    旧的 (^|/) 会被 "deploy\.env"、".ssh\config" 这类路径绕过）。
+        //  - 扩展名分支（\.pem|\.key|…）必须放在 (^|[\\/]) 分组之外：旧写法把整个
+        //    备选串都包进 (^|/)，导致点号前必须是分隔符，于是 "server.pem"、
+        //    "/etc/ssl/server.pem" 这类最常见的密钥路径反而匹配不上。
+        //  - (?i) 让大小写不敏感：Windows 路径本身大小写不敏感，否则
+        //    "CERTS\SERVER.PEM" 可以绕过。
+        "(?i)(^|[\\\\/])(\\.env($|\\.)|\\.npmrc$|\\.pypirc$|\\.netrc$|\\.git-credentials$|\\.aws[\\\\/]credentials$|\\.kube[\\\\/]config$|\\.ssh[\\\\/]|id_rsa$|id_dsa$|id_ed25519$|authorized_keys$|known_hosts$|\\.alkaid0[\\\\/])|\\.(pem|key|crt|p12|pfx|der|jks|keystore)$",
         param(ToolCall, "path")
     )
 )

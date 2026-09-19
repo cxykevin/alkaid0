@@ -20,17 +20,45 @@ type KeyRef struct {
 	Original string
 }
 
+// StreamKey 标识一条独立的流式字段。
+//
+// 为什么需要：还原器（Aho-Corasick）会把"可能是关键词前缀"的尾部字节扣留到下次调用
+// 再输出。若正文与工具调用参数共用一个还原器状态，正文末尾被扣留的字节会被拼到
+// 参数串前面（如 `s{"path"…`），导致工具调用 JSON 解析失败、整个回合中止；
+// 多条工具参数流之间同样会互相串字节。因此每条流必须有独立状态。
+type StreamKey struct {
+	Choice int   // choices 下标
+	Kind   uint8 // StreamKindContent / StreamKindArguments
+	Index  int   // 工具调用下标（Kind == StreamKindArguments 时有效）
+}
+
+const (
+	// StreamKindContent 正文流
+	StreamKindContent uint8 = iota
+	// StreamKindArguments 工具调用参数流
+	StreamKindArguments
+)
+
+// PendingArg 是流结束时某条工具参数流的残留字节。
+type PendingArg struct {
+	Choice int
+	Index  int
+	Text   string
+}
+
 // Engine 是安全 key 上下文的引擎：出站脱敏 + 响应流式还原。
 // 每个请求创建一个 Engine（映射表很小，全量加载 + 重建 AC 自动机开销可忽略）。
 type Engine struct {
 	db           *gorm.DB
 	cfg          configStructs.DataMaskConfig
 	mu           sync.RWMutex
-	origToMask   map[KeyRef]string     // 原值 → 假值（脱敏方向）
-	maskToOrig   map[string]string     // 假值 → 原值（还原方向）
-	contentRep   *ahocorasick.Replacer // 正文流还原器
-	reasoningRep *ahocorasick.Replacer // 思考流还原器（独立状态，避免跨流误拼接）
-	custom       []string              // /mask add 的自定义脱敏值（精确匹配）
+	origToMask   map[KeyRef]string // 原值 → 假值（脱敏方向）
+	maskToOrig   map[string]string // 假值 → 原值（还原方向）
+	reps         map[StreamKey]*ahocorasick.Replacer
+	repItems     []ahocorasick.Item // 重建还原器用的条目（惰性创建各流时复用）
+	repOrder     []StreamKey        // 流创建顺序，便于稳定地刷出残留
+	reasoningRep *ahocorasick.Replacer
+	custom       []string // /mask add 的自定义脱敏值（精确匹配）
 }
 
 // NewEngine 创建引擎。功能未启用 / db 为 nil / 映射表不存在时返回 nil（调用方零行为变化）。
@@ -86,13 +114,30 @@ func (e *Engine) loadMappings() {
 }
 
 // rebuildReplacersLocked 依据当前 maskToOrig 重建还原器（调用方须持写锁）。
+// 各条流按需惰性创建，重建时连同已有状态一起清空。
 func (e *Engine) rebuildReplacersLocked() {
 	items := make([]ahocorasick.Item, 0, len(e.maskToOrig))
 	for masked, orig := range e.maskToOrig {
 		items = append(items, ahocorasick.Item{Keyword: masked, Replace: orig})
 	}
-	e.contentRep = ahocorasick.NewReplacer(items)
+	e.repItems = items
+	e.reps = make(map[StreamKey]*ahocorasick.Replacer)
+	e.repOrder = nil
 	e.reasoningRep = ahocorasick.NewReplacer(items)
+}
+
+// replacerLocked 取出（必要时创建）指定流的还原器。调用方须持写锁。
+func (e *Engine) replacerLocked(key StreamKey) *ahocorasick.Replacer {
+	if e.reps == nil {
+		e.reps = make(map[StreamKey]*ahocorasick.Replacer)
+	}
+	if r, ok := e.reps[key]; ok {
+		return r
+	}
+	r := ahocorasick.NewReplacer(e.repItems)
+	e.reps[key] = r
+	e.repOrder = append(e.repOrder, key)
+	return r
 }
 
 // MaskMessages 对消息列表逐条脱敏。返回新切片；原切片不被修改。
@@ -201,15 +246,23 @@ func (e *Engine) lookupOrCreate(typ, original string) (string, error) {
 	return original, nil
 }
 
-// RestoreContent 流式还原正文 chunk（状态跨调用保持）。
-func (e *Engine) RestoreContent(s string) string {
-	e.mu.RLock()
-	r := e.contentRep
-	e.mu.RUnlock()
-	if r == nil || s == "" {
+// RestoreStream 流式还原指定流的分片（状态仅在该流内跨调用保持）。
+func (e *Engine) RestoreStream(key StreamKey, s string) string {
+	if s == "" {
+		return s
+	}
+	e.mu.Lock()
+	r := e.replacerLocked(key)
+	e.mu.Unlock()
+	if r == nil {
 		return s
 	}
 	return string(r.Stream([]byte(s)))
+}
+
+// RestoreContent 流式还原正文 chunk（等价于正文流的 RestoreStream，保留旧签名）。
+func (e *Engine) RestoreContent(s string) string {
+	return e.RestoreStream(StreamKey{Kind: StreamKindContent}, s)
 }
 
 // RestoreReasoning 流式还原思考 chunk（独立状态）。
@@ -223,16 +276,38 @@ func (e *Engine) RestoreReasoning(s string) string {
 	return string(r.Stream([]byte(s)))
 }
 
-// FinishRestore 流结束时刷出两条流的残留缓冲。
+// FinishRestore 流结束时刷出正文与思考流的残留缓冲（保留旧签名）。
 func (e *Engine) FinishRestore() (content, reasoning string) {
-	e.mu.RLock()
-	c, r := e.contentRep, e.reasoningRep
-	e.mu.RUnlock()
-	if c != nil {
-		content = string(c.Finish())
-	}
-	if r != nil {
-		reasoning = string(r.Finish())
-	}
+	content, reasoning, _ = e.FinishAll()
 	return content, reasoning
+}
+
+// FinishAll 流结束时刷出所有流的残留缓冲。
+//
+// 工具参数流的残留必须单独返回（PendingArg），由调用方按对应 tool_call 的
+// arguments 增量下发 —— 绝不能像旧实现那样把参数残留混进正文，反之亦然。
+func (e *Engine) FinishAll() (content, reasoning string, args []PendingArg) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	for _, key := range e.repOrder {
+		r := e.reps[key]
+		if r == nil {
+			continue
+		}
+		tail := string(r.Finish())
+		if tail == "" {
+			continue
+		}
+		switch key.Kind {
+		case StreamKindArguments:
+			args = append(args, PendingArg{Choice: key.Choice, Index: key.Index, Text: tail})
+		default:
+			content += tail
+		}
+	}
+	if e.reasoningRep != nil {
+		reasoning = string(e.reasoningRep.Finish())
+	}
+	return content, reasoning, args
 }

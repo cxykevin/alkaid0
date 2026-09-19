@@ -125,20 +125,29 @@ func SimpleOpenAIRequest(ctx context.Context, baseURL, apiKey, model string, bod
 		if err := restoreChatResponse(&chatResp, masker); err != nil {
 			return err
 		}
+		// 还原之后再归一化：真实网关的非流式响应把内容放在 choices[].message，
+		// 而下游消费方（SendRequest 的 callback）只读 choices[].delta。
+		// 放在 restore 之后是为了让每个字段只经过一次有状态的脱敏还原器。
+		normalizeNonStreamChoices(&chatResp)
 		if err := callback(chatResp); err != nil {
 			return fmt.Errorf("callback error: %w", err)
 		}
 		if masker != nil {
-			content, reasoning := masker.FinishRestore()
-			if content != "" || reasoning != "" {
+			content, reasoning, pendingArgs := masker.FinishAll()
+			if content != "" || reasoning != "" || len(pendingArgs) > 0 {
 				var reasoningPtr *string
 				if reasoning != "" {
 					reasoningPtr = &reasoning
 				}
+				msg := structs.Message{Content: content, ReasoningContent: reasoningPtr}
+				for _, p := range pendingArgs {
+					msg.ToolCalls = append(msg.ToolCalls, structs.StreamToolCall{
+						Index:    p.Index,
+						Function: &structs.StreamToolCallFunc{Arguments: p.Text},
+					})
+				}
 				if err := callback(structs.ChatCompletionResponse{
-					Choices: []structs.Choice{{Delta: structs.Message{
-						Content: content, ReasoningContent: reasoningPtr,
-					}}},
+					Choices: []structs.Choice{{Delta: msg}},
 				}); err != nil {
 					return fmt.Errorf("callback error: %w", err)
 				}
@@ -179,6 +188,10 @@ func SimpleOpenAIRequest(ctx context.Context, baseURL, apiKey, model string, bod
 		if err := restoreChatResponse(&chatResp, masker); err != nil {
 			return err
 		}
+		// 还原之后再归一化：真实网关的非流式响应把内容放在 choices[].message，
+		// 而下游消费方（SendRequest 的 callback）只读 choices[].delta。
+		// 放在 restore 之后是为了让每个字段只经过一次有状态的脱敏还原器。
+		normalizeNonStreamChoices(&chatResp)
 		if err := callback(chatResp); err != nil {
 			return fmt.Errorf("callback error: %w", err)
 		}
@@ -221,15 +234,25 @@ func SimpleOpenAIRequest(ctx context.Context, baseURL, apiKey, model string, bod
 		return fmt.Errorf("invalid empty response")
 	}
 
-	// 正常结束时刷出还原器的残留缓冲（未匹配的有界缓冲也是响应文本的一部分）
+	// 正常结束时刷出还原器的残留缓冲（未匹配的有界缓冲也是响应文本的一部分）。
+	// 工具参数流的残留必须回填到对应 tool_call 的 arguments 上，混进正文会污染
+	// 回复内容、并让最后一个工具调用丢掉结尾字节。
 	if masker != nil {
-		if c, r := masker.FinishRestore(); c != "" || r != "" {
+		c, r, pendingArgs := masker.FinishAll()
+		if c != "" || r != "" || len(pendingArgs) > 0 {
 			var rp *string
 			if r != "" {
 				rp = &r
 			}
+			msg := structs.Message{Content: c, ReasoningContent: rp}
+			for _, p := range pendingArgs {
+				msg.ToolCalls = append(msg.ToolCalls, structs.StreamToolCall{
+					Index:    p.Index,
+					Function: &structs.StreamToolCallFunc{Arguments: p.Text},
+				})
+			}
 			if err := callback(structs.ChatCompletionResponse{
-				Choices: []structs.Choice{{Delta: structs.Message{Content: c, ReasoningContent: rp}}},
+				Choices: []structs.Choice{{Delta: msg}},
 			}); err != nil {
 				logger.Error("call openai chat error when callback finish: %v", err)
 				return fmt.Errorf("callback error: %w", err)
@@ -240,8 +263,13 @@ func SimpleOpenAIRequest(ctx context.Context, baseURL, apiKey, model string, bod
 	return nil
 }
 
-// readResponsePrefix consumes BOM and JSON whitespace while retaining the bytes
-// for the parser. This lets us distinguish ordinary JSON from an SSE stream.
+// readResponsePrefix 跳过 UTF-8 BOM 与前导空白，返回**首个非空白字节**及其之前的
+// 全部已消费字节（调用方会把它们重新注入行读取器）。用于区分普通 JSON 与 SSE 流。
+//
+// 注意 first 必须是首个非空白字节本身：旧实现多读了一个字节才返回，于是
+// 以 "{" 开头的响应体得到 first == '"'，`first == '{'` 永远不成立 ——
+// 整个"网关忽略 stream=true 时按非流式 JSON 处理"的分支成了死代码，
+// 这类响应最终会掉进 SSE 循环并报 invalid empty response。
 func readResponsePrefix(reader *bufio.Reader) (prefix []byte, first byte, err error) {
 	b, err := reader.ReadByte()
 	if err != nil {
@@ -253,8 +281,8 @@ func readResponsePrefix(reader *bufio.Reader) (prefix []byte, first byte, err er
 		if err2 != nil || err3 != nil || b2 != 0xbb || b3 != 0xbf {
 			return nil, 0, fmt.Errorf("invalid response prefix")
 		}
-	} else {
-		prefix = append(prefix, b)
+	} else if err := reader.UnreadByte(); err != nil {
+		return nil, 0, err
 	}
 	for {
 		b, err = reader.ReadByte()
@@ -268,6 +296,31 @@ func readResponsePrefix(reader *bufio.Reader) (prefix []byte, first byte, err er
 	}
 }
 
+// normalizeNonStreamChoices 把非流式响应的 choices[].message 归一化到 delta 字段。
+//
+// 背景：部分兼容网关会忽略 stream=true，直接返回普通 JSON。真实 OpenAI 的非流式
+// 响应把内容放在 choices[].message（流式才用 choices[].delta），而 Alkaid0 的
+// 响应消费方统一只读 delta —— 于是这类网关表现为"空回复"（工具调用同样会丢失）。
+// mock 服务器此前也错误地用 delta 构造非流式响应，掩盖了这个缺陷。
+func normalizeNonStreamChoices(resp *structs.ChatCompletionResponse) {
+	if resp == nil {
+		return
+	}
+	for i := range resp.Choices {
+		choice := &resp.Choices[i]
+		// 仅在 delta 为空、message 有内容时搬运，绝不覆盖真实的流式增量
+		if !isEmptyMessage(choice.Delta) || isEmptyMessage(choice.Message) {
+			continue
+		}
+		choice.Delta = choice.Message
+	}
+}
+
+// isEmptyMessage 判断一条消息是否没有任何内容
+func isEmptyMessage(m structs.Message) bool {
+	return m.Content == "" && m.ReasoningContent == nil && len(m.ToolCalls) == 0
+}
+
 func restoreChatResponse(chatResp *structs.ChatCompletionResponse, masker *mask.Engine) error {
 	if masker == nil {
 		return nil
@@ -275,14 +328,23 @@ func restoreChatResponse(chatResp *structs.ChatCompletionResponse, masker *mask.
 	for i := range chatResp.Choices {
 		choice := &chatResp.Choices[i]
 		restoreMessage := func(message *structs.Message) {
-			message.Content = masker.RestoreContent(message.Content)
+			// 每条流使用独立的还原器状态：正文与各工具参数共享状态时，
+			// 被扣留的前缀字节会串到别的字段上（旧实现即如此，会让参数串变成
+			// `s{"path"…` 而 JSON 解析失败、整个回合中止）。
+			message.Content = masker.RestoreStream(mask.StreamKey{
+				Choice: i, Kind: mask.StreamKindContent,
+			}, message.Content)
 			if rc := message.ReasoningContent; rc != nil {
 				r := masker.RestoreReasoning(*rc)
 				message.ReasoningContent = &r
 			}
 			for j := range message.ToolCalls {
 				if message.ToolCalls[j].Function != nil {
-					message.ToolCalls[j].Function.Arguments = masker.RestoreContent(message.ToolCalls[j].Function.Arguments)
+					message.ToolCalls[j].Function.Arguments = masker.RestoreStream(mask.StreamKey{
+						Choice: i,
+						Kind:   mask.StreamKindArguments,
+						Index:  message.ToolCalls[j].Index,
+					}, message.ToolCalls[j].Function.Arguments)
 				}
 			}
 		}

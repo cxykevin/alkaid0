@@ -37,6 +37,14 @@ func fsOpWithTimeout[T any](timeout time.Duration, op func(ctx context.Context) 
 	defer cancel()
 	ch := make(chan fsOpResult[T], 1)
 	go func() {
+		// panic 兜底：op 中的 panic（如 make([]byte, 负数)）若不加 recover 会
+		// 直接终止整个进程。转换为错误返回，调用方按普通失败处理。
+		defer func() {
+			if r := recover(); r != nil {
+				var zero T
+				ch <- fsOpResult[T]{val: zero, err: fmt.Errorf("filesystem operation panicked: %v", r)}
+			}
+		}()
 		val, err := op(ctx)
 		ch <- fsOpResult[T]{val: val, err: err}
 	}()
@@ -55,6 +63,11 @@ func fsOpVoidWithTimeout(timeout time.Duration, op func(ctx context.Context) err
 	defer cancel()
 	ch := make(chan error, 1)
 	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				ch <- fmt.Errorf("filesystem operation panicked: %v", r)
+			}
+		}()
 		ch <- op(ctx)
 	}()
 	select {
@@ -83,6 +96,13 @@ func (cr *ctxReader) Read(p []byte) (int, error) {
 func removeAllCtx(ctx context.Context, path string) error {
 	if err := ctx.Err(); err != nil {
 		return err
+	}
+	// 先 Lstat（不跟随符号链接）：符号链接本身应被删除，而不是它指向的目标，
+	// 与 os.RemoveAll 语义一致。否则 fs/rm 一个指向目录的链接会删掉目标目录里的内容。
+	if li, lerr := os.Lstat(path); lerr != nil {
+		return lerr
+	} else if li.Mode()&os.ModeSymlink != 0 || !li.IsDir() {
+		return os.Remove(path)
 	}
 	entries, err := os.ReadDir(path)
 	if err != nil {
@@ -193,6 +213,19 @@ func validatePath(cwd, relPath string) (string, error) {
 	}
 
 	return fullPath, nil
+}
+
+// requirePath 拒绝空路径，供"创建/删除/改属性"类会改动文件系统的操作使用。
+//
+// validatePath 会把空路径映射为会话工作目录（供 stat/read 列出根目录，有测试依赖
+// 该行为），但改动类操作绝不能接受空路径：fs/rm 传 "" 会递归删掉整个工作目录
+// （含 .alkaid0 下的会话数据库），chmod/chown 传 "" 则会作用到工作目录根本身。
+// 因此所有写入/删除/改属性入口都必须先经过本检查。
+func requirePath(p string) error {
+	if strings.TrimSpace(p) == "" {
+		return fmt.Errorf("path must not be empty")
+	}
+	return nil
 }
 
 // validateNoSymlinkEscape 对 fullPath 及其已存在的最长前缀解析符号链接，
@@ -343,6 +376,16 @@ func FsStat(req FsCommonRequest, _ func(string, any, *string) error, _ uint64) (
 //   - 设置 sessionId：仅接受相对路径，在会话工作目录内访问
 //   - 不设置 sessionId：仅接受绝对路径，不能访问 /etc 或 C:\ProgramData
 func FsRead(req FsReadRequest, _ func(string, any, *string) error, _ uint64) (FsReadResponse, error) {
+	// 负数 offset/length 没有意义，且 offset 为负会让下游 fileSize-offset 溢出成
+	// 负数，进而 make([]byte, 负数) panic（在 fsOpWithTimeout 的 goroutine 中会终止
+	// 整个进程）；length 为负同样会直接进 make。这里显式拒绝。
+	if req.Offset < 0 {
+		return FsReadResponse{}, fmt.Errorf("offset must not be negative")
+	}
+	if req.Length < 0 {
+		return FsReadResponse{}, fmt.Errorf("length must not be negative")
+	}
+
 	var cwd string
 	if req.SessionID != "" {
 		var err error
@@ -427,10 +470,18 @@ func FsRead(req FsReadRequest, _ func(string, any, *string) error, _ uint64) (Fs
 		}
 
 		if req.Length > 0 {
-			// 确保读范围不超出文件结尾，超出时静默截断
+			// 确保读范围不超出文件结尾，超出时静默截断。
+			// 入口已保证 req.Offset >= 0；这里仍对 maxRead 做下界防御，
+			// 避免任何未来改动让负数进入 make([]byte, n)。
 			maxRead := fileSize - req.Offset
+			if maxRead < 0 {
+				maxRead = 0
+			}
 			if req.Length > maxRead {
 				req.Length = maxRead
+			}
+			if req.Length < 0 {
+				req.Length = 0
 			}
 			data = make([]byte, req.Length)
 			// ctx-aware 读取：每次 Read 前检查取消，超时提前退出
@@ -471,6 +522,9 @@ func FsRead(req FsReadRequest, _ func(string, any, *string) error, _ uint64) (Fs
 func FsWrite(req FsWriteRequest, _ func(string, any, *string) error, _ uint64) (FsWriteResponse, error) {
 	if req.SessionID == "" {
 		return FsWriteResponse{}, fmt.Errorf("sessionId is required")
+	}
+	if err := requirePath(req.Path); err != nil {
+		return FsWriteResponse{}, err
 	}
 
 	cwd, _, err := sessionID2Cwd(req.SessionID)
@@ -548,6 +602,9 @@ func FsMkdir(req FsCommonRequest, _ func(string, any, *string) error, _ uint64) 
 	if req.SessionID == "" {
 		return u.H{}, fmt.Errorf("sessionId is required")
 	}
+	if err := requirePath(req.Path); err != nil {
+		return u.H{}, err
+	}
 
 	cwd, _, err := sessionID2Cwd(req.SessionID)
 	if err != nil {
@@ -574,6 +631,9 @@ func FsRm(req FsCommonRequest, _ func(string, any, *string) error, _ uint64) (u.
 	if req.SessionID == "" {
 		return u.H{}, fmt.Errorf("sessionId is required")
 	}
+	if err := requirePath(req.Path); err != nil {
+		return u.H{}, err
+	}
 
 	cwd, _, err := sessionID2Cwd(req.SessionID)
 	if err != nil {
@@ -583,6 +643,12 @@ func FsRm(req FsCommonRequest, _ func(string, any, *string) error, _ uint64) (u.
 	fullPath, err := validatePath(cwd, req.Path)
 	if err != nil {
 		return u.H{}, err
+	}
+
+	// 双保险：即使路径解析出现意外，也绝不允许删除会话工作目录本身
+	// （否则会连同 .alkaid0 下的会话数据库一起删掉）。
+	if filepath.Clean(fullPath) == filepath.Clean(cwd) {
+		return u.H{}, fmt.Errorf("refusing to delete the session working directory")
 	}
 
 	err = fsOpVoidWithTimeout(fsIOTimeout, func(ctx context.Context) error {
@@ -603,6 +669,9 @@ func FsChmod(req FsChmodRequest, _ func(string, any, *string) error, _ uint64) (
 	}
 	if req.Mode == "" {
 		return u.H{}, fmt.Errorf("mode is required")
+	}
+	if err := requirePath(req.Path); err != nil {
+		return u.H{}, err
 	}
 
 	cwd, _, err := sessionID2Cwd(req.SessionID)
@@ -647,6 +716,9 @@ func FsChown(req FsChownRequest, _ func(string, any, *string) error, _ uint64) (
 	}
 	if req.Owner == "" {
 		return u.H{}, fmt.Errorf("owner is required")
+	}
+	if err := requirePath(req.Path); err != nil {
+		return u.H{}, err
 	}
 
 	cwd, _, err := sessionID2Cwd(req.SessionID)

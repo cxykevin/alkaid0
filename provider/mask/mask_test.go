@@ -545,3 +545,107 @@ func splitChunks(s string, n int) []string {
 	}
 	return chunks
 }
+
+// ---- 回归测试：跨流共享还原器状态会串字节 ----
+//
+// 背景：还原器（Aho-Corasick）会把"可能是关键词前缀"的尾部字节扣留到下次调用再输出。
+// 旧实现里正文与每个工具调用参数共用同一个 contentRep，于是正文末尾被扣留的字节
+// 会被拼到紧随其后的工具参数串前面（如 `s{"path"…`），导致工具调用 JSON 解析失败、
+// 整个回合中止；多条工具参数流之间也会互相串字节。
+
+// seedKeyMapping 直接写入一条映射，使还原器的关键词前缀可预期。
+func seedKeyMapping(t *testing.T, db *gorm.DB, masked, original string) {
+	t.Helper()
+	row := storageStructs.KeyMapping{KeyType: "api_key", Original: original, Masked: masked}
+	if err := db.Create(&row).Error; err != nil {
+		t.Fatalf("seed key mapping: %v", err)
+	}
+}
+
+func TestRestoreStream_ContentAndArgumentsDoNotShareState(t *testing.T) {
+	enableMask(t)
+	db := newTestDB(t)
+	// 假值以 "sk-" 开头：AC 自动机因此存在 "s"、"sk"、"sk-" 等前缀
+	seedKeyMapping(t, db, "sk-or-v1-abcdefghijklmnop", "sk-or-v1-real-secret-value")
+
+	eng := NewEngine(db)
+	if eng == nil {
+		t.Fatal("engine should be enabled")
+	}
+
+	contentKey := StreamKey{Choice: 0, Kind: StreamKindContent}
+	argsKey := StreamKey{Choice: 0, Kind: StreamKindArguments, Index: 0}
+
+	// 正文以 "s" 结尾 → 该字节会被扣留，等待后续输入确认是否为关键词前缀
+	gotContent := eng.RestoreStream(contentKey, "Let me read the paths")
+	if gotContent != "Let me read the path" {
+		t.Fatalf("content stream should withhold the trailing prefix byte, got %q", gotContent)
+	}
+
+	// 紧接着是工具参数流：绝不能带上被扣留的 "s"
+	args := `{"path":"README.md"}`
+	gotArgs := eng.RestoreStream(argsKey, args)
+	if gotArgs != args {
+		t.Errorf("arguments stream must not inherit the content stream's withheld byte:\n got %q\nwant %q", gotArgs, args)
+	}
+
+	// 残留也必须各归各流：正文流残留 "s"，参数流没有残留
+	content, _, pending := eng.FinishAll()
+	if content != "s" {
+		t.Errorf("content leftover should be %q, got %q", "s", content)
+	}
+	for _, p := range pending {
+		t.Errorf("arguments stream should have no leftover, got %+v", p)
+	}
+}
+
+func TestRestoreStream_TwoArgumentStreamsAreIsolated(t *testing.T) {
+	enableMask(t)
+	db := newTestDB(t)
+	seedKeyMapping(t, db, "sk-or-v1-abcdefghijklmnop", "sk-or-v1-real-secret-value")
+
+	eng := NewEngine(db)
+	if eng == nil {
+		t.Fatal("engine should be enabled")
+	}
+
+	key0 := StreamKey{Choice: 0, Kind: StreamKindArguments, Index: 0}
+	key1 := StreamKey{Choice: 0, Kind: StreamKindArguments, Index: 1}
+
+	// 第一条参数流以 "s" 结尾（可能是关键词前缀，被扣留）
+	if got := eng.RestoreStream(key0, `{"a":1,"s`); got != `{"a":1,"` {
+		t.Fatalf("first args stream should withhold the trailing byte, got %q", got)
+	}
+	// 第二条参数流必须完整，不受第一条影响
+	second := `{"b":2}`
+	if got := eng.RestoreStream(key1, second); got != second {
+		t.Errorf("second arguments stream must be isolated, got %q want %q", got, second)
+	}
+	// 第一条流的残留应归到 key0
+	_, _, pending := eng.FinishAll()
+	if len(pending) != 1 || pending[0].Index != 0 || pending[0].Text != "s" {
+		t.Errorf("leftover must be attributed to the first argument stream, got %+v", pending)
+	}
+}
+
+func TestRestoreStream_ActualSecretIsStillRestored(t *testing.T) {
+	enableMask(t)
+	db := newTestDB(t)
+	const masked = "sk-or-v1-abcdefghijklmnop"
+	const original = "sk-or-v1-real-secret-value"
+	seedKeyMapping(t, db, masked, original)
+
+	eng := NewEngine(db)
+	key := StreamKey{Choice: 0, Kind: StreamKindContent}
+
+	// 分片跨越关键词边界时仍必须正确还原（证明隔离没有破坏还原功能）
+	var out string
+	for _, chunk := range []string{"key=", masked[:8], masked[8:], " end"} {
+		out += eng.RestoreStream(key, chunk)
+	}
+	rest, _, _ := eng.FinishAll()
+	out += rest
+	if !strings.Contains(out, original) {
+		t.Errorf("secret split across chunks must be restored, got %q", out)
+	}
+}

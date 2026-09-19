@@ -269,3 +269,83 @@ func TestLoadPreservesExistingKey(t *testing.T) {
 		t.Errorf("Server.Key = %q, want %q", GlobalConfig.Server.Key, existingKey)
 	}
 }
+
+// ---- 写时复制（copy-on-write）不变量回归测试 ----
+//
+// 背景：旧实现里 GlobalConfigForWrite 返回全局对象指针、调用方在锁内就地修改；
+// Load 也用 *GlobalConfig = *tempConfig 就地改写已发布对象。而全仓库 200+ 处
+// 读取是无锁的（直接 config.GlobalConfig），只要读者正在遍历这些 map，
+// Go 运行时就会 fatal("concurrent map read and map write") 终止整个进程。
+// 修复后：对象一旦发布就不再被修改，写入方克隆副本、提交时才整体替换指针。
+
+func TestGlobalConfigForWriteIsCopyOnWrite(t *testing.T) {
+	restore := GlobalConfigSwap(*GlobalConfigSafe())
+	defer restore()
+
+	published := GlobalConfigSafe() // 模拟"读者已经持有的指针"
+	const probePort = uint16(45678)
+
+	cfg, commit, _ := GlobalConfigForWrite()
+	cfg.Server.Port = probePort
+	if cfg.Model.Models == nil {
+		cfg.Model.Models = map[int32]structs.ModelConfig{}
+	}
+	cfg.Model.Models[4242] = structs.ModelConfig{ModelName: "cow-probe"}
+	commit()
+
+	if published.Server.Port == probePort {
+		t.Error("已发布对象被就地修改：写时复制不变量被破坏")
+	}
+	if _, ok := published.Model.Models[4242]; ok {
+		t.Error("已发布对象的 map 被就地修改：写时复制不变量被破坏")
+	}
+
+	if got := GlobalConfigSafe().Server.Port; got != probePort {
+		t.Errorf("commit 后新配置未生效：Server.Port=%d, want %d", got, probePort)
+	}
+	if _, ok := GlobalConfigSafe().Model.Models[4242]; !ok {
+		t.Error("commit 后新配置缺少新增的模型")
+	}
+}
+
+func TestGlobalConfigForWriteDiscardPublishesNothing(t *testing.T) {
+	restore := GlobalConfigSwap(*GlobalConfigSafe())
+	defer restore()
+
+	before := GlobalConfigSafe().Server.Port
+	cfg, _, discard := GlobalConfigForWrite()
+	cfg.Server.Port = before + 1
+	discard()
+
+	if got := GlobalConfigSafe().Server.Port; got != before {
+		t.Errorf("discard 之后不应发布任何改动：Server.Port=%d, want %d", got, before)
+	}
+}
+
+// TestSnapshotJSONIsDecoupled 快照必须与全局对象解耦
+func TestSnapshotJSONIsDecoupled(t *testing.T) {
+	restore := GlobalConfigSwap(*GlobalConfigSafe())
+	defer restore()
+
+	snap, err := SnapshotJSON()
+	if err != nil {
+		t.Fatalf("SnapshotJSON failed: %v", err)
+	}
+	if len(snap) == 0 {
+		t.Fatal("snapshot should not be empty")
+	}
+
+	// 之后的写入不得改变已生成的快照
+	const probePort = uint16(45679)
+	cfg, commit, _ := GlobalConfigForWrite()
+	cfg.Server.Port = probePort
+	commit()
+
+	var decoded structs.Config
+	if err := json.Unmarshal(snap, &decoded); err != nil {
+		t.Fatalf("snapshot should be valid JSON: %v", err)
+	}
+	if decoded.Server.Port == probePort {
+		t.Error("已生成的快照被之后的写入改变了（快照未解耦）")
+	}
+}

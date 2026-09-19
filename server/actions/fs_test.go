@@ -1100,3 +1100,146 @@ func TestFs_PathSecurity(t *testing.T) {
 		t.Errorf("path traversal should be blocked")
 	}
 }
+
+// ---- 回归测试：改动类操作必须拒绝空路径 ----
+//
+// 背景：validatePath 会把空路径映射为会话工作目录（stat/read 列出根目录依赖该行为，
+// 见 TestValidatePath_Empty / TestFsStat_RootDirectory），但 fs/rm 传空路径会因此
+// 递归删除整个工作目录，连同 .alkaid0 下的会话数据库一起消失；chmod/chown 传空路径
+// 则会把工作目录根本身改掉。所有改动类入口都必须拒绝空路径。
+
+func TestFsMutatingOperations_RejectEmptyPath(t *testing.T) {
+	tmpDir := t.TempDir()
+	sentinel := filepath.Join(tmpDir, "sentinel.txt")
+	if err := os.WriteFile(sentinel, []byte("keep me"), 0644); err != nil {
+		t.Fatalf("prepare sentinel failed: %v", err)
+	}
+	sessionID := registerTestSession(t, tmpDir, 1)
+
+	cases := []struct {
+		name string
+		path string
+		call func(path string) error
+	}{
+		{"rm", "", func(p string) error {
+			_, err := FsRm(FsCommonRequest{SessionID: sessionID, Path: p}, nil, 1)
+			return err
+		}},
+		{"rm-whitespace", "   ", func(p string) error {
+			_, err := FsRm(FsCommonRequest{SessionID: sessionID, Path: p}, nil, 1)
+			return err
+		}},
+		{"mkdir", "", func(p string) error {
+			_, err := FsMkdir(FsCommonRequest{SessionID: sessionID, Path: p}, nil, 1)
+			return err
+		}},
+		{"chmod", "", func(p string) error {
+			_, err := FsChmod(FsChmodRequest{SessionID: sessionID, Path: p, Mode: "000"}, nil, 1)
+			return err
+		}},
+		{"chown", "", func(p string) error {
+			_, err := FsChown(FsChownRequest{SessionID: sessionID, Path: p, Owner: "root"}, nil, 1)
+			return err
+		}},
+		{"write", "", func(p string) error {
+			_, err := FsWrite(FsWriteRequest{SessionID: sessionID, Path: p, Content: "x"}, nil, 1)
+			return err
+		}},
+	}
+
+	for _, tc := range cases {
+		if err := tc.call(tc.path); err == nil {
+			t.Errorf("%s with path %q should be rejected", tc.name, tc.path)
+		}
+	}
+
+	// 工作目录与其内容必须完好无损
+	if _, err := os.Stat(sentinel); err != nil {
+		t.Fatalf("sentinel must survive empty-path operations: %v", err)
+	}
+	if info, err := os.Stat(tmpDir); err != nil || !info.IsDir() {
+		t.Fatalf("session working directory must survive empty-path operations: %v", err)
+	}
+}
+
+// ---- 回归测试：删除符号链接不应删除其指向的目标内容 ----
+
+func TestFsRm_SymlinkRemovesLinkNotTarget(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("creating symlinks requires privileges on Windows")
+	}
+
+	tmpDir := t.TempDir()
+	targetDir := filepath.Join(tmpDir, "realdir")
+	if err := os.MkdirAll(targetDir, 0755); err != nil {
+		t.Fatalf("mkdir target failed: %v", err)
+	}
+	keep := filepath.Join(targetDir, "keep.txt")
+	if err := os.WriteFile(keep, []byte("keep"), 0644); err != nil {
+		t.Fatalf("write target file failed: %v", err)
+	}
+	link := filepath.Join(tmpDir, "link")
+	if err := os.Symlink(targetDir, link); err != nil {
+		t.Skipf("symlink unsupported: %v", err)
+	}
+
+	sessionID := registerTestSession(t, tmpDir, 1)
+	if _, err := FsRm(FsCommonRequest{SessionID: sessionID, Path: "link"}, nil, 1); err != nil {
+		t.Fatalf("FsRm on symlink failed: %v", err)
+	}
+
+	if _, err := os.Lstat(link); !os.IsNotExist(err) {
+		t.Errorf("the symlink itself should be removed")
+	}
+	if _, err := os.Stat(keep); err != nil {
+		t.Errorf("symlink target contents must NOT be deleted: %v", err)
+	}
+}
+
+// ---- 回归测试：fs/read 负数 offset/length ----
+//
+// 背景：负数 offset 会让 fileSize-offset 溢出成负数，make([]byte, 负数) 直接 panic；
+// 该 panic 发生在 fsOpWithTimeout 的 goroutine 中，未加 recover 时会终止整个进程。
+
+func TestFsRead_RejectsNegativeOffsetAndLength(t *testing.T) {
+	tmpDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(tmpDir, "f.txt"), []byte("hello world"), 0644); err != nil {
+		t.Fatalf("prepare file failed: %v", err)
+	}
+	sessionID := registerTestSession(t, tmpDir, 1)
+
+	cases := []FsReadRequest{
+		{SessionID: sessionID, Path: "f.txt", Offset: -1, Length: 1},
+		{SessionID: sessionID, Path: "f.txt", Offset: -9223372036854774000, Length: 1},
+		{SessionID: sessionID, Path: "f.txt", Offset: -1 << 50, Length: 1 << 62},
+		{SessionID: sessionID, Path: "f.txt", Length: -1},
+		{SessionID: sessionID, Path: "f.txt", Offset: -1 << 62, Length: 0},
+	}
+
+	for _, req := range cases {
+		if _, err := FsRead(req, nil, 1); err == nil {
+			t.Errorf("FsRead(offset=%d, length=%d) should be rejected", req.Offset, req.Length)
+		}
+	}
+}
+
+func TestFsRead_LengthClampedToEOF(t *testing.T) {
+	tmpDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(tmpDir, "f.txt"), []byte("hello world"), 0644); err != nil {
+		t.Fatalf("prepare file failed: %v", err)
+	}
+	sessionID := registerTestSession(t, tmpDir, 1)
+
+	// 巨大 length 必须被静默截断到文件末尾，而不是尝试分配相应内存
+	resp, err := FsRead(FsReadRequest{SessionID: sessionID, Path: "f.txt", Offset: 6, Length: 1 << 62}, nil, 1)
+	if err != nil {
+		t.Fatalf("FsRead failed: %v", err)
+	}
+	got, ok := resp.Content.(string)
+	if !ok {
+		t.Fatalf("expected string content, got %T", resp.Content)
+	}
+	if got != "world" {
+		t.Errorf("expected %q, got %q", "world", got)
+	}
+}

@@ -231,13 +231,7 @@ func (p *Object) Start(ctx context.Context) {
 
 					if usage.TotalTokens != 0 {
 						// get modelID
-						modelID := session.LastModelID
-						if session.CurrentAgentID != "" {
-							modelIDRet := uint32(session.CurrentAgentConfig.AgentModel)
-							if modelIDRet != 0 {
-								modelID = modelIDRet
-							}
-						}
+						modelID := session.EffectiveModelID()
 						modelCfg, ok := config.GlobalConfig.Model.Models[int32(modelID)]
 						if ok {
 							if modelCfg.CompressSize != 0 && usage.TotalTokens >= modelCfg.CompressSize {

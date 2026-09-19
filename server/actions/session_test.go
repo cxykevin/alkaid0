@@ -52,6 +52,58 @@ func registerTestSession(t *testing.T, cwd string, id uint32) string {
 	return sessID
 }
 
+// ---- 回归测试：会话注册表读写都必须持锁 ----
+//
+// 背景：sessions 的所有写入都持 sessLock（loadSession 插入、closeSession/releaseFunc
+// 删除），但 broadcastToolCallCancelled 与 SessionResume 曾直接裸读 sessions[...]。
+// Go 运行时 map 的写标志是整表级的：一次无锁读与任意键的写入并发就会
+// fatal("concurrent map read and map write")，终止整个进程且无法 recover。
+
+func TestSessionRegistryReadsAreLocked(t *testing.T) {
+	prev := sessions
+	sessions = map[string]*sessionObj{}
+	t.Cleanup(func() { sessions = prev })
+
+	const sid = "sess_1:/tmp/alkaid0-session-registry-race"
+	obj := &sessionObj{cwd: "/tmp/alkaid0-session-registry-race", id: 1, ctx: context.Background()}
+	emptyPending := &[]funcs.ToolCall{}
+
+	deadline := time.Now().Add(300 * time.Millisecond)
+	var wg sync.WaitGroup
+
+	// 写入方：模拟 loadSession 插入 / releaseFunc 删除
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for time.Now().Before(deadline) {
+			sessLock.Lock()
+			sessions[sid] = obj
+			delete(sessions, sid)
+			sessLock.Unlock()
+		}
+	}()
+
+	// 读取方 1：broadcastToolCallCancelled 的注册表查询
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for time.Now().Before(deadline) {
+			broadcastToolCallCancelled(sid, emptyPending)
+		}
+	}()
+
+	// 读取方 2：session/resume 的注册表查询（统一走 lookupSession）
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for time.Now().Before(deadline) {
+			_, _ = lookupSession(sid)
+		}
+	}()
+
+	wg.Wait()
+}
+
 // TestSessionID2Cwd 测试会话ID解析功能
 func TestSessionID2Cwd(t *testing.T) {
 	tests := []struct {

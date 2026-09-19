@@ -111,6 +111,25 @@ type PlanEntry struct {
 	Status   string `json:"status"`   // pending | in_progress | completed
 }
 
+// EffectiveModelID 返回本次请求应使用的模型 ID：
+// 活跃子代理配置了模型时优先用它，否则用会话最后选择的模型。
+//
+// 这是**唯一**的模型解析入口：此前这段判断在 5 处各抄了一份
+// （request.SendRequest、build.Build、ui/loop、run/python、actions.currentTokenLimit），
+// 其中 build.Build 漏了子代理分支，导致请求体里的 model 与参数取自父模型，
+// 而连接目标/计费/统计却按子代理模型走——轻则参数不符，重则直接 404。
+func (c *Chats) EffectiveModelID() uint32 {
+	if c == nil {
+		return 0
+	}
+	if c.CurrentAgentID != "" {
+		if id := uint32(c.CurrentAgentConfig.AgentModel); id != 0 {
+			return id
+		}
+	}
+	return c.LastModelID
+}
+
 // AgentLifecycleLock 串行化子代理激活/停用操作。
 func (c *Chats) AgentLifecycleLock() {
 	if c == nil {

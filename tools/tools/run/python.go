@@ -65,13 +65,7 @@ except:
 // resolveCurrentModel 解析当前 session 的模型配置，返回字符串 ModelID。
 // 优先使用 active subagent 的模型，否则使用 session.LastModelID。
 func resolveCurrentModel(session *storageStructs.Chats) (string, error) {
-	modelID := session.LastModelID
-	if session.CurrentAgentID != "" {
-		agentModelID := uint32(session.CurrentAgentConfig.AgentModel)
-		if agentModelID != 0 {
-			modelID = agentModelID
-		}
-	}
+	modelID := session.EffectiveModelID()
 
 	modelCfg, ok := config.GlobalConfig.Model.Models[int32(modelID)]
 	if !ok {

@@ -269,6 +269,18 @@ func Trace(session *structs.Chats, mp map[string]*any, push []*any) (bool, []*an
 		} else {
 			path2 := filepath.Join(nowpath, path)
 			path2 = filepath.Clean(path2)
+			// read 由内置规则自动批准，纯词法校验挡不住工作区内指向外部的符号链接
+			// （os.Stat / os.ReadFile 都会跟随链接）。这里补上"解析符号链接 +
+			// 保护 .alkaid0"的包含性校验。
+			if err := u.EnsureWorkspacePath(nowpath, path2, ".alkaid0"); err != nil {
+				boolx := false
+				success := any(boolx)
+				errMsg := any(err.Error())
+				return false, push, map[string]*any{
+					"success": &success,
+					"error":   &errMsg,
+				}, nil
+			}
 			// 检查文件是否存在
 			stat, err := os.Stat(path2)
 			if err != nil {

@@ -3,6 +3,8 @@ package request
 import (
 	"context"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -219,5 +221,70 @@ func TestConcurrentRequests(t *testing.T) {
 		case <-time.After(10 * time.Second):
 			t.Fatal("Timeout waiting for concurrent requests")
 		}
+	}
+}
+
+// ---- 回归测试：忽略 stream=true 的网关（非流式 JSON 回退） ----
+//
+// 背景：真实 OpenAI 的非流式响应把内容放在 choices[].message（流式才用 delta），
+// 而响应消费方统一只读 delta。此前没有 message→delta 的归一化，于是这类网关
+// 表现为"空回复"；mock 服务器也错误地使用 delta 构造非流式响应，掩盖了该缺陷。
+
+func TestNormalizeNonStreamChoices(t *testing.T) {
+	resp := structs.ChatCompletionResponse{
+		Choices: []structs.Choice{
+			{Index: 0, Message: structs.Message{Role: "assistant", Content: "hello from message"}},
+		},
+	}
+	normalizeNonStreamChoices(&resp)
+	if resp.Choices[0].Delta.Content != "hello from message" {
+		t.Errorf("message content should be moved into delta, got %q", resp.Choices[0].Delta.Content)
+	}
+
+	// delta 已有内容时不得被覆盖（真正的流式增量）
+	resp2 := structs.ChatCompletionResponse{
+		Choices: []structs.Choice{
+			{Index: 0, Delta: structs.Message{Content: "streamed"}, Message: structs.Message{Content: "stale"}},
+		},
+	}
+	normalizeNonStreamChoices(&resp2)
+	if resp2.Choices[0].Delta.Content != "streamed" {
+		t.Errorf("existing delta must win, got %q", resp2.Choices[0].Delta.Content)
+	}
+
+	// 两者都为空时不产生任何变化
+	resp3 := structs.ChatCompletionResponse{Choices: []structs.Choice{{Index: 0}}}
+	normalizeNonStreamChoices(&resp3)
+	if resp3.Choices[0].Delta.Content != "" {
+		t.Error("empty message must not produce content")
+	}
+
+	normalizeNonStreamChoices(nil) // 不得 panic
+}
+
+// TestSimpleOpenAIRequest_NonStreamMessageField 端到端：网关忽略 stream=true、
+// 直接返回标准非流式 JSON（choices[].message）时，回调必须收到内容。
+func TestSimpleOpenAIRequest_NonStreamMessageField(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"x","object":"chat.completion","model":"m","choices":[{"index":0,"message":{"role":"assistant","content":"non-stream reply"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}`))
+	}))
+	defer srv.Close()
+
+	var got string
+	err := SimpleOpenAIRequest(context.Background(), srv.URL, "sk-test", "m",
+		structs.ChatCompletionRequest{Messages: []structs.Message{{Role: structs.RoleUser, Content: "hi"}}},
+		nil,
+		func(resp structs.ChatCompletionResponse) error {
+			if len(resp.Choices) > 0 {
+				got += resp.Choices[0].Delta.Content
+			}
+			return nil
+		})
+	if err != nil {
+		t.Fatalf("SimpleOpenAIRequest failed: %v", err)
+	}
+	if got != "non-stream reply" {
+		t.Errorf("callback must receive the non-stream message content, got %q", got)
 	}
 }

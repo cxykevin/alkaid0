@@ -478,3 +478,77 @@ func TestBuildWithSummary(t *testing.T) {
 		t.Errorf("Build() returned nil request")
 	}
 }
+
+// TestBuildUsesAgentModel 回归测试：子代理激活时，请求体必须使用子代理配置的模型。
+//
+// 背景：build.Build 曾直接用 chatLine.LastModelID 构造请求体，而连接目标、落库、
+// 计费与上下文统计都走"子代理优先"的解析（session.EffectiveModelID）。两侧不一致时，
+// 请求会带着父模型的 model 名与参数发往子代理模型的端点——跨供应商时直接 404，
+// 同供应商时静默用父模型跑完并记到子代理模型账上。
+func TestBuildUsesAgentModel(t *testing.T) {
+	db := setupBuildTest(t)
+
+	// 注册第二个模型（写时复制：复制 map 后整体替换配置对象）
+	base := config.GlobalConfigSafe()
+	models := make(map[int32]cfgStruct.ModelConfig, len(base.Model.Models)+1)
+	for k, v := range base.Model.Models {
+		models[k] = v
+	}
+	models[2] = cfgStruct.ModelConfig{
+		ModelName:        "agent-model",
+		ModelID:          "agent-model-id",
+		ModelTemperature: 0.1,
+		ProviderSpecificConfig: cfgStruct.ProviderSpecificConfig{
+			EnableTemperature: true,
+		},
+	}
+	cfgCopy := *base
+	cfgCopy.Model.Models = models
+	restore := config.GlobalConfigSwap(cfgCopy)
+	defer restore()
+
+	chat := structs.Chats{
+		ID:                 202,
+		LastModelID:        1, // 父会话选择模型 1
+		DB:                 db,
+		InTestFlag:         true,
+		CurrentAgentID:     "reviewer", // 子代理激活，且配置了模型 2
+		CurrentAgentConfig: cfgStruct.AgentConfig{AgentModel: 2},
+	}
+	if err := db.Create(&chat).Error; err != nil {
+		t.Fatalf("Failed to create test chat: %v", err)
+	}
+
+	result, err := Build(db, &chat)
+	if err != nil {
+		t.Fatalf("Build() returned error: %v", err)
+	}
+	if result == nil {
+		t.Fatal("Build() returned nil request")
+	}
+	if result.Model != "agent-model-id" {
+		t.Errorf("request body must use the sub-agent model: got %q, want %q", result.Model, "agent-model-id")
+	}
+}
+
+// TestEffectiveModelID 单元测试：唯一模型解析入口
+func TestEffectiveModelID(t *testing.T) {
+	cases := []struct {
+		name string
+		chat *structs.Chats // 指针：Chats 内含 sync.Mutex，按值传递会触发 vet 的 copylocks
+		want uint32
+	}{
+		{"no agent -> last model", &structs.Chats{LastModelID: 7}, 7},
+		{"agent without model -> last model", &structs.Chats{LastModelID: 7, CurrentAgentID: "a"}, 7},
+		{"agent with model -> agent model", &structs.Chats{LastModelID: 7, CurrentAgentID: "a", CurrentAgentConfig: cfgStruct.AgentConfig{AgentModel: 9}}, 9},
+	}
+	for _, tc := range cases {
+		if got := tc.chat.EffectiveModelID(); got != tc.want {
+			t.Errorf("%s: got %d, want %d", tc.name, got, tc.want)
+		}
+	}
+	var nilChat *structs.Chats
+	if got := nilChat.EffectiveModelID(); got != 0 {
+		t.Errorf("nil chat should return 0, got %d", got)
+	}
+}

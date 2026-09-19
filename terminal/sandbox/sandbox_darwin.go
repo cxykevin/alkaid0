@@ -47,6 +47,12 @@ func (s *Sandbox) createDarwinIsolatedCommand(ctx context.Context, name string, 
 	fullArgs := append([]string{"-f", tmpFile.Name(), name}, args...)
 	cmd := exec.CommandContext(ctx, "sandbox-exec", fullArgs...)
 
+	// 必须显式设置工作目录与环境：exec.Cmd 默认继承 daemon 进程的 cwd 与完整环境
+	// （其中含 Alkaid0 自身的 API key 等敏感变量），命令会在错误的目录、带着不该有的
+	// 环境运行。Windows 路径已设置 cmd.Dir/cmd.Env，macOS 此前漏了。
+	cmd.Dir = s.workDir
+	cmd.Env = s.env
+
 	return cmd, nil
 }
 

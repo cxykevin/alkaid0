@@ -3,6 +3,7 @@ package edit
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -380,5 +381,101 @@ func TestLineDiff(t *testing.T) {
 	ops = lineDiff(bigOld, bigNew)
 	if len(ops) != 6000 {
 		t.Fatalf("degraded diff should replace all lines, got %d ops", len(ops))
+	}
+}
+
+// ---- 回归测试：路径包含性（符号链接逃逸 / .alkaid0 保护） ----
+//
+// 背景：CheckPath 只做纯词法校验（拒绝 ".."、绝对路径、通配符），而
+// os.ReadFile/os.WriteFile/os.Stat 都会跟随符号链接——工作区内一个指向外部的
+// 链接就能让"相对路径"读写工作区之外的文件。fs RPC 有 validatePath 保护，
+// edit 此前完全没有。read 工具同理（见 trace 包）。
+
+// assertEditFailed 断言 writeFile 以 success=false 结束
+func assertEditFailed(t *testing.T, ret map[string]*any) {
+	t.Helper()
+	if ret == nil {
+		t.Fatal("writeFile returned nil result map")
+	}
+	v, ok := ret["success"]
+	if !ok || v == nil {
+		t.Fatal("result map should contain success")
+	}
+	b, ok := (*v).(bool)
+	if !ok {
+		t.Fatalf("success should be bool, got %T", *v)
+	}
+	if b {
+		t.Fatalf("expected failure, got success=true (error=%v)", ret["error"])
+	}
+}
+
+func TestWriteFile_RejectsSymlinkEscape(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("creating symlinks requires privileges on Windows")
+	}
+
+	workspace := t.TempDir()
+	outside := t.TempDir()
+	if err := os.WriteFile(filepath.Join(outside, "secret.txt"), []byte("secret"), 0644); err != nil {
+		t.Fatalf("prepare outside file: %v", err)
+	}
+	target := filepath.Join(outside, "evil.txt")
+
+	// 工作区内一个指向外部的符号链接
+	if err := os.Symlink(outside, filepath.Join(workspace, "link")); err != nil {
+		t.Skipf("symlink unsupported: %v", err)
+	}
+
+	session := &structs.Chats{CurrentActivatePath: workspace}
+
+	// 通过链接写工作区外的文件（新文件，链接目录已存在）
+	mp := map[string]*any{"path": ptr("link/evil.txt"), "target": ptr(""), "text": ptr("pwned")}
+	_, _, ret, _ := writeFile(session, mp, nil)
+	assertEditFailed(t, ret)
+	if _, err := os.Stat(target); err == nil {
+		t.Error("write through a symlink escaping the workspace must be rejected")
+	}
+
+	// 通过链接改工作区外的已有文件
+	mp = map[string]*any{"path": ptr("link/secret.txt"), "target": ptr("@all"), "text": ptr("pwned")}
+	_, _, ret, _ = writeFile(session, mp, nil)
+	assertEditFailed(t, ret)
+	data, _ := os.ReadFile(filepath.Join(outside, "secret.txt"))
+	if string(data) != "secret" {
+		t.Errorf("outside file must not be modified, got %q", string(data))
+	}
+}
+
+func TestWriteFile_RejectsAlkaid0Path(t *testing.T) {
+	workspace := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(workspace, ".alkaid0"), 0755); err != nil {
+		t.Fatalf("prepare .alkaid0: %v", err)
+	}
+	session := &structs.Chats{CurrentActivatePath: workspace}
+
+	mp := map[string]*any{"path": ptr(".alkaid0/session.db"), "target": ptr(""), "text": ptr("x")}
+	_, _, ret, _ := writeFile(session, mp, nil)
+	assertEditFailed(t, ret)
+	if _, err := os.Stat(filepath.Join(workspace, ".alkaid0", "session.db")); err == nil {
+		t.Error("writing inside .alkaid0 must be rejected")
+	}
+}
+
+// TestHandleRegexEdit_LiteralReplacement 回归测试：替换文本必须按字面插入。
+//
+// 背景：旧实现用 re.ReplaceAllString(content, text)，会把 text 里的
+// $1 / ${name} 当作展开模板；模型写 shell 脚本、Makefile 或正则片段时
+// 内容会被静默改写（数据损坏且无任何报错）。
+func TestHandleRegexEdit_LiteralReplacement(t *testing.T) {
+	content := "VALUE=placeholder"
+
+	out, err := handleRegexEdit(content, "@regex:/placeholder/g", "$HOME/${USER}/$1")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	want := "VALUE=$HOME/${USER}/$1"
+	if out != want {
+		t.Errorf("replacement must be literal: got %q, want %q", out, want)
 	}
 }

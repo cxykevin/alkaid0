@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 
 	"github.com/cxykevin/alkaid0/config"
@@ -45,19 +46,37 @@ func TestConfigGetReturnsNonNil(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if resp.Config == nil {
-		t.Fatal("ConfigGetResponse.Config should not be nil")
+	if len(resp.Config) == 0 {
+		t.Fatal("ConfigGetResponse.Config should not be empty")
 	}
 }
 
-// TestConfigGetReturnsSameGlobalConfig config/get 应返回与 GlobalConfig 相同指针
-func TestConfigGetReturnsSameGlobalConfig(t *testing.T) {
+// TestConfigGetReturnsSnapshot config/get 必须返回配置**快照**，而不是全局对象指针。
+//
+// 背景：旧实现直接返回 config.GlobalConfig，jsonrpc 层在 handler 返回之后、脱离任何锁
+// 的情况下序列化它（遍历 Model.Models 等 map）；并发的 config/set（reflect.SetMapIndex）
+// 或 /reload（EnsureCacheDefaults 写 map）会让 Go 运行时
+// fatal("concurrent map iteration and map write") 直接终止整个进程。
+func TestConfigGetReturnsSnapshot(t *testing.T) {
 	resp, err := ConfigGet(ConfigGetRequest{}, nil, 0)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if resp.Config != config.GlobalConfig {
-		t.Error("ConfigGet should return the same GlobalConfig pointer")
+
+	// 快照内容必须与当前配置一致
+	want, err := json.Marshal(config.GlobalConfig)
+	if err != nil {
+		t.Fatalf("marshal GlobalConfig: %v", err)
+	}
+	var gotAny, wantAny any
+	if err := json.Unmarshal(resp.Config, &gotAny); err != nil {
+		t.Fatalf("snapshot should be valid JSON: %v", err)
+	}
+	if err := json.Unmarshal(want, &wantAny); err != nil {
+		t.Fatalf("marshalled config should be valid JSON: %v", err)
+	}
+	if !reflect.DeepEqual(gotAny, wantAny) {
+		t.Error("ConfigGet snapshot content should equal the current config")
 	}
 }
 
@@ -76,12 +95,18 @@ func TestConfigGetJSONSerializable(t *testing.T) {
 		t.Fatal("serialized config should not be empty")
 	}
 
-	var decoded ConfigGetResponse
+	// 线上报文格式不变：result.config 仍是一个 JSON 对象
+	var decoded struct {
+		Config map[string]any `json:"config"`
+	}
 	if err := json.Unmarshal(data, &decoded); err != nil {
 		t.Fatalf("ConfigGetResponse should be JSON deserializable: %v", err)
 	}
 	if decoded.Config == nil {
-		t.Fatal("decoded Config should not be nil")
+		t.Fatal("decoded config should not be nil")
+	}
+	if _, ok := decoded.Config["Server"]; !ok {
+		t.Error("serialized response should still contain the Server section")
 	}
 }
 
@@ -237,9 +262,12 @@ func TestConfigGetAfterSet(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ConfigGet failed: %v", err)
 	}
-	if resp.Config.Server.Port != newPort {
-		t.Errorf("after ConfigSet, Server.Port = %d, want %d",
-			resp.Config.Server.Port, newPort)
+	var got cfgStructs.Config
+	if err := json.Unmarshal(resp.Config, &got); err != nil {
+		t.Fatalf("unmarshal config snapshot: %v", err)
+	}
+	if got.Server.Port != newPort {
+		t.Errorf("after ConfigSet, Server.Port = %d, want %d", got.Server.Port, newPort)
 	}
 }
 

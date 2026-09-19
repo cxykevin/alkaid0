@@ -2,6 +2,7 @@ package ios
 
 import (
 	"bytes"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -172,6 +173,67 @@ func TestCopyEmptyFile(t *testing.T) {
 	}
 	if len(got) != 0 {
 		t.Errorf("Expected empty file, got %d bytes", len(got))
+	}
+}
+
+// TestCopyCloneFallbackKeepsDestination 回归测试：FICLONE 失败后回退复制成功时，
+// 目标文件必须保留且内容正确，函数必须返回 nil。
+//
+// 背景：旧实现把 cloneFile 的错误写在同一个 err 上，回退 io.Copy 成功后 err 仍非 nil，
+// defer 里的清理逻辑便删掉了刚复制好的目标文件，同时向上返回成功——表现为
+// @tree 复制/移动大文件时目标凭空消失（在不支持 reflink 的文件系统上必现）。
+func TestCopyCloneFallbackKeepsDestination(t *testing.T) {
+	dir := t.TempDir()
+	origin := filepath.Join(dir, "origin.bin")
+	dist := filepath.Join(dir, "dist.bin")
+	content := []byte("hello alkaid0 copy fallback")
+
+	if err := os.WriteFile(origin, content, 0644); err != nil {
+		t.Fatalf("prepare origin failed: %v", err)
+	}
+
+	// 强制走"大文件"分支，并让 FICLONE 恒失败，从而确定性地覆盖回退路径
+	restoreLimit, restoreClone := maxCopyLimit, cloneFileFn
+	maxCopyLimit = -1
+	cloneFileFn = func(_, _ int) error { return errors.New("FICLONE unsupported") }
+	t.Cleanup(func() { maxCopyLimit, cloneFileFn = restoreLimit, restoreClone })
+
+	if err := Copy(origin, dist); err != nil {
+		t.Fatalf("Copy should succeed via io.Copy fallback, got %v", err)
+	}
+
+	got, err := os.ReadFile(dist)
+	if err != nil {
+		t.Fatalf("destination must survive a successful fallback copy: %v", err)
+	}
+	if !bytes.Equal(got, content) {
+		t.Errorf("destination content mismatch: got %q, want %q", got, content)
+	}
+}
+
+// TestCopyRemovesDestinationOnRealFailure 回归测试：复制确实失败时必须清理半成品目标文件。
+func TestCopyRemovesDestinationOnRealFailure(t *testing.T) {
+	dir := t.TempDir()
+	srcDir := filepath.Join(dir, "srcdir")
+	if err := os.MkdirAll(srcDir, 0755); err != nil {
+		t.Fatalf("prepare source dir failed: %v", err)
+	}
+	// 目录不能作为 io.Copy 的源（读取必然失败），用来构造真实的复制失败
+	if err := os.WriteFile(filepath.Join(srcDir, "child.txt"), []byte("x"), 0644); err != nil {
+		t.Fatalf("prepare child failed: %v", err)
+	}
+	dist := filepath.Join(dir, "dist.bin")
+
+	restoreLimit, restoreClone := maxCopyLimit, cloneFileFn
+	maxCopyLimit = -1
+	cloneFileFn = func(_, _ int) error { return errors.New("FICLONE unsupported") }
+	t.Cleanup(func() { maxCopyLimit, cloneFileFn = restoreLimit, restoreClone })
+
+	if err := Copy(srcDir, dist); err == nil {
+		t.Fatalf("Copy from a directory should fail")
+	}
+	if _, err := os.Stat(dist); !os.IsNotExist(err) {
+		t.Errorf("failed copy must not leave a partial destination behind (stat err=%v)", err)
 	}
 }
 

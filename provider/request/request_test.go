@@ -850,6 +850,81 @@ func TestEvaluateApprovalRules_BuiltinReject(t *testing.T) {
 	}
 }
 
+// TestEvaluateApprovalRules_BuiltinReject_PathVariants 回归测试：内置拒绝规则必须真正生效。
+//
+// 背景：旧 pattern 把扩展名分支也包进了 (^|/) 分组，并且只认 "/" 作为分隔符，于是
+//   - "certs/server.pem"（点号前不是分隔符）匹配不上 → 私钥可被静默读取；
+//   - "deploy\.env"、".ssh\config"（Windows 反斜杠）匹配不上 → 凭据可被静默读取。
+//
+// 由于 read 的自动批准是既定设计，黑名单是这里唯一的防线，必须覆盖这些写法。
+func TestEvaluateApprovalRules_BuiltinReject_PathVariants(t *testing.T) {
+	db := setupTestDB(t)
+	defer u.Unwrap(db.DB()).Close()
+
+	oldIgnore := config.GlobalConfig.Agent.IgnoreDefaultRules
+	defer func() { config.GlobalConfig.Agent.IgnoreDefaultRules = oldIgnore }()
+	config.GlobalConfig.Agent.IgnoreDefaultRules = false
+
+	session := &storageStructs.Chats{
+		ID: 1, DB: db,
+		CurrentAgentConfig: cfgStruct.AgentConfig{},
+	}
+
+	decide := func(name, path string) ApprovalDecision {
+		v := any(path)
+		res, err := EvaluateApprovalRules(session, []ToolCall{{
+			Name: name, ID: path,
+			Parameters: map[string]*any{"path": &v},
+		}})
+		if err != nil {
+			t.Fatalf("EvaluateApprovalRules(%s %q) error: %v", name, path, err)
+		}
+		return res.Decision
+	}
+
+	// 必须被拒绝：密钥/凭据文件的各种书写方式
+	mustReject := []string{
+		"certs/server.pem",     // 旧规则漏掉的典型私钥路径
+		"/etc/ssl/server.pem",  // 无会话模式下的绝对路径
+		"keys/private.key",     // .key 扩展名
+		"config/app.p12",       // 其他密钥容器扩展名
+		"store.keystore",       //
+		"deploy\\.env",         // Windows 反斜杠 + .env
+		"sub\\.env",            //
+		".ssh\\config",         // 反斜杠目录
+		".aws\\credentials",    //
+		".alkaid0\\config.db",  // 会话数据库
+		"x/.alkaid0/MEMORY.md", //
+		"id_rsa",               // 私钥文件名
+		"a/id_rsa",             //
+		"CERTS\\SERVER.PEM",    // Windows 大小写不敏感
+		"project/.env.local",   //
+	}
+	for _, p := range mustReject {
+		if got := decide("read", p); got != DecisionRejected {
+			t.Errorf("read %q must be rejected, got decision %v", p, got)
+		}
+		if got := decide("edit", p); got != DecisionRejected {
+			t.Errorf("edit %q must be rejected, got decision %v", p, got)
+		}
+	}
+
+	// 不能误伤：普通源码/文档路径与虚拟对象
+	mustNotReject := []string{
+		"src/main.go",
+		"docs/readme.md",
+		"a/b/c.txt",
+		"notes/monkey.md", // 含 "key" 但不是 .key 扩展名
+		"@memory",
+		"@task",
+	}
+	for _, p := range mustNotReject {
+		if got := decide("read", p); got == DecisionRejected {
+			t.Errorf("read %q must NOT be rejected", p)
+		}
+	}
+}
+
 // TestEvaluateApprovalRules_NilSession 测试空会话
 func TestEvaluateApprovalRules_NilSession(t *testing.T) {
 	result, _ := EvaluateApprovalRules(nil, []ToolCall{{Name: "test", ID: "1"}})

@@ -336,6 +336,19 @@ func sessionID2Cwd(sessionID string) (string, uint32, error) {
 	return obj.cwd, obj.id, nil
 }
 
+// lookupSession 在锁保护下从全局会话注册表读取一个会话。
+//
+// sessions 的所有写入都持 sessLock（loadSession 插入、closeSession/releaseFunc 删除），
+// 因此任何读取也必须持锁：Go 运行时的 map 写标志是整表级的，一次无锁读与任意键的
+// 写入并发就会 fatal("concurrent map read and map write")，直接终止整个进程且无法
+// recover。返回的 *sessionObj 由 GC 保活，解锁后继续读其字段是安全的。
+func lookupSession(sessionID string) (*sessionObj, bool) {
+	sessLock.Lock()
+	obj, ok := sessions[sessionID]
+	sessLock.Unlock()
+	return obj, ok
+}
+
 // parseSessionID 从会话ID字符串中安全解析出工作目录和会话ID（纯字符串解析，不查内存注册表）。
 // 仅供 session/resume 冷还原使用：服务器重启后内存注册表为空，需从客户端提供的 sessionId 恢复
 // cwd+id，再交由 loadSession 打开对应数据库并 QueryChat 验证会话真实存在，验证通过后才注册进
@@ -455,7 +468,7 @@ func broadcastToolCallCancelled(sessionID string, pending *[]funcs.ToolCall) {
 	if pending == nil {
 		return
 	}
-	obj, ok := sessions[sessionID]
+	obj, ok := lookupSession(sessionID)
 	if !ok {
 		return
 	}
@@ -1877,7 +1890,7 @@ func SessionResume(req SessionResumeRequest, call func(string, any, *string) err
 	registerConnCall(connID, req.SessionID, call)
 	// 先补发正在进行的流式消息。此快照与后续 chunk 共用 streamMu，避免加入连接错过内容。
 	activeMessageIDs := make(map[uint64]struct{})
-	if obj, ok := sessions[req.SessionID]; ok {
+	if obj, ok := lookupSession(req.SessionID); ok {
 		obj.streamMu.Lock()
 		for id, active := range obj.activeAgentMessages {
 			activeMessageIDs[id] = struct{}{}
@@ -2154,12 +2167,7 @@ func currentTokenLimit(sess *structs.Chats) uint64 {
 	if sess == nil {
 		return 8192
 	}
-	modelID := sess.LastModelID
-	if sess.CurrentAgentID != "" {
-		if id := uint32(sess.CurrentAgentConfig.AgentModel); id != 0 {
-			modelID = id
-		}
-	}
+	modelID := sess.EffectiveModelID()
 	if cfg, ok := config.GlobalConfig.Model.Models[int32(modelID)]; ok {
 		return uint64(cfg.TokenLimit)
 	}
@@ -2504,8 +2512,12 @@ func SessionDelete(req SessionDeleteRequest, call func(string, any, *string) err
 	}
 	defer closeDB(cwd)
 
-	// 直接执行删除 SQL（无论是否存在，按规范静默成功）
-	_ = funcs.DeleteChat(db, &structs.Chats{ID: id})
+	// 执行删除。会话本就不存在（0 行受影响）时 GORM 不报错，符合"静默成功"的约定；
+	// 但真正删除失败（例如外键约束）必须上报，否则客户端以为已删除、
+	// 敏感对话内容却仍留在磁盘上。
+	if err := funcs.DeleteChat(db, &structs.Chats{ID: id}); err != nil {
+		return u.H{}, fmt.Errorf("failed to delete session: %w", err)
+	}
 
 	return u.H{}, nil
 }

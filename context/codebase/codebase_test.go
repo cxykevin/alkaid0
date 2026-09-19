@@ -932,6 +932,53 @@ func TestBM25SearchEmpty(t *testing.T) {
 	}
 }
 
+// TestUpsertItemReturnsStableID 回归测试：同一 (file_path, symbol) 二次写入必须返回同一个 id。
+//
+// 背景：storeEmbedding/upsertItem 曾在 ON CONFLICT DO UPDATE 之后调用
+// res.LastInsertId()。SQLite 仅在真正执行 INSERT 时更新 last_insert_rowid()，
+// 走 UPDATE 分支时该值保持上一次插入的 id —— 于是增量重建索引会把向量写到别的
+// 代码条目上，并误删被更新条目的旧向量（语义检索静默返回错误结果）。
+func TestUpsertItemReturnsStableID(t *testing.T) {
+	dir, restore := setupCodebase(t, 4)
+	defer restore()
+
+	cdb, err := getOrCreateDB(dir)
+	if err != nil {
+		t.Fatalf("getOrCreateDB: %v", err)
+	}
+
+	task := &EmbedTask{
+		FilePath:    "a.go",
+		Symbol:      "funcA",
+		EmbedText:   "package a",
+		FullContent: "package a",
+	}
+
+	// 先插入一条无关记录，让 last_insert_rowid 有一个"陈旧"值可被错误复用
+	other := insertTestItem(t, cdb, "other.go", "funcOther", "package other", "package other", "")
+
+	first, err := cdb.upsertItem(task, embedHash(task.EmbedText))
+	if err != nil {
+		t.Fatalf("first upsert failed: %v", err)
+	}
+	if first == other {
+		t.Fatalf("first upsert returned the id of an unrelated row: %d", first)
+	}
+
+	// 再插入一条，把 last_insert_rowid 推进到第三个值
+	_ = insertTestItem(t, cdb, "third.go", "funcThird", "package third", "package third", "")
+
+	// 同一 (file_path, symbol) 二次写入：走 ON CONFLICT DO UPDATE 分支
+	task.FullContent = "package a // updated"
+	second, err := cdb.upsertItem(task, embedHash(task.EmbedText))
+	if err != nil {
+		t.Fatalf("second upsert failed: %v", err)
+	}
+	if second != first {
+		t.Errorf("re-upsert must return the same row id: got %d, want %d", second, first)
+	}
+}
+
 // insertTestItem 直接向数据库插入一条 codebase_items 记录（绕过 worker/API）
 func insertTestItem(t *testing.T, cdb *DB, filePath, symbol, embedText, fullContent string, tags string) int64 {
 	t.Helper()

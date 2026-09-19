@@ -1011,13 +1011,7 @@ func SendRequest(ctx context.Context, session *storageStructs.Chats, callback fu
 	db := session.DB
 
 	// 确定使用的模型 ID：优先使用子代理配置的模型，否则使用会话最后选择的模型
-	modelID := session.LastModelID
-	if session.CurrentAgentID != "" {
-		modelIDRet := uint32(session.CurrentAgentConfig.AgentModel)
-		if modelIDRet != 0 {
-			modelID = modelIDRet
-		}
-	}
+	modelID := session.EffectiveModelID()
 	modelCfg, ok := config.GlobalConfig.Model.Models[int32(modelID)]
 	if !ok {
 		return true, errors.New("model not found")

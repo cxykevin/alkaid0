@@ -52,6 +52,11 @@ func QueryChat(db *gorm.DB, id uint32) (*structs.Chats, error) {
 // DeleteChat 删除聊天
 // 在事务中先删除所有子记录：Messages/Terminals 等外键为 OnDelete:RESTRICT，
 // 直接删 Chats 会报外键约束错误，且不删子表会留下孤儿数据（含敏感对话内容）。
+//
+// 注意：这里必须覆盖 Chats 的**全部**外键子表，漏掉任何一张都会让最后的
+// tx.Delete(&Chats) 触发外键约束失败，从而导致整个事务回滚、一条记录都删不掉。
+// 目前 Chats 的外键子表为：Messages / Traces / Terminals / ReferFiles / Scopes
+// （见 storage/structs/*.go 中带 foreignKey:ChatID 的结构体）。
 func DeleteChat(db *gorm.DB, chat *structs.Chats) error {
 	return db.Transaction(func(tx *gorm.DB) error {
 		if err := tx.Where("chat_id = ?", chat.ID).Delete(&structs.Messages{}).Error; err != nil {
@@ -64,6 +69,9 @@ func DeleteChat(db *gorm.DB, chat *structs.Chats) error {
 			return err
 		}
 		if err := tx.Where("chat_id = ?", chat.ID).Delete(&structs.ReferFiles{}).Error; err != nil {
+			return err
+		}
+		if err := tx.Where("chat_id = ?", chat.ID).Delete(&structs.Scopes{}).Error; err != nil {
 			return err
 		}
 		return tx.Delete(&structs.Chats{}, chat.ID).Error

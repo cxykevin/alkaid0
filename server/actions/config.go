@@ -17,8 +17,15 @@ import (
 type ConfigGetRequest struct{}
 
 // ConfigGetResponse 获取配置的响应
+//
+// Config 是**在配置读锁内**序列化出的 JSON 快照，而不是指向全局配置对象的指针。
+// 若直接返回 *cfgStructs.Config，jsonrpc 层会在 handler 返回之后、脱离任何锁的情况下
+// 序列化它，同时遍历 Model.Models 等 map；此时并发的 config/set（reflect.SetMapIndex）
+// 或 /reload（EnsureCacheDefaults 写 map）会让 Go 运行时
+// fatal("concurrent map iteration and map write") 终止整个进程。
+// 用 json.RawMessage 承载快照，线上报文格式完全不变（仍为 {"config":{...}}）。
 type ConfigGetResponse struct {
-	Config *cfgStructs.Config `json:"config"`
+	Config json.RawMessage `json:"config"`
 }
 
 // ConfigSetRequest 设置配置的请求
@@ -35,9 +42,13 @@ type ConfigSetResponse struct{}
 
 // ---- Handler functions ----
 
-// ConfigGet 返回完整的当前配置
+// ConfigGet 返回完整的当前配置（读锁内序列化的快照）
 func ConfigGet(_ ConfigGetRequest, _ func(string, any, *string) error, _ uint64) (ConfigGetResponse, error) {
-	return ConfigGetResponse{Config: config.GlobalConfig}, nil
+	snapshot, err := config.SnapshotJSON()
+	if err != nil {
+		return ConfigGetResponse{}, fmt.Errorf("failed to serialize config: %w", err)
+	}
+	return ConfigGetResponse{Config: snapshot}, nil
 }
 
 // ConfigSet 写入配置并自动重载
@@ -63,10 +74,10 @@ func ConfigSet(req ConfigSetRequest, _ func(string, any, *string) error, _ uint6
 	// （如 Model.Models 是 map[int32]ModelConfig）遇到 patch 中出现的键会用全新
 	// 解码的值整体替换，丢失该键下未在 patch 中的字段——表现为"改一个模型字段，
 	// 该模型其余字段被清零/重置"。因此改为 applyPatch 做逐字段深度合并。
-	cfg, unlock := config.GlobalConfigForWrite()
+	cfg, commit, discard := config.GlobalConfigForWrite()
 	var patch map[string]any
 	if err := json.Unmarshal(req.Config, &patch); err != nil {
-		unlock()
+		discard()
 		return ConfigSetResponse{}, fmt.Errorf("failed to apply config: %v", err)
 	}
 	applyErr := applyPatch(reflect.ValueOf(cfg), patch)
@@ -76,13 +87,20 @@ func ConfigSet(req ConfigSetRequest, _ func(string, any, *string) error, _ uint6
 		// 跑一遍 applyNullDeletes 作为防御，覆盖可能的边界情形。
 		applyNullDeletes(cfg, req.Config)
 	}
-	unlock()
 	if applyErr != nil {
+		// 补丁应用失败：丢弃副本。写时复制让"失败的 config/set 把半成品补丁
+		// 留在运行中的配置里"这件事不再可能发生。
+		discard()
 		return ConfigSetResponse{}, fmt.Errorf("failed to apply config: %v", applyErr)
 	}
+	// 提交（整体替换指针发布新配置）
+	commit()
 
-	// 保存到文件并触发重载钩子
-	config.Save()
+	// 保存到文件并触发重载钩子。落盘失败必须上报：否则内存里已经是新配置、
+	// 磁盘上还是旧的，重启后用户的修改凭空消失，而本次调用却报告成功。
+	if err := config.Save(); err != nil {
+		return ConfigSetResponse{}, fmt.Errorf("failed to save config: %w", err)
+	}
 
 	return ConfigSetResponse{}, nil
 }

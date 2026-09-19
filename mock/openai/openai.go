@@ -201,8 +201,12 @@ type ChatCompletionResponse struct {
 
 // Choice 选择项
 type Choice struct {
-	Index        int     `json:"index"`
-	Delta        Message `json:"delta"`
+	Index int     `json:"index"`
+	Delta Message `json:"delta"`
+	// Message 是非流式响应（stream=false，或网关忽略 stream=true）的标准字段。
+	// 真实 OpenAI 在非流式响应里只填 message、不填 delta；mock 必须照此构造，
+	// 否则客户端"只读 delta"的缺陷会被 mock 掩盖。
+	Message      Message `json:"message"`
 	FinishReason string  `json:"finish_reason"`
 }
 
@@ -322,7 +326,8 @@ func handleChatCompletion(w http.ResponseWriter, r *http.Request) {
 		Choices: []Choice{
 			{
 				Index: 0,
-				Delta: Message{
+				// 非流式响应使用 message 字段（与真实 OpenAI 一致）
+				Message: Message{
 					Role:    "assistant",
 					Content: responseText,
 				},

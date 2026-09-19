@@ -136,6 +136,42 @@ func TestDeleteChat(t *testing.T) {
 	}
 }
 
+// TestDeleteChat_WithScopesRow 回归测试：带 Scopes 子记录的会话必须能真正删除。
+//
+// 背景：Scopes 也对 Chats 声明了外键（storage/structs/scopes.go），而 DeleteChat
+// 只删了 Messages/Traces/Terminals/ReferFiles。于是最后的 tx.Delete(&Chats) 触发
+// 外键约束 → 整个事务回滚 → 一条记录都没删掉；调用方又丢弃了错误，
+// 客户端以为删除成功，敏感对话内容仍留在磁盘上。
+func TestDeleteChat_WithScopesRow(t *testing.T) {
+	db := setupTestDB(t)
+	defer u.Unwrap(db.DB()).Close()
+
+	chat := &structs.Chats{Title: "With Scopes"}
+	if err := db.Create(chat).Error; err != nil {
+		t.Fatalf("create chat: %v", err)
+	}
+
+	// 会话产生过 scope 记录（正常使用中很常见）
+	scope := &structs.Scopes{ChatID: chat.ID, Name: "default", Enabled: true}
+	if err := db.Create(scope).Error; err != nil {
+		t.Fatalf("create scopes row: %v", err)
+	}
+
+	if err := DeleteChat(db, chat); err != nil {
+		t.Fatalf("DeleteChat with a scopes row failed: %v", err)
+	}
+
+	if _, err := QueryChat(db, chat.ID); err == nil {
+		t.Error("chat should be deleted")
+	}
+
+	var left int64
+	db.Model(&structs.Scopes{}).Where("chat_id = ?", chat.ID).Count(&left)
+	if left != 0 {
+		t.Errorf("scopes rows must be deleted together with the chat, %d left", left)
+	}
+}
+
 // --- 纯函数测试：读取全局配置 ---
 
 // configSetup 保存并恢复全局配置

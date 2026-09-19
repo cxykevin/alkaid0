@@ -142,7 +142,12 @@ func (cdb *DB) embedAndStore(ctx context.Context, task *EmbedTask) error {
 
 	tagsJSON := tagsToJSON(task.Tags)
 
-	res, err := tx.Exec(`
+	// 用 RETURNING id 取回记录主键，不能用 res.LastInsertId()：
+	// SQLite 仅在真正执行 INSERT 时更新 last_insert_rowid()，走 ON CONFLICT DO UPDATE
+	// 分支时它保持上一次插入的值，于是"更新已有条目"会拿到陈旧的 id —— 新向量被写到
+	// 别的代码条目上、被更新条目的旧向量被误删，语义检索会静默返回错误结果。
+	var itemID int64
+	if err := tx.QueryRow(`
 		INSERT INTO codebase_items (file_path, symbol, tags, full_content, embed_text, embed_hash)
 		VALUES (?, ?, ?, ?, ?, ?)
 		ON CONFLICT(file_path, symbol) DO UPDATE SET
@@ -151,18 +156,15 @@ func (cdb *DB) embedAndStore(ctx context.Context, task *EmbedTask) error {
 			embed_text=excluded.embed_text,
 			embed_hash=excluded.embed_hash,
 			updated_at=CURRENT_TIMESTAMP
-	`, task.FilePath, task.Symbol, tagsJSON, task.FullContent, task.EmbedText, hash)
-	if err != nil {
+		RETURNING id
+	`, task.FilePath, task.Symbol, tagsJSON, task.FullContent, task.EmbedText, hash).Scan(&itemID); err != nil {
 		return fmt.Errorf("upsert items: %w", err)
 	}
 
-	itemID, err := res.LastInsertId()
-	if err != nil {
-		return fmt.Errorf("last insert id: %w", err)
-	}
-
 	// 先删除旧向量（如果是更新），再插入新向量
-	_, _ = tx.Exec("DELETE FROM codebase_vec WHERE id=?", itemID)
+	if _, err := tx.Exec("DELETE FROM codebase_vec WHERE id=?", itemID); err != nil {
+		return fmt.Errorf("delete old vec id=%d: %w", itemID, err)
+	}
 
 	vecBytes := float32SliceToBytes(embeddings[0])
 	if _, err := tx.Exec(
@@ -192,7 +194,10 @@ func (cdb *DB) upsertItem(task *EmbedTask, hash string) (int64, error) {
 
 	tagsJSON := tagsToJSON(task.Tags)
 
-	res, err := cdb.db.Exec(`
+	// 同 storeEmbedding：必须用 RETURNING id，LastInsertId 在 ON CONFLICT DO UPDATE
+	// 分支下返回的是陈旧值。
+	var itemID int64
+	if err := cdb.db.QueryRow(`
 		INSERT INTO codebase_items (file_path, symbol, tags, full_content, embed_text, embed_hash)
 		VALUES (?, ?, ?, ?, ?, ?)
 		ON CONFLICT(file_path, symbol) DO UPDATE SET
@@ -201,14 +206,9 @@ func (cdb *DB) upsertItem(task *EmbedTask, hash string) (int64, error) {
 			embed_text=excluded.embed_text,
 			embed_hash=excluded.embed_hash,
 			updated_at=CURRENT_TIMESTAMP
-	`, task.FilePath, task.Symbol, tagsJSON, task.FullContent, task.EmbedText, hash)
-	if err != nil {
+		RETURNING id
+	`, task.FilePath, task.Symbol, tagsJSON, task.FullContent, task.EmbedText, hash).Scan(&itemID); err != nil {
 		return 0, fmt.Errorf("upsert items: %w", err)
-	}
-
-	itemID, err := res.LastInsertId()
-	if err != nil {
-		return 0, fmt.Errorf("last insert id: %w", err)
 	}
 	return itemID, nil
 }

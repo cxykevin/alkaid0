@@ -62,6 +62,19 @@ func (l *Logger) Error(ctx context.Context, msg string, data ...any) {
 	}
 }
 
+// ParamsFilter 实现 gorm.ParamsFilter 接口：把参数从日志用的 SQL 中剔除。
+//
+// 为什么必须实现：GORM 交给 logger 的 SQL 是经 Dialector.Explain 插值后的文本，
+// 参数值会被原样写进日志——包括 key_mappings 里的原始密钥、messages 里的完整
+// 提示词、refer_files 里的文件内容；而日志尾部会被 /feedback 上传
+// （server/actions/feedback.go）。返回 nil 参数后 GORM 只渲染占位符
+// （等效官方 ParameterizedQueries 选项），排查问题时语句/耗时/行数仍然可见。
+//
+// 本方法不受 LogMode 影响：DEBUG 级别同样只输出占位符。
+func (l *Logger) ParamsFilter(_ context.Context, sql string, _ ...interface{}) (string, []interface{}) {
+	return sql, nil
+}
+
 // Trace 跟踪 SQL 执行耗时与错误
 func (l *Logger) Trace(ctx context.Context, begin time.Time, fc func() (string, int64), err error) {
 	if l.level == gormLogger.Silent {

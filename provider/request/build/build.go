@@ -47,7 +47,11 @@ func Build(db *gorm.DB, session *storageStructs.Chats) (*reqStruct.ChatCompletio
 		addSystemPrompt += session.SystemPrompt
 		session.SystemPrompt = ""
 	}
-	body, err := RequestBody(session.ID, int32(chatLine.LastModelID), chatLine.NowAgent, tools, db, addSystemPrompt, traces, session.CurrentAgentConfig, chatLine)
+	// 模型解析必须与传输层（request.SendRequest）共用同一个入口：子代理激活时走
+	// AgentModel。此前这里直接用 chatLine.LastModelID，于是请求体里的 model 与全部
+	// 模型参数取自父模型，而连接目标/落库/计费/上下文统计按子代理模型走——轻则参数
+	// 不符，重则子代理模型跨供应商时直接 404。
+	body, err := RequestBody(session.ID, int32(session.EffectiveModelID()), chatLine.NowAgent, tools, db, addSystemPrompt, traces, session.CurrentAgentConfig, chatLine)
 	if err != nil {
 		logger.Error("build request body error %v", err)
 		return nil, err

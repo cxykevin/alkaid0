@@ -30,8 +30,13 @@ func TestHandleChatCompletion(t *testing.T) {
 		t.Errorf("expected model test-chat, got %s", resp.Model)
 	}
 
-	if len(resp.Choices) == 0 || resp.Choices[0].Delta.Content == "" {
-		t.Errorf("expected non-empty response content")
+	// 非流式响应必须使用 message 字段（与真实 OpenAI 一致）；用 delta 会掩盖
+	// 客户端"只读 delta"的缺陷，见 provider/request 的 normalizeNonStreamChoices。
+	if len(resp.Choices) == 0 || resp.Choices[0].Message.Content == "" {
+		t.Errorf("expected non-empty response content in choices[].message")
+	}
+	if resp.Choices[0].Delta.Content != "" {
+		t.Errorf("non-stream response must not populate choices[].delta")
 	}
 }
 
@@ -219,8 +224,8 @@ func TestHandleChatCompletion_FlashModel(t *testing.T) {
 	if resp.Model != "test-chat-flash" {
 		t.Errorf("expected model test-chat-flash, got %s", resp.Model)
 	}
-	if len(resp.Choices) == 0 || resp.Choices[0].Delta.Content == "" {
-		t.Error("expected non-empty response content")
+	if len(resp.Choices) == 0 || resp.Choices[0].Message.Content == "" {
+		t.Error("expected non-empty response content in choices[].message")
 	}
 }
 
