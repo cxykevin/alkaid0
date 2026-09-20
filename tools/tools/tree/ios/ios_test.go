@@ -237,6 +237,49 @@ func TestCopyRemovesDestinationOnRealFailure(t *testing.T) {
 	}
 }
 
+// TestCopyClosesDestinationBeforeRemoving 回归测试：失败清理必须发生在关闭目标句柄之后。
+//
+// 背景：旧实现用 defer 先 os.Remove(dist) 再 d.Close()。Windows 的 CreateFileW 默认不带
+// FILE_SHARE_DELETE，删除仍被打开的文件会因共享冲突失败，而该错误被丢弃，于是半成品目标
+// 文件残留（CI windows-latest 实测 stat err=<nil>）。这个顺序约束在 Linux 上观察不到
+// （unlink 对已打开的文件照样成功），因此这里通过 removeFileFn 直接断言句柄已经关闭。
+func TestCopyClosesDestinationBeforeRemoving(t *testing.T) {
+	dir := t.TempDir()
+	srcDir := filepath.Join(dir, "srcdir")
+	if err := os.MkdirAll(srcDir, 0755); err != nil {
+		t.Fatalf("prepare source dir failed: %v", err)
+	}
+	// 目录不能作为 io.Copy 的源（读取必然失败），用来构造真实的复制失败
+	if err := os.WriteFile(filepath.Join(srcDir, "child.txt"), []byte("x"), 0644); err != nil {
+		t.Fatalf("prepare child failed: %v", err)
+	}
+	dist := filepath.Join(dir, "dist.bin")
+
+	restoreLimit, restoreClone, restoreRemove := maxCopyLimit, cloneFileFn, removeFileFn
+	maxCopyLimit = -1
+	cloneFileFn = func(_, _ int) error { return errors.New("FICLONE unsupported") }
+	removed := false
+	removeFileFn = func(d *os.File, path string) error {
+		removed = true
+		// 句柄关闭后 Stat 必然报错；仍能 Stat 成功说明删除先于关闭执行
+		if _, err := d.Stat(); err == nil {
+			t.Errorf("destination must be closed before it is removed, otherwise Windows cannot delete it")
+		}
+		return os.Remove(path)
+	}
+	t.Cleanup(func() { maxCopyLimit, cloneFileFn, removeFileFn = restoreLimit, restoreClone, restoreRemove })
+
+	if err := Copy(srcDir, dist); err == nil {
+		t.Fatalf("Copy from a directory should fail")
+	}
+	if !removed {
+		t.Errorf("failed copy must trigger the cleanup")
+	}
+	if _, err := os.Stat(dist); !os.IsNotExist(err) {
+		t.Errorf("failed copy must not leave a partial destination behind (stat err=%v)", err)
+	}
+}
+
 // TestCopyNonexistentSrc 测试复制不存在的源文件
 func TestCopyNonexistentSrc(t *testing.T) {
 	tempDir, err := os.MkdirTemp("", "ios_noent_test")
