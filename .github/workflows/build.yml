@@ -151,7 +151,10 @@ jobs:
           # Python 沙箱等）在 CI 真正执行。此前该开关被注释掉，52 个用例永远
           # 不跑——深度审查修复 Linux 沙箱 remount,rw 时正是靠打开它才暴露出来。
           # 仅在 Linux 打开：macOS/Windows 走各自平台隔离实现，尚未验证。
-          ALKAID0_TEST_SANDBOX: ${{ matrix.os == 'ubuntu-latest' && 'true' || 'false' }}
+          # 注意非 Linux 必须给**空字符串**而不是 'false'：用例判定是
+          # os.Getenv("ALKAID0_TEST_SANDBOX") == ""，任何非空值（含 "false"）
+          # 都会把沙箱用例真正跑起来（CI 实测 Windows 因此多出 42 个失败）。
+          ALKAID0_TEST_SANDBOX: ${{ matrix.os == 'ubuntu-latest' && 'true' || '' }}
           ALKAID0_TEST_LESS_MEMORY_MODE: "true"
           CGO_ENABLED: "0"
         run: |
