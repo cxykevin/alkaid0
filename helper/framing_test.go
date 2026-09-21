@@ -92,7 +92,13 @@ func TestCopyStdinToWSFramesOneJSONValuePerFrame(t *testing.T) {
 	}
 	origStdin := os.Stdin
 	os.Stdin = stdinFile
-	t.Cleanup(func() { os.Stdin = origStdin })
+	// 必须关闭文件：Windows 上未关闭的句柄会让 t.TempDir() 的清理失败
+	// （unlinkat ... The process cannot access the file because it is being used
+	// by another process）。t.Cleanup 是后进先出，这条会先于 TempDir 清理执行。
+	t.Cleanup(func() {
+		os.Stdin = origStdin
+		_ = stdinFile.Close()
+	})
 
 	if err := copyStdinToWS(conn); !errors.Is(err, io.EOF) {
 		t.Fatalf("copyStdinToWS() error = %v, want io.EOF", err)

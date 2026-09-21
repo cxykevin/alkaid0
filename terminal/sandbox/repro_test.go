@@ -24,6 +24,7 @@ import (
 // 并在 mount.sh 中通过 setpriv 降权到工作目录属主再执行命令。
 // 该测试在普通用户与 root 下均应通过。
 func TestOSIsolationWorkDirOwner(t *testing.T) {
+	requireOSIsolation(t)
 	if os.Getenv("ALKAID0_TEST_SANDBOX") == "" {
 		t.Skip("跳过隔离测试（设置 ALKAID0_TEST_SANDBOX=true 启用）")
 	}

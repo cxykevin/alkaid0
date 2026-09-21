@@ -2,6 +2,8 @@ package lsp
 
 import (
 	"path/filepath"
+	"runtime"
+	"strings"
 	"testing"
 )
 
@@ -108,8 +110,30 @@ func TestPathToURIRoundTrip(t *testing.T) {
 			t.Errorf("uriToPath(%q) 未识别为 file URI", uri)
 			continue
 		}
-		if got != p {
-			t.Errorf("uriToPath(pathToURI(%q)) = %q", p, got)
+		// URI 一律用正斜杠；还原成平台路径时 Windows 会得到反斜杠形式
+		// （filepath.FromSlash），这是平台语义下的正确结果，断言按平台归一化。
+		want := filepath.FromSlash(p)
+		if got != want {
+			t.Errorf("uriToPath(pathToURI(%q)) = %q, want %q", p, got, want)
+		}
+	}
+
+	if runtime.GOOS == "windows" {
+		// Windows 盘符路径的往返：pathToURI 必须生成 file:///C:/... 形式。
+		// 输入用正斜杠（Windows 同样接受），还原结果按平台归一化后应等于输入。
+		for _, p := range []string{"C:/Users/me/file.go", "C:/Program Files/a b/x.go"} {
+			uri := pathToURI(p)
+			if !strings.HasPrefix(uri, "file:///C:/") {
+				t.Errorf("pathToURI(%q) = %q, 期望 file:///C:/... 形式", p, uri)
+			}
+			got, ok := uriToPath(uri)
+			if !ok {
+				t.Errorf("uriToPath(%q) 未识别为 file URI", uri)
+				continue
+			}
+			if want := filepath.FromSlash(p); got != want {
+				t.Errorf("uriToPath(pathToURI(%q)) = %q, want %q", p, got, want)
+			}
 		}
 	}
 }

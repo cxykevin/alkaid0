@@ -40,6 +40,7 @@ func TestOSIsolationNoFakeEtcResidue(t *testing.T) {
 	if os.Getenv("ALKAID0_TEST_SANDBOX") == "" {
 		t.Skip("跳过隔离测试（设置 ALKAID0_TEST_SANDBOX=true 启用）")
 	}
+	requireOSIsolation(t)
 
 	before := fakeEtcSnapshot()
 

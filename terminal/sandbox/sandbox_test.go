@@ -289,6 +289,7 @@ func TestIsolationModeString(t *testing.T) {
 }
 
 func TestIsolationOSSpec(t *testing.T) {
+	requireOSIsolation(t)
 	if os.Getenv("ALKAID0_TEST_SANDBOX") == "" {
 		t.Skip("跳过隔离测试（设置 ALKAID0_TEST_SANDBOX=true 启用）")
 	}

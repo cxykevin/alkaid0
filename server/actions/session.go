@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"path"
 	"path/filepath"
 	"slices"
 	"strconv"
@@ -680,10 +679,10 @@ func requestPermission(obj *sessionObj, pending *[]funcs.ToolCall) (bool, error)
 
 // dbKey 规范化数据库缓存键。
 //
-// loadDB 过去在命中缓存之后才 path.Clean(pathx)，closeDB 则从不 Clean：
+// loadDB 过去在命中缓存之后才 filepath.Clean(pathx)，closeDB 则从不 Clean：
 // 以 "/a/b/" 与 "/a/b" 两种写法访问会各建一个连接（旧连接泄漏、引用计数错乱），
 // 而 closeDB 用另一种写法时永远找不到条目，连接永不关闭。
-func dbKey(p string) string { return path.Clean(p) }
+func dbKey(p string) string { return filepath.Clean(p) }
 
 // loadDB 加载数据库连接，支持连接复用和引用计数
 func loadDB(pathx string) (*gorm.DB, error) {
@@ -700,7 +699,7 @@ func loadDB(pathx string) (*gorm.DB, error) {
 		if err != nil || !info.IsDir() {
 			return nil, fmt.Errorf("cwd not found or not a directory")
 		}
-		db, err := storage.InitStorage(path.Join(pathx, ".alkaid0"), "")
+		db, err := storage.InitStorage(filepath.Join(pathx, ".alkaid0"), "")
 		if err != nil {
 			return nil, err
 		}
@@ -1852,7 +1851,7 @@ func SessionNew(req SessionNewRequest, call func(string, any, *string) error, co
 	if req.Cwd == "" {
 		return SessionNewResponse{}, fmt.Errorf("cwd is empty")
 	}
-	req.Cwd = path.Clean(req.Cwd)
+	req.Cwd = filepath.Clean(req.Cwd)
 	info, err := os.Stat(req.Cwd)
 	if err != nil || !info.IsDir() {
 		return SessionNewResponse{}, fmt.Errorf("cwd not found or not a directory")
@@ -2019,7 +2018,7 @@ func SessionResume(req SessionResumeRequest, call func(string, any, *string) err
 			return SessionResumeResponse{}, err
 		}
 	}
-	if cwd != path.Clean(req.Cwd) {
+	if cwd != filepath.Clean(req.Cwd) {
 		return SessionResumeResponse{}, fmt.Errorf("cwd not match")
 	}
 	sess, err := loadSession(cwd, &sid, true)
@@ -2545,12 +2544,12 @@ func sessionOlderThanCursor(c *structs.Chats, cur sessionCursor) bool {
 // SessionList 列出工作目录中的所有会话（ACP v2 session/list）。
 // 按最后活动时间倒序（新→旧），每页最多 sessionListPageSize 条，返回 nextCursor 支持 cursor 翻页。
 func SessionList(req SessionListRequest, call func(string, any, *string) error, connID uint64) (SessionListResponse, error) {
-	req.Cwd = path.Clean(req.Cwd)
+	req.Cwd = filepath.Clean(req.Cwd)
 	info, err := os.Stat(req.Cwd)
 	if err != nil || !info.IsDir() {
 		return SessionListResponse{}, fmt.Errorf("cwd not found or not a directory")
 	}
-	info, err = os.Stat(path.Join(req.Cwd, ".alkaid0"))
+	info, err = os.Stat(filepath.Join(req.Cwd, ".alkaid0"))
 	if err != nil || !info.IsDir() {
 		return SessionListResponse{}, fmt.Errorf("cwd not inited")
 	}

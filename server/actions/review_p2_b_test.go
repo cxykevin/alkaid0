@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/cxykevin/alkaid0/context/codebase"
 	"github.com/cxykevin/alkaid0/storage"
 	"github.com/cxykevin/alkaid0/storage/structs"
 	"github.com/cxykevin/alkaid0/ui/funcs"
@@ -28,6 +29,9 @@ func newResumedSession(t *testing.T, connID uint64) (string, uint32, string) {
 		t.Fatalf("InitStorage: %v", err)
 	}
 	t.Cleanup(func() { _ = u.Unwrap(db.DB()).Close() })
+	// resume 会启动异步索引，打开 dir/.alkaid0/codebase.sqlite。Windows 上未关闭的
+	// 句柄会让 t.TempDir() 的清理失败（unlinkat ... being used by another process）。
+	t.Cleanup(func() { _ = codebase.CloseDirectory(dir) })
 	id, err := funcs.CreateChat(db, false)
 	if err != nil {
 		t.Fatalf("CreateChat: %v", err)

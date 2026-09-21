@@ -355,6 +355,10 @@ func newSessionListDB(t *testing.T, n int) (string, *gorm.DB, []uint32) {
 		ids[i] = chat.ID
 	}
 	t.Cleanup(func() { closeDB(tmpDir) })
+	// 会话的异步索引会打开 tmpDir/.alkaid0/codebase.sqlite。Windows 上未关闭的
+	// 句柄会让 t.TempDir() 的清理失败（unlinkat ... being used by another process），
+	// 从而把测试判为失败。t.Cleanup 后进先出，这里注册得比 TempDir 晚，先执行。
+	t.Cleanup(func() { _ = codebase.CloseDirectory(tmpDir) })
 	return tmpDir, db, ids
 }
 

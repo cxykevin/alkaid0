@@ -7,8 +7,6 @@ import (
 	"context"
 	"errors"
 	"os"
-	"os/exec"
-	"syscall"
 	"testing"
 	"time"
 )
@@ -40,35 +38,49 @@ func TestExecCmdWaitDelayBoundsOrphanPipe(t *testing.T) {
 	}
 }
 
-// TestExecCmdKillDoesNotSignalStalePID 回归测试：命令进程已被 Wait 回收后再调用 Kill，
-// 不得按陈旧 PID 杀进程组——PID 会被系统复用，复用的进程若恰好是进程组组长就会被误杀。
+// TestExecCmdKillOnWaitedProcessReturnsErrProcessDone 回归：命令进程已被 Wait 回收后
+// 再 Kill 必须返回 os.ErrProcessDone，绝不能按陈旧 PID 向进程组发信号（PID 会被系统
+// 复用，复用的进程若恰好是进程组组长就会被误杀）。
 //
-// 构造：decoy 模拟"复用了旧 PID 的无关进程"（独立进程组组长）；ExecCmd 的
-// ProcessState 非空表示该命令已结束（真实场景中由 Wait 写入）。
-// 旧实现会直接 syscall.Kill(-pid) 杀掉 decoy；新实现必须不向该 PID 发信号。
-func TestExecCmdKillDoesNotSignalStalePID(t *testing.T) {
-	decoy := exec.Command("sleep", "30")
-	decoy.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	if err := decoy.Start(); err != nil {
-		t.Fatalf("启动 decoy 失败: %v", err)
+// 实现约束（CI 实测）：判定"进程已结束"必须依赖 os.Process 自身的 done 状态——
+// Process.Signal 在被 Wait 回收后必然返回 ErrProcessDone；**不能读 cmd.ProcessState**，
+// os/exec 的 Wait 会并发写该字段，而 Kill 常来自另一条 goroutine（run 工具的 kill 通道），
+// macOS/Windows 的 -race 会直接报 data race 并让 CI 变红。
+func TestExecCmdKillOnWaitedProcessReturnsErrProcessDone(t *testing.T) {
+	e := createIsolateNoneCmd(context.Background(), "sh", []string{"-c", "exit 0"}, nil, "")
+	if err := e.Start(); err != nil {
+		t.Fatalf("Start 失败: %v", err)
 	}
-	decoyPid := decoy.Process.Pid
-	defer func() {
-		_ = syscall.Kill(-decoyPid, syscall.SIGKILL)
-		_, _ = decoy.Process.Wait()
-	}()
+	if err := e.Wait(); err != nil {
+		t.Fatalf("Wait 失败: %v", err)
+	}
+	if err := e.Kill(); !errors.Is(err, os.ErrProcessDone) {
+		t.Fatalf("对已回收进程 Kill 应返回 os.ErrProcessDone，实际: %v", err)
+	}
+}
 
-	e := &ExecCmd{cmd: &exec.Cmd{Process: decoy.Process, ProcessState: &os.ProcessState{}}}
-	err := e.Kill()
-	if !errors.Is(err, os.ErrProcessDone) {
-		t.Fatalf("对已结束命令 Kill 应返回 os.ErrProcessDone，实际: %v", err)
+// TestExecCmdKillConcurrentWithWait 回归：Kill 与 Wait 并发（run 工具 kill 通道的真实
+// 时序：doKill → job.kill → Command.Kill，同时 runCmd 正在 Wait）不得构成 data race，
+// 且 Kill 必须真的终止命令。旧实现里 Kill 读 cmd.ProcessState 就是在这里被 -race 抓到的。
+func TestExecCmdKillConcurrentWithWait(t *testing.T) {
+	e := createIsolateNoneCmd(context.Background(), "sh", []string{"-c", "sleep 5"}, nil, "")
+	if err := e.Start(); err != nil {
+		t.Fatalf("Start 失败: %v", err)
 	}
 
-	// decoy 必须仍然存活。用 wait4(WNOHANG) 判断：被杀的子进程此时已是僵尸，
-	// 单看 kill(pid, 0) 会误判为存活。
-	var status syscall.WaitStatus
-	wpid, werr := syscall.Wait4(decoyPid, &status, syscall.WNOHANG, nil)
-	if werr != nil || wpid != 0 {
-		t.Fatalf("无关进程（模拟被复用的 PID %d）被误杀: wait4 pid=%d err=%v", decoyPid, wpid, werr)
+	done := make(chan error, 1)
+	go func() { done <- e.Wait() }()
+
+	// 给 Wait 一点时间进入阻塞，再并发 Kill
+	time.Sleep(200 * time.Millisecond)
+	killErr := e.Kill()
+
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("Kill 后 Wait 未返回")
+	}
+	if killErr != nil && !errors.Is(killErr, os.ErrProcessDone) {
+		t.Fatalf("Kill 返回意外错误: %v", killErr)
 	}
 }

@@ -6,7 +6,6 @@ import (
 	"context"
 	"errors"
 	"io"
-	"os"
 	"os/exec"
 	"syscall"
 )
@@ -97,15 +96,13 @@ func (e *ExecCmd) Kill() error {
 	if e.cmd == nil || e.cmd.Process == nil {
 		return nil
 	}
-	// 进程已被 Wait 回收：PID 可能已被系统复用，绝不能再按陈旧 PID 发信号，
-	// 否则会误杀恰好复用该 PID 的无关进程组（例如另一条刚启动的沙盒命令）。
-	// 与 os.Process.Kill 在 Wait 之后的语义一致，返回 ErrProcessDone。
-	if e.cmd.ProcessState != nil {
-		return os.ErrProcessDone
-	}
-	// 先用 Process.Signal 确认进程仍存活并在同一时刻发送 SIGKILL：os.Process
-	// 内部有 done 标记与锁，已退出/已回收时返回 ErrProcessDone，不会像裸
-	// syscall.Kill 那样把信号发给复用了旧 PID 的新进程。
+	// 直接用 Process.Signal 发送 SIGKILL：os.Process 内部有 done 标记与互斥锁，
+	// 进程已退出/已被 Wait 回收时返回 os.ErrProcessDone——既能避免把信号发给
+	// 复用了旧 PID 的新进程，也不会像裸 syscall.Kill 那样误杀无关进程组。
+	//
+	// 注意不能先读 e.cmd.ProcessState 做判断：os/exec.Cmd.Wait() 会并发写该字段，
+	// 而 Kill 可能来自另一条 goroutine（run 工具的 kill 通道），-race 实测报
+	// data race（macOS/Windows CI 均因此失败）。
 	if err := e.cmd.Process.Signal(syscall.SIGKILL); err != nil {
 		return err
 	}
