@@ -118,6 +118,10 @@ func (s *Sandbox) createLinuxIsolatedCommand(ctx context.Context, name string, a
 	cmd := exec.CommandContext(ctx, "unshare", unshareArgs...)
 	// 将调用方环境传给 unshare；否则隔离进程会丢失任务注入的凭据和配置。
 	cmd.Env = s.env
+	// 输出 writer 不是 *os.File 时会起拷贝 goroutine；沙盒命令留下持有管道的
+	// 后代进程时 Wait 会永久阻塞（任务停在 running、kill/ESC 失效）。
+	// WaitDelay 到点后 os/exec 强制关管道并返回 exec.ErrWaitDelay（见 ExecCmd.Wait）。
+	cmd.WaitDelay = drainTimeout
 	// 设置进程组，确保超时时可以杀死整个进程树
 	// unshare --pid --fork 的子进程会成为孤儿进程，通过进程组 kill 可防止残留
 	cmd.SysProcAttr = &syscall.SysProcAttr{
@@ -166,11 +170,15 @@ func (s *Sandbox) generateWritableMounts() (string, string) {
 	for i, dir := range s.writableDirs {
 		varName := fmt.Sprintf("ALK_WD_%d", i)
 		exports = append(exports, fmt.Sprintf("export %s=%s", varName, shellQuote(dir)))
-		// 确保目录存在，然后 rbind 并 remount rw
+		// 确保目录存在，然后 rbind 并 remount rw。
+		// 注意 remount 必须带 bind：外层只读化用的是 remount,ro,bind（只改挂载项
+		// 自身的 ro 标志），对称地恢复写权限也必须用 remount,rw,bind。不带 bind 时
+		// util-linux 会尝试修改整个 superblock 的 ro 标志，在 user namespace 中必然
+		// EPERM（实测 rc=32）→ 可写目录保持只读，命令写入报"只读文件系统"。
 		cmds = append(cmds, fmt.Sprintf(`
 			mkdir -p "$%s" 2>/dev/null || :
 			mount --rbind "$%s" "$%s" 2>/dev/null || :
-			mount -o remount,rw "$%s" 2>/dev/null || :`,
+			mount -o remount,rw,bind "$%s" 2>/dev/null || :`,
 			varName, varName, varName, varName,
 		))
 		// 保护可写目录中的 .alkaid0 子目录（只读），防止沙箱内进程修改聊天记录和配置

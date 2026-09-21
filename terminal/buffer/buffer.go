@@ -260,12 +260,39 @@ func (b *Buffer) Resize(rows, cols int) {
 	b.cols = cols
 	b.scrollBottom = rows - 1
 
-	// 调整光标位置
+	// 滚动区域必须收敛到新尺寸内：scrollTop 只在这里可能 >= rows，
+	// 若不重置，ESC M（RI）触发的 scrollDown 会用越界行号索引 cells → panic。
+	if b.scrollTop >= rows {
+		b.scrollTop = 0
+	}
+	if b.scrollTop > b.scrollBottom {
+		b.scrollTop = b.scrollBottom
+	}
+
+	// 调整光标位置（恢复光标同样要收敛，否则 ESC 8 之后 ESC [ K/J 会用越界坐标索引 cells）
+	if b.cursorX < 0 {
+		b.cursorX = 0
+	}
+	if b.cursorY < 0 {
+		b.cursorY = 0
+	}
 	if b.cursorX >= cols {
 		b.cursorX = cols - 1
 	}
 	if b.cursorY >= rows {
 		b.cursorY = rows - 1
+	}
+	if b.savedCursor.x < 0 {
+		b.savedCursor.x = 0
+	}
+	if b.savedCursor.y < 0 {
+		b.savedCursor.y = 0
+	}
+	if b.savedCursor.x >= cols {
+		b.savedCursor.x = cols - 1
+	}
+	if b.savedCursor.y >= rows {
+		b.savedCursor.y = rows - 1
 	}
 }
 

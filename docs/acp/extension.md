@@ -20,6 +20,8 @@ alkaid0 所默认实现的协议是简单 `Websocket` 而非 [ACP 中建议的 `
 
 服务端使用 Query 参数认证。在 Query 参数中添加 `key=<key>` 即可。如果没有 Query 参数选项，则可以在 `Path` 中设置 `/acp?k=<key>`。
 
+REST 端点（如 `/info`、OpenAI 兼容代理）与 WebSocket 共用同一份密钥：除查询参数外，也接受 `Authorization: Bearer <key>` 请求头。`/` 根路径保持公开。
+
 支持 Websocket 桥接的客户端可以直接链接。只支持 stdio 的客户端可以使用提供的 helper 链接。
 
 Websocket 的每个请求体与 stdio 下的每个请求体均相同。
@@ -243,7 +245,7 @@ Python run 的 `runId` 是 workflow 的唯一关联标识，同时绑定 Job、t
 
 #### stdout 握手与过滤
 
-`Flow.run()` 的 stdout 使用 bracketed-paste 握手：开始标记为 `\u001b[?2004h`，结束标记为 `\u001b[?2004l`。握手帧内每行是一个 JSONL 事件。服务端按增量数据解析，因此标记可以跨 read 分片。握手标记、帧内 JSON、非法协议行以及 dynworkflow 交互内容从 terminal 输出中剔除；帧外普通 stdout 和 stderr 仍作为终端输出。
+`Flow.run()` 的 stdout 使用 bracketed-paste 握手：开始标记为 `\u001b[?2004h`，结束标记为 `\u001b[?2004l`。握手帧内每行是一个 JSONL 事件。服务端按增量数据解析，因此标记可以跨 read 分片。握手标记与帧内 JSON 从 terminal 输出中剔除；帧内无法解析为协议事件的行，以及超过缓冲上限（1 MiB）的异常帧内容，会作为普通终端输出返回而不是静默丢弃（避免命令崩溃在帧中途时整段输出消失）。帧外普通 stdout 和 stderr 仍作为终端输出。
 
 #### 事件更新
 

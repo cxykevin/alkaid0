@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
@@ -256,6 +257,15 @@ func interfaceEqual(a, b any) bool {
 	return a == b
 }
 
+// PID 返回已创建子进程的 PID；进程尚未创建时返回 0。
+// 供 sandbox.Command.Start 判断失败路径是否需要立即清理临时资源（如目录 ACL）。
+func (c *Cmd) PID() int {
+	if c.Process == nil {
+		return 0
+	}
+	return c.Process.Pid
+}
+
 // Start 启动程序
 func (c *Cmd) Start() (err error) {
 	c.mu.Lock()
@@ -445,7 +455,9 @@ func (c *Cmd) Start() (err error) {
 		return errors.New("exec: no args")
 	}
 	argvStr := c.argvString()
-	pi, err := CreateProc("", argvStr, c.Dir, &si, envPtr)
+	// CREATE_SUSPENDED：进程创建后先不运行，等加入 Job Object 后再由下面的
+	// ResumeThread 恢复，避免它在加入 Job 之前抢先派生出逃出 Job 树的孙进程。
+	pi, err := createProc("", argvStr, c.Dir, &si, envPtr, windows.CREATE_SUSPENDED)
 	if err != nil {
 		return err
 	}
@@ -474,6 +486,15 @@ func (c *Cmd) Start() (err error) {
 			logger.Warn("assign process %d to job object failed, fallback to killing direct child only: %v", pi.ProcessId, aerr)
 			_ = job.Close()
 			c.job.Store(nil)
+		}
+	}
+	// 恢复挂起的进程。若并发 Kill 已经终止了进程，ResumeThread 会因线程已退出
+	// 而报错——那是正常的终止路径，不能当成启动失败；其他恢复失败则终止进程
+	// 并返回错误，否则进程会永远挂起、Wait 永不返回。
+	if _, rerr := windows.ResumeThread(pi.Thread); rerr != nil {
+		if !c.killRequested.Load() {
+			_ = c.Kill()
+			return fmt.Errorf("ResumeThread(%d): %w", pi.ProcessId, rerr)
 		}
 	}
 	// 进程启动前就已被要求终止：此刻补杀，关掉 kill 早于 start 的竞态窗口

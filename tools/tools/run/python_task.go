@@ -165,7 +165,8 @@ func pythonTask(session *structs.Chats, mp map[string]*any, cross []*any) (bool,
 	var cleanupFn func()
 
 	if needsProxy {
-		key, baseURL, modelID, err := buildProxyEnv(session)
+		// 每次代码运行都现场分配一把新 key（24 小时有效期，不做续期）
+		key, baseURL, modelID, err := buildProxyEnv(session, proxyKeyTTLMinutes)
 		if err != nil {
 			return errResult(fmt.Sprintf("[System] Failed to setup OpenAI proxy: %v", err), cross)
 		}
@@ -191,7 +192,7 @@ func pythonTask(session *structs.Chats, mp map[string]*any, cross []*any) (bool,
 	// 前台命令结束时同样把输出写入该 ID 对应的 temp obj，客户端事后可按 terminal id 取回内容。
 	workspace := session.Root
 	workDir := path.Join(session.Root, session.CurrentActivatePath)
-	runID := NewRunID(workspace)
+	runID := NewRunIDForSession(session, workspace)
 	// temp obj 内部路径（@temp/run/7 → run/7）
 	tempPath, ok := TempPath(runID)
 	if !ok {

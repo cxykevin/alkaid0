@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"runtime"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -72,6 +73,73 @@ func GetSessionCount() (int, int) {
 	return u.AnyDefault(u.Default(ret2, "sessions", -1), -1), u.AnyDefault(u.Default(ret2, "dbs", -1), -1)
 }
 
+// serverKeyParams 从查询参数中提取服务端 key 时尝试的参数名（保持与旧客户端兼容）。
+var serverKeyParams = []string{"token", "Token", "TOKEN", "authorization", "Authorization", "auth", "Auth", "AUTH", "session", "Session", "passwd", "Passwd", "password", "Password", "access_token", "AccessToken", "key", "Key", "KEY", "k", "s", "p"}
+
+// httpRequestServerKey 从请求的查询参数或 Authorization 头提取服务端 key。
+// 供 WebSocket 升级与 /info 等 HTTP 端点共用同一套鉴权。
+func httpRequestServerKey(r *http.Request) string {
+	if r == nil {
+		return ""
+	}
+	vals := r.URL.Query()
+	for _, name := range serverKeyParams {
+		if token := vals.Get(name); token != "" {
+			return token
+		}
+	}
+	auth := strings.TrimSpace(r.Header.Get("Authorization"))
+	if auth == "" {
+		return ""
+	}
+	// 支持 "Bearer <key>"（大小写不敏感）与裸 key 两种形式
+	if len(auth) > len("bearer ") && strings.EqualFold(auth[:len("bearer ")], "bearer ") {
+		return strings.TrimSpace(auth[len("bearer "):])
+	}
+	return auth
+}
+
+// getSessionCount 供 /info 返回会话/DB 数；包级变量作为测试缝，
+// 避免测试依赖 chancall 消费者导致阻塞。
+var getSessionCount = GetSessionCount
+
+// handleInfo 处理 /info：返回版本、进程内存与会话统计。
+// 这些数据包含运行态信息，必须与 WebSocket 升级同级鉴权（此前无鉴权即可读取）。
+func handleInfo(w http.ResponseWriter, r *http.Request) {
+	// 恒定时间比较，避免时序侧信道泄露 key 长度/内容
+	if subtle.ConstantTimeCompare([]byte(httpRequestServerKey(r)), []byte(config.GlobalConfig.Server.Key)) != 1 {
+		loggerWs.Error("invalid token on /info, rejecting request")
+		http.Error(w, "invalid token", http.StatusUnauthorized)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("X-Server", product.UserAgent)
+	var state runtime.MemStats
+	runtime.ReadMemStats(&state)
+	ss, db := getSessionCount()
+	_ = json.NewEncoder(w).Encode(u.H{
+		"version": product.Version,
+		"system": u.H{
+			"pid":        os.Getpid(),
+			"goroutines": runtime.NumGoroutine(),
+			"mem": u.H{
+				"alloc": state.Alloc,
+				"sys":   state.Sys,
+			},
+			"gc": u.H{
+				"num":   state.NumGC,
+				"pause": float32(time.Duration(state.PauseTotalNs) / time.Second),
+				"cpu":   state.GCCPUFraction,
+			},
+		},
+		"network": u.H{
+			"sessions": ss,
+			"dbs":      db,
+		},
+		"usage": stats.Snapshot(),
+	})
+}
+
 // StartWs 从 WebSocket 启动 JSON-RPC，支持多会话
 // addr: 监听地址，例如 "localhost:8080"
 // path: WebSocket 路径，例如 "/jsonrpc"
@@ -104,53 +172,18 @@ func StartWs(handler func(string, func(string) error, uint64) (returnString stri
 		})
 	})
 
-	// 根路径返回简单 JSON
+	// /info：运行态信息，必须携带与 WebSocket 相同的 key（见 handleInfo）
 	mux.HandleFunc("/info", func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/info" {
 			return
 		}
-		w.Header().Set("Content-Type", "application/json")
-		w.Header().Set("X-Server", product.UserAgent)
-		var state runtime.MemStats
-		runtime.ReadMemStats(&state)
-		ss, db := GetSessionCount()
-		json.NewEncoder(w).Encode(u.H{
-			"version": product.Version,
-			"system": u.H{
-				"pid":        os.Getpid(),
-				"goroutines": runtime.NumGoroutine(),
-				"mem": u.H{
-					"alloc": state.Alloc,
-					"sys":   state.Sys,
-				},
-				"gc": u.H{
-					"num":   state.NumGC,
-					"pause": float32(time.Duration(state.PauseTotalNs) / time.Second),
-					"cpu":   state.GCCPUFraction,
-				},
-			},
-			"network": u.H{
-				"sessions": ss,
-				"dbs":      db,
-			},
-			"usage": stats.Snapshot(),
-		})
+		handleInfo(w, r)
 	})
 
 	// 处理 WebSocket 连接
 	mux.HandleFunc(config.GlobalConfig.Server.Path, func(w http.ResponseWriter, r *http.Request) {
-		vals := r.URL.Query()
-		if len(vals) == 0 {
-			loggerWs.Error("no query params")
-			return
-		}
-		// 检查token
-		token := ""
-		for _, val := range []string{"token", "Token", "TOKEN", "authorization", "Authorization", "auth", "Auth", "AUTH", "session", "Session", "passwd", "Passwd", "password", "Password", "access_token", "AccessToken", "key", "Key", "KEY", "k", "s", "p"} {
-			if token = vals.Get(val); token != "" {
-				break
-			}
-		}
+		// 检查token（查询参数或 Authorization 头）
+		token := httpRequestServerKey(r)
 		// 恒定时间比较，避免时序侧信道泄露 key 长度/内容
 		if subtle.ConstantTimeCompare([]byte(token), []byte(config.GlobalConfig.Server.Key)) != 1 {
 			loggerWs.Error("invalid token, rejecting connection")

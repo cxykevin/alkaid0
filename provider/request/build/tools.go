@@ -160,14 +160,14 @@ func ToolsSolver(session *structs.Chats, callback func(string, string, map[strin
 					// 写入 ToolCallingContext，由 server 层限流广播实时预览到前端。
 					// 所有内置工具 OnHook 均为纯展示（构造 calling_info，无命令/文件/子代理副作用），
 					// 以部分参数重复执行幂等无害；若未来 OnHook 引入真实副作用需重新评估。
-					session.CurrentToolID = fmt.Sprintf("call_%d_%d_%s", session.ID, session.CurrentMessageID, ID)
+					session.CurrentToolID = fmt.Sprintf("call_%d_%d_%s", session.ID, session.GetCurrentMessageID(), ID)
 					err := tools.ExecToolOnHook(session, toolKey, arg, ID)
 					if err != nil {
 						return err
 					}
 					return nil
 				}
-				if session.State != state.StateToolCalling {
+				if session.GetState() != state.StateToolCalling {
 					return nil
 				}
 				ret, err := tools.ExecToolPostHook(session, toolKey, arg, ID)

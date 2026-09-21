@@ -21,10 +21,14 @@ func ReadGlobalConfigs(db *gorm.DB) error {
 }
 
 // SaveGlobalConfigs 保存全局配置
-// Configs 无主键，GORM Save/First 会报 "WHERE conditions required"，故用清空后重插保持单行语义
+// Configs 无主键，GORM Save/First 会报 "WHERE conditions required"，故用清空后重插保持单行语义。
+// 清空与重插必须在同一个事务里：否则 Create 失败（或进程在中途退出）会让配置表变空，
+// 启动时读回的是零值，用户的全部设置静默丢失。
 func SaveGlobalConfigs(db *gorm.DB) error {
-	if err := db.Where("1 = 1").Delete(&structs.Configs{}).Error; err != nil {
-		return err
-	}
-	return db.Create(&GlobalConfig).Error
+	return db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Where("1 = 1").Delete(&structs.Configs{}).Error; err != nil {
+			return err
+		}
+		return tx.Create(&GlobalConfig).Error
+	})
 }

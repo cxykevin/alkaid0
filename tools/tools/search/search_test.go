@@ -293,3 +293,60 @@ func TestFormatResultsEmpty(t *testing.T) {
 		t.Errorf("expected 'No results found.', got %q", output)
 	}
 }
+
+// TestAiGrepSkipsSymlinkEscape 回归：工作区内指向工作区外的符号链接不得被搜索读取。
+//
+// WalkDir 不会跟随链接进入目录，但对"指向文件的链接" d.IsDir() 为 false，
+// 随后 grepFile 的 os.Open 会跟随链接读到工作区之外的内容（search 是自动批准
+// 工具，无需用户确认即可把内容带进对话）。
+func TestAiGrepSkipsSymlinkEscape(t *testing.T) {
+	dir := t.TempDir()
+	outside := t.TempDir()
+
+	secret := filepath.Join(outside, "secret.txt")
+	if err := os.WriteFile(secret, []byte("LEAKED-CREDENTIAL\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(secret, filepath.Join(dir, "link.txt")); err != nil {
+		t.Skipf("当前环境不支持创建符号链接: %v", err)
+	}
+	// 对照组：工作区内的普通文件仍然必须能被搜到
+	if err := os.WriteFile(filepath.Join(dir, "normal.txt"), []byte("LEAKED-CREDENTIAL\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	results := aiGrep(context.Background(), dir, "LEAKED-CREDENTIAL", false, true, nil, 10)
+	foundNormal := false
+	for _, r := range results {
+		if r.FilePath == "link.txt" {
+			t.Errorf("指向工作区外的符号链接不应被搜索到: %s", r.FilePath)
+		}
+		if r.FilePath == "normal.txt" {
+			foundNormal = true
+		}
+	}
+	if !foundNormal {
+		t.Error("工作区内普通文件应仍能被搜索到")
+	}
+}
+
+// TestAiGrepSkipsSensitiveVariants 回归：敏感文件名此前靠字面枚举，
+// .env.staging/.env.prod/服务器证书/私钥/.git-credentials 等变体会被搜索出来，
+// 而 provider/request/rules/reject.expr 却拒绝 read/edit 同类文件——
+// search 是自动批准工具，黑名单是它唯一的防线，必须与规则等价。
+func TestAiGrepSkipsSensitiveVariants(t *testing.T) {
+	dir := t.TempDir()
+	for _, name := range []string{
+		".env.staging", ".env.prod", ".env.backup",
+		"server.pem", "private.key", "cert.p12", ".git-credentials",
+	} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("SUPER-SECRET-VALUE\n"), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	results := aiGrep(context.Background(), dir, "SUPER-SECRET-VALUE", false, true, nil, 10)
+	if len(results) != 0 {
+		t.Errorf("敏感文件不应被搜索到，实际返回 %d 条: %+v", len(results), results)
+	}
+}

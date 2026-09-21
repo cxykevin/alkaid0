@@ -124,7 +124,7 @@ func GetModelName(modelID uint32, defaultName string) string {
 // PendingToolCall 待审批工具调用
 // 最近一次带 ToolCallingJSONString 的消息即待审批内容
 func PendingToolCall(session *structs.Chats) ([]ToolCall, *structs.Messages, uint64, error) {
-	if session.State != state.StateWaitApprove {
+	if session.GetState() != state.StateWaitApprove {
 		return nil, nil, 0, nil
 	}
 	var msg structs.Messages
@@ -135,7 +135,7 @@ func PendingToolCall(session *structs.Chats) ([]ToolCall, *structs.Messages, uin
 		}
 		return nil, nil, msg.ID, err
 	}
-	session.CurrentMessageID = msg.ID
+	session.SetCurrentMessageID(msg.ID)
 	if session.TemporyDataOfRequest == nil {
 		session.TemporyDataOfRequest = make(map[string]any)
 	}
@@ -152,7 +152,7 @@ func PendingToolCall(session *structs.Chats) ([]ToolCall, *structs.Messages, uin
 // AutoHandleMainSessionPendingTools 处理主会话的待审批工具。
 // 返回: (autoHandled, approved, pendingTools, msgID, error)
 func AutoHandleMainSessionPendingTools(session *structs.Chats) (bool, bool, []ToolCall, uint64, error) {
-	if session.State != state.StateWaitApprove {
+	if session.GetState() != state.StateWaitApprove {
 		return false, false, nil, 0, nil
 	}
 	tools, msg, msgID, err := PendingToolCall(session)
@@ -181,7 +181,7 @@ func AutoHandleMainSessionPendingTools(session *structs.Chats) (bool, bool, []To
 // 子代理从不将待审批工具暴露给用户——未命中规则的调用自动拒绝（安全限制）。
 // 返回: (autoHandled, approved, error)
 func AutoHandleSubAgentPendingTools(session *structs.Chats) (bool, bool, error) {
-	if session.State != state.StateWaitApprove {
+	if session.GetState() != state.StateWaitApprove {
 		return false, false, nil
 	}
 	tools, msg, msgID, err := PendingToolCall(session)
@@ -215,7 +215,7 @@ func AutoHandleSubAgentPendingTools(session *structs.Chats) (bool, bool, error) 
 // 根据是否有活跃子代理分派到对应的处理函数。
 // Deprecated: 直接使用 AutoHandleMainSessionPendingTools 或 AutoHandleSubAgentPendingTools
 func AutoHandlePendingToolCalls(session *structs.Chats) (bool, bool, []ToolCall, uint64, error) {
-	if session.State != state.StateWaitApprove {
+	if session.GetState() != state.StateWaitApprove {
 		return false, false, nil, 0, nil
 	}
 	if session.CurrentAgentID != "" || session.NowAgent != "" {
@@ -227,7 +227,7 @@ func AutoHandlePendingToolCalls(session *structs.Chats) (bool, bool, []ToolCall,
 
 // ApproveToolCalls 允许执行待审批工具调用
 func ApproveToolCalls(session *structs.Chats) (uint64, error) {
-	if session.State != state.StateWaitApprove {
+	if session.GetState() != state.StateWaitApprove {
 		return 0, nil
 	}
 	var msg structs.Messages
@@ -241,7 +241,7 @@ func ApproveToolCalls(session *structs.Chats) (uint64, error) {
 	if session.TemporyDataOfRequest == nil {
 		session.TemporyDataOfRequest = make(map[string]any)
 	}
-	session.CurrentMessageID = msg.ID
+	session.SetCurrentMessageID(msg.ID)
 	_, err = request.ExecuteToolCalls(session, msg.ToolCallingJSONString)
 	return msg.ID, err
 }

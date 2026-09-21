@@ -19,6 +19,29 @@ const workflowUpdatePrefix = "alk.cxykevin.top/session/terminal/workflow/update_
 // 在查询/推送 workflow 终端时附带推送（见 pushWorkflowSnapshot / broadcastWorkflowSnapshot）。
 const workflowSnapshotUpdate = "alk.cxykevin.top/session/terminal/workflow/snapshot"
 
+// workflowRunKey 生成 workflow 行/事件在库内的唯一键。
+//
+// run 序号按工作目录从 1 开始（@temp/run/1），不同项目/会话会重复，而
+// workflows.run_id 有全局唯一索引、workflow_events 有 (workflow_id, sequence)
+// 唯一索引。若直接以 run_id 落库：第二个项目的行会因 unique 冲突创建失败，
+// 事件写入失败，随后按 run_id 的 Updates 还会改到第一个项目的行上（跨会话覆盖）。
+// 因此库内统一存 "<chatID>:<runID>"，对外仍暴露原始 runID。
+func workflowRunKey(chatID uint32, runID string) string {
+	return strconv.FormatUint(uint64(chatID), 10) + ":" + runID
+}
+
+// workflowDisplayRunID 把库内存储键还原为对外暴露的 run ID；
+// 兼容历史行（直接存原始 runID，没有会话前缀）。
+func workflowDisplayRunID(chatID uint32, stored string) string {
+	return strings.TrimPrefix(stored, strconv.FormatUint(uint64(chatID), 10)+":")
+}
+
+// workflowStoredRunIDs 返回某会话某 run 在库内可能使用的全部 run_id 值：
+// 新格式的会话前缀键，以及历史裸 runID（冷升级兼容）。
+func workflowStoredRunIDs(chatID uint32, runID string) []string {
+	return []string{workflowRunKey(chatID, runID), runID}
+}
+
 func persistWorkflowEvent(sessionID, runID string, ev runTool.WorkflowEvent) {
 	cwd, chatID, err := sessionID2Cwd(sessionID)
 	if err != nil {
@@ -29,14 +52,16 @@ func persistWorkflowEvent(sessionID, runID string, ev runTool.WorkflowEvent) {
 		return
 	}
 	defer closeDB(cwd)
+	// 行查询必须同时按 chat_id 过滤：run_id 在不同会话/项目间会重复。
+	key := workflowRunKey(chatID, runID)
 	var row structs.Workflows
-	if db.Where("run_id = ?", runID).First(&row).Error != nil {
-		row = structs.Workflows{WorkflowID: runID, ChatID: chatID, RunID: runID, Status: "running", CreatedAt: time.Now().UTC()}
+	if db.Where("chat_id = ? AND run_id IN ?", chatID, workflowStoredRunIDs(chatID, runID)).First(&row).Error != nil {
+		row = structs.Workflows{WorkflowID: runID, ChatID: chatID, RunID: key, TerminalID: runID, Status: "running", CreatedAt: time.Now().UTC()}
 		_ = db.Create(&row).Error
 	}
 	row.LastSequence++
 	payload, _ := json.Marshal(ev.Data)
-	_ = db.Create(&structs.WorkflowEvents{WorkflowID: runID, ChatID: chatID, Sequence: row.LastSequence, Type: ev.Type, NodeID: stringValue(ev.Data["nodeId"]), AgentIndex: intValue(ev.Data["agentIndex"]), PayloadJSON: string(payload), RawJSON: string(ev.Raw), CreatedAt: time.Now().UTC()}).Error
+	_ = db.Create(&structs.WorkflowEvents{WorkflowID: key, ChatID: chatID, Sequence: row.LastSequence, Type: ev.Type, NodeID: stringValue(ev.Data["nodeId"]), AgentIndex: intValue(ev.Data["agentIndex"]), PayloadJSON: string(payload), RawJSON: string(ev.Raw), CreatedAt: time.Now().UTC()}).Error
 	updates := map[string]any{"last_sequence": row.LastSequence, "updated_at": time.Now().UTC()}
 	if ev.Type == "graph" {
 		updates["graph_json"] = string(payload)
@@ -45,7 +70,13 @@ func persistWorkflowEvent(sessionID, runID string, ev runTool.WorkflowEvent) {
 		updates["agent_state_json"] = string(payload)
 		updates["current_node"] = stringValue(ev.Data["nodeId"])
 	}
-	_ = db.Model(&structs.Workflows{}).Where("run_id = ?", runID).Updates(updates).Error
+	if row.TerminalID == "" {
+		// 历史行没有 terminal_id（该列此前从不写入，status 响应里的 terminalId
+		// 因此恒为空）。run 与 terminal 使用同一个统一 ID（@temp/run/<n>），这里补齐。
+		updates["terminal_id"] = runID
+		row.TerminalID = runID
+	}
+	_ = db.Model(&structs.Workflows{}).Where("chat_id = ? AND run_id = ?", chatID, row.RunID).Updates(updates).Error
 }
 
 func stringValue(v any) string { s, _ := v.(string); return s }
@@ -169,7 +200,7 @@ func decodeWorkflowJSON(raw string) any {
 
 func workflowSnapshot(db *gorm.DB, chatID uint32, runID, activeStatus string) (SessionWorkflowStatusResponse, error) {
 	var row structs.Workflows
-	if err := db.Where("chat_id = ? AND run_id = ?", chatID, runID).First(&row).Error; err != nil {
+	if err := db.Where("chat_id = ? AND run_id IN ?", chatID, workflowStoredRunIDs(chatID, runID)).First(&row).Error; err != nil {
 		return SessionWorkflowStatusResponse{}, err
 	}
 	status := row.Status
@@ -177,14 +208,14 @@ func workflowSnapshot(db *gorm.DB, chatID uint32, runID, activeStatus string) (S
 		status = activeStatus
 	}
 	var events []structs.WorkflowEvents
-	if err := db.Where("chat_id = ? AND workflow_id = ?", chatID, runID).Order("sequence ASC").Find(&events).Error; err != nil {
+	if err := db.Where("chat_id = ? AND workflow_id IN ?", chatID, workflowStoredRunIDs(chatID, runID)).Order("sequence ASC").Find(&events).Error; err != nil {
 		return SessionWorkflowStatusResponse{}, err
 	}
 	logs := make([]any, 0, len(events))
 	for _, event := range events {
 		logs = append(logs, map[string]any{"sequence": event.Sequence, "type": event.Type, "nodeId": event.NodeID, "agentIndex": event.AgentIndex, "payload": decodeWorkflowJSON(event.PayloadJSON), "raw": decodeWorkflowJSON(event.RawJSON), "createdAt": event.CreatedAt.UTC().Format(time.RFC3339Nano)})
 	}
-	workflow := map[string]any{"workflowId": row.WorkflowID, "runId": row.RunID, "terminalId": row.TerminalID, "name": row.Name, "status": status, "currentNode": row.CurrentNode, "currentAgent": row.CurrentAgent, "lastSequence": row.LastSequence, "createdAt": row.CreatedAt.UTC().Format(time.RFC3339Nano), "updatedAt": row.UpdatedAt.UTC().Format(time.RFC3339Nano)}
+	workflow := map[string]any{"workflowId": row.WorkflowID, "runId": workflowDisplayRunID(chatID, row.RunID), "terminalId": row.TerminalID, "name": row.Name, "status": status, "currentNode": row.CurrentNode, "currentAgent": row.CurrentAgent, "lastSequence": row.LastSequence, "createdAt": row.CreatedAt.UTC().Format(time.RFC3339Nano), "updatedAt": row.UpdatedAt.UTC().Format(time.RFC3339Nano)}
 	if row.Error != "" {
 		workflow["error"] = row.Error
 	}

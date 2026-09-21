@@ -91,8 +91,25 @@ type Message struct {
 	Role             string           `json:"role"` // RoleUser | RoleAssistant | RoleSystem | RoleTool
 	Content          string           `json:"content"`
 	ReasoningContent *string          `json:"reasoning_content,omitempty"`
-	ToolCalls        []StreamToolCall `json:"tool_calls"`   // assistant 消息的 tool_calls（含流式 delta 反序列化目标）
+	ToolCalls        []StreamToolCall `json:"tool_calls"`             // assistant 消息的 tool_calls（含流式 delta 反序列化目标）
 	ToolCallID       string           `json:"tool_call_id,omitempty"` // tool 角色结果关联的调用 id
+}
+
+// MarshalJSON 自定义序列化：assistant 消息携带 tool_calls 且正文为空时省略 content 字段。
+// OpenAI 规范允许携带 tool_calls 的 assistant 消息不带 content；Anthropic 转换代理会拒绝
+// 空 text content block（text content blocks must be non-empty）。此前 Content 无 omitempty，
+// 纯工具调用回放会发出 "content":""。
+func (m Message) MarshalJSON() ([]byte, error) {
+	type messageAlias Message
+	if m.Content == "" && len(m.ToolCalls) > 0 {
+		// 外层 Content 指针遮蔽内嵌别名的 Content 字段，nil + omitempty 即省略该字段
+		type messageWithoutContent struct {
+			messageAlias
+			Content *string `json:"content,omitempty"`
+		}
+		return json.Marshal(messageWithoutContent{messageAlias: messageAlias(m)})
+	}
+	return json.Marshal(messageAlias(m))
 }
 
 // ChatCompletionResponse OpenAI ChatCompletion 响应结构体

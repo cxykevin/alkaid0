@@ -327,12 +327,16 @@ func TestConcurrentBroadcast(t *testing.T) {
 		unregisterConnCall(cid, sessionID)
 	}
 
-	// 验证每个连接都收到了所有更新
+	// 验证每个连接都收到了所有更新。
+	// 旧断言只 t.Logf 漏推的更新，广播回归（漏推/重复推）永远测不出来。
 	mu.Lock()
 	defer mu.Unlock()
-	for cid, count := range updateCounts {
-		if count != updateCount {
-			t.Logf("conn %d received %d updates, want %d", cid, count, updateCount)
+	if len(updateCounts) != numConn {
+		t.Errorf("收到更新的连接数 = %d, want %d（有连接完全没收到广播）", len(updateCounts), numConn)
+	}
+	for cid := uint64(1); cid <= uint64(numConn); cid++ {
+		if got := updateCounts[cid]; got != updateCount {
+			t.Errorf("conn %d 收到 %d 条更新, want %d", cid, got, updateCount)
 		}
 	}
 }

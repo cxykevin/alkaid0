@@ -74,6 +74,10 @@ func ConfigSet(req ConfigSetRequest, _ func(string, any, *string) error, _ uint6
 	// （如 Model.Models 是 map[int32]ModelConfig）遇到 patch 中出现的键会用全新
 	// 解码的值整体替换，丢失该键下未在 patch 中的字段——表现为"改一个模型字段，
 	// 该模型其余字段被清零/重置"。因此改为 applyPatch 做逐字段深度合并。
+	//
+	// previous 是提交前的已发布配置（写时复制：发布后不会再被修改），
+	// 用于落盘失败时回滚，保证 config/set"要么整体成功、要么整体回滚"。
+	previous := config.GlobalConfigSafe()
 	cfg, commit, discard := config.GlobalConfigForWrite()
 	var patch map[string]any
 	if err := json.Unmarshal(req.Config, &patch); err != nil {
@@ -99,6 +103,12 @@ func ConfigSet(req ConfigSetRequest, _ func(string, any, *string) error, _ uint6
 	// 保存到文件并触发重载钩子。落盘失败必须上报：否则内存里已经是新配置、
 	// 磁盘上还是旧的，重启后用户的修改凭空消失，而本次调用却报告成功。
 	if err := config.Save(); err != nil {
+		// 上报失败的同时必须回滚已发布的内存配置：否则本次调用报告失败，
+		// 但 config/get 已经能看到部分补丁生效，用户以为"什么都没改"。
+		// 仅当当前指针仍是本次提交的克隆时才回滚，绝不覆盖并发写入者的新配置。
+		if config.GlobalConfigSafe() == cfg && previous != nil {
+			config.GlobalConfigSwap(*previous)
+		}
 		return ConfigSetResponse{}, fmt.Errorf("failed to save config: %w", err)
 	}
 

@@ -340,24 +340,37 @@ func TestTraceSuccess(t *testing.T) {
 		t.Error("Expected pass to be false")
 	}
 
-	// 检查结果
-	if successPtr, ok := result["success"]; ok && successPtr != nil {
-		if success, ok := (*successPtr).(bool); ok && success {
-			// 成功的情况下验证TraceID和数据库
-			if session.TraceID == 1 {
-				// 验证数据库记录
-				var trace structs.Traces
-				fullPath := filepath.Join(tmpDir, "test.txt")
-				if err := db.Where("chat_id = ? AND path = ?", session.ID, fullPath).First(&trace).Error; err == nil {
-					// 找到了记录，测试通过
-					return
-				}
+	// 旧断言把所有检查包在 if success 里、失败只 t.Log，等于永远不失败。
+	// 这里改为硬断言：成功必须为 true、TraceID 递增、记录落库且内容正确。
+	successPtr, ok := result["success"]
+	if !ok || successPtr == nil {
+		t.Fatalf("Expected success in result, got %v", result)
+	}
+	success, ok := (*successPtr).(bool)
+	if !ok || !success {
+		errMsg := "<nil>"
+		if errPtr, ok := result["error"]; ok && errPtr != nil {
+			if s, ok := (*errPtr).(string); ok {
+				errMsg = s
 			}
 		}
+		t.Fatalf("Expected success to be true, error=%s", errMsg)
 	}
 
-	// 如果没有成功，也不算失败，因为可能有其他原因
-	t.Log("Trace may not have succeeded, but test continues")
+	if session.TraceID != 1 {
+		t.Errorf("TraceID = %d, want 1", session.TraceID)
+	}
+	var trace structs.Traces
+	if err := db.Where("chat_id = ? AND path = ? AND agent_id = ?", session.ID, "test.txt", session.NowAgent).
+		First(&trace).Error; err != nil {
+		t.Fatalf("trace record not persisted: %v", err)
+	}
+	if trace.LastContent != content {
+		t.Errorf("persisted content = %q, want %q", trace.LastContent, content)
+	}
+	if trace.TraceID != session.TraceID {
+		t.Errorf("persisted TraceID = %d, want %d", trace.TraceID, session.TraceID)
+	}
 }
 
 func TestTraceFileTooLarge(t *testing.T) {
@@ -410,11 +423,16 @@ func TestUnreadSuccess(t *testing.T) {
 
 	tmpDir := t.TempDir()
 	testFile := filepath.Join(tmpDir, "test.txt")
+	if err := os.WriteFile(testFile, []byte("line1\nline2"), 0644); err != nil {
+		t.Fatal(err)
+	}
 
-	// 先创建一个trace记录
+	// 先创建一个 trace 记录。注意 Traces.Path 存的是模型给出的相对路径
+	// （trace.go 落库时写的是 path，不是绝对路径），旧用例写绝对路径导致
+	// unread 永远匹配不到记录，于是测试只能"不强制断言"。
 	trace := structs.Traces{
 		ChatID:  1,
-		Path:    testFile,
+		Path:    "test.txt",
 		TraceID: 1,
 		AgentID: "test_agent",
 	}
@@ -447,18 +465,25 @@ func TestUnreadSuccess(t *testing.T) {
 		t.Error("Expected pass to be false")
 	}
 
-	// 检查结果 - unread 可能会失败如果记录不存在
-	if successPtr, ok := result["success"]; ok && successPtr != nil {
-		success, _ := (*successPtr).(bool)
-		// 只要有结果就可以，不强制要求成功
-		_ = success
+	// 旧断言显式不断言（_ = success / _ = count），协议违规也能通过。
+	successPtr, ok := result["success"]
+	if !ok || successPtr == nil {
+		t.Fatalf("Expected success in result, got %v", result)
+	}
+	success, ok := (*successPtr).(bool)
+	if !ok || !success {
+		t.Fatalf("Expected unread to succeed, result=%v", result)
 	}
 
-	// 验证数据库记录（可能已删除或未找到）
 	var count int64
-	db.Model(&structs.Traces{}).Where("chat_id = ? AND path = ? AND agent_id = ?", session.ID, testFile, session.NowAgent).Count(&count)
-	// 不强制要求为0，因为可能路径匹配问题
-	_ = count
+	if err := db.Model(&structs.Traces{}).
+		Where("chat_id = ? AND path = ? AND agent_id = ?", session.ID, "test.txt", session.NowAgent).
+		Count(&count).Error; err != nil {
+		t.Fatal(err)
+	}
+	if count != 0 {
+		t.Errorf("trace record should be deleted after unread, count=%d", count)
+	}
 }
 
 func TestUnreadNotFound(t *testing.T) {

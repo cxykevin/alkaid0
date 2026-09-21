@@ -28,10 +28,20 @@ type Parser struct {
 type parserState int
 
 const (
-	stateNormal parserState = iota // 普通文本模式
-	stateEscape                    // 已收到 ESC，等待命令
-	stateCSI                       // CSI 序列：ESC [ params... cmd
-	stateOSC                       // OSC 序列：ESC ] ... ST/BEL
+	stateNormal    parserState = iota // 普通文本模式
+	stateEscape                       // 已收到 ESC，等待命令
+	stateCSI                          // CSI 序列：ESC [ params... cmd
+	stateOSC                          // OSC 序列：ESC ] ... ST/BEL
+	stateOSCEscape                    // OSC 内收到 ESC，等待可能的 ST 终止符（ESC ）
+)
+
+// CSI 参数限制：畸形/恶意输出可用超长数字串（如 ESC [ 99999999999999999999 C）
+// 把参数累加成巨值甚至负数；随后光标坐标越界/为负，eraseLine、eraseDisplay 等
+// 会直接用 cells[负数] 索引 → panic。这里对参数值做饱和、对参数个数设上限。
+const (
+	maxCSIParam        = 1 << 16 // 单个参数上限，远大于任何真实终端尺寸
+	maxCSIParams       = 32      // 单个 CSI 序列的参数个数上限
+	maxCSIIntermediate = 16      // 单个 CSI 序列的中间字节个数上限
 )
 
 // NewParser 创建一个新的解析器
@@ -62,6 +72,8 @@ func (p *Parser) processByte(b byte) {
 		p.processCSI(b)
 	case stateOSC:
 		p.processOSC(b)
+	case stateOSCEscape:
+		p.processOSCEscape(b)
 	}
 }
 
@@ -142,13 +154,23 @@ func (p *Parser) processCSI(b byte) {
 			p.params = append(p.params, 0)
 		}
 		lastIdx := len(p.params) - 1
-		p.params[lastIdx] = p.params[lastIdx]*10 + int(b-'0')
+		// 饱和累加：达到上限后不再增长，避免 int 溢出成负数/巨值导致坐标越界
+		if p.params[lastIdx] < maxCSIParam {
+			p.params[lastIdx] = p.params[lastIdx]*10 + int(b-'0')
+			if p.params[lastIdx] > maxCSIParam {
+				p.params[lastIdx] = maxCSIParam
+			}
+		}
 	} else if b == ';' {
-		// 参数分隔符，新建一个参数槽（默认值 0）
-		p.params = append(p.params, 0)
+		// 参数分隔符，新建一个参数槽（默认值 0）；超出上限则忽略，避免参数洪水无限增长
+		if len(p.params) < maxCSIParams {
+			p.params = append(p.params, 0)
+		}
 	} else if b >= 0x20 && b < 0x40 {
 		// 中间字节，用于扩展命令（如 ESC [ ? 25 h 的 '?'）
-		p.intermediate = append(p.intermediate, b)
+		if len(p.intermediate) < maxCSIIntermediate {
+			p.intermediate = append(p.intermediate, b)
+		}
 	} else {
 		// 最终命令字节，执行对应的终端操作
 		p.executeCSI(b)
@@ -239,8 +261,26 @@ func (p *Parser) executeCSI(cmd byte) {
 // processOSC 处理OSC序列 (Operating System Command)
 func (p *Parser) processOSC(b byte) {
 	// 简单实现：忽略OSC序列直到遇到BEL或ST
-	if b == 0x07 || b == 0x9C {
+	switch {
+	case b == 0x07 || b == 0x9C: // BEL / 8 位 ST
 		p.state = stateNormal
+	case b == 0x1B: // ESC：可能是 ST（ESC + 反斜杠）的前半，转入 stateOSCEscape 等待
+		p.state = stateOSCEscape
+	}
+}
+
+// processOSCEscape 处理 OSC 内的 ESC：ESC + 反斜杠是 ST（字符串终止符），
+// 表示 OSC 结束；其它字节说明这不是终止符，继续按 OSC 内容忽略。
+//
+// 修复前只认 BEL/0x9C，ST 结束的 OSC 会让解析器永久停在 stateOSC，
+// 后续所有输出（含普通文本）都被吞掉。
+func (p *Parser) processOSCEscape(b byte) {
+	switch b {
+	case '\\', 0x07, 0x9C: // ST（ESC + 反斜杠）、BEL、8 位 ST
+		p.state = stateNormal
+	case 0x1B: // 连续 ESC，继续等待可能的 ST
+	default:
+		p.state = stateOSC
 	}
 }
 

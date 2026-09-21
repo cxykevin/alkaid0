@@ -3,6 +3,7 @@ package parser
 import (
 	"errors"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/cxykevin/alkaid0/log"
 	structs "github.com/cxykevin/alkaid0/storage/structs"
@@ -80,7 +81,9 @@ func (p *Parser) AddToken(token string, tokenThinking string) (string, string, *
 	var response strings.Builder
 	var responseThinking strings.Builder
 	responseThinking.WriteString(tokenThinking)
-	for _, char := range token {
+	for i := 0; i < len(token); {
+		char, size := utf8.DecodeRuneInString(token[i:])
+		i += size
 		solveThink := func(tokens string) {
 			if p.KeyMode == KeyModeThink {
 				responseThinking.WriteString(tokens)
@@ -121,6 +124,18 @@ func (p *Parser) AddToken(token string, tokenThinking string) (string, string, *
 				p.TokenCache = ""
 				p.Mode = ModeOutside
 				p.atLineStart = false
+				continue
+			}
+			if char == '<' || char == '\n' {
+				// 标签名不可能包含 '<' 或换行：说明这里的 '<' 不是有效标签起始。
+				// 先原样回吐已缓存的候选文本，再把当前字符按“标签外文本”重新处理；
+				// 否则换行/后续真正的行首标签会被吞进候选并当成普通文本输出，
+				// 行首状态停在 false，导致 '\n<think>' 这类标签再也不被识别。
+				response.WriteString("<" + p.TokenCache)
+				p.TokenCache = ""
+				p.Mode = ModeOutside
+				p.atLineStart = false
+				i -= size
 				continue
 			}
 			p.TokenCache += string(char)

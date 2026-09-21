@@ -60,9 +60,15 @@ func registerTestSession(t *testing.T, cwd string, id uint32) string {
 // fatal("concurrent map read and map write")，终止整个进程且无法 recover。
 
 func TestSessionRegistryReadsAreLocked(t *testing.T) {
+	sessLock.Lock()
 	prev := sessions
 	sessions = map[string]*sessionObj{}
-	t.Cleanup(func() { sessions = prev })
+	sessLock.Unlock()
+	t.Cleanup(func() {
+		sessLock.Lock()
+		sessions = prev
+		sessLock.Unlock()
+	})
 
 	const sid = "sess_1:/tmp/alkaid0-session-registry-race"
 	obj := &sessionObj{cwd: "/tmp/alkaid0-session-registry-race", id: 1, ctx: context.Background()}
@@ -874,13 +880,17 @@ func TestParseSessionID(t *testing.T) {
 // session/load 应能从磁盘数据库恢复已存在的会话；不存在的会话应报错且不注册。
 func TestSessionLoadColdRestore(t *testing.T) {
 	// 备份并清空全局注册表，模拟服务器冷启动
+	sessLock.Lock()
 	oldSessions := sessions
+	sessions = map[string]*sessionObj{}
+	sessLock.Unlock()
+	dbLock.Lock()
 	oldDbs := dbs
+	dbs = map[string]*dbObj{}
+	dbLock.Unlock()
 	oldBinded := bindedSessionOnConn
 	oldConnCall := connCallMap
 	oldSessionConn := sessionConnMap
-	sessions = map[string]*sessionObj{}
-	dbs = map[string]*dbObj{}
 	bindedSessionOnConn = map[uint64][]string{}
 	connCallMap = map[uint64]func(string, any, *string) error{}
 	sessionConnMap = map[string][]uint64{}
@@ -1043,12 +1053,44 @@ func TestScheduleSessionReleaseNonExistent(t *testing.T) {
 	scheduleSessionRelease("nonexistent_session_id_12345")
 }
 
+// setSessionTimeoutForTest 用写时复制接口临时把会话超时改成 seconds 秒。
+// 直接赋值 config.GlobalConfig.Server.SessionTimeout 会就地改写已发布对象，
+// 违反配置的写时复制不变量（与任何无锁读者并发时可能触发 fatal）。
+func setSessionTimeoutForTest(t *testing.T, seconds int) {
+	t.Helper()
+	old := config.GlobalConfigSafe()
+	cfg, commit, _ := config.GlobalConfigForWrite()
+	cfg.Server.SessionTimeout = seconds
+	commit()
+	t.Cleanup(func() { config.GlobalConfigSwap(*old)() })
+}
+
+// waitForSessionReleased 轮询等待会话从注册表消失，最长 timeout。
+// 替代"睡固定 1500ms 等 1s 定时器"：固定等待在慢机器上会假失败、在快机器上白等。
+func waitForSessionReleased(sessionID string, timeout time.Duration) bool {
+	deadline := time.Now().Add(timeout)
+	for {
+		sessLock.Lock()
+		_, ok := sessions[sessionID]
+		sessLock.Unlock()
+		if !ok {
+			return true
+		}
+		if time.Now().After(deadline) {
+			return false
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
 // TestSessionReleaseTimerCancel 调度释放后取消，会话应保留
 func TestSessionReleaseTimerCancel(t *testing.T) {
 	// 保存并清理全局状态
+	sessLock.Lock()
 	oldSessions := sessions
-	oldAgentCallList := agentCallList
 	sessions = map[string]*sessionObj{}
+	sessLock.Unlock()
+	oldAgentCallList := agentCallList
 	agentCallList = map[string]map[string]func(){}
 	defer func() {
 		sessLock.Lock()
@@ -1089,18 +1131,18 @@ func TestSessionReleaseTimerCancel(t *testing.T) {
 // TestSessionReleaseTimerFires 调度释放后超时，会话应被清理
 func TestSessionReleaseTimerFires(t *testing.T) {
 	// 保存并清理全局状态
+	sessLock.Lock()
 	oldSessions := sessions
-	oldAgentCallList := agentCallList
-	oldSessionTimeout := config.GlobalConfig.Server.SessionTimeout
 	sessions = map[string]*sessionObj{}
+	sessLock.Unlock()
+	oldAgentCallList := agentCallList
 	agentCallList = map[string]map[string]func(){}
-	config.GlobalConfig.Server.SessionTimeout = 1 // 1 秒超时
+	setSessionTimeoutForTest(t, 1)
 	defer func() {
 		sessLock.Lock()
 		sessions = oldSessions
 		sessLock.Unlock()
 		agentCallList = oldAgentCallList
-		config.GlobalConfig.Server.SessionTimeout = oldSessionTimeout
 	}()
 
 	obj := &sessionObj{
@@ -1115,23 +1157,19 @@ func TestSessionReleaseTimerFires(t *testing.T) {
 	// 调度释放（1 秒后触发）
 	scheduleSessionRelease(sessionID)
 
-	// 等待超时
-	time.Sleep(1500 * time.Millisecond)
-
-	// 确认会话已被清理
-	sessLock.Lock()
-	_, ok := sessions[sessionID]
-	sessLock.Unlock()
-	if ok {
+	// 等待释放：轮询而不是固定 sleep
+	if !waitForSessionReleased(sessionID, 5*time.Second) {
 		t.Error("session should have been released after timeout")
 	}
 }
 
 // TestSessionReleaseTimerMultiSession 多个会话独立释放
 func TestSessionReleaseTimerMultiSession(t *testing.T) {
+	sessLock.Lock()
 	oldSessions := sessions
-	oldAgentCallList := agentCallList
 	sessions = map[string]*sessionObj{}
+	sessLock.Unlock()
+	oldAgentCallList := agentCallList
 	agentCallList = map[string]map[string]func(){}
 	defer func() {
 		sessLock.Lock()
@@ -1175,16 +1213,17 @@ func TestSessionReleaseTimerMultiSession(t *testing.T) {
 
 // TestRegisterConnCallCancelsReleaseTimer registerConnCall 应取消待处理的定时器
 func TestRegisterConnCallCancelsReleaseTimer(t *testing.T) {
+	sessLock.Lock()
 	oldSessions := sessions
+	sessions = map[string]*sessionObj{}
+	sessLock.Unlock()
 	oldAgentCallList := agentCallList
-	oldSessionTimeout := config.GlobalConfig.Server.SessionTimeout
 	oldSessionConnMap := sessionConnMap
 	oldConnCallMap := connCallMap
-	sessions = map[string]*sessionObj{}
 	agentCallList = map[string]map[string]func(){}
 	sessionConnMap = map[string][]uint64{}
 	connCallMap = map[uint64]func(string, any, *string) error{}
-	config.GlobalConfig.Server.SessionTimeout = 3 // 3 秒超时，给足够时间让 register 取消
+	setSessionTimeoutForTest(t, 3) // 3 秒超时，给足够时间让 register 取消
 	defer func() {
 		sessLock.Lock()
 		sessions = oldSessions
@@ -1192,7 +1231,6 @@ func TestRegisterConnCallCancelsReleaseTimer(t *testing.T) {
 		agentCallList = oldAgentCallList
 		sessionConnMap = oldSessionConnMap
 		connCallMap = oldConnCallMap
-		config.GlobalConfig.Server.SessionTimeout = oldSessionTimeout
 	}()
 
 	obj := &sessionObj{
@@ -1283,9 +1321,11 @@ func TestSessionDelete_InvalidID(t *testing.T) {
 
 // TestSessionDelete_LoadedSession 已加载会话删除：内存注册表移除 + DB 记录删除
 func TestSessionDelete_LoadedSession(t *testing.T) {
+	sessLock.Lock()
 	oldSessions := sessions
-	oldAgentCallList := agentCallList
 	sessions = map[string]*sessionObj{}
+	sessLock.Unlock()
+	oldAgentCallList := agentCallList
 	agentCallList = map[string]map[string]func(){}
 	defer func() {
 		sessLock.Lock()
@@ -1330,9 +1370,11 @@ func TestSessionDelete_LoadedSession(t *testing.T) {
 // SessionDelete 测试时需要真实 db path
 // TestSessionDeleteCancelsTimer SessionDelete 应取消定时器
 func TestSessionDeleteCancelsTimer(t *testing.T) {
+	sessLock.Lock()
 	oldSessions := sessions
-	oldAgentCallList := agentCallList
 	sessions = map[string]*sessionObj{}
+	sessLock.Unlock()
+	oldAgentCallList := agentCallList
 	agentCallList = map[string]map[string]func(){}
 	defer func() {
 		sessLock.Lock()
@@ -1379,8 +1421,10 @@ func TestBackgroundDefaultFalse(t *testing.T) {
 
 // TestGetBackgroundSessionNotFound 无效 sessionID 应返回错误
 func TestGetBackgroundSessionNotFound(t *testing.T) {
+	sessLock.Lock()
 	oldSessions := sessions
 	sessions = map[string]*sessionObj{}
+	sessLock.Unlock()
 	defer func() { sessLock.Lock(); sessions = oldSessions; sessLock.Unlock() }()
 
 	_, err := SessionGetBackground(SessionGetBackgroundRequest{
@@ -1393,9 +1437,11 @@ func TestGetBackgroundSessionNotFound(t *testing.T) {
 
 // TestGetBackgroundSession 创建 session 后查询 background 状态
 func TestGetBackgroundSession(t *testing.T) {
+	sessLock.Lock()
 	oldSessions := sessions
-	oldAgentCallList := agentCallList
 	sessions = map[string]*sessionObj{}
+	sessLock.Unlock()
+	oldAgentCallList := agentCallList
 	agentCallList = map[string]map[string]func(){}
 	defer func() {
 		sessLock.Lock()
@@ -1439,18 +1485,18 @@ func TestGetBackgroundSession(t *testing.T) {
 
 // TestScheduleReleaseBackgroundActive background=true + 活跃状态 → 不释放，重新调度
 func TestScheduleReleaseBackgroundActive(t *testing.T) {
+	sessLock.Lock()
 	oldSessions := sessions
-	oldAgentCallList := agentCallList
-	oldSessionTimeout := config.GlobalConfig.Server.SessionTimeout
 	sessions = map[string]*sessionObj{}
+	sessLock.Unlock()
+	oldAgentCallList := agentCallList
 	agentCallList = map[string]map[string]func(){}
-	config.GlobalConfig.Server.SessionTimeout = 1 // 1 秒超时
+	setSessionTimeoutForTest(t, 1)
 	defer func() {
 		sessLock.Lock()
 		sessions = oldSessions
 		sessLock.Unlock()
 		agentCallList = oldAgentCallList
-		config.GlobalConfig.Server.SessionTimeout = oldSessionTimeout
 	}()
 
 	obj := &sessionObj{
@@ -1487,18 +1533,18 @@ func TestScheduleReleaseBackgroundActive(t *testing.T) {
 
 // TestScheduleReleaseBackgroundIdle background=true + StateIdle → 释放
 func TestScheduleReleaseBackgroundIdle(t *testing.T) {
+	sessLock.Lock()
 	oldSessions := sessions
-	oldAgentCallList := agentCallList
-	oldSessionTimeout := config.GlobalConfig.Server.SessionTimeout
 	sessions = map[string]*sessionObj{}
+	sessLock.Unlock()
+	oldAgentCallList := agentCallList
 	agentCallList = map[string]map[string]func(){}
-	config.GlobalConfig.Server.SessionTimeout = 1 // 1 秒超时
+	setSessionTimeoutForTest(t, 1)
 	defer func() {
 		sessLock.Lock()
 		sessions = oldSessions
 		sessLock.Unlock()
 		agentCallList = oldAgentCallList
-		config.GlobalConfig.Server.SessionTimeout = oldSessionTimeout
 	}()
 
 	obj := &sessionObj{
@@ -1517,32 +1563,26 @@ func TestScheduleReleaseBackgroundIdle(t *testing.T) {
 	// 调度释放
 	scheduleSessionRelease(sessionID)
 
-	// 等待超时
-	time.Sleep(1500 * time.Millisecond)
-
-	// session 应被释放（Idle 状态下即使 background=true 也应释放）
-	sessLock.Lock()
-	_, ok := sessions[sessionID]
-	sessLock.Unlock()
-	if ok {
+	// 等待释放：轮询而不是固定 sleep
+	if !waitForSessionReleased(sessionID, 5*time.Second) {
 		t.Error("session should be released when background mode is on but state is idle")
 	}
 }
 
 // TestScheduleReleaseBackgroundWaitApprove background=true + StateWaitApprove → 释放
 func TestScheduleReleaseBackgroundWaitApprove(t *testing.T) {
+	sessLock.Lock()
 	oldSessions := sessions
-	oldAgentCallList := agentCallList
-	oldSessionTimeout := config.GlobalConfig.Server.SessionTimeout
 	sessions = map[string]*sessionObj{}
+	sessLock.Unlock()
+	oldAgentCallList := agentCallList
 	agentCallList = map[string]map[string]func(){}
-	config.GlobalConfig.Server.SessionTimeout = 1 // 1 秒超时
+	setSessionTimeoutForTest(t, 1)
 	defer func() {
 		sessLock.Lock()
 		sessions = oldSessions
 		sessLock.Unlock()
 		agentCallList = oldAgentCallList
-		config.GlobalConfig.Server.SessionTimeout = oldSessionTimeout
 	}()
 
 	obj := &sessionObj{
@@ -1561,32 +1601,26 @@ func TestScheduleReleaseBackgroundWaitApprove(t *testing.T) {
 	// 调度释放
 	scheduleSessionRelease(sessionID)
 
-	// 等待超时
-	time.Sleep(1500 * time.Millisecond)
-
-	// session 应被释放（WaitApprove 状态下即使 background=true 也应释放）
-	sessLock.Lock()
-	_, ok := sessions[sessionID]
-	sessLock.Unlock()
-	if ok {
+	// 等待释放：轮询而不是固定 sleep
+	if !waitForSessionReleased(sessionID, 5*time.Second) {
 		t.Error("session should be released when background mode is on but state is WaitApprove")
 	}
 }
 
 // TestScheduleReleaseBackgroundOff background=false → 始终释放（回归测试）
 func TestScheduleReleaseBackgroundOff(t *testing.T) {
+	sessLock.Lock()
 	oldSessions := sessions
-	oldAgentCallList := agentCallList
-	oldSessionTimeout := config.GlobalConfig.Server.SessionTimeout
 	sessions = map[string]*sessionObj{}
+	sessLock.Unlock()
+	oldAgentCallList := agentCallList
 	agentCallList = map[string]map[string]func(){}
-	config.GlobalConfig.Server.SessionTimeout = 1 // 1 秒超时
+	setSessionTimeoutForTest(t, 1)
 	defer func() {
 		sessLock.Lock()
 		sessions = oldSessions
 		sessLock.Unlock()
 		agentCallList = oldAgentCallList
-		config.GlobalConfig.Server.SessionTimeout = oldSessionTimeout
 	}()
 
 	obj := &sessionObj{
@@ -1605,14 +1639,8 @@ func TestScheduleReleaseBackgroundOff(t *testing.T) {
 	// 调度释放
 	scheduleSessionRelease(sessionID)
 
-	// 等待超时
-	time.Sleep(1500 * time.Millisecond)
-
-	// session 应被释放（background=false 时即使活跃也应释放）
-	sessLock.Lock()
-	_, ok := sessions[sessionID]
-	sessLock.Unlock()
-	if ok {
+	// 等待释放：轮询而不是固定 sleep
+	if !waitForSessionReleased(sessionID, 5*time.Second) {
 		t.Error("session should be released when background mode is off, even if state is active")
 	}
 }
@@ -1688,10 +1716,14 @@ func TestReplayRunTerminalIDs(t *testing.T) {
 // TestSessionResumeReplayTerminalID 验证历史回放的 run 工具调用同样携带 terminal id：
 // 服务端重启后客户端凭回放的工具调用即可查询终端内容。
 func TestSessionResumeReplayTerminalID(t *testing.T) {
+	sessLock.Lock()
 	oldSessions := sessions
-	oldDbs := dbs
 	sessions = map[string]*sessionObj{}
+	sessLock.Unlock()
+	dbLock.Lock()
+	oldDbs := dbs
 	dbs = map[string]*dbObj{}
+	dbLock.Unlock()
 	defer func() {
 		sessLock.Lock()
 		sessions = oldSessions

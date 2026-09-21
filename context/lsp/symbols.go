@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -370,19 +371,108 @@ func extractFullCode(content string, rng Range) string {
 // URI 处理
 // ---------------------------------------------------------------------------
 
-// pathToURI 将文件路径转为 file:// URI
+// pathToURI 将文件路径转为符合 RFC 3986/8089 的 file URI
+// 空格、中文等字符按 UTF-8 做百分号转义；Windows 盘符路径转为 file:///C:/... 形式
 func pathToURI(absPath string) string {
-	// Linux: file:///path/to/file
-	return "file://" + absPath
+	p := filepath.ToSlash(absPath)
+	// 非 Windows 平台收到 Windows 风格路径时同样兼容（如跨平台调用/测试）
+	p = strings.ReplaceAll(p, "\\", "/")
+
+	switch {
+	case strings.HasPrefix(p, "//"):
+		// UNC: \\server\share -> file://server/share
+		return "file:" + uriPathEscape(p)
+	case !strings.HasPrefix(p, "/"):
+		// Windows 盘符路径 C:/dir/file -> /C:/dir/file；相对路径补前导 /
+		p = "/" + p
+	}
+	return "file://" + uriPathEscape(p)
+}
+
+// uriToPath 将 file URI 还原为本地文件路径（pathToURI 的逆操作）
+// 第二个返回值表示是否是可识别的 file URI
+func uriToPath(uri string) (string, bool) {
+	rest, ok := strings.CutPrefix(uri, "file://")
+	if !ok {
+		return "", false
+	}
+
+	// URI 中可能出现百分号转义（空格、中文等），先解码
+	decoded, err := url.PathUnescape(rest)
+	if err != nil {
+		decoded = rest // 非法转义按原样处理，保持可用
+	}
+
+	if strings.HasPrefix(decoded, "//") {
+		// UNC: file://server/share -> \\server\share
+		return strings.ReplaceAll(decoded, "/", "\\"), true
+	}
+	// Windows 盘符: file:///C:/dir -> C:\dir
+	if strings.HasPrefix(decoded, "/") && isWindowsDrivePath(decoded[1:]) {
+		decoded = decoded[1:]
+	}
+	return filepath.FromSlash(decoded), true
+}
+
+// sameFileURI 判断两个 file URI 是否指向同一路径
+// 部分语言服务器的 publishDiagnostics 会回传百分号解码后的 URI
+func sameFileURI(a, b string) bool {
+	if a == b {
+		return true
+	}
+	pa, oka := uriToPath(a)
+	pb, okb := uriToPath(b)
+	return oka && okb && pa == pb
+}
+
+// uriPathEscape 对 URI 路径做百分号转义，保留 '/' 分隔符与 RFC 3986 pchar 允许的字符
+func uriPathEscape(p string) string {
+	const hex = "0123456789ABCDEF"
+	var sb strings.Builder
+	sb.Grow(len(p))
+	for i := 0; i < len(p); i++ {
+		c := p[i]
+		if isURIPathByte(c) {
+			sb.WriteByte(c)
+			continue
+		}
+		sb.WriteByte('%')
+		sb.WriteByte(hex[c>>4])
+		sb.WriteByte(hex[c&0x0f])
+	}
+	return sb.String()
+}
+
+// isURIPathByte 判断字节是否可以不经转义直接出现在 URI 路径中
+func isURIPathByte(c byte) bool {
+	switch {
+	case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z', c >= '0' && c <= '9':
+		return true
+	}
+	switch c {
+	case '-', '_', '.', '~', // unreserved
+		'!', '$', '&', '\'', '(', ')', '*', '+', ',', ';', '=', // sub-delims
+		':', '@', '/': // pchar 其余部分与路径分隔符
+		return true
+	}
+	return false
+}
+
+// isWindowsDrivePath 判断是否为 Windows 盘符路径（如 C:/dir）
+func isWindowsDrivePath(p string) bool {
+	if len(p) < 2 || p[1] != ':' {
+		return false
+	}
+	c := p[0]
+	return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
 }
 
 // languageFromURI 从 URI 推断语言
 // 实际上从 extFromPath 获取更可靠，这里作为备选
 func languageFromURI(uri string) string {
-	if after, ok := strings.CutPrefix(uri, "file://"); ok {
-		path := after
-		ext := extFromPath(path)
-		return languageIDFromExt(ext)
+	path, ok := uriToPath(uri)
+	if !ok {
+		return ""
 	}
-	return ""
+	return languageIDFromExt(extFromPath(path))
 }

@@ -94,10 +94,11 @@ func (p *Solver) AddNativeToolCallDelta(deltas []structs.StreamToolCall) error {
 // 如果解析过程中有工具响应（toolResponses），序列化后以 MessageRoleTool 类型存入数据库。
 // 返回的 bool 值表示是否还有更多工具调用待处理（CalledTools=false 表示解析结束）。
 func (p *Solver) DoneToken() (bool, string, string, error) {
+	// 原生工具收尾的错误先暂存：无论它是否失败都必须继续文本解析器收尾，
+	// 否则文本解析器尚未回吐的尾部（如未闭合的标签候选文本）会随错误一起被丢弃。
+	var nativeErr error
 	if p.nativeAcc != nil {
-		if err := p.nativeAcc.DoneToken(); err != nil {
-			return true, "", "", err
-		}
+		nativeErr = p.nativeAcc.DoneToken()
 	}
 	delta, reasoningDelta, _, err := p.parser.DoneToken()
 	if err != nil {
@@ -120,6 +121,9 @@ func (p *Solver) DoneToken() (bool, string, string, error) {
 			return true, delta, reasoningDelta, err
 		}
 		p.responsesSaved = true
+	}
+	if nativeErr != nil {
+		return true, delta, reasoningDelta, nativeErr
 	}
 	if p.nativeAcc == nil {
 		return true, delta, reasoningDelta, nil
@@ -154,7 +158,11 @@ func NewSolver(db *gorm.DB, session *storageStructs.Chats) *Solver {
 // NewNativeSolver 创建原生 tool_calls 模式的 Solver。
 // parser 仅处理普通文本与 <think>，tool_calls 由 nativeAcc 累积。
 func NewNativeSolver(db *gorm.DB, session *storageStructs.Chats) *Solver {
-	obj := NewSolver(db, session)
+	obj := &Solver{chatID: session.ID, db: db, session: session}
+	// 文本解析器不解析工具（原生模式由 nativeAcc 负责），无需构建工具求解器。
+	// 此前先经 NewSolver 构建一次、再为 nativeAcc 构建一次，同一轮重复执行了
+	// ToolsSolver（含每个工具的 Enable 判定与 PreHook），第二次的结果被直接丢弃。
+	obj.parser = parser.NewParser(session, nil)
 	obj.nativeAcc = parser.NewNativeToolCallAccumulator(session, *build.ToolsSolver(session, obj.saveToolResponse))
 	return obj
 }

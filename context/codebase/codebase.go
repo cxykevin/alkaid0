@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -26,12 +27,21 @@ type DB struct {
 	dimension   int
 	providerURL string
 	providerKey string
+	// vecDim codebase_vec 虚拟表实际声明的向量维度（ensureSchema 后读取），
+	// 维度校验以物理表为准，避免配置/meta 与实际建表结果不一致时写入错误维度。
+	vecDim int
 
 	queue *QueueManager
 
+	// workerOpMu 串行化 worker 的启动/停止（AddToQueue 与 StopDirectory），
+	// 防止"停止并清空"与"确保 worker + 入队"交错后留下无人消费的任务。
+	workerOpMu sync.Mutex
+
 	workerCtx    context.Context
 	workerCancel context.CancelFunc
-	workerWG     sync.WaitGroup
+	// workerDone 在 worker goroutine 退出时关闭，用于 stopWorker 等待其退出
+	// （替代 WaitGroup：worker 可能在 Wait 期间被重启，复用 WaitGroup 会误 panic）。
+	workerDone chan struct{}
 
 	mu sync.RWMutex
 
@@ -43,6 +53,8 @@ type DirStatus struct {
 	Directory    string `json:"directory"`
 	QueueLen     int    `json:"queue_len"`
 	TotalPushed  int    `json:"total_pushed"` // 累计入队任务数（用于进度计算）
+	Processing   int    `json:"processing"`   // 已取走、尚未处理完成的任务数
+	Failed       int    `json:"failed"`       // 嵌入失败的任务数
 	WorkerActive bool   `json:"worker_active"`
 	Paused       bool   `json:"paused"`
 }
@@ -91,10 +103,6 @@ func AddToQueue(directory string, task EmbedTask) error {
 		return err
 	}
 
-	// 确保 worker 在运行：/index cancel 或 StopDirectory 会停止 worker，
-	// 重新入队前需重启，否则任务无人消费、索引卡住（getOrCreateDB 只在创建时启动 worker）。
-	cdb.startWorker()
-
 	cdb.mu.RLock()
 	q := cdb.queue
 	cdb.mu.RUnlock()
@@ -102,6 +110,16 @@ func AddToQueue(directory string, task EmbedTask) error {
 	if q == nil {
 		return fmt.Errorf("queue not ready for directory %s", directory)
 	}
+
+	// 与 StopDirectory 串行：保证"确保 worker 存活 + 入队"是原子的。
+	// 否则 stopWorker 可能恰好在本函数判断 worker 之后、Push 之前完成停止与
+	// 清空，任务留在队列里却没有任何消费者，队列永久卡住（丢唤醒）。
+	cdb.workerOpMu.Lock()
+	defer cdb.workerOpMu.Unlock()
+
+	// 确保 worker 在运行：/index cancel 或 StopDirectory 会停止 worker，
+	// 重新入队前需重启，否则任务无人消费、索引卡住（getOrCreateDB 只在创建时启动 worker）。
+	cdb.startWorker()
 
 	q.Push(&task)
 	return nil
@@ -132,6 +150,12 @@ func StopDirectory(directory string) error {
 	if err != nil {
 		return err
 	}
+
+	// 与 AddToQueue 串行，避免"停止并清空"与"确保 worker + 入队"交错后
+	// 留下无人消费的任务（见 AddToQueue 注释）。
+	cdb.workerOpMu.Lock()
+	defer cdb.workerOpMu.Unlock()
+
 	cdb.stopWorker()
 
 	cdb.mu.Lock()
@@ -167,14 +191,15 @@ func DirectoryStatus(directory string) *DirStatus {
 	cdb.mu.RLock()
 	defer cdb.mu.RUnlock()
 
+	// workerCtx 已取消（stopWorker 正在停止、状态尚未清理）不算活跃
+	workerActive := cdb.workerCancel != nil && cdb.workerCtx != nil && cdb.workerCtx.Err() == nil
 	status := &DirStatus{
 		Directory:    directory,
-		WorkerActive: cdb.workerCancel != nil,
-		Paused:       cdb.workerCancel == nil,
+		WorkerActive: workerActive,
+		Paused:       !workerActive,
 	}
 	if cdb.queue != nil {
-		status.QueueLen = cdb.queue.Len()
-		status.TotalPushed = cdb.queue.totalPushed
+		status.QueueLen, status.TotalPushed, status.Processing, status.Failed = cdb.queue.Stats()
 	}
 	return status
 }
@@ -464,6 +489,9 @@ func getOrCreateDB(directory string) (*DB, error) {
 		cdb.db.Close()
 		return nil, fmt.Errorf("schema for %s: %w", directory, err)
 	}
+	// 缓存 codebase_vec 实际建表维度：配置/meta 与物理表不一致时，
+	// 向量维度校验以物理表为准（见 expectedDim）。
+	cdb.syncVecDimension()
 	cdb.startWorker()
 
 	VecDBsLock.Lock()
@@ -603,6 +631,32 @@ func (cdb *DB) ensureSchema() error {
 
 	// 检查并迁移 FTS5 表（兼容已有数据库文件）
 	return cdb.ensureFTSSchema()
+}
+
+// vecDimRe 匹配 vec0 建表语句中的 float[N] 维度声明
+var vecDimRe = regexp.MustCompile(`float\s*\[\s*(\d+)\s*\]`)
+
+// syncVecDimension 读取 codebase_vec 虚拟表实际声明的维度并缓存到 cdb.vecDim。
+// 维度校验以物理表为准，避免配置/meta 与实际建表结果不一致时把错误维度的向量写进 vec0。
+func (cdb *DB) syncVecDimension() {
+	var ddl string
+	if err := cdb.db.QueryRow(
+		"SELECT sql FROM sqlite_master WHERE type='table' AND name='codebase_vec'",
+	).Scan(&ddl); err != nil {
+		return
+	}
+	m := vecDimRe.FindStringSubmatch(ddl)
+	if len(m) < 2 {
+		return
+	}
+	dim, err := strconv.Atoi(m[1])
+	if err != nil || dim <= 0 {
+		return
+	}
+	cdb.vecDim = dim
+	if dim != cdb.dimension {
+		cdb.logger.Warn("vec table dimension=%d != configured dimension=%d; 以实际表维度为准", dim, cdb.dimension)
+	}
 }
 
 // createTables 创建所有表和 FTS 触发器

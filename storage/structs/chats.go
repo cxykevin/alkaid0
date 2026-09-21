@@ -6,7 +6,9 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
+	"unsafe"
 
 	"github.com/cxykevin/alkaid0/config/structs"
 	"github.com/cxykevin/alkaid0/log"
@@ -88,6 +90,10 @@ type Chats struct {
 	// 流式解析阶段 OnHook（loop 主 goroutine 的 solveFunc）写、SetCallback goroutine 读，
 	// 无锁会触发 Go runtime 的 concurrent map read and map write panic。
 	toolCtxMu sync.RWMutex `gorm:"-" json:"-"`
+	// runtimeStateMu 保护 ToolState / CurrentMessageID 的并发访问。
+	// 两者是 uint64：32 位平台上结构体字段不保证 8 字节对齐，无法安全地就地做原子
+	// 64 位操作，故用 RWMutex；State 是 int32，访问器直接对原字段做原子 32 位读写。
+	runtimeStateMu sync.RWMutex `gorm:"-" json:"-"`
 	// toolKillMu 保护 ToolKillFn 的并发访问
 	toolKillMu sync.Mutex `gorm:"-" json:"-"`
 	// ToolKillFn 由当前正在执行的工具注册，loop.Stop() 调用它来中断工具
@@ -144,6 +150,97 @@ func (c *Chats) AgentLifecycleUnlock() {
 		return
 	}
 	c.agentLifecycleMu.Unlock()
+}
+
+// === 会话状态访问器（P1-18 / F4） ===
+//
+// State 是持久化列（chats.state，SendRequest/ExecuteToolCalls 依赖它做断点恢复与
+// 客户端状态机同步），不能改成 atomic 类型字段——server/actions 等处大量
+// `sess.State == state.StateIdle` 的直接比较会编译失败，GORM 也需要它是普通字段。
+// 因此这里保持字段本身不变，只把读写改为对同一块内存的原子操作：
+//   - State 底层是 int32，在 Go 支持的所有平台上都满足原子对齐要求；
+//   - ToolState / CurrentMessageID 是 uint64，32 位平台上字段可能只有 4 字节对齐
+//     （对非对齐地址做 64 位原子操作会 panic），故用 runtimeStateMu 保护。
+//
+// 为什么必须全部读点一起改：Go race detector 把「原子写 + 普通读」同样判定为
+// data race（实测 atomic.StoreInt32 与普通读并发会报 WARNING: DATA RACE），
+// 所以只要还有一个裸读，-race 就仍会失败。ui/loop 与 provider/request 已全部改走
+// 访问器；server/actions、ui/funcs 等目录的读点见 P1-18 报告清单。
+
+// atomicStatePtr 返回 State 字段的 int32 原子视图。
+// 与标准库 sync/atomic.Int32 的实现同理（对字段地址做 32 位原子指令），
+// 保证不影响 GORM 持久化与既有直接比较的调用点。
+func (c *Chats) atomicStatePtr() *int32 {
+	return (*int32)(unsafe.Pointer(&c.State))
+}
+
+// GetState 原子读取会话状态。
+func (c *Chats) GetState() state.State {
+	if c == nil {
+		return state.StateIdle
+	}
+	return state.State(atomic.LoadInt32(c.atomicStatePtr()))
+}
+
+// SetState 原子写入会话状态（不落库；需要持久化时用 SaveState）。
+func (c *Chats) SetState(s state.State) {
+	if c == nil {
+		return
+	}
+	atomic.StoreInt32(c.atomicStatePtr(), int32(s))
+}
+
+// SaveState 原子写入会话状态并以单列 UPDATE 落库。
+// 只更新 state 列，避免整行 Save 覆盖其他 goroutine 并发写入的列（如 ai_title）。
+func (c *Chats) SaveState(s state.State) error {
+	if c == nil {
+		return gorm.ErrInvalidDB
+	}
+	c.SetState(s)
+	if c.DB == nil {
+		return gorm.ErrInvalidDB
+	}
+	return c.DB.Model(&Chats{}).Where("id = ?", c.ID).Update("state", s).Error
+}
+
+// GetToolState 读取工具执行状态（0 无 / 1 执行中 / 2 已取消）。
+func (c *Chats) GetToolState() uint64 {
+	if c == nil {
+		return 0
+	}
+	c.runtimeStateMu.RLock()
+	defer c.runtimeStateMu.RUnlock()
+	return c.ToolState
+}
+
+// SetToolState 写入工具执行状态。
+func (c *Chats) SetToolState(v uint64) {
+	if c == nil {
+		return
+	}
+	c.runtimeStateMu.Lock()
+	c.ToolState = v
+	c.runtimeStateMu.Unlock()
+}
+
+// GetCurrentMessageID 读取当前请求关联的 assistant 消息 DB ID。
+func (c *Chats) GetCurrentMessageID() uint64 {
+	if c == nil {
+		return 0
+	}
+	c.runtimeStateMu.RLock()
+	defer c.runtimeStateMu.RUnlock()
+	return c.CurrentMessageID
+}
+
+// SetCurrentMessageID 写入当前请求关联的 assistant 消息 DB ID。
+func (c *Chats) SetCurrentMessageID(id uint64) {
+	if c == nil {
+		return
+	}
+	c.runtimeStateMu.Lock()
+	c.CurrentMessageID = id
+	c.runtimeStateMu.Unlock()
 }
 
 // SetContext 线程安全地设置会话上下文
@@ -308,7 +405,7 @@ func (c *Chats) SetToolCalling(id string, resp any, typ string) {
 	if c.ToolCallingRunID == nil {
 		c.ToolCallingRunID = make(map[string]string)
 	}
-	streaming := c.State == state.StateReciving || c.State == state.StateRequesting
+	streaming := c.GetState() == state.StateReciving || c.GetState() == state.StateRequesting
 	if !streaming {
 		// 最终状态（审批后执行 / 工具 PostHook）：用完整原始参数规范化展示内容——
 		// 文本块与 calling_info.args 都改成"参数不省略"的渲染；归一化后的参数回写，
@@ -342,7 +439,7 @@ func (c *Chats) persistToolCallingContent(id string, content any) {
 	}
 	msgID, toolID := splitToolCallingID(id)
 	if msgID == 0 {
-		msgID = c.CurrentMessageID
+		msgID = c.GetCurrentMessageID()
 	}
 	if toolID == "" {
 		toolID = id

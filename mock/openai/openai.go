@@ -599,9 +599,19 @@ func acquireServer() {
 	for range 150 { // 最多重试 30s（150 × 200ms）
 		listener, err := net.Listen("tcp", Addr)
 		if err == nil {
-			// 提取实际端口（Addr 为 ":0" 时由 OS 分配）
-			_, port, _ := net.SplitHostPort(listener.Addr().String())
-			BaseURL = fmt.Sprintf("http://localhost:%s/v1", port)
+			// 提取实际监听地址与端口（Addr 为 ":0" 时由 OS 分配）。
+			// BaseURL 必须使用监听器真实绑定的地址：此前硬编码 "localhost"，
+			// 在双栈机器上 localhost 可能被解析为 ::1，而监听只绑定 IPv4
+			// （如 SetAddr("127.0.0.1:0")）时该地址不可达，测试随机失败。
+			host, port, splitErr := net.SplitHostPort(listener.Addr().String())
+			if splitErr != nil {
+				host, port = "127.0.0.1", "0"
+			}
+			// 未指定地址（":0"）时监听所有网卡，BaseURL 需要一个确定可达的具体地址
+			if host == "" || host == "::" || host == "0.0.0.0" || host == "[::]" {
+				host = "127.0.0.1"
+			}
+			BaseURL = fmt.Sprintf("http://%s/v1", net.JoinHostPort(host, port))
 			if waitChan != nil {
 				close(waitChan)
 			}

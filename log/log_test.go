@@ -1,10 +1,13 @@
 package log
 
 import (
+	"bytes"
 	"fmt"
+	stdlog "log"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -408,4 +411,138 @@ func TestDebugLevelEnabled(t *testing.T) {
 	if DebugLevelEnabled() {
 		t.Error("DebugLevelEnabled should be false at warn level")
 	}
+}
+
+// TestOpenLogFileDoesNotTruncateExisting 回归：同名日志文件已存在时不得截断。
+//
+// 旧实现用 O_CREATE|O_TRUNC 打开日志文件，而默认文件名只精确到秒：
+// 同一秒内启动的第二个进程会把第一个进程刚写入的日志清空（多进程部署丢日志）。
+func TestOpenLogFileDoesNotTruncateExisting(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "log20260101-000000.log")
+	if err := os.WriteFile(path, []byte("first process log"), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	f, err := openLogFile(path)
+	if err != nil {
+		t.Fatalf("openLogFile failed: %v", err)
+	}
+	name := f.Name()
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	if filepath.Clean(name) == filepath.Clean(path) {
+		t.Fatal("同名文件已存在时不应复用（会截断其它进程的日志）")
+	}
+	if !logFileNamePattern.MatchString(filepath.Base(name)) {
+		t.Errorf("新文件名 %q 必须仍被清理规则匹配，否则不会被 maxLogFiles 回收", filepath.Base(name))
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != "first process log" {
+		t.Errorf("已存在的日志被改写: %q", string(data))
+	}
+}
+
+// TestSanitizeSensitiveInfo_BearerAndURLCredentials 回归：真实日志里
+// "Bearer <token>"（中间有空格，token 无固定前缀）与 URL 查询参数中的凭据
+// 此前原样落盘，会被 /feedback 一起上传。
+func TestSanitizeSensitiveInfo_BearerAndURLCredentials(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		expected string
+	}{
+		{
+			name:     "Bearer with space",
+			input:    "Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9",
+			expected: "Authorization: Bearer ***",
+		},
+		{
+			name:     "lowercase bearer",
+			input:    "authorization: bearer abcdefgh12345678",
+			expected: "authorization: bearer ***",
+		},
+		{
+			name:     "url query key",
+			input:    "GET https://api.example.com/v1?key=abc123def456&x=1",
+			expected: "GET https://***/v1?key=***&x=1",
+		},
+		{
+			name:     "access token query",
+			input:    "https://api.example.com/v1?access_token=zzzzzzzzzzzz",
+			expected: "https://***/v1?access_token=***",
+		},
+		{
+			name:     "plain prose untouched",
+			input:    "basic authentication is required",
+			expected: "basic authentication is required",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := SanitizeSensitiveInfo(tt.input); got != tt.expected {
+				t.Errorf("SanitizeSensitiveInfo(%q) = %q; want %q", tt.input, got, tt.expected)
+			}
+		})
+	}
+}
+
+// TestLogFallbackKeepsMessages 回归：日志初始化失败降级到 stderr 后，
+// 真实日志内容不能变成无意义的 "log channel full" 警告，Shutdown 也不能 panic。
+func TestLogFallbackKeepsMessages(t *testing.T) {
+	Shutdown() // 结束当前 worker，避免与下面的全局状态改写并发
+
+	oldLogger := Logger
+	oldPath := logPath
+	oldEnv, hadEnv := os.LookupEnv(envLogName)
+	t.Cleanup(func() {
+		// 本用例改写了全局日志状态：恢复环境后重建正常的日志系统
+		if hadEnv {
+			os.Setenv(envLogName, oldEnv)
+		} else {
+			os.Unsetenv(envLogName)
+		}
+		Logger, logPath = oldLogger, oldPath
+		loggerInited.Store(false)
+		syncOnly.Store(false)
+		atomic.StoreUint32(&isShutdown, 0)
+		Load()
+	})
+
+	// 让 MkdirAll 失败：日志路径的父级是一个普通文件
+	blocker := filepath.Join(t.TempDir(), "blocker")
+	if err := os.WriteFile(blocker, []byte("x"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	os.Setenv(envLogName, filepath.Join(blocker, "log.log"))
+
+	loggerInited.Store(false)
+	syncOnly.Store(false)
+	atomic.StoreUint32(&isShutdown, 0)
+	logPath = ""
+
+	Load()
+
+	if !syncOnly.Load() {
+		t.Fatal("日志目录创建失败时应降级为 stderr 同步模式")
+	}
+
+	var buf bytes.Buffer
+	Logger = stdlog.New(&buf, "", 0)
+	New("fallback-test").Info("REAL-MESSAGE-42")
+
+	got := buf.String()
+	if !strings.Contains(got, "REAL-MESSAGE-42") {
+		t.Errorf("降级模式下真实日志丢失: %q", got)
+	}
+	if strings.Contains(got, "log channel full") {
+		t.Errorf("降级模式仍走了异步通道: %q", got)
+	}
+
+	Shutdown() // 修复前这里会对 nil channel 调用 close 而 panic
 }

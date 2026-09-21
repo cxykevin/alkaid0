@@ -126,7 +126,7 @@ func scanTreeState(path string, depth int, ancestors map[string]bool, states map
 	}
 	visible := make([]os.DirEntry, 0, len(entries))
 	for _, entry := range entries {
-		if dirBlacklists[entry.Name()] {
+		if isBlacklistedName(entry.Name()) {
 			continue
 		}
 		visible = append(visible, entry)
@@ -308,7 +308,7 @@ func visibleTreeEntries(path string) ([]os.DirEntry, error) {
 	}
 	visible := entries[:0]
 	for _, entry := range entries {
-		if dirBlacklists[entry.Name()] {
+		if isBlacklistedName(entry.Name()) {
 			continue
 		}
 		visible = append(visible, entry)
@@ -463,20 +463,25 @@ func buildGlobalPrompt(session *structs.Chats) (string, error) {
 		return "", err
 	}
 	states, stateErr := treeStates(workPath)
+	// 扫描未报错时（即使因截断而不完整）也计算指纹：指纹覆盖全部已扫描到的目录形状，
+	// 可作为缓存有效性依据；完整性只决定能否增量刷新（截断节点无法安全刷新）。
 	fingerprint := ""
-	if stateErr == nil && treeStatesComplete(states) {
+	if stateErr == nil {
 		fingerprint = treeStateFingerprint(states)
 	}
 	cache, exact := treeCache(session, workPath, fingerprint)
 	if exact {
 		storeTreeCache(session, cache)
-	} else if cache != nil && fingerprint != "" {
+	} else if cache != nil && fingerprint != "" && treeStatesComplete(states) {
 		if updated, ok := incrementalTree(cache, states, fingerprint); ok {
 			cache = updated
 			storeTreeCache(session, cache)
 		} else {
 			cache = nil
 		}
+	} else {
+		// 指纹不可用（扫描失败）或扫描不完整且与缓存不符：旧快照无法校验，强制重建。
+		cache = nil
 	}
 	if cache == nil {
 		treeID := int32(0)
@@ -643,6 +648,10 @@ func writeTree(session *structs.Chats, mp map[string]*any, cross []*any) (bool, 
 		boolx := false
 		success := any(boolx)
 		errMsg := any("Tree changed during edit; please regenerate the tree and retry")
+		if rets.Fingerprint == "" {
+			// 空指纹表示快照建立时扫描失败，无法判定目录是否被外部修改，与"指纹不匹配"区分开。
+			errMsg = any("Tree state is not verifiable (incomplete scan); please regenerate the tree and retry")
+		}
 		return false, cross, map[string]*any{
 			"success": &success,
 			"error":   &errMsg,

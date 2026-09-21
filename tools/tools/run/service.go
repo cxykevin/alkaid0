@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/cxykevin/alkaid0/storage/structs"
 	"github.com/cxykevin/alkaid0/terminal/sandbox"
 )
 
@@ -46,16 +47,81 @@ const RunIDPrefix = "@temp/run/"
 // workspace 是一个工作目录（一个目录可以有多个会话），因此终端 ID/run id（@temp/run/<n>）
 // 在**工作目录**内唯一；服务端按会话解析出其工作目录后在该目录内匹配（见 Service.Status / Stop / Kill）。
 var runSeqMu sync.Mutex
-var runSeq = make(map[string]uint64)
+var runSeq = make(map[string]*runSeqState)
+
+// runSeqState 工作目录的 run 序号状态。seeded 表示是否已从持久化内容恢复过序号
+// （每个工作目录只需恢复一次，避免每次分配都查库）。
+type runSeqState struct {
+	mu     sync.Mutex
+	seq    uint64
+	seeded bool
+}
 
 // NewRunID 为指定工作目录分配下一个终端 ID / run id
 // （@temp/run/<n>，序号 base36，按工作目录重置）。
 func NewRunID(workspace string) string {
+	return allocRunID(workspace, nil)
+}
+
+// NewRunIDForSession 在 NewRunID 的基础上，首次分配前先按工作目录从已持久化的
+// run 内容（@temp/run/<n> 对应 ReferFiles.path "run/<n>"）恢复最大序号。
+//
+// 为什么需要：序号计数器只存在于进程内，重启后清零；而 @temp/run/<n> 的内容是
+// 持久化的（ReferFiles 主键为 chat_id+path）。若不恢复，新任务会重新分配
+// @temp/run/1，AddTempObject 因主键冲突失败：新任务输出整体丢失，该路径上仍留着
+// 上一进程的旧内容。序号的命名空间是工作目录，会话 DB 即该工作目录的库
+// （含其中所有会话），因此按整库恢复。
+func NewRunIDForSession(session *structs.Chats, workspace string) string {
+	return allocRunID(workspace, session)
+}
+
+func allocRunID(workspace string, session *structs.Chats) string {
+	st := runSeqStateOf(workspace)
+	st.mu.Lock()
+	if session != nil && !st.seeded {
+		st.seeded = true
+		if seed := persistedRunSeq(session); seed > st.seq {
+			st.seq = seed
+		}
+	}
+	st.seq++
+	n := st.seq
+	st.mu.Unlock()
+	return RunIDPrefix + strconv.FormatUint(n, 36)
+}
+
+func runSeqStateOf(workspace string) *runSeqState {
 	runSeqMu.Lock()
-	runSeq[workspace]++
-	n := strconv.FormatUint(runSeq[workspace], 36)
-	runSeqMu.Unlock()
-	return RunIDPrefix + n
+	defer runSeqMu.Unlock()
+	st, ok := runSeq[workspace]
+	if !ok {
+		st = &runSeqState{}
+		runSeq[workspace] = st
+	}
+	return st
+}
+
+// persistedRunSeq 返回工作目录数据库里已持久化的最大 run 序号（无记录或查询失败为 0）。
+func persistedRunSeq(session *structs.Chats) uint64 {
+	if session == nil || session.DB == nil {
+		return 0
+	}
+	var paths []string
+	if err := session.DB.Model(&structs.ReferFiles{}).Where("path LIKE ?", "run/%").Pluck("path", &paths).Error; err != nil {
+		logger.Warn("restore run id sequence failed: %v", err)
+		return 0
+	}
+	var maxSeq uint64
+	for _, p := range paths {
+		suffix, ok := strings.CutPrefix(p, "run/")
+		if !ok || suffix == "" {
+			continue
+		}
+		if n, err := strconv.ParseUint(suffix, 36, 64); err == nil && n > maxSeq {
+			maxSeq = n
+		}
+	}
+	return maxSeq
 }
 
 // NormalizeID 校验并规范化终端 ID / run id：
@@ -659,6 +725,11 @@ func (s *Service) execute(ctx context.Context, job *Job, req *Request) {
 			job.result = &Result{Success: false, ErrString: fmt.Sprintf("[System] background job %s panicked: %v\n", job.ID, r)}
 			job.State = JobFinished
 			job.resultMu.Unlock()
+			// panic 路径不会执行正常路径末尾的 active 清理：不在这里删除，
+			// 任务会永久滞留在 active，终端列表一直显示 running。
+			s.mu.Lock()
+			delete(s.active, jobKey(job.Workspace, job.ID))
+			s.mu.Unlock()
 		}
 		close(job.done)
 	}()
@@ -856,8 +927,15 @@ func bgRunningContent(command string, start time.Time) string {
 }
 
 // bgFinalContent 后台任务结束后的最终状态文本。
+// 创建阶段失败（sandbox.New / Execute 失败）没有任何输出，失败原因必须一并写入：
+// 后台任务没有返回错误的通道，用户只能从内容快照（终端推送/已结束终端查询）看到结果，
+// 否则只显示 "Finished: success=false"，失败原因完全丢失。
 func bgFinalContent(command string, r *Result) string {
-	return fmt.Sprintf("[agent execute] $ %s\n\n%s%s[Background] Finished: success=%v\n", command, r.ErrString, r.Output, r.Success)
+	errString := r.ErrString
+	if r.CreateErr != nil {
+		errString += fmt.Sprintf("[System] %v\n", r.CreateErr)
+	}
+	return fmt.Sprintf("[agent execute] $ %s\n\n%s%s[Background] Finished: success=%v\n", command, errString, r.Output, r.Success)
 }
 
 type writerFunc func([]byte) (int, error)

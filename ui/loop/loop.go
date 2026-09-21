@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"runtime/debug"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -11,6 +12,7 @@ import (
 
 	"github.com/cxykevin/alkaid0/config"
 	"github.com/cxykevin/alkaid0/log"
+	"github.com/cxykevin/alkaid0/provider/request"
 	reqStructs "github.com/cxykevin/alkaid0/provider/request/structs"
 	"github.com/cxykevin/alkaid0/storage/structs"
 	"github.com/cxykevin/alkaid0/ui/funcs"
@@ -80,20 +82,27 @@ type msgObj struct {
 
 // Object 循环对象
 type Object struct {
-	sendQueue      chan msgObj
-	systemQueue    chan string
-	recvQueue      chan AIResponse
-	recvSyncQueue  chan struct{}
-	lock           sync.Mutex
-	isResponding   bool
-	cancelFunc     context.CancelFunc // 取消当前 LLM 请求
-	toolCancelFunc context.CancelFunc // 取消正在执行中的工具（ExecuteToolCalls）
-	ctxCancel      context.CancelFunc // 取消整个循环生命周期
-	session        *structs.Chats
-	ctx            context.Context
-	done           chan struct{}
-	closeOnce      sync.Once
-	stopped        atomic.Bool // Stop() 已调用标记，防止 cancel 后 AI 继续重试（多协程读写，用原子类型避免 data race）
+	sendQueue         chan msgObj
+	systemQueue       chan string
+	recvQueue         chan AIResponse
+	recvSyncQueue     chan struct{}
+	lock              sync.Mutex
+	isResponding      bool
+	cancelFunc        context.CancelFunc // 取消当前 LLM 请求
+	toolCancelFunc    context.CancelFunc // 取消正在执行中的工具（ExecuteToolCalls）
+	summaryCancelFunc context.CancelFunc // 取消正在执行的摘要（SummarySession，Stop()/ESC 可中断）
+	ctxCancel         context.CancelFunc // 取消整个循环生命周期
+	session           *structs.Chats
+	ctx               context.Context
+	done              chan struct{}
+	closeOnce         sync.Once
+	stopped           atomic.Bool // Stop() 已调用标记，防止 cancel 后 AI 继续重试（多协程读写，用原子类型避免 data race）
+	// callbackSet 标记 SetCallback 是否已注册。重复注册会产生多个 recvQueue 消费者，
+	// 破坏「一条消息一个 recvSyncQueue 令牌」的配对并让回调并发执行（P1-18/F1）。
+	callbackSet atomic.Bool
+	// callbackWG 跟踪 SetCallback 启动的回调 goroutine，供 WaitCallback 在关库前 join
+	// （否则 closeDB 之后回调仍可能访问 sess.DB，use-after-close）。
+	callbackWG sync.WaitGroup
 }
 
 // queueSize 队列缓冲区大小
@@ -154,16 +163,26 @@ func (p *Object) Start(ctx context.Context) {
 
 	var needCompress bool
 
-	// doAutoSummary 执行自动摘要并发送回调通知（提取的公共逻辑，复用 4 次）
-	doAutoSummary := func() {
+	// doAutoSummary 执行自动摘要并发送回调通知（提取的公共逻辑，复用 4 次）。
+	// 摘要走可被 Stop()/ESC 取消的独立 context（P1-18/F5）：返回 false 表示摘要被
+	// 用户停止，调用方不得继续本轮请求。
+	doAutoSummary := func() bool {
 		logger.Info("start auto summary in session=%d", session.ID)
 		call(AIResponse{SummaryText: "", SummaryFlag: true})
-		summaryText, err := funcs.SummarySession(p.ctx, session)
+		summaryCtx, finishSummary := p.runWithSummaryCancel()
+		summaryText, err := funcs.SummarySession(summaryCtx, session)
+		finishSummary()
 		if err != nil {
+			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+				needCompress = false
+				call(AIResponse{StopReason: StopReasonUser})
+				return false
+			}
 			call(AIResponse{Error: fmt.Errorf("loop error when auto summary %v", err), StopReason: StopReasonError})
 		}
 		call(AIResponse{SummaryText: summaryText, SummaryFlag: true})
 		needCompress = false
+		return true
 	}
 
 	// runResponseLoop 启动响应循环：发送请求 → 接收流式响应 → 处理工具调用结果 → 判断是否需要继续
@@ -190,8 +209,8 @@ func (p *Object) Start(ctx context.Context) {
 			p.lock.Unlock()
 
 			// 令牌数达到压缩阈值时，在下一轮请求前执行自动摘要
-			if needCompress {
-				doAutoSummary()
+			if needCompress && !doAutoSummary() {
+				break
 			}
 
 			// sendRequestWithRetry 执行请求，失败时根据配置重试（指数退避）
@@ -305,7 +324,7 @@ func (p *Object) Start(ctx context.Context) {
 			if finish {
 				// 若 LLM 发出了工具调用，状态会变为 WaitApprove
 				// 等待用户或自动规则决策后才能继续
-				if session.State == state.StateWaitApprove {
+				if session.GetState() == state.StateWaitApprove {
 					if p.handleWaitApprove(session, call, needCompress, doAutoSummary) {
 						continue
 					}
@@ -336,15 +355,15 @@ func (p *Object) Start(ctx context.Context) {
 	}
 
 	// 处理启动时的待审批状态：从数据库恢复的会话可能有未完成的工具调用
-	if session.State == state.StateWaitApprove {
+	if session.GetState() == state.StateWaitApprove {
 		logger.Info("waiting approve in session=%d", session.ID)
-		session.ToolState = 1
-		if p.handleWaitApprove(session, call, false, func() {}) {
+		session.SetToolState(1)
+		if p.handleWaitApprove(session, call, false, func() bool { return true }) {
 			func() {
 				runResponseLoop()
 			}()
 		}
-		session.ToolState = 0
+		session.SetToolState(0)
 	}
 
 	// 获取用户输入
@@ -387,8 +406,16 @@ func (p *Object) Start(ctx context.Context) {
 				SummaryText: "",
 				SummaryFlag: true,
 			})
-			summaryText, err := funcs.SummarySession(p.ctx, session)
+			// 手动摘要同样使用可被 Stop()/ESC 取消的 context（P1-18/F5）
+			summaryCtx, finishSummary := p.runWithSummaryCancel()
+			summaryText, err := funcs.SummarySession(summaryCtx, session)
+			finishSummary()
 			if err != nil {
+				if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+					// 已被用户停止：不重复发送停止事件，等待下一条用户输入
+					needCompress = false
+					continue
+				}
 				call(AIResponse{
 					Error:      fmt.Errorf("loop error when summary %v", err),
 					StopReason: StopReasonError,
@@ -406,24 +433,41 @@ func (p *Object) Start(ctx context.Context) {
 				StopReason: StopReasonUser,
 			})
 		case msgActionApprove:
-			session.ToolState = 1
+			// P1-18/F2 审批身份绑定：命令携带用户实际批准的消息 ID 时，先与当前待审批
+			// 消息比对；不一致说明该批准已过期（期间用户又发了新 prompt 并产生了新的
+			// 待审批调用），此时既不能执行旧工具，也不能把旧批准套用到新消息上。
+			approvedID := callObj.MsgID
+			if approvedID != 0 && approvedID != session.GetCurrentMessageID() {
+				call(AIResponse{
+					Error: fmt.Errorf("loop error when approve: %w (approved msg %d, pending msg %d)",
+						request.ErrPendingToolCallChanged, approvedID, session.GetCurrentMessageID()),
+					StopReason: StopReasonUser,
+				})
+				// 不触发新一轮请求：新消息的审批对话框仍在等待用户决策
+				continue
+			}
+			session.SetToolState(1)
 			logger.Info("approve tools in session=%d", session.ID)
 			restoreToolCtx := p.runWithToolCancel(session)
-			msgID, err := funcs.ApproveToolCalls(session)
+			// 走 ID 绑定版本：执行前再校验一次消息 ID（防「校验通过后、执行前」被并发替换）
+			msgID, err := request.ApproveToolCallsByID(session, approvedID)
 			restoreToolCtx()
+			session.SetToolState(0)
 			if err != nil {
 				call(AIResponse{
 					Error:      fmt.Errorf("loop error when approve %v", err),
 					StopReason: StopReasonUser,
 				})
+				if errors.Is(err, request.ErrPendingToolCallChanged) {
+					continue
+				}
 			}
-			session.CurrentMessageID = msgID
+			session.SetCurrentMessageID(msgID)
 			call(AIResponse{
 				MsgID:           msgID,
 				ThinkingContext: "",
 				Content:         "",
 			})
-			session.ToolState = 0
 
 			session.ResetLatest()
 
@@ -474,12 +518,18 @@ func (p *Object) Stop() {
 	p.lock.Lock()
 	cancel := p.cancelFunc
 	toolCancel := p.toolCancelFunc
+	summaryCancel := p.summaryCancelFunc
 	p.lock.Unlock()
 	if cancel != nil {
 		cancel()
 	}
 	if toolCancel != nil {
 		toolCancel()
+	}
+	// 摘要请求此前只受 SummaryTimeout(120s) 限制：ESC 后主循环最多要等 2 分钟
+	// 才能响应下一条输入（P1-18/F5）。这里取消摘要的独立 context，立即中断网络请求。
+	if summaryCancel != nil {
+		summaryCancel()
 	}
 	// 调用工具注册的直接停止函数（所有工具通用的中断入口）
 	if p.session != nil {
@@ -506,7 +556,7 @@ func (p *Object) Cancel() {
 // 在每个分支中通过 call() 发送 AIResponse 回调。
 // 返回 shouldContinue — 为 true 时调用方应 continue 下一轮 LLM 请求。
 // needCompress 和 doAutoSummary 用于在拒绝后自动摘要。
-func (p *Object) handleWaitApprove(session *structs.Chats, call func(AIResponse), needCompress bool, doAutoSummary func()) (shouldContinue bool) {
+func (p *Object) handleWaitApprove(session *structs.Chats, call func(AIResponse), needCompress bool, doAutoSummary func() bool) (shouldContinue bool) {
 	restoreToolCtx := p.runWithToolCancel(session)
 	autoHandled, approved, pendingTools, msgID, pErr := funcs.AutoHandlePendingToolCalls(session)
 	restoreToolCtx()
@@ -525,17 +575,17 @@ func (p *Object) handleWaitApprove(session *structs.Chats, call func(AIResponse)
 			// 并触发空回调广播 final tool_call 状态。否则 final 条目会残留到下一轮
 			// SendRequest 的流式回调才被 TakeFinalToolCalling 取出广播，而此刻 ToolState
 			// 已被 SendRequest 重置为 0，tool_call_update 的 status 会错误地显示为 pending。
-			session.ToolState = 1
+			session.SetToolState(1)
 			call(AIResponse{
 				MsgID:           msgID,
 				ThinkingContext: "",
 				Content:         "",
 			})
-			session.ToolState = 0
+			session.SetToolState(0)
 			return true
 		}
 		// auto-rejected：标记工具状态为已取消，无论主会话还是子代理都继续
-		session.ToolState = 2
+		session.SetToolState(2)
 		// 先发送空回调广播 cancelled，然后继续下一轮 LLM
 		call(AIResponse{
 			MsgID:           0,
@@ -563,16 +613,31 @@ func (p *Object) handleWaitApprove(session *structs.Chats, call func(AIResponse)
 	}
 
 	// 无 pending tools（异常路径）
-	session.ToolState = 2
+	session.SetToolState(2)
 	if session.CurrentAgentID != "" {
 		funcs.SubAgentReject(session)
 		return true
 	}
-	if needCompress {
-		doAutoSummary()
+	if needCompress && !doAutoSummary() {
+		return false
 	}
 	call(AIResponse{StopReason: StopReasonModel})
 	return false
+}
+
+// runWithSummaryCancel 为摘要请求（SummarySession）建立可被 Stop()/ESC 取消的独立 context。
+// 返回的 finish 函数负责清理注册并释放该 context；摘要结束后必须调用。
+func (p *Object) runWithSummaryCancel() (context.Context, func()) {
+	summaryCtx, summaryCancel := context.WithCancel(p.ctx)
+	p.lock.Lock()
+	p.summaryCancelFunc = summaryCancel
+	p.lock.Unlock()
+	return summaryCtx, func() {
+		p.lock.Lock()
+		p.summaryCancelFunc = nil
+		p.lock.Unlock()
+		summaryCancel()
+	}
 }
 
 // runWithToolCancel 在工具执行期间设置可取消的上下文，使 Stop() 能够中断正在执行的工具。
@@ -678,9 +743,24 @@ func (p *Object) Summary() error {
 
 // Approve 审批待处理的工具调用，发送 msgActionApprove 指令到处理队列。
 // 用户确认后执行工具调用，然后将结果继续发给 LLM。
+//
+// P1-18/F2：在入队时捕获当前待审批消息 ID，作为审批身份随命令传递；执行时若该
+// 消息已不是待审批消息则拒绝执行（见 msgActionApprove 分支）。调用方若能提供
+// 用户点击审批时对应的消息 ID（server/actions 的 pendingMsgID），应改用
+// ApproveWithID 以避免此处读取与点击之间的竞态。
 func (p *Object) Approve() error {
+	if p.session == nil {
+		return fmt.Errorf("approve error: session not initialized")
+	}
+	return p.ApproveWithID(p.session.GetCurrentMessageID())
+}
+
+// ApproveWithID 同 Approve，但显式携带用户实际批准的消息 ID（审批身份绑定）。
+// msgID == 0 表示未携带身份，退化为 Approve 的原有语义。
+func (p *Object) ApproveWithID(msgID uint64) error {
 	obj := msgObj{
 		Command: msgActionApprove,
+		MsgID:   msgID,
 	}
 	select {
 	case p.sendQueue <- obj:
@@ -694,16 +774,76 @@ func (p *Object) Approve() error {
 // 将 AIResponse 对象传递给 UI 层进行处理。通过 recvSyncQueue 实现背压同步。
 //
 // 使用双 chan select 而非 busy-poll + sleep，idle 时 goroutine 挂起不消耗 CPU。
+//
+// P1-18/F1 修复：
+//  1. 每个响应的回调都带 recover：此前回调 panic 会直接杀死消费 goroutine，
+//     此后 call() 的发送方永远阻塞在 <-recvSyncQueue（只有 p.done 能解除，
+//     而 Start 正阻塞在 call() 中）→ 真死锁。
+//  2. 无论回调是否 panic 都释放 recvSyncQueue 令牌，保证「一条消息一个令牌」配对；
+//     消费 goroutine 退出时也不卡在令牌发送上（select p.done）。
+//  3. 重复注册被拒绝：多个消费者会并发处理同一轮响应，破坏回调的顺序假设。
+//  4. 消费 goroutine 纳入 callbackWG，配合 WaitCallback 让会话释放在 closeDB
+//     之前确认回调已退出（否则回调仍可能访问 sess.DB，use-after-close）。
 func (p *Object) SetCallback(callFunc func(AIResponse)) {
+	if callFunc == nil {
+		return
+	}
+	if !p.callbackSet.CompareAndSwap(false, true) {
+		logger.Warn("SetCallback called more than once, ignoring duplicate registration")
+		return
+	}
+	p.callbackWG.Add(1)
 	go func() {
+		defer p.callbackWG.Done()
 		for {
 			select {
-			case call := <-p.recvQueue:
-				callFunc(call)
-				p.recvSyncQueue <- struct{}{} // 通知发送方已完成处理
+			case resp := <-p.recvQueue:
+				p.invokeCallback(callFunc, resp)
+				// 通知发送方已完成处理；p.done 已关闭（循环退出/取消）时立即放弃，
+				// 避免消费 goroutine 卡在令牌发送上无法 join。
+				select {
+				case p.recvSyncQueue <- struct{}{}:
+				case <-p.done:
+					return
+				}
 			case <-p.done:
 				return
 			}
 		}
 	}()
+}
+
+// invokeCallback 调用回调并捕获 panic：单个响应处理失败不得杀死消费者 goroutine、
+// 阻塞整个 loop 主循环。
+func (p *Object) invokeCallback(callFunc func(AIResponse), resp AIResponse) {
+	defer func() {
+		if r := recover(); r != nil {
+			logger.Error("recovered from AI response callback panic: %v\n%s", r, debug.Stack())
+		}
+	}()
+	callFunc(resp)
+}
+
+// WaitCallback 等待 SetCallback 注册的回调 goroutine 退出，返回是否在超时前退出。
+// timeout <= 0 表示无限等待。必须在 closeDB 之前调用：Cancel() 只是异步信号，
+// 回调 goroutine 可能仍在向客户端广播并访问会话 DB。
+func (p *Object) WaitCallback(timeout time.Duration) bool {
+	if p.callbackSet.Load() {
+		done := make(chan struct{})
+		go func() {
+			p.callbackWG.Wait()
+			close(done)
+		}()
+		if timeout <= 0 {
+			<-done
+			return true
+		}
+		select {
+		case <-done:
+			return true
+		case <-time.After(timeout):
+			return false
+		}
+	}
+	return true
 }

@@ -28,10 +28,12 @@ type Error struct {
 	Data    any    `json:"data,omitempty"`
 }
 
-// Response JSON-RPC 响应结构体
+// Response JSON-RPC 响应结构体。
+// ID 不使用 omitempty：解析错误（无法确定 id）的响应必须携带 "id": null，
+// 省略该字段不符合 JSON-RPC 规范。
 type Response struct {
 	Version string `json:"jsonrpc"`
-	ID      any    `json:"id,omitempty"`
+	ID      any    `json:"id"`
 	Result  any    `json:"result,omitempty"`
 	Error   *Error `json:"error,omitempty"`
 }

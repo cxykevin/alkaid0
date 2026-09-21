@@ -45,7 +45,9 @@ func Build(db *gorm.DB, session *storageStructs.Chats) (*reqStruct.ChatCompletio
 			addSystemPrompt += "\n\n"
 		}
 		addSystemPrompt += session.SystemPrompt
-		session.SystemPrompt = ""
+		// 只读取、不在这里清空：请求失败时调用方（ui/loop 指数退避重试）会重新调用
+		// Build 构建请求，构建即消费会让重试请求丢掉排队的 system 通知。
+		// 消费由 SendRequest 在请求成功后完成。
 	}
 	// 模型解析必须与传输层（request.SendRequest）共用同一个入口：子代理激活时走
 	// AgentModel。此前这里直接用 chatLine.LastModelID，于是请求体里的 model 与全部

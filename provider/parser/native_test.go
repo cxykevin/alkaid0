@@ -2,6 +2,8 @@ package parser_test
 
 import (
 	"encoding/json"
+	"runtime"
+	"strings"
 	"testing"
 
 	"github.com/cxykevin/alkaid0/provider/parser"
@@ -183,20 +185,29 @@ func TestNativeAccumulatorTypeMismatch(t *testing.T) {
 	}
 }
 
-// TestNativeAccumulatorDoneTokenUnclosed 未闭合 arguments：DoneToken 报错，调用不落库
-// （对齐提示词模式 </tools> 时 jsonParser.DoneToken 报 incomplete JSON 的语义）。
-func TestNativeAccumulatorDoneTokenUnclosed(t *testing.T) {
+// TestNativeAccumulatorTruncatedArgumentsDropsOnlyThatCall 流结束时参数仍未闭合
+// （响应被截断/网关断流）：只丢弃这个调用，DoneToken 不得把错误抛给上游——
+// 否则整个回合中止，已解析的正文与其他调用一起丢失。
+func TestNativeAccumulatorTruncatedArgumentsDropsOnlyThatCall(t *testing.T) {
 	var recs []callRecord
 	acc := parser.NewNativeToolCallAccumulator(nil, []*parser.ToolsDefine{recordTool(&recs)})
 
-	if err := acc.AddDelta(0, "call_1", "calculator", `{"expression":"unclosed`); err != nil {
+	if err := acc.AddDelta(0, "call_trunc", "calculator", `{"expression":"unclosed`); err != nil {
 		t.Fatal(err)
 	}
-	if err := acc.DoneToken(); err == nil {
-		t.Fatal("DoneToken should error on unclosed arguments (incomplete JSON)")
+	// 同一个流里其他调用照常完成
+	if err := acc.AddDelta(1, "call_ok", "calculator", `{"expression":"fine"}`); err != nil {
+		t.Fatal(err)
 	}
-	if acc.HasTools() {
-		t.Fatal("unclosed call should not be solved")
+	if err := acc.DoneToken(); err != nil {
+		t.Fatalf("truncated arguments must be dropped, not returned as a stream error: %v", err)
+	}
+	tools := acc.GetTools()
+	if len(tools) != 1 || tools[0].ID != "call_ok" {
+		t.Fatalf("truncated call must be dropped, completed call kept, got %+v", tools)
+	}
+	if !acc.HasTools() {
+		t.Fatal("completed call should still be solved")
 	}
 }
 
@@ -213,5 +224,183 @@ func TestNativeAccumulatorEmptyArguments(t *testing.T) {
 	}
 	if acc.HasTools() {
 		t.Fatal("empty arguments should not solve a tool")
+	}
+}
+
+// TestNativeAccumulatorMalformedArgumentsDropsOnlyThatCall 单个调用的参数 JSON 畸形
+// （模型生成错误 / 网关破坏）：只丢弃该调用并告警，不得把错误返回给调用方——
+// 否则一次畸形参数会中止整轮流式响应，连已解析的正文与其他调用一起丢弃。
+func TestNativeAccumulatorMalformedArgumentsDropsOnlyThatCall(t *testing.T) {
+	var recs []callRecord
+	acc := parser.NewNativeToolCallAccumulator(nil, []*parser.ToolsDefine{recordTool(&recs)})
+
+	// 对象值缺失（':' 后直接 '}'），json 解析器会报 "unexpected '}'"
+	if err := acc.AddDelta(0, "call_bad", "calculator", `{"expression":}`); err != nil {
+		t.Fatalf("malformed arguments must be dropped, not returned as a stream error: %v", err)
+	}
+	// 同一个流里其他调用照常完成
+	if err := acc.AddDelta(1, "call_ok", "calculator", `{"expression":"fine"}`); err != nil {
+		t.Fatal(err)
+	}
+	if err := acc.DoneToken(); err != nil {
+		t.Fatalf("DoneToken must not abort after a dropped call: %v", err)
+	}
+	tools := acc.GetTools()
+	if len(tools) != 1 || tools[0].ID != "call_ok" {
+		t.Fatalf("malformed call must be dropped, completed call kept, got %+v", tools)
+	}
+}
+
+// TestNativeAccumulatorIndexReuseKeepsAllCalls 同一 index 被复用给多次调用
+// （OpenAI 兼容端点偶尔不递增 index）：每个调用都必须保留，不能被
+// "已 finalize → 丢弃 arguments" 的旧逻辑吞掉。
+func TestNativeAccumulatorIndexReuseKeepsAllCalls(t *testing.T) {
+	var recs []callRecord
+	acc := parser.NewNativeToolCallAccumulator(nil, []*parser.ToolsDefine{recordTool(&recs)})
+
+	if err := acc.AddDelta(0, "call_1", "calculator", `{"expression":"first"}`); err != nil {
+		t.Fatal(err)
+	}
+	// 复用 index 0 的第二次调用
+	if err := acc.AddDelta(0, "call_2", "calculator", `{"expression":"second"}`); err != nil {
+		t.Fatal(err)
+	}
+	if err := acc.DoneToken(); err != nil {
+		t.Fatal(err)
+	}
+	tools := acc.GetTools()
+	if len(tools) != 2 {
+		t.Fatalf("index reuse must keep both calls, got %d: %+v", len(tools), tools)
+	}
+	if tools[0].ID != "call_1" || tools[1].ID != "call_2" {
+		t.Fatalf("unexpected ids: %+v", tools)
+	}
+	if v := tools[0].Parameters["expression"]; v == nil || *v != "first" {
+		t.Fatalf("call_1 expression = %v", v)
+	}
+	if v := tools[1].Parameters["expression"]; v == nil || *v != "second" {
+		t.Fatalf("call_2 expression = %v", v)
+	}
+	// 复用后的调用也要进入 Origin 序列化
+	var origin []map[string]any
+	if err := json.Unmarshal([]byte(acc.Origin()), &origin); err != nil {
+		t.Fatalf("invalid origin %q: %v", acc.Origin(), err)
+	}
+	if len(origin) != 2 || origin[0]["id"] != "call_1" || origin[1]["id"] != "call_2" {
+		t.Fatalf("unexpected origin: %s", acc.Origin())
+	}
+}
+
+// TestNativeAccumulatorIndexReuseWithoutID 复用 index 的新调用先到 arguments、id/name
+// 晚到：同样必须新建状态并最终解析出第二个调用。
+func TestNativeAccumulatorIndexReuseWithoutID(t *testing.T) {
+	var recs []callRecord
+	acc := parser.NewNativeToolCallAccumulator(nil, []*parser.ToolsDefine{recordTool(&recs)})
+
+	if err := acc.AddDelta(0, "call_1", "calculator", `{"expression":"first"}`); err != nil {
+		t.Fatal(err)
+	}
+	if err := acc.AddDelta(0, "", "", `{"expression":"second"}`); err != nil {
+		t.Fatal(err)
+	}
+	if err := acc.AddDelta(0, "call_2", "calculator", ""); err != nil {
+		t.Fatal(err)
+	}
+	tools := acc.GetTools()
+	if len(tools) != 2 {
+		t.Fatalf("index reuse without id must keep both calls, got %d: %+v", len(tools), tools)
+	}
+	if tools[1].ID != "call_2" {
+		t.Fatalf("unexpected second call: %+v", tools[1])
+	}
+	if v := tools[1].Parameters["expression"]; v == nil || *v != "second" {
+		t.Fatalf("call_2 expression = %v", v)
+	}
+}
+
+// TestNativeAccumulatorDuplicateIDsKeepEachCall 多个调用共用同一 id（网关/历史回放
+// 数据重复）时，GetTools/Origin 必须按调用各自返回：旧实现按 id 建索引会把先到的
+// 调用覆盖成后到的参数，导致调用被合并/串参数。
+func TestNativeAccumulatorDuplicateIDsKeepEachCall(t *testing.T) {
+	var recs []callRecord
+	acc := parser.NewNativeToolCallAccumulator(nil, []*parser.ToolsDefine{recordTool(&recs)})
+
+	if err := acc.AddDelta(0, "call_dup", "calculator", `{"expression":"first"}`); err != nil {
+		t.Fatal(err)
+	}
+	if err := acc.AddDelta(1, "call_dup", "calculator", `{"expression":"second"}`); err != nil {
+		t.Fatal(err)
+	}
+	tools := acc.GetTools()
+	if len(tools) != 2 {
+		t.Fatalf("expected 2 calls, got %d: %+v", len(tools), tools)
+	}
+	if v := tools[0].Parameters["expression"]; v == nil || *v != "first" {
+		t.Fatalf("first call parameters overwritten by duplicate id: %v", v)
+	}
+	if v := tools[1].Parameters["expression"]; v == nil || *v != "second" {
+		t.Fatalf("second call expression = %v", v)
+	}
+	var origin []map[string]any
+	if err := json.Unmarshal([]byte(acc.Origin()), &origin); err != nil {
+		t.Fatalf("invalid origin %q: %v", acc.Origin(), err)
+	}
+	if len(origin) != 2 {
+		t.Fatalf("unexpected origin length: %s", acc.Origin())
+	}
+	if p0, ok := origin[0]["parameters"].(map[string]any); !ok || p0["expression"] != "first" {
+		t.Fatalf("origin[0] parameters = %v", origin[0]["parameters"])
+	}
+	if p1, ok := origin[1]["parameters"].(map[string]any); !ok || p1["expression"] != "second" {
+		t.Fatalf("origin[1] parameters = %v", origin[1]["parameters"])
+	}
+}
+
+// TestNativeAccumulatorLongStringArgumentsAllocatedBytes 长字符串参数必须线性累积：
+// library/json 逐字符 += 拼接时每次都会复制整个字符串（累计复制 O(n²)，2 万字符约
+// 2 亿字节）；改为 strings.Builder 后只做线性追加。这里用 MemStats.TotalAlloc 的
+// 增量断言上界：修复前远超上界，修复后仅 KB 量级。
+func TestNativeAccumulatorLongStringArgumentsAllocatedBytes(t *testing.T) {
+	const n = 20000
+	long := strings.Repeat("a", n)
+	arguments := `{"expression":"` + long + `"}`
+
+	var throwaway []callRecord
+	measure := func() uint64 {
+		var before, after runtime.MemStats
+		runtime.GC()
+		runtime.ReadMemStats(&before)
+		acc := parser.NewNativeToolCallAccumulator(nil, []*parser.ToolsDefine{recordTool(&throwaway)})
+		_ = acc.AddDelta(0, "call_1", "calculator", arguments)
+		runtime.ReadMemStats(&after)
+		runtime.KeepAlive(acc)
+		return after.TotalAlloc - before.TotalAlloc
+	}
+	measure() // 预热，排除一次性初始化分配
+	allocated := measure()
+	t.Logf("allocated %d bytes for %d-char string", allocated, n)
+
+	const limit = 20 << 20 // 20MiB：二次方复制约 2 亿字节，线性追加仅 KB 量级
+	if allocated > limit {
+		t.Fatalf("long string argument allocated %d bytes (quadratic concatenation?), want <= %d", allocated, limit)
+	}
+
+	// 内容必须完整保留
+	var recs []callRecord
+	acc := parser.NewNativeToolCallAccumulator(nil, []*parser.ToolsDefine{recordTool(&recs)})
+	if err := acc.AddDelta(0, "call_1", "calculator", arguments); err != nil {
+		t.Fatal(err)
+	}
+	tools := acc.GetTools()
+	if len(tools) != 1 {
+		t.Fatalf("expected 1 tool, got %d", len(tools))
+	}
+	v := tools[0].Parameters["expression"]
+	if v == nil {
+		t.Fatal("expression missing")
+	}
+	got, ok := (*v).(string)
+	if !ok || got != long {
+		t.Fatalf("long expression not preserved: len=%d ok=%v", len(got), ok)
 	}
 }

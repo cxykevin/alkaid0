@@ -138,13 +138,20 @@ jobs:
           ALKAID0_CONFIG_PATH: "alklog.log"
           ALKAID0_TEST_LESS_MEMORY_MODE: "true"
         run: |
-          go test -race -count=1 ./config/... ./library/... ./log/... ./mock/... ./provider/parser/... ./provider/request/structs/... ./storage/... ./terminal/buffer/... ./tools/... ./ui/...
+          # 全量包参与竞态检测。此前这里是手工挑选的包列表，./server/...、
+          # ./provider/...（parser/structs 除外）、./helper/...、./context/...
+          # 全部没有竞态检测，深度审查确认的多个并发缺陷恰好都在被排除的包里。
+          go test -race -count=1 ./...
 
       - name: 运行测试
         env:
           ALKAID0_DEBUG_MOCKSERVER: "true"
           ALKAID0_CONFIG_PATH: "alklog.log"
-          # ALKAID0_TEST_SANDBOX: "true"
+          # 打开沙箱开关：默认被 skip 的沙箱/隔离用例（OS 级隔离、写权限、
+          # Python 沙箱等）在 CI 真正执行。此前该开关被注释掉，52 个用例永远
+          # 不跑——深度审查修复 Linux 沙箱 remount,rw 时正是靠打开它才暴露出来。
+          # 仅在 Linux 打开：macOS/Windows 走各自平台隔离实现，尚未验证。
+          ALKAID0_TEST_SANDBOX: ${{ matrix.os == 'ubuntu-latest' && 'true' || 'false' }}
           ALKAID0_TEST_LESS_MEMORY_MODE: "true"
           CGO_ENABLED: "0"
         run: |

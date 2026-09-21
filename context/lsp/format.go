@@ -157,7 +157,7 @@ func (m *Manager) FormatAndDiagnose(workdir, filePath string) *FormatResult {
 	handler := func(method string, params json.RawMessage) {
 		if method == "textDocument/publishDiagnostics" {
 			var p PublishDiagnosticsParams
-			if err := json.Unmarshal(params, &p); err == nil && p.URI == uri {
+			if err := json.Unmarshal(params, &p); err == nil && sameFileURI(p.URI, uri) {
 				select {
 				case diagCh <- p.Diagnostics:
 				default:
@@ -262,14 +262,9 @@ func applyTextEdits(text string, edits []TextEdit) string {
 		}
 
 		// 替换起始行之前的部分 + newText + 替换结束行之后的部分
-		prefix := ""
-		if startChar > 0 && startChar <= len(lines[startLine]) {
-			prefix = lines[startLine][:startChar]
-		}
-		suffix := ""
-		if endChar > 0 && endChar <= len(lines[endLine]) {
-			suffix = lines[endLine][endChar:]
-		}
+		// LSP 的 Character 是 UTF-16 码元数，不能直接当字节下标切字符串
+		prefix := lines[startLine][:utf16OffsetToBytes(lines[startLine], startChar)]
+		suffix := lines[endLine][utf16OffsetToBytes(lines[endLine], endChar):]
 
 		// newText 可能包含多行
 		editLines := splitLines(edit.NewText)
@@ -298,6 +293,27 @@ func applyTextEdits(text string, edits []TextEdit) string {
 	}
 
 	return joinLines(lines)
+}
+
+// utf16OffsetToBytes 将 LSP 的 UTF-16 码元列号转换为字符串内的 UTF-8 字节偏移
+// 非 ASCII 字符在 UTF-8 中占多个字节，增补平面字符（如 emoji）占两个 UTF-16 码元；
+// 偏移超过行长度时返回行尾，落在代理对中间时返回该字符之后
+func utf16OffsetToBytes(line string, offset int) int {
+	if offset <= 0 {
+		return 0
+	}
+	units := 0
+	for i, r := range line {
+		if units >= offset {
+			return i
+		}
+		if r > 0xFFFF {
+			units += 2
+		} else {
+			units++
+		}
+	}
+	return len(line)
 }
 
 // splitLines 按 \n 分割字符串，保留空行

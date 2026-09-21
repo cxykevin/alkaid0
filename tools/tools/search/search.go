@@ -532,8 +532,19 @@ func aiGrep(ctx context.Context, root, query string, includeGitignored bool, rec
 		relPath, _ := filepath.Rel(root, path)
 		name := d.Name()
 
-		// 跳过黑名单
-		if dirBlacklists[name] {
+		// 符号链接必须解析后再做包含性校验：WalkDir 不会跟随链接进入目录，
+		// 但对"指向文件的链接" d.IsDir() 为 false，os.Open 会跟随链接读到
+		// 工作区之外的内容（edit/read 已在批 1 用 utils.EnsureWorkspacePath 修掉
+		// 同类问题，search 此前遗漏）。校验失败直接跳过。
+		if d.Type()&os.ModeSymlink != 0 {
+			if linkErr := u.EnsureWorkspacePath(root, path); linkErr != nil {
+				logger.Warn("search: skip %s: %v", relPath, linkErr)
+				return nil
+			}
+		}
+
+		// 跳过黑名单（含 .env 家族、密钥扩展名等模式化名称，与审批规则对齐）
+		if dirBlacklists[name] || u.IsSensitivePathName(name) {
 			if d.IsDir() {
 				return filepath.SkipDir
 			}

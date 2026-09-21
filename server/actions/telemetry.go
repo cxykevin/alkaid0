@@ -56,9 +56,19 @@ func runAutoTelemetry() {
 	defer cancel()
 	if _, err := feedbackSubmit(ctx, content, modelLogs, osInfo); err != nil {
 		logger.Warn("auto telemetry submit failed: %v", err)
+		// 失败也要记录本次尝试时间：否则反馈服务端长期不可用时，每次启动都会
+		// 重试上报（无上限）。宁可失败后推迟一个周期，也不做无限重试。
+		writeTelemetryTimestamp(path)
 		return
 	}
-	// 成功后才写时间戳，失败留待下次重试。
+	writeTelemetryTimestamp(path)
+}
+
+// writeTelemetryTimestamp 记录最近一次 Telemetry 尝试时间（成功或失败均写）。
+func writeTelemetryTimestamp(path string) {
+	if path == "" {
+		return
+	}
 	if dir := filepath.Dir(path); os.MkdirAll(dir, 0700) == nil {
 		_ = os.WriteFile(path, []byte(strconv.FormatInt(time.Now().Unix(), 10)), 0600)
 	}

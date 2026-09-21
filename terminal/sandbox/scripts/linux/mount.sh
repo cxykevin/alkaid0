@@ -132,6 +132,11 @@ chroot "$T" sh -uc '
 		fi
 	} > "$_alk_grf" 2>/dev/null || :
 	mount --bind "$_alk_grf" /etc/group 2>/dev/null || :
+	# 立即删除宿主上的伪造文件：chroot 内的 /tmp 通常是可写目录白名单的一员
+	# （宿主 /tmp 被 rbind 并 remount,rw），不删就会以 .alk-sandbox-etc-* 的
+	# 名字永久残留在宿主 /tmp。bind mount 持有 inode 引用，删掉源路径后
+	# /etc/passwd、/etc/group 仍指向该 inode，随本 mount namespace 一起消失。
+	rm -f "$_alk_pwf" "$_alk_grf" 2>/dev/null || :
 
 	# 切换到工作目录并执行
 	# 若指定了运行属主（root 服务且工作目录属主非 root），先降权到属主再进入执行，

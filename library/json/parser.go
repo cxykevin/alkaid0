@@ -265,8 +265,8 @@ func (p *Parser) AddToken(token string) error {
 			}
 			if rv == '"' {
 				// 字符串结束
-				strVal := p.stringTmp
-				p.stringTmp = ""
+				strVal := p.stringTmp.String()
+				p.stringTmp.Reset()
 				p.mode = jsonModeDefault
 
 				// 根据当前容器上下文决定是 key 还是 value
@@ -298,9 +298,9 @@ func (p *Parser) AddToken(token string) error {
 				continue
 			}
 			// 追加字符串内容
-			p.stringTmp += string(rv)
+			p.stringTmp.WriteRune(rv)
 			if p.currentValuePtr != nil {
-				*p.currentValuePtr = StringSlot(p.stringTmp)
+				*p.currentValuePtr = StringSlot(p.stringTmp.String())
 			}
 			continue
 		case jsonModeInStringSpecialChar:
@@ -312,21 +312,21 @@ func (p *Parser) AddToken(token string) error {
 				p.mode = jsonModeInStringSpecialCharHex
 				continue
 			case 'n':
-				p.stringTmp += "\n"
+				p.stringTmp.WriteByte('\n')
 			case 'r':
-				p.stringTmp += "\r"
+				p.stringTmp.WriteByte('\r')
 			case 't':
-				p.stringTmp += "\t"
+				p.stringTmp.WriteByte('\t')
 			case 'b':
-				p.stringTmp += "\b"
+				p.stringTmp.WriteByte('\b')
 			case 'f':
-				p.stringTmp += "\f"
+				p.stringTmp.WriteByte('\f')
 			default:
-				p.stringTmp += string(rv)
+				p.stringTmp.WriteRune(rv)
 			}
 			p.mode = jsonModeInString
 			if p.currentValuePtr != nil {
-				*p.currentValuePtr = StringSlot(p.stringTmp)
+				*p.currentValuePtr = StringSlot(p.stringTmp.String())
 			}
 			continue
 		case jsonModeInStringSpecialCharHex:
@@ -350,7 +350,7 @@ func (p *Parser) AddToken(token string) error {
 							high := p.pendingHighSurrogate
 							low := code
 							r := 0x10000 + ((high - 0xD800) << 10) + (low - 0xDC00)
-							p.stringTmp += string(rune(r))
+							p.stringTmp.WriteRune(rune(r))
 							p.pendingHighSurrogate = 0
 						} else {
 							p.Stop = true
@@ -363,15 +363,15 @@ func (p *Parser) AddToken(token string) error {
 							p.pendingHighSurrogate = code
 						} else if code >= 0xDC00 && code <= 0xDFFF {
 							// 未配对的低代理项：替换为 U+FFFD，避免产生非法 UTF-8
-							p.stringTmp += "�"
+							p.stringTmp.WriteString("�")
 						} else {
-							p.stringTmp += string(rune(code))
+							p.stringTmp.WriteRune(rune(code))
 						}
 					}
 					p.stringHexTmp = ""
 					p.mode = jsonModeInString
 					if p.currentValuePtr != nil {
-						*p.currentValuePtr = StringSlot(p.stringTmp)
+						*p.currentValuePtr = StringSlot(p.stringTmp.String())
 					}
 				}
 				continue
@@ -381,19 +381,19 @@ func (p *Parser) AddToken(token string) error {
 			return errors.New("invalid unicode escape char")
 		case jsonModeInNumber:
 			if isNumChar(rv) {
-				p.numTmp += string(rv)
+				p.numTmp.WriteRune(rv)
 				if p.currentValuePtr != nil {
-					*p.currentValuePtr = p.numTmp
+					*p.currentValuePtr = p.numTmp.String()
 				}
 				continue
 			}
 			// 结束数字，尝试解析
-			num, err := strconv.ParseFloat(p.numTmp, 64)
+			num, err := strconv.ParseFloat(p.numTmp.String(), 64)
 			if err != nil {
 				// 数字超出 float64 范围（如 1e999，属合法 JSON）时不应中止整个流式解析，
 				// 以原始字符串作为值保留，宁可后续按文本处理也不丢弃其余 token。
-				raw := p.numTmp
-				p.numTmp = ""
+				raw := p.numTmp.String()
+				p.numTmp.Reset()
 				p.mode = jsonModeDefault
 				if p.currentValuePtr != nil {
 					*p.currentValuePtr = raw
@@ -403,7 +403,7 @@ func (p *Parser) AddToken(token string) error {
 					return err
 				}
 			} else {
-				p.numTmp = ""
+				p.numTmp.Reset()
 				p.mode = jsonModeDefault
 				// push number value
 				if p.currentValuePtr != nil {
@@ -549,13 +549,13 @@ func (p *Parser) AddToken(token string) error {
 			if ok && topType.(jsonMode) == jsonModeInObjectWaitingKey {
 				// It's a key string
 				p.mode = jsonModeInString
-				p.stringTmp = ""
+				p.stringTmp.Reset()
 				p.stringIsKey = true
 				continue
 			}
 			// It's a value string (root, array element, or object value)
 			p.mode = jsonModeInString
-			p.stringTmp = ""
+			p.stringTmp.Reset()
 			p.stringIsKey = false
 			// create placeholder in parent
 			if _, err := p.beginValueSlot(""); err != nil {
@@ -603,7 +603,8 @@ func (p *Parser) AddToken(token string) error {
 		default:
 			if isNumChar(rv) {
 				p.mode = jsonModeInNumber
-				p.numTmp = string(rv)
+				p.numTmp.Reset()
+				p.numTmp.WriteRune(rv)
 				continue
 			}
 			p.Stop = true
@@ -627,11 +628,11 @@ func (p *Parser) DoneToken() error {
 
 	// 尝试接受以数字/关键字结尾的输入，并在 EOF 时将值填充进占位符或容器
 	if p.mode == jsonModeInNumber {
-		num, err := strconv.ParseFloat(p.numTmp, 64)
+		num, err := strconv.ParseFloat(p.numTmp.String(), 64)
 		if err != nil {
 			return errors.New("invalid number format at EOF")
 		}
-		p.numTmp = ""
+		p.numTmp.Reset()
 		p.mode = jsonModeDefault
 		if p.currentValuePtr != nil {
 			*p.currentValuePtr = num

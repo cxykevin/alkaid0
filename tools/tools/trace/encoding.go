@@ -147,41 +147,49 @@ func hasCoherentScript(text string) bool {
 //
 // 判定为二进制时返回 ("", EncodingBinary)。
 func DecodeText(content []byte) (string, string) {
+	text, name, _ := DecodeTextEx(content)
+	return text, name
+}
+
+// DecodeTextEx 与 DecodeText 判定完全一致，只是额外返回原始字节是否带 BOM
+// （UTF-8 / UTF-16）。edit 工具要按原编码写回，必须知道 BOM 是否存在：
+// 无 BOM 的 UTF-16 与带 BOM 的 UTF-16 在 DecodeText 里是同一个编码名。
+func DecodeTextEx(content []byte) (text string, name string, hasBOM bool) {
 	if len(content) == 0 {
-		return "", EncodingUTF8
+		return "", EncodingUTF8, false
 	}
 
 	// 1) BOM
 	switch {
 	case bytes.HasPrefix(content, []byte{0xEF, 0xBB, 0xBF}):
-		return string(content[3:]), EncodingUTF8BOM
+		return string(content[3:]), EncodingUTF8BOM, true
 	case bytes.HasPrefix(content, []byte{0xFF, 0xFE}):
 		if s, err := decodeWith(content[2:], xunicode.UTF16(xunicode.LittleEndian, xunicode.IgnoreBOM)); err == nil {
-			return s, EncodingUTF16LE
+			return s, EncodingUTF16LE, true
 		}
 	case bytes.HasPrefix(content, []byte{0xFE, 0xFF}):
 		if s, err := decodeWith(content[2:], xunicode.UTF16(xunicode.BigEndian, xunicode.IgnoreBOM)); err == nil {
-			return s, EncodingUTF16BE
+			return s, EncodingUTF16BE, true
 		}
 	}
 
 	// 2) 含 NUL：UTF-16（无 BOM）或二进制
 	if bytes.IndexByte(content, 0) >= 0 {
 		if s, name, ok := decodeUTF16WithoutBOM(content); ok {
-			return s, name
+			return s, name, false
 		}
-		return "", EncodingBinary
+		return "", EncodingBinary, false
 	}
 
 	// 3) 合法 UTF-8：直接用（含 ASCII）
 	if utf8.Valid(content) {
-		return string(content), EncodingUTF8
+		return string(content), EncodingUTF8, false
 	}
 	// 3b) 只有极个别坏字节（例如历史仓库里混了一个坏字节的 UTF-8 文件）：仍按 UTF-8 处理，
 	//     避免整篇被当成 GBK/Big5 解成乱码。阈值卡得很紧——放宽会把"少量重音字母的
 	//     西欧文本"误判成 UTF-8，那同样是把内容解错。
 	if justFewInvalidBytes(content) {
-		return string(content), EncodingUTF8
+		return string(content), EncodingUTF8, false
 	}
 
 	// 4) 候选编码打分。分两条路走，都不成立就按 UTF-8 原样输出：
@@ -232,20 +240,20 @@ func DecodeText(content []byte) (string, string) {
 		}
 	}
 	if bestText == "" {
-		return string(content), EncodingUTF8 // 一个候选都没解出来：按 UTF-8 原样输出
+		return string(content), EncodingUTF8, false // 一个候选都没解出来：按 UTF-8 原样输出
 	}
 	if singleByteOnly {
 		if bestScore <= 0 {
-			return string(content), EncodingUTF8
+			return string(content), EncodingUTF8, false
 		}
-		return bestText, bestName
+		return bestText, bestName, false
 	}
 	// 多字节路：还要过置信度（得分 / 高位字节数）下限，冷门编码下限更高——
 	// 认错不如不认，认不出就按 UTF-8 原样输出，让模型看到替换符而不是"看着像真的"的错误解码。
 	if density := float64(bestScore) / float64(max(high, 1)); density < candidateMinDensity(bestName) {
-		return string(content), EncodingUTF8
+		return string(content), EncodingUTF8, false
 	}
-	return bestText, bestName
+	return bestText, bestName, false
 }
 
 // 冷门编码（日/韩）要与常用编码拉开的最小领先幅度（百分比）。
@@ -349,6 +357,60 @@ func justFewInvalidBytes(content []byte) bool {
 func decodeWith(content []byte, enc encoding.Encoding) (string, error) {
 	out, _, err := transform.Bytes(enc.NewDecoder(), content)
 	return string(out), err
+}
+
+// encodeWith 用给定编码编码，返回字节与错误。
+func encodeWith(text string, enc encoding.Encoding) ([]byte, error) {
+	out, _, err := transform.Bytes(enc.NewEncoder(), []byte(text))
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// EncodeText 把 UTF-8 文本按 name 编码回文件字节，与 DecodeTextEx 成对使用
+// （edit 工具写回时保持原文件编码）。
+//
+// hasBOM 只对 UTF-16 生效：DecodeTextEx 会把 BOM 的存在与否单独返回，因为
+// "utf-16le" 这个编码名同时对应带 BOM 与不带 BOM 两种文件。UTF-8 BOM 由
+// EncodingUTF8BOM 本身决定。未知编码名（含 EncodingUTF8）按 UTF-8 原样输出；
+// 文本里有目标编码无法表示的字符时返回错误，由调用方决定是否放弃写入——
+// 宁可报错，也不静默用替换符损坏文件。
+func EncodeText(text, name string, hasBOM bool) ([]byte, error) {
+	switch name {
+	case EncodingUTF8BOM:
+		return append([]byte{0xEF, 0xBB, 0xBF}, text...), nil
+	case EncodingUTF16LE:
+		if hasBOM {
+			return encodeWith(text, xunicode.UTF16(xunicode.LittleEndian, xunicode.UseBOM))
+		}
+		return encodeWith(text, xunicode.UTF16(xunicode.LittleEndian, xunicode.IgnoreBOM))
+	case EncodingUTF16BE:
+		if hasBOM {
+			return encodeWith(text, xunicode.UTF16(xunicode.BigEndian, xunicode.UseBOM))
+		}
+		return encodeWith(text, xunicode.UTF16(xunicode.BigEndian, xunicode.IgnoreBOM))
+	case EncodingGBK:
+		return encodeWith(text, simplifiedchinese.GBK)
+	case EncodingGB18030:
+		return encodeWith(text, simplifiedchinese.GB18030)
+	case EncodingBig5:
+		return encodeWith(text, traditionalchinese.Big5)
+	case EncodingShiftJIS:
+		return encodeWith(text, japanese.ShiftJIS)
+	case EncodingEUCJP:
+		return encodeWith(text, japanese.EUCJP)
+	case EncodingEUCKR:
+		return encodeWith(text, korean.EUCKR)
+	case "windows-1252":
+		return encodeWith(text, charmap.Windows1252)
+	case "windows-1251":
+		return encodeWith(text, charmap.Windows1251)
+	case "iso-8859-1":
+		return encodeWith(text, charmap.ISO8859_1)
+	default:
+		return []byte(text), nil
+	}
 }
 
 // decodeUTF16WithoutBOM 处理没有 BOM 的 UTF-16：Windows 工具与部分编辑器会产出这种文件。

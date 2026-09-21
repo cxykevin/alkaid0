@@ -202,9 +202,15 @@ func validatePath(cwd, relPath string) (string, error) {
 		return "", fmt.Errorf("path escapes the working directory")
 	}
 
-	// 阻止访问 .alkaid0 目录
-	if strings.HasPrefix(rel, ".alkaid0") {
-		return "", fmt.Errorf("access to .alkaid0 directory is not allowed")
+	// 阻止访问 .alkaid0 目录。
+	// 必须逐分量、大小写不敏感地判定：Windows/NTFS 大小写不敏感，".ALKAID0"、
+	// ".Alkaid0" 会解析到同一个目录，此前的大小写敏感前缀比较可被绕过；
+	// 逐分量还顺带覆盖嵌套路径（sub/.alkaid0/x），且不会像前缀比较那样误伤
+	// ".alkaid0-backup" 这类合法名字。
+	for _, part := range strings.Split(strings.ReplaceAll(rel, "\\", "/"), "/") {
+		if strings.EqualFold(part, ".alkaid0") {
+			return "", fmt.Errorf("access to .alkaid0 directory is not allowed")
+		}
 	}
 
 	// 解析符号链接，防止工作区内的 symlink 把读写/删除操作引到工作区外
@@ -228,10 +234,24 @@ func requirePath(p string) error {
 	return nil
 }
 
+// maxSymlinkDepth 符号链接解析深度上限，超过即拒绝（悬垂/循环链接）。
+const maxSymlinkDepth = 40
+
 // validateNoSymlinkEscape 对 fullPath 及其已存在的最长前缀解析符号链接，
 // 确认解析后的真实路径仍在 cwd 内，防止工作区内的 symlink（如 node_modules、
 // venv、用户手动链接的文件）把操作引到 /etc 或用户主目录等工作区外位置。
+//
+// 悬垂链接同样必须校验：filepath.EvalSymlinks 对"目标不存在"的链接返回错误，
+// 旧实现遇到错误就向上跳过该分量，于是 cwd/link -> /outside/missing 会被判为
+// 未逃逸；随后 fs/write 以 O_CREATE 跟随该链接，真的在 /outside 落盘。
 func validateNoSymlinkEscape(cwd, fullPath string) error {
+	return validateNoSymlinkEscapeDepth(cwd, fullPath, 0)
+}
+
+func validateNoSymlinkEscapeDepth(cwd, fullPath string, depth int) error {
+	if depth > maxSymlinkDepth {
+		return fmt.Errorf("too many levels of symbolic links")
+	}
 	realCwd, err := filepath.EvalSymlinks(cwd)
 	if err != nil {
 		realCwd = filepath.Clean(cwd)
@@ -242,10 +262,22 @@ func validateNoSymlinkEscape(cwd, fullPath string) error {
 		resolved, err := filepath.EvalSymlinks(checkPath)
 		if err == nil {
 			rel, relErr := filepath.Rel(realCwd, resolved)
-			if relErr != nil || strings.HasPrefix(rel, "..") {
+			if relErr != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
 				return fmt.Errorf("path escapes the working directory via symlink")
 			}
 			return nil
+		}
+		// EvalSymlinks 失败但该路径本身存在且是符号链接：说明它是悬垂链接
+		// （或链接环）。内核在真正打开时仍会跟随它，必须显式解析其目标并校验。
+		if li, lerr := os.Lstat(checkPath); lerr == nil && li.Mode()&os.ModeSymlink != 0 {
+			target, rerr := os.Readlink(checkPath)
+			if rerr != nil {
+				return fmt.Errorf("cannot resolve symlink %q: %v", checkPath, rerr)
+			}
+			if !filepath.IsAbs(target) {
+				target = filepath.Join(filepath.Dir(checkPath), target)
+			}
+			return validateNoSymlinkEscapeDepth(cwd, target, depth+1)
 		}
 		parent := filepath.Dir(checkPath)
 		if parent == checkPath {
@@ -570,24 +602,84 @@ func FsWrite(req FsWriteRequest, _ func(string, any, *string) error, _ uint64) (
 		if err := ctx.Err(); err != nil {
 			return struct{}{}, err
 		}
-		flag := os.O_CREATE | os.O_WRONLY
 		if req.Append {
-			flag |= os.O_APPEND
-		} else {
-			flag |= os.O_TRUNC
+			// 追加模式无法用"临时文件 + rename"原子替换，保持原语义；
+			// 但拒绝非普通文件：对 FIFO 以 O_WRONLY 打开会永久阻塞在 open，
+			// 超时也无法取消（goroutine 泄漏）。
+			if li, lerr := os.Stat(fullPath); lerr == nil && !li.Mode().IsRegular() {
+				return struct{}{}, fmt.Errorf("refusing to append to non-regular file %s", fullPath)
+			}
+			f, err := os.OpenFile(fullPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+			if err != nil {
+				return struct{}{}, err
+			}
+			defer f.Close()
+			n, err := f.Write(content)
+			if err != nil {
+				return struct{}{}, err
+			}
+			bytesWritten = int64(n)
+			return struct{}{}, nil
 		}
 
-		f, err := os.OpenFile(fullPath, flag, 0644)
+		// 覆盖写：先写同目录临时文件，再 rename 原子替换。
+		// 旧实现直接以 O_TRUNC 打开目标：一旦 200ms 超时（FUSE/网络盘/FIFO），
+		// 调用方收到超时错误，后台却仍可能继续写入，且原内容已被截断，
+		// 留下半截文件。临时文件方案保证目标要么保持原样、要么是完整新内容。
+		target := fullPath
+		if resolved, rerr := filepath.EvalSymlinks(fullPath); rerr == nil {
+			// 目标已存在（可能是指向工作区内文件的符号链接）：写其真实路径，
+			// 保持"写穿链接"的语义。
+			target = resolved
+		} else if li, lerr := os.Lstat(fullPath); lerr == nil && li.Mode()&os.ModeSymlink != 0 {
+			// 悬垂链接（目标尚不存在）：解析链接目标，同样写穿。
+			if link, lerr2 := os.Readlink(fullPath); lerr2 == nil {
+				if !filepath.IsAbs(link) {
+					link = filepath.Join(filepath.Dir(fullPath), link)
+				}
+				target = link
+			}
+		}
+
+		tmp, err := os.CreateTemp(filepath.Dir(target), ".alkaid0-fswrite-*")
 		if err != nil {
 			return struct{}{}, err
 		}
-		defer f.Close()
-
-		n, err := f.Write(content)
-		if err != nil {
+		tmpName := tmp.Name()
+		cleanup := func() {
+			_ = tmp.Close()
+			_ = os.Remove(tmpName)
+		}
+		if err := tmp.Chmod(0644); err != nil {
+			cleanup()
 			return struct{}{}, err
 		}
-		bytesWritten = int64(n)
+		// 分块写入并在每块前检查 ctx，使超时/取消能中断写入而不是继续改盘。
+		for off := 0; off < len(content); {
+			if err := ctx.Err(); err != nil {
+				cleanup()
+				return struct{}{}, err
+			}
+			n, werr := tmp.Write(content[off:])
+			if werr != nil {
+				cleanup()
+				return struct{}{}, werr
+			}
+			off += n
+			bytesWritten = int64(off)
+		}
+		if err := ctx.Err(); err != nil {
+			cleanup()
+			return struct{}{}, err
+		}
+		if err := tmp.Close(); err != nil {
+			_ = os.Remove(tmpName)
+			return struct{}{}, err
+		}
+		if err := os.Rename(tmpName, target); err != nil {
+			_ = os.Remove(tmpName)
+			return struct{}{}, err
+		}
 		return struct{}{}, nil
 	})
 	if err != nil {

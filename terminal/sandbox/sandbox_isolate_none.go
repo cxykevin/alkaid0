@@ -4,9 +4,10 @@ package sandbox
 
 import (
 	"context"
+	"errors"
 	"io"
+	"os"
 	"os/exec"
-	"runtime"
 	"syscall"
 )
 
@@ -25,6 +26,11 @@ func createIsolateNoneCmd(ctx context.Context, name string, args []string, env [
 
 	cmd := exec.CommandContext(ctx, name, args...)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	// 输出 writer 不是 *os.File 时（run 工具把 stdout/stderr 接到内存 writer），
+	// os/exec 会起拷贝 goroutine 逐块转发；若后代进程继承管道并存活，Wait 会
+	// 永远等不到 EOF。WaitDelay 到点后 os/exec 强制关掉管道并返回
+	// exec.ErrWaitDelay，由 Wait 按"命令已结束"处理。
+	cmd.WaitDelay = drainTimeout
 	cmd.Cancel = func() error {
 		if cmd.Process == nil {
 			return nil
@@ -54,7 +60,16 @@ func (e *ExecCmd) Start() error {
 
 // Wait 等待
 func (e *ExecCmd) Wait() error {
-	return e.cmd.Wait()
+	err := e.cmd.Wait()
+	// 主进程已退出、只是后代仍持有输出管道：命令本身已经结束（见 WaitDelay 注释）。
+	// 若退出码为 0 则视为成功，不能因为排空兜底而误报失败（输出可能被截断）。
+	if errors.Is(err, exec.ErrWaitDelay) {
+		logger.Warn("output pipe still held by descendant process after exit, output may be truncated (state: %v)", e.cmd.ProcessState)
+		if state := e.cmd.ProcessState; state != nil && state.Success() {
+			return nil
+		}
+	}
+	return err
 }
 
 // Run 执行
@@ -82,15 +97,24 @@ func (e *ExecCmd) Kill() error {
 	if e.cmd == nil || e.cmd.Process == nil {
 		return nil
 	}
-	if runtime.GOOS != "windows" {
-		// 只有在进程设置了独立进程组（Setpgid）时才杀进程组。
-		// OS 隔离模式设置了 Setpgid（sandbox_linux.go），杀进程组安全且能杀 unshare --pid --fork 孤儿。
-		// 非隔离模式没有 Setpgid，杀进程组会误杀 Claude Code 所在进程组的其他进程（如外部 git）。
-		if pgid, err := syscall.Getpgid(e.cmd.Process.Pid); err == nil && pgid == e.cmd.Process.Pid {
-			_ = syscall.Kill(-e.cmd.Process.Pid, syscall.SIGKILL)
-		}
+	// 进程已被 Wait 回收：PID 可能已被系统复用，绝不能再按陈旧 PID 发信号，
+	// 否则会误杀恰好复用该 PID 的无关进程组（例如另一条刚启动的沙盒命令）。
+	// 与 os.Process.Kill 在 Wait 之后的语义一致，返回 ErrProcessDone。
+	if e.cmd.ProcessState != nil {
+		return os.ErrProcessDone
 	}
-	return e.cmd.Process.Kill()
+	// 先用 Process.Signal 确认进程仍存活并在同一时刻发送 SIGKILL：os.Process
+	// 内部有 done 标记与锁，已退出/已回收时返回 ErrProcessDone，不会像裸
+	// syscall.Kill 那样把信号发给复用了旧 PID 的新进程。
+	if err := e.cmd.Process.Signal(syscall.SIGKILL); err != nil {
+		return err
+	}
+	// 进程仍存活：只有它确实是独立进程组组长（Start 时设置 Setpgid，或
+	// unshare --pid --fork 路径）时才杀整个进程组，清理孤儿后代。
+	if pgid, err := syscall.Getpgid(e.cmd.Process.Pid); err == nil && pgid == e.cmd.Process.Pid {
+		_ = syscall.Kill(-e.cmd.Process.Pid, syscall.SIGKILL)
+	}
+	return nil
 }
 
 // Clean 清理

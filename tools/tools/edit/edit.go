@@ -1,7 +1,6 @@
 package edit
 
 import (
-	"bufio"
 	"bytes"
 	_ "embed" // embed
 	"errors"
@@ -323,9 +322,11 @@ func buildDiffContent(absPath string, oldContent, newContent string, isNew bool)
 
 // CheckPath 处理路径
 func CheckPath(mp map[string]*any) (string, error) {
-	// 后台终端路径由 edit 直接转发输入，不按文件路径校验。
+	// 规范的后台终端路径（@temp/run/<id>）由 edit 直接转发输入，不按文件路径校验。
+	// 历史写法 run/<id> 不在这里放行："run/" 同时是普通目录名，放行会让
+	// run/../x 绕过 ".." 校验，也让普通路径无法走后续的常规校验。
 	if pathPtr, ok := mp["path"]; ok && pathPtr != nil {
-		if path, ok := (*pathPtr).(string); ok && (strings.HasPrefix(path, "@temp/run/") || strings.HasPrefix(path, "run/")) {
+		if path, ok := (*pathPtr).(string); ok && strings.HasPrefix(path, "@temp/run/") {
 			return path, nil
 		}
 	}
@@ -509,7 +510,15 @@ func writeFile(session *structs.Chats, mp map[string]*any, cross []*any) (bool, 
 
 	// A @temp/run path addresses a live terminal rather than a file. Send the
 	// text bytes unchanged so callers can provide control keys or a newline.
-	if strings.HasPrefix(path, "@temp/run/") || strings.HasPrefix(path, "run/") {
+	// run/<n> 是历史兼容写法：必须先确认该工作区真的有这个活动 run，否则
+	// run/main.go 这类普通文件会被劫持成终端输入、永远无法编辑。
+	// run 服务以 session.Root 作为工作目录命名空间（见 run.go 的 Workspace）。
+	runWorkspace := session.Root
+	isRunPath := strings.HasPrefix(path, "@temp/run/")
+	if !isRunPath && strings.HasPrefix(path, "run/") {
+		isRunPath = runTool.Default.FindInWorkspace(runWorkspace, path) != nil
+	}
+	if isRunPath {
 		textPtr, ok := mp["text"]
 		if !ok || textPtr == nil {
 			return false, cross, map[string]*any{}, errors.New("missing text parameter")
@@ -518,8 +527,7 @@ func writeFile(session *structs.Chats, mp map[string]*any, cross []*any) (bool, 
 		if !ok {
 			return false, cross, map[string]*any{}, errors.New("invalid text parameter")
 		}
-		workspace := filepath.Join(session.Root, session.CurrentActivatePath)
-		if err := runTool.Default.WriteRunStdin(workspace, session.ID, path, []byte(text)); err != nil {
+		if err := runTool.Default.WriteRunStdin(runWorkspace, session.ID, path, []byte(text)); err != nil {
 			return false, cross, map[string]*any{}, fmt.Errorf("failed to write terminal input: %w", err)
 		}
 		success := any(true)
@@ -553,73 +561,150 @@ func writeFile(session *structs.Chats, mp map[string]*any, cross []*any) (bool, 
 		}, nil
 	}
 
-	// 读取文件内容
+	// 读取文件内容：与 read 工具共用同一套编解码（trace.DecodeTextEx）。非 UTF-8
+	// 文件（BOM/UTF-16/GBK 等）按解码后的文本比对与编辑，写回时恢复原编码；否则
+	// read 存的是解码文本、edit 拿原始字节比对，带 BOM 的文件永远报"内容已被外部修改"。
+	// 这里一次读完（不再用 bufio.Scanner）：Scanner 默认 64KiB 行长上限会让压缩后的
+	// JS/JSON 直接报错，而且它吃掉行尾 \r 与末尾换行，重写整个文件时把 CRLF 改成 LF。
 	var content string
-	lines := []string{}
+	var encName string
+	var hasBOM bool
+	fileMode := os.FileMode(0644)
 	fileExists := true
+	// 实际写入的路径：符号链接要落到链接目标，否则原子 rename 会把链接本身
+	// 替换成普通文件（旧的 os.WriteFile 是跟随链接写目标）
+	writePath := path
 
-	file, err := os.Open(path)
-	if err != nil {
-		if os.IsNotExist(err) {
-			fileExists = false
-		} else {
+	stat, statErr := os.Lstat(path)
+	if statErr != nil {
+		if !os.IsNotExist(statErr) {
 			boolx := false
 			success := any(boolx)
-			errMsg := any(fmt.Sprintf("failed to open file: %v", err))
+			errMsg := any(fmt.Sprintf("failed to stat file: %v", statErr))
 			return false, cross, map[string]*any{
 				"success": &success,
 				"error":   &errMsg,
 			}, nil
 		}
+		fileExists = false
+		encName = trace.EncodingUTF8
 	} else {
-		defer file.Close()
-
-		scanner := bufio.NewScanner(file)
-		for scanner.Scan() {
-			lines = append(lines, scanner.Text())
-			if session.GetContext().Err() != nil {
-				_ = file.Close()
+		info := stat
+		if stat.Mode()&os.ModeSymlink != 0 {
+			// 链接本身不是常规文件：工作区内指向常规文件的链接是合法用法，
+			// 跟随链接后校验目标（越界链接已由 EnsureWorkspacePath 拦住）
+			resolvedPath, resolveErr := filepath.EvalSymlinks(path)
+			if resolveErr != nil {
 				boolx := false
 				success := any(boolx)
-				errMsg := any("edit cancelled: " + session.GetContext().Err().Error())
+				errMsg := any(fmt.Sprintf("failed to resolve symlink: %v", resolveErr))
 				return false, cross, map[string]*any{
 					"success": &success,
 					"error":   &errMsg,
 				}, nil
 			}
+			resolved, statLinkErr := os.Stat(resolvedPath)
+			if statLinkErr != nil {
+				boolx := false
+				success := any(boolx)
+				errMsg := any(fmt.Sprintf("failed to stat file: %v", statLinkErr))
+				return false, cross, map[string]*any{
+					"success": &success,
+					"error":   &errMsg,
+				}, nil
+			}
+			writePath = resolvedPath
+			info = resolved
 		}
-		if err := scanner.Err(); err != nil {
+		// FIFO/设备/目录不是可编辑的文件：读 FIFO 会永久阻塞且不可取消
+		if !info.Mode().IsRegular() {
 			boolx := false
 			success := any(boolx)
-			errMsg := any(fmt.Sprintf("failed to read file: %v", err))
+			errMsg := any("not a regular file")
 			return false, cross, map[string]*any{
 				"success": &success,
 				"error":   &errMsg,
 			}, nil
 		}
-		content = strings.Join(lines, "\n")
-	}
-
-	currentContent := content
-	if fileExists {
-		if raw, err := os.ReadFile(path); err == nil {
-			currentContent = string(raw)
+		// 与 read 工具一致的大小上限，避免把巨大文件整个读进内存
+		if info.Size() > trace.MaxFileSize {
+			boolx := false
+			success := any(boolx)
+			errMsg := any("file too large")
+			return false, cross, map[string]*any{
+				"success": &success,
+				"error":   &errMsg,
+			}, nil
+		}
+		fileMode = info.Mode().Perm()
+		raw, readErr := os.ReadFile(writePath)
+		if readErr != nil {
+			boolx := false
+			success := any(boolx)
+			errMsg := any(fmt.Sprintf("failed to read file: %v", readErr))
+			return false, cross, map[string]*any{
+				"success": &success,
+				"error":   &errMsg,
+			}, nil
+		}
+		content, encName, hasBOM = trace.DecodeTextEx(raw)
+		if encName == trace.EncodingBinary {
+			// 二进制文件保持旧行为：按原始字节处理（read 工具不会跟踪这类文件）
+			content = string(raw)
 		}
 	}
-	if err := trace.CheckEditContent(session, origRelPath, currentContent); err != nil {
+
+	// 读取可能阻塞（网络文件系统），写盘前检查取消信号
+	if session.GetContext().Err() != nil {
 		boolx := false
 		success := any(boolx)
-		errMsg := any(err.Error())
+		errMsg := any("edit cancelled: " + session.GetContext().Err().Error())
 		return false, cross, map[string]*any{
 			"success": &success,
 			"error":   &errMsg,
 		}, nil
 	}
 
+	if fileExists {
+		// 与 read 工具记录的（解码后）内容比对，避免覆盖请求构建后的外部修改
+		if err := trace.CheckEditContent(session, origRelPath, content); err != nil {
+			boolx := false
+			success := any(boolx)
+			errMsg := any(err.Error())
+			return false, cross, map[string]*any{
+				"success": &success,
+				"error":   &errMsg,
+			}, nil
+		}
+	} else {
+		// 文件已不存在：清掉确认条目，否则残留的旧内容会让该路径永远无法重建
+		trace.ForgetEditContent(session, origRelPath)
+	}
+
 	logger.Info("edit file \"%s\" mode \"%s\" in ID=%d,agentID=%s", path, target, session.ID, session.CurrentAgentID)
-	newContent, err := ProcessString(content, target, text, fileExists)
+
+	// 行尾与末尾换行按原文件保留：内部统一按 LF 处理，写回时恢复 CRLF，
+	// 否则 Windows 仓库每编辑一次就被整篇改成 LF。
+	crlf := fileExists && strings.Contains(content, "\r\n")
+	editContent := content
+	if crlf {
+		editContent = strings.ReplaceAll(content, "\r\n", "\n")
+	}
+	hadFinalNewline := !fileExists || strings.HasSuffix(editContent, "\n")
+
+	newContent, err := ProcessString(editContent, target, text, fileExists)
 	if err == nil {
+		if crlf {
+			// 模型给的替换文本里可能自带 CRLF：先归一成 LF，再做末尾换行处理
+			newContent = strings.ReplaceAll(newContent, "\r\n", "\n")
+		}
 		newContent = normalizeTrailingNewline(newContent)
+		if !hadFinalNewline {
+			newContent = strings.TrimSuffix(newContent, "\n")
+		}
+		if crlf {
+			newContent = strings.ReplaceAll(newContent, "\n", "\r\n")
+		}
 	}
 	if err != nil {
 		logger.Warn("failed to process string: %v", err)
@@ -642,16 +727,26 @@ func writeFile(session *structs.Chats, mp map[string]*any, cross []*any) (bool, 
 			"error":   &errMsg,
 		}, nil
 	}
-	// 保存旧内容原始字节（scanner 逐行读取会丢失末尾换行，此处重读用于精确 diff）
-	var oldContentRaw string
-	if fileExists {
-		if ob, err := os.ReadFile(path); err == nil {
-			oldContentRaw = string(ob)
+	// 写回原编码字节；目标编码表示不了的字符（例如往 GBK 文件里塞 emoji）宁可报错，
+	// 也不静默用替换符损坏文件
+	outBytes := []byte(newContent)
+	if encName != trace.EncodingBinary {
+		outBytes, err = trace.EncodeText(newContent, encName, hasBOM)
+		if err != nil {
+			logger.Warn("failed to encode file: %v", err)
+			boolx := false
+			success := any(boolx)
+			errMsg := any(fmt.Sprintf("failed to encode content back to %s: %v", encName, err))
+			return false, cross, map[string]*any{
+				"success": &success,
+				"error":   &errMsg,
+			}, nil
 		}
 	}
-	// 写入文件
-	err = os.WriteFile(path, []byte(newContent), 0644)
-	if err != nil {
+	// 旧内容（LF 归一）用于精确 diff
+	oldContentRaw := strings.ReplaceAll(content, "\r\n", "\n")
+	// 原子写入：同目录临时文件 + rename，中断时不会留下被截断的半截文件
+	if err := writeFileAtomic(writePath, outBytes, fileMode); err != nil {
 		logger.Warn("failed to write file: %v", err)
 		boolx := false
 		success := any(boolx)
@@ -679,12 +774,16 @@ func writeFile(session *structs.Chats, mp map[string]*any, cross []*any) (bool, 
 	// 生成 ACP v2 Diffs 段：基于磁盘最终内容（LSP 格式化可能已改写文件），
 	// 更新广播 content 并持久化，供客户端实时展示与会话还原重放。
 	finalContent := newContent
-	if fb, err := os.ReadFile(path); err == nil {
-		finalContent = string(fb)
+	if fb, readErr := os.ReadFile(writePath); readErr == nil {
+		if decoded, name, _ := trace.DecodeTextEx(fb); name != trace.EncodingBinary {
+			finalContent = decoded
+		} else {
+			finalContent = string(fb)
+		}
 	}
 	trace.ConfirmEditContent(session, origRelPath, finalContent)
 	respObj := buildRespObj(session, mp)
-	if diffObj := buildDiffContent(path, oldContentRaw, finalContent, !fileExists); diffObj != nil {
+	if diffObj := buildDiffContent(path, oldContentRaw, strings.ReplaceAll(finalContent, "\r\n", "\n"), !fileExists); diffObj != nil {
 		respObj = append(respObj, diffObj)
 	}
 	if toolIDPtr, ok := mp["_id"]; ok && toolIDPtr != nil {
@@ -716,6 +815,32 @@ func writeFile(session *structs.Chats, mp map[string]*any, cross []*any) (bool, 
 
 func normalizeTrailingNewline(s string) string {
 	return strings.TrimRight(s, "\n") + "\n"
+}
+
+// writeFileAtomic 以"同目录临时文件 + rename"写入：写临时文件期间原文件保持完整，
+// 中断/崩溃最多留下一个临时文件，不会出现被截断的半截目标文件。权限沿用原文件。
+func writeFileAtomic(path string, data []byte, perm os.FileMode) error {
+	dir := filepath.Dir(path)
+	tmp, err := os.CreateTemp(dir, ".alkaid0-edit-*.tmp")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	// 成功 rename 后临时文件已不存在，这里只是失败路径的兜底清理
+	defer func() { _ = os.Remove(tmpName) }()
+
+	if _, err := tmp.Write(data); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Chmod(perm); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmpName, path)
 }
 
 func handleLineReplace(lines []string, target, text string) (string, error) {

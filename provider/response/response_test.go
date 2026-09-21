@@ -132,6 +132,81 @@ func TestNativeSolver_ToolCalls(t *testing.T) {
 	}
 }
 
+// TestNewNativeSolverBuildsToolsSolverOnce 同一轮只应构建一次工具求解器：
+// NewNativeSolver 此前经由 NewSolver 构建一次、再为 nativeAcc 构建一次，会重复
+// 执行 ToolsSolver 的 Enable 判定与 PreHook（这里用 Enable 计数断言构建次数）。
+func TestNewNativeSolverBuildsToolsSolverOnce(t *testing.T) {
+	db := newTestDB(t)
+	toolobj.ToolsList = make(map[string]*toolobj.Tools)
+	toolobj.Scopes = make(map[string]string)
+	toolobj.Scopes["test_scope"] = "Test Scope"
+	enableCalls := 0
+	toolobj.ToolsList["test_calculator_once"] = &toolobj.Tools{
+		Name:  "test_calculator_once",
+		ID:    "test_calculator_once",
+		Scope: "test_scope",
+		Enable: func(*storageStructs.Chats) bool {
+			enableCalls++
+			return true
+		},
+		Parameters: map[string]parser.ToolParameters{
+			"expression": {Type: parser.ToolTypeString, Required: true},
+		},
+	}
+	session := &storageStructs.Chats{ID: 3003, DB: db, EnableScopes: map[string]bool{"test_scope": true}}
+	if s := response.NewNativeSolver(db, session); s == nil {
+		t.Fatal("NewNativeSolver returned nil")
+	}
+	if enableCalls != 1 {
+		t.Fatalf("ToolsSolver built %d times in one round, want 1", enableCalls)
+	}
+}
+
+// TestSolver_TruncatedNativeToolCallKeepsTextTail 原生参数在流结束时未闭合：
+// 收尾不得返回错误，且文本解析器尚未回吐的尾部候选（这里为行首未完成的 "<th"）
+// 必须保留——此前 nativeAcc.DoneToken 的错误会短路文本收尾，尾部文本随错误丢失。
+func TestSolver_TruncatedNativeToolCallKeepsTextTail(t *testing.T) {
+	db := newTestDB(t)
+	toolobj.ToolsList = make(map[string]*toolobj.Tools)
+	toolobj.Scopes = make(map[string]string)
+	toolobj.Scopes["test_scope"] = "Test Scope"
+	toolobj.ToolsList["test_calculator"] = &toolobj.Tools{
+		Name:  "test_calculator",
+		ID:    "test_calculator",
+		Scope: "test_scope",
+		Parameters: map[string]parser.ToolParameters{
+			"expression": {Type: parser.ToolTypeString, Required: true},
+		},
+	}
+	session := &storageStructs.Chats{ID: 3004, DB: db, EnableScopes: map[string]bool{"test_scope": true}}
+	s := response.NewNativeSolver(db, session)
+
+	if _, _, err := s.AddToken("正文\n<th", ""); err != nil {
+		t.Fatalf("AddToken error: %v", err)
+	}
+	if err := s.AddNativeToolCallDelta([]structs.StreamToolCall{{
+		Index:    0,
+		ID:       "call_trunc",
+		Function: &structs.StreamToolCallFunc{Name: "test_calculator", Arguments: `{"expression":"1+1`},
+	}}); err != nil {
+		t.Fatalf("AddNativeToolCallDelta error: %v", err)
+	}
+
+	calledTools, delta, _, err := s.DoneToken()
+	if err != nil {
+		t.Fatalf("DoneToken must not fail on truncated native arguments: %v", err)
+	}
+	if delta != "<th" {
+		t.Fatalf("text tail lost: delta = %q, want %q", delta, "<th")
+	}
+	if tools := s.GetTools(); len(tools) != 0 {
+		t.Fatalf("truncated call must not be executed: %+v", tools)
+	}
+	if !calledTools {
+		t.Fatal("no pending tools after every native call was dropped")
+	}
+}
+
 //go:fix inline
 func newAny(v any) *any {
 	return new(v)

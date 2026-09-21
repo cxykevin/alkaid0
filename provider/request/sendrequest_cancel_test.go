@@ -84,6 +84,9 @@ func TestSendRequest_ContextCancel_ContentPersisted(t *testing.T) {
 
 	var receivedDeltas []string
 	var mu sync.Mutex
+	// firstDelta 在收到第一个非空增量时关闭：取消时机由此驱动，而不是靠固定 sleep
+	firstDelta := make(chan struct{})
+	var firstDeltaOnce sync.Once
 
 	errCh := make(chan error, 1)
 
@@ -92,21 +95,26 @@ func TestSendRequest_ContextCancel_ContentPersisted(t *testing.T) {
 			func(delta, thinking string, _ uint64, _ structs.Usage, _ *string) error {
 				mu.Lock()
 				receivedDeltas = append(receivedDeltas, delta)
+				// 收到断言依赖的 "mock" 后再取消：过早取消会连这个词都还没到，
+				// 用例断言持久化内容包含 "mock" 就会失败。
+				ready := strings.Contains(strings.Join(receivedDeltas, ""), "mock")
 				mu.Unlock()
+				if ready {
+					firstDeltaOnce.Do(func() { close(firstDelta) })
+				}
 				return nil
 			})
 		errCh <- err
 	}()
 
-	// test-chat 模型：14 个词，~700ms 总时长，50ms/词
-	// 等待 250ms，应该收到 ~5 个词
-	time.Sleep(250 * time.Millisecond)
-
-	// 检查是否提前完成（防止 mock server 问题导致测试误判）
+	// 取消时机改为"收到首个增量后立即取消"：此前固定 sleep 250ms，在 -race 等
+	// 慢速环境下 mock 的流式响应可能先跑完，用例就测不到"中途取消"（实测 -race 偶发失败）。
 	select {
+	case <-firstDelta:
 	case err := <-errCh:
-		t.Fatalf("SendRequest completed before cancel (err=%v) - response too fast", err)
-	default:
+		t.Fatalf("SendRequest 在收到任何增量前就结束了（err=%v）", err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("等待首个流式增量超时")
 	}
 
 	mu.Lock()
@@ -138,16 +146,21 @@ func TestSendRequest_ContextCancel_ContentPersisted(t *testing.T) {
 		t.Fatal("Timeout waiting for SendRequest to return after cancel")
 	}
 
-	// 等待异步持久化 goroutine 完成
-	time.Sleep(500 * time.Millisecond)
-
-	// 查询数据库中 agent 消息
+	// 等待异步持久化 goroutine 完成：轮询而不是固定 sleep（固定等待在慢机器上
+	// 会假失败、在快机器上白等）。
 	var savedMsg storageStructs.Messages
-	err = db.Where("chat_id = ? AND type = ?", chat.ID, storageStructs.MessagesRoleAgent).
-		Order("id DESC").
-		First(&savedMsg).Error
-	if err != nil {
-		t.Fatalf("Failed to query persisted message: %v", err)
+	persistDeadline := time.Now().Add(5 * time.Second)
+	for {
+		err = db.Where("chat_id = ? AND type = ?", chat.ID, storageStructs.MessagesRoleAgent).
+			Order("id DESC").
+			First(&savedMsg).Error
+		if err == nil && savedMsg.Delta != "" {
+			break
+		}
+		if time.Now().After(persistDeadline) {
+			t.Fatalf("超时等待取消后的内容持久化（last err=%v, delta=%q）", err, savedMsg.Delta)
+		}
+		time.Sleep(20 * time.Millisecond)
 	}
 
 	t.Logf("Persisted delta length: %d", len(savedMsg.Delta))
@@ -163,11 +176,13 @@ func TestSendRequest_ContextCancel_ContentPersisted(t *testing.T) {
 		t.Errorf("Persisted delta does not contain expected mock content: %q", savedMsg.Delta)
 	}
 
-	// 验证持久化内容短于完整响应（证明确实在中途取消了）
+	// 验证持久化内容短于完整响应（证明确实在中途取消了）。
+	// 旧实现只 t.Logf 一条警告，"取消其实没生效、请求已经跑完"也能通过——
+	// 那样这个用例就完全失去意义，因此改为硬失败。
 	fullResponse := "This is a mock response from model test-chat. Your message was received and processed."
 	if len(savedMsg.Delta) >= len(fullResponse) {
-		t.Logf("Warning: persisted (%d) >= full response (%d) - may have completed before cancel",
-			len(savedMsg.Delta), len(fullResponse))
+		t.Fatalf("取消未生效：持久化内容 %d 字节 >= 完整响应 %d 字节（delta=%q）",
+			len(savedMsg.Delta), len(fullResponse), savedMsg.Delta)
 	}
 
 	if savedMsg.ModelID != 1 {

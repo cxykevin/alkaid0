@@ -37,8 +37,10 @@ func LoadAgent(session *structs.Chats) error {
 	session.CurrentAgentID = obj.ID
 	session.CurrentAgentConfig = agentConfig
 
-	// 写DB
-	err = session.DB.Save(session).Error
+	// 写DB：这些字段都是 gorm:"-"，不产生列更新；这里只把已持久化的 now_agent
+	// 重新写一遍刷新 updated_at，避免整行 Save 覆盖并发写入的 ai_title（P1-18 附带项）。
+	err = session.DB.Model(&structs.Chats{}).Where("id = ?", session.ID).
+		Update("now_agent", session.NowAgent).Error
 	if err != nil {
 		return err
 	}

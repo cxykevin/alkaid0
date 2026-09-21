@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	"github.com/cxykevin/alkaid0/log"
 	"gorm.io/gorm"
@@ -21,7 +22,14 @@ func init() {
 }
 
 //go:embed auto_execute.sql
-var fastSQL string
+var maintenanceSQL string
+
+// maintenanceDone 记录本进程内已经执行过维护语句（VACUUM/ANALYZE）的数据库文件绝对路径。
+// 这两个语句都会扫描/重写整个数据库，而 InitStorage 会被反复调用，不能每次打开都执行。
+var (
+	maintenanceMu   sync.Mutex
+	maintenanceDone = make(map[string]struct{})
+)
 
 // InitStorage 初始化 db
 func InitStorage(dataPath string, dbFile string) (*gorm.DB, error) {
@@ -62,16 +70,42 @@ func InitStorage(dataPath string, dbFile string) (*gorm.DB, error) {
 		return nil, err
 	}
 
-	for v := range strings.SplitSeq(fastSQL, ";") {
+	// per-connection 的 PRAGMA（foreign_keys 等）已经下沉到 DSN（见 init.go），
+	// 这里的语句只剩 VACUUM/ANALYZE：它们不是连接级设置，ANALYZE 会扫描整库索引写
+	// sqlite_stat1、VACUUM 会重写整个数据库文件。InitStorage 会被 server/actions 的
+	// loadDB 反复调用（打开会话数据库、后台 workflow 事件等），每次打开都执行会明显
+	// 拖慢打开速度，因此按数据库文件在本进程内只维护一次；内存库直接跳过。
+	if !isMemoryDBPath(dbPath) {
+		runMaintenanceOnce(db, dbPath)
+	}
+	return db, nil
+}
+
+// runMaintenanceOnce 对指定数据库文件执行一次 VACUUM/ANALYZE。
+// 同一个文件在本进程内只会真正执行一次（无论 InitStorage 被调用多少次）。
+func runMaintenanceOnce(db *gorm.DB, dbPath string) {
+	key := dbPath
+	if abs, absErr := filepath.Abs(dbPath); absErr == nil {
+		key = abs
+	}
+
+	maintenanceMu.Lock()
+	if _, ok := maintenanceDone[key]; ok {
+		maintenanceMu.Unlock()
+		return
+	}
+	maintenanceDone[key] = struct{}{}
+	maintenanceMu.Unlock()
+
+	for v := range strings.SplitSeq(maintenanceSQL, ";") {
 		vs := strings.TrimSpace(v)
 		if vs == "" {
 			continue
 		}
-		logger.Debug("executing fastSQL: %s", vs)
-		err := db.Exec(vs).Error
-		if err != nil {
-			logger.Error("failed to execute sql \"%s\": %v", vs, err)
+		logger.Debug("executing maintenance SQL: %s", vs)
+		if err := db.Exec(vs).Error; err != nil {
+			// 维护失败不影响正常使用，只记录
+			logger.Error("failed to execute maintenance SQL %q: %v", vs, err)
 		}
 	}
-	return db, nil
 }

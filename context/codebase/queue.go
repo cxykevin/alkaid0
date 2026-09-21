@@ -92,6 +92,11 @@ type QueueManager struct {
 	// totalPushed 累计入队任务数（含后来追加的 extras 任务）。
 	// 用于进度计算：Processed = totalPushed - Len()，不受新任务追加影响。
 	totalPushed int
+	// inFlight 已被 worker 取走、尚未处理完成的任务数。进度轮询用它区分
+	// "队列已空但最后一条仍在写入"与"真正处理完毕"。
+	inFlight int
+	// failed 嵌入失败的任务数。用于如实报告索引终态（Clear 时重置）。
+	failed int
 }
 
 // NewQueueManager 创建新的队列管理器
@@ -131,6 +136,7 @@ func (qm *QueueManager) WaitPop(ctx context.Context) *EmbedTask {
 		if qm.queue.Len() > 0 && !qm.paused && !qm.closed {
 			elem := qm.queue.Front()
 			qm.queue.Remove(elem)
+			qm.inFlight++
 			qm.mu.Unlock()
 			return elem.Value.(*EmbedTask)
 		}
@@ -155,6 +161,29 @@ func (qm *QueueManager) Len() int {
 	return qm.queue.Len()
 }
 
+// FinishTask 标记一个已取出的任务处理完成（worker 处理后调用）
+func (qm *QueueManager) FinishTask() {
+	qm.mu.Lock()
+	if qm.inFlight > 0 {
+		qm.inFlight--
+	}
+	qm.mu.Unlock()
+}
+
+// RecordFailure 记录一次嵌入失败
+func (qm *QueueManager) RecordFailure() {
+	qm.mu.Lock()
+	qm.failed++
+	qm.mu.Unlock()
+}
+
+// Stats 一次性返回队列统计快照，避免分多次加锁读到不一致的组合
+func (qm *QueueManager) Stats() (queueLen, totalPushed, inFlight, failed int) {
+	qm.mu.Lock()
+	defer qm.mu.Unlock()
+	return qm.queue.Len(), qm.totalPushed, qm.inFlight, qm.failed
+}
+
 // Pause 暂停队列处理（WaitPop 不会返回任务）
 func (qm *QueueManager) Pause() {
 	qm.mu.Lock()
@@ -174,12 +203,13 @@ func (qm *QueueManager) Resume() {
 	}
 }
 
-// Clear 清空队列并重置累计入队计数
+// Clear 清空队列并重置累计入队计数与失败计数
 func (qm *QueueManager) Clear() {
 	qm.mu.Lock()
 	defer qm.mu.Unlock()
 	qm.queue.Init()
 	qm.totalPushed = 0
+	qm.failed = 0
 }
 
 // Close 关闭队列，所有阻塞的 WaitPop 返回 nil

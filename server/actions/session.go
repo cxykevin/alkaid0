@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path"
+	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
@@ -136,6 +137,13 @@ type sessionObj struct {
 	streamMu        sync.Mutex
 	// activeAgentMessages 保存正在流式输出的消息，供中途加入的连接补齐。
 	activeAgentMessages map[uint64]*activeAgentMessage
+	// loopLifecycleMu 保护 loopWG/loopReleasing：启动 loop 与释放会话互斥，
+	// 保证释放时的 Wait 不会再遇到并发的 Add（WaitGroup 误用会 panic）。
+	loopLifecycleMu sync.Mutex
+	loopReleasing   bool
+	// loopWG 跟踪本会话启动的 loop goroutine。释放/删除会话前必须 join：
+	// Cancel 只是异步信号，loop 仍可能在使用 sess.DB，closeDB 后即 use-after-close。
+	loopWG sync.WaitGroup
 }
 
 // dbObj 数据库对象，包含引用计数用于生命周期管理
@@ -377,6 +385,40 @@ func parseSessionID(sessionID string) (string, uint32, error) {
 	return cwd, uint32(num), nil
 }
 
+// resolveSessionTarget 解析 sessionId → (cwd, chatID)。
+//
+// 与 sessionID2Cwd 的区别：允许冷会话（服务器重启后内存注册表为空）。
+// 冷路径绝不相信客户端携带的 cwd：
+//   - 只接受绝对路径且已规范化（cwd2SessionID 生成的就是规范形式），拒绝
+//     "/a/./b"、相对路径、尾随分隔符等伪造形式；
+//   - 目标目录下必须已存在 .alkaid0（会话库），否则 loadDB 会在任意可写目录里
+//     创建 .alkaid0/config.db —— 仅凭一个字符串就能让服务端在宿主机任意位置落盘。
+func resolveSessionTarget(sessionID string) (string, uint32, error) {
+	if cwd, id, err := sessionID2Cwd(sessionID); err == nil {
+		return cwd, id, nil
+	}
+	cwd, id, err := parseSessionID(sessionID)
+	if err != nil {
+		return "", 0, err
+	}
+	if !filepath.IsAbs(cwd) || filepath.Clean(cwd) != cwd {
+		return "", 0, fmt.Errorf("invalid session id: cwd must be an absolute clean path")
+	}
+	if info, statErr := os.Stat(filepath.Join(cwd, ".alkaid0")); statErr != nil || !info.IsDir() {
+		return "", 0, fmt.Errorf("session not found")
+	}
+	return cwd, id, nil
+}
+
+// sessionBoundToConn 判断连接是否通过 session/new 或 session/resume 绑定过该会话。
+// sessionId 由客户端提供，prompt/cancel/close 之前必须以本映射校验，
+// 否则任一连接都能操作或释放其他连接持有的会话。
+func sessionBoundToConn(connID uint64, sessionID string) bool {
+	bindedSessionOnConnMu.Lock()
+	defer bindedSessionOnConnMu.Unlock()
+	return slices.Contains(bindedSessionOnConn[connID], sessionID)
+}
+
 // registerConnCall 注册连接的call函数和会话绑定
 // 新连接绑定到会话时，会自动取消任何待处理的延迟释放定时器
 func registerConnCall(connID uint64, sessionID string, callFunc func(string, any, *string) error) {
@@ -398,12 +440,7 @@ func registerConnCall(connID uint64, sessionID string, callFunc func(string, any
 
 // unregisterConnCall 注销连接和会话的绑定
 func unregisterConnCall(connID uint64, sessionID string) {
-	connCallLock.Lock()
-	defer connCallLock.Unlock()
-	delete(connCallMap, connID)
-
 	sessionConnLock.Lock()
-	defer sessionConnLock.Unlock()
 	conns := sessionConnMap[sessionID]
 	for i, cid := range conns {
 		if cid == connID {
@@ -414,6 +451,24 @@ func unregisterConnCall(connID uint64, sessionID string) {
 	if len(sessionConnMap[sessionID]) == 0 {
 		delete(sessionConnMap, sessionID)
 	}
+	// connCallMap 是**连接级**的：一个连接可以绑定多个会话。只有该连接不再绑定
+	// 任何会话时才删除它的 call，否则解绑会话 A 会把仍在服务会话 B 的连接回调
+	// 一起删掉，此后发往会话 B 的所有广播都会静默丢失。
+	stillBound := false
+	for _, list := range sessionConnMap {
+		if slices.Contains(list, connID) {
+			stillBound = true
+			break
+		}
+	}
+	sessionConnLock.Unlock()
+
+	if stillBound {
+		return
+	}
+	connCallLock.Lock()
+	delete(connCallMap, connID)
+	connCallLock.Unlock()
 }
 
 // broadcastSessionUpdate 向所有连接到该会话的客户端广播更新
@@ -473,7 +528,7 @@ func broadcastToolCallCancelled(sessionID string, pending *[]funcs.ToolCall) {
 		return
 	}
 	for _, tool := range *pending {
-		toolCallID := fmt.Sprintf("call_%d_%d_%s", obj.session.ID, obj.session.CurrentMessageID, tool.ID)
+		toolCallID := fmt.Sprintf("call_%d_%d_%s", obj.session.ID, obj.session.GetCurrentMessageID(), tool.ID)
 		// 与直播最终状态、session/resume 回放共用同一份规范化 content/参数渲染。
 		_ = broadcastSessionUpdate(sessionID, SessionUpdate{
 			SessionID: sessionID,
@@ -483,7 +538,7 @@ func broadcastToolCallCancelled(sessionID string, pending *[]funcs.ToolCall) {
 				Title:         fmt.Sprintf("[Call %s]%s", tool.Name, tool.ID),
 				Kind:          u.Default(ToolNameToTypeMap, tool.Name, "other"),
 				Status:        "cancelled",
-				Content:       structs.BuildToolCallingContent(tool.Name, obj.session.CurrentMessageID, tool.Parameters),
+				Content:       structs.BuildToolCallingContent(tool.Name, obj.session.GetCurrentMessageID(), tool.Parameters),
 			},
 		}, 0)
 	}
@@ -531,7 +586,7 @@ func requestPermission(obj *sessionObj, pending *[]funcs.ToolCall) (bool, error)
 		return false, fmt.Errorf("invalid permission request")
 	}
 	tool := (*pending)[0]
-	toolCallID := fmt.Sprintf("call_%d_%d_%s", obj.session.ID, obj.session.CurrentMessageID, tool.ID)
+	toolCallID := fmt.Sprintf("call_%d_%d_%s", obj.session.ID, obj.session.GetCurrentMessageID(), tool.ID)
 	params := RequestPermissionParams{
 		SessionID: cwd2SessionID(obj.cwd, obj.id),
 		Title:     fmt.Sprintf("Approve tool call: %s", tool.Name),
@@ -542,7 +597,7 @@ func requestPermission(obj *sessionObj, pending *[]funcs.ToolCall) (bool, error)
 				Title:      fmt.Sprintf("[Call %s]%s", tool.Name, tool.ID),
 				Kind:       u.Default(ToolNameToTypeMap, tool.Name, "other"),
 				Status:     "pending",
-				Content:    structs.BuildToolCallingContent(tool.Name, obj.session.CurrentMessageID, tool.Parameters),
+				Content:    structs.BuildToolCallingContent(tool.Name, obj.session.GetCurrentMessageID(), tool.Parameters),
 			},
 		},
 		Options: []PermissionOption{
@@ -623,17 +678,24 @@ func requestPermission(obj *sessionObj, pending *[]funcs.ToolCall) (bool, error)
 // 	return lastErr
 // }
 
+// dbKey 规范化数据库缓存键。
+//
+// loadDB 过去在命中缓存之后才 path.Clean(pathx)，closeDB 则从不 Clean：
+// 以 "/a/b/" 与 "/a/b" 两种写法访问会各建一个连接（旧连接泄漏、引用计数错乱），
+// 而 closeDB 用另一种写法时永远找不到条目，连接永不关闭。
+func dbKey(p string) string { return path.Clean(p) }
+
 // loadDB 加载数据库连接，支持连接复用和引用计数
 func loadDB(pathx string) (*gorm.DB, error) {
+	if pathx == "" {
+		return nil, fmt.Errorf("cwd is empty")
+	}
+	pathx = dbKey(pathx)
 	dbLock.Lock()
 	defer dbLock.Unlock()
 	if obj, ok := dbs[pathx]; ok {
 		obj.referCnt++
 	} else {
-		if pathx == "" {
-			return nil, fmt.Errorf("cwd is empty")
-		}
-		pathx = path.Clean(pathx)
 		info, err := os.Stat(pathx)
 		if err != nil || !info.IsDir() {
 			return nil, fmt.Errorf("cwd not found or not a directory")
@@ -653,6 +715,11 @@ func loadDB(pathx string) (*gorm.DB, error) {
 // closeDB 关闭数据库连接，引用计数递减，处理资源清理
 func closeDB(path string) {
 	logger.Debug("close db %s", path)
+	if path == "" {
+		return
+	}
+	// 与 loadDB 使用同一规范化键，保证 "/a/b/" 也能命中 "/a/b" 的缓存条目。
+	path = dbKey(path)
 	dbLock.Lock()
 	defer dbLock.Unlock()
 	if obj, ok := dbs[path]; ok {
@@ -762,7 +829,7 @@ func loadSession(cwd string, id *uint32, knowID bool, hidden ...bool) (*structs.
 			lp := obj.loop
 			obj.loopMu.Unlock()
 			notice := fmt.Sprintf("Background shell %q stopped: success=%v killed=%v run_id=%s", command, r.Success, r.Killed, runID)
-			if sess.State == state.StateIdle || sess.State == state.StateWaiting {
+			if sess.GetState() == state.StateIdle || sess.GetState() == state.StateWaiting {
 				if err := lp.NotifySystem(notice); err == nil {
 					return
 				}
@@ -777,7 +844,7 @@ func loadSession(cwd string, id *uint32, knowID bool, hidden ...bool) (*structs.
 			if obj.loop == lp {
 				obj.loop = loop.New(sess)
 				obj.loop.SetCallback(obj.loopCallback)
-				go obj.loop.Start(context.Background())
+				obj.startSessionLoop(obj.loop)
 			}
 			newLoop := obj.loop
 			obj.loopMu.Unlock()
@@ -902,9 +969,9 @@ func loadSession(cwd string, id *uint32, knowID bool, hidden ...bool) (*structs.
 			// 新一轮流式存在 State 竞态），按标记最可靠。
 			if finalCtx, finalTyp, finalRunIDs, finalTerminalIDs := sess.TakeFinalToolCallingWithIDs(); len(finalCtx) != 0 {
 				toolStatus := "pending"
-				if sess.ToolState == 1 {
+				if sess.GetToolState() == 1 {
 					toolStatus = "completed"
-				} else if sess.ToolState == 2 {
+				} else if sess.GetToolState() == 2 {
 					toolStatus = "cancelled"
 				}
 				for id, val := range finalCtx {
@@ -987,11 +1054,13 @@ func loadSession(cwd string, id *uint32, knowID bool, hidden ...bool) (*structs.
 			// 错误也并入 idle（stopReason=refusal + 私有 error_msg）。
 			if resp.StopReason != loop.StopReasonNone && resp.StopReason != loop.StopReasonPendingTool {
 				// 本轮结束后不再把消息视为活跃流，后续 resume 应从持久化历史回放。
-				if resp.MsgID != 0 {
-					obj.streamMu.Lock()
-					delete(obj.activeAgentMessages, resp.MsgID)
-					obj.streamMu.Unlock()
-				}
+				// 必须清空整张表而不是只删 resp.MsgID：取消（StopReasonUser 回调的
+				// MsgID 为 0）、等待审批后重启的新消息、子代理消息等都会留下永远
+				// 不会被停止事件命中的条目，导致 map 只增不减，且重连时补发早已
+				// 结束轮次的陈旧内容。
+				obj.streamMu.Lock()
+				clear(obj.activeAgentMessages)
+				obj.streamMu.Unlock()
 				var errMsg string
 				if resp.Error != nil {
 					errMsg = resp.Error.Error()
@@ -1019,12 +1088,14 @@ func loadSession(cwd string, id *uint32, knowID bool, hidden ...bool) (*structs.
 					}
 					// 守卫：会话须仍在 WaitApprove 且当前待审批消息未被新的工具调用替换
 					// （权限未决时第二个 prompt 到达会拒绝旧的工具并可能产生新的 WaitApprove）
-					if obj.session.State != state.StateWaitApprove || obj.session.CurrentMessageID != pendingMsgID {
+					if obj.session.GetState() != state.StateWaitApprove || obj.session.GetCurrentMessageID() != pendingMsgID {
 						return
 					}
 					if approved {
 						broadcastStateUpdate(sessID, "running", "", "")
-						if err := obj.loop.Approve(); err != nil {
+						// 审批身份绑定：把用户批准的那条消息 ID 一并传入，执行前再校验一次，
+						// 避免"校验通过后、执行前"待审批消息被并发替换时误执行新消息的工具。
+						if err := obj.loop.ApproveWithID(pendingMsgID); err != nil {
 							logger.Warn("approve error: %v", err)
 						}
 					} else {
@@ -1040,7 +1111,7 @@ func loadSession(cwd string, id *uint32, knowID bool, hidden ...bool) (*structs.
 
 		}
 		obj.loop.SetCallback(obj.loopCallback)
-		go obj.loop.Start(context.Background())
+		obj.startSessionLoop(obj.loop)
 
 		obj.session = sess
 		sess.ReferCount = 1
@@ -1108,10 +1179,51 @@ func (obj *sessionObj) closePermDone() {
 	obj.permDoneOnce.Do(func() { close(obj.permDone) })
 }
 
+// loopJoinTimeout 释放会话时等待 loop goroutine 退出的上限；超时只告警，不阻塞释放。
+var loopJoinTimeout = 5 * time.Second
+
+// startSessionLoop 启动 loop goroutine 并纳入 loopWG 跟踪。
+func (obj *sessionObj) startSessionLoop(lp *loop.Object) {
+	if obj == nil || lp == nil {
+		return
+	}
+	obj.loopLifecycleMu.Lock()
+	defer obj.loopLifecycleMu.Unlock()
+	if obj.loopReleasing {
+		return
+	}
+	obj.loopWG.Add(1)
+	go func() {
+		defer obj.loopWG.Done()
+		lp.Start(context.Background())
+	}()
+}
+
+// releaseSessionLoop 阻止新的 loop 启动，并等待已启动的 loop goroutine 退出。
+// 必须在 closeDB 之前调用：Cancel 只是异步信号，loop 仍可能在使用 sess.DB。
+func (obj *sessionObj) releaseSessionLoop() {
+	if obj == nil {
+		return
+	}
+	obj.loopLifecycleMu.Lock()
+	obj.loopReleasing = true
+	obj.loopLifecycleMu.Unlock()
+	done := make(chan struct{})
+	go func() {
+		obj.loopWG.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(loopJoinTimeout):
+		logger.Warn("session %d: loop did not exit within %v, closing db anyway", obj.id, loopJoinTimeout)
+	}
+}
+
 // closeSession 关闭会话，引用计数递减，处理资源清理
 func closeSession(sessionID string) {
+	var released *sessionObj
 	sessLock.Lock()
-	defer sessLock.Unlock()
 	if obj, ok := sessions[sessionID]; ok {
 		obj.session.ReferCount--
 		logger.Debug("close session ID=%s count=%d", sessionID, obj.session.ReferCount)
@@ -1122,14 +1234,30 @@ func closeSession(sessionID string) {
 				obj.releaseTimer.Stop()
 				obj.releaseTimer = nil
 			}
-			obj.loop.Cancel()
-			obj.closePermDone()
-			indexChatHistory(obj.session, obj.cwd)
-			closeDB(obj.cwd)
+			// 先摘除注册表，再在锁外 cancel/join/关库：等待 loop 退出可能耗时，
+			// 不能持 sessLock 阻塞其他会话的操作。
 			delete(sessions, sessionID)
 			delete(agentCallList, sessionID)
+			released = obj
 		}
 	}
+	sessLock.Unlock()
+	if released == nil {
+		return
+	}
+	if released.loop != nil {
+		released.loop.Cancel()
+	}
+	released.closePermDone()
+	// join loop 后再关 DB：否则 loop 仍可能在使用 sess.DB（use-after-close）。
+	released.releaseSessionLoop()
+	// SetCallback 的回调 goroutine 不属于 loop 主 goroutine，releaseSessionLoop
+	// 无法 join 它；它可能仍在向客户端广播并访问 sess.DB，这里显式等待。
+	if released.loop != nil && !released.loop.WaitCallback(5*time.Second) {
+		logger.Warn("session %s: callback goroutine still running after 5s, closing DB anyway", sessionID)
+	}
+	indexChatHistory(released.session, released.cwd)
+	closeDB(released.cwd)
 }
 
 // cancelSessionRelease 取消会话的延迟释放定时器
@@ -1457,7 +1585,7 @@ func terminalStoredContent(cwd string, chatID uint32, terminalID string) (string
 		return "", false, false
 	}
 	var workflowCount int64
-	if err := db.Model(&structs.Workflows{}).Where("chat_id = ? AND run_id = ?", chatID, terminalID).Count(&workflowCount).Error; err != nil {
+	if err := db.Model(&structs.Workflows{}).Where("chat_id = ? AND run_id IN ?", chatID, workflowStoredRunIDs(chatID, terminalID)).Count(&workflowCount).Error; err != nil {
 		logger.Warn("check workflow record failed: %v", err)
 	}
 	return file.Content, workflowCount > 0, true
@@ -1481,7 +1609,9 @@ func listStoredTerminals(cwd, sessionID string, chatID uint32) []SessionTerminal
 	var workflows []structs.Workflows
 	if err := db.Where("chat_id = ?", chatID).Find(&workflows).Error; err == nil {
 		for i := range workflows {
-			if terminalID, ok := runTool.NormalizeID(workflows[i].RunID); ok {
+			// 库内 RunID 可能带会话前缀（见 workflowRunKey），展示/匹配用原始 runID。
+			displayRunID := workflowDisplayRunID(workflows[i].ChatID, workflows[i].RunID)
+			if terminalID, ok := runTool.NormalizeID(displayRunID); ok {
 				workflowRuns[terminalID] = struct{}{}
 			}
 		}
@@ -1671,33 +1801,46 @@ func scheduleSessionRelease(sessionID string) {
 
 		// 获取 sessLock 后二次确认并清理
 		sessLock.Lock()
-		defer sessLock.Unlock()
 		obj2, ok2 := sessions[sessionID]
 		if !ok2 || obj2.releaseTimer == nil {
+			sessLock.Unlock()
 			return // 已被其他路径处理（如 SessionDelete）
 		}
 		obj2.releaseTimer = nil
 
 		// 后台模式开启且 loop 正在活跃处理时，重新调度，不释放
 		if obj2.background && obj2.session != nil {
-			switch obj2.session.State {
+			switch obj2.session.GetState() {
 			case state.StateRequesting, state.StateReciving, state.StateToolCalling:
 				logger.Debug("session %s background mode: still processing (state=%d), reschedule release",
-					sessionID, obj2.session.State)
+					sessionID, obj2.session.GetState())
 				obj2.releaseTimer = time.AfterFunc(
 					time.Duration(timeout)*time.Second, releaseFunc)
+				sessLock.Unlock()
 				return
 			}
 			// 其他状态（Idle、WaitApprove、Waiting、GeneratingPrompt）→ 执行释放
 		}
-
-		logger.Info("release session %s after %ds timeout", sessionID, timeout)
-		obj2.loop.Cancel()
-		obj2.closePermDone()
-		indexChatHistory(obj2.session, obj2.cwd)
-		closeDB(obj2.cwd)
+		// 先在锁内摘除注册表，随后在锁外 cancel/join/关库：等待 loop 退出可能
+		// 耗时，不能持 sessLock 阻塞其他会话。
 		delete(sessions, sessionID)
 		delete(agentCallList, sessionID)
+		sessLock.Unlock()
+
+		logger.Info("release session %s after %ds timeout", sessionID, timeout)
+		if obj2.loop != nil {
+			obj2.loop.Cancel()
+		}
+		obj2.closePermDone()
+		// join loop 后再关 DB：否则 loop 仍可能在使用 sess.DB（use-after-close）。
+		obj2.releaseSessionLoop()
+		// SetCallback 的回调 goroutine 不属于 loop 主 goroutine，releaseSessionLoop
+		// 无法 join 它；它可能仍在向客户端广播并访问 sess.DB，这里显式等待。
+		if obj2.loop != nil && !obj2.loop.WaitCallback(5*time.Second) {
+			logger.Warn("session %s: callback goroutine still running after 5s, closing DB anyway", sessionID)
+		}
+		indexChatHistory(obj2.session, obj2.cwd)
+		closeDB(obj2.cwd)
 	}
 
 	obj.releaseTimer = time.AfterFunc(time.Duration(timeout)*time.Second, releaseFunc)
@@ -2145,15 +2288,22 @@ func SessionClose(req SessionCloseRequest, call func(string, any, *string) error
 	if req.SessionID == "" {
 		return u.H{}, fmt.Errorf("sessionId is empty")
 	}
-	if _, _, err := sessionID2Cwd(req.SessionID); err != nil {
+	// 校验并映射到注册表中的规范键；只能关闭本连接绑定过的会话，
+	// 否则任意连接都能释放其他连接持有的会话。
+	cwd, id, err := sessionID2Cwd(req.SessionID)
+	if err != nil {
 		return u.H{}, err
 	}
+	sessionID := cwd2SessionID(cwd, id)
+	if !sessionBoundToConn(connID, sessionID) {
+		return u.H{}, fmt.Errorf("session %s is not bound to this connection", sessionID)
+	}
 	// 解绑当前连接并调度释放
-	unregisterConnCall(connID, req.SessionID)
+	unregisterConnCall(connID, sessionID)
 	bindedSessionOnConnMu.Lock()
-	bindedSessionOnConn[connID] = slices.DeleteFunc(bindedSessionOnConn[connID], func(s string) bool { return s == req.SessionID })
+	bindedSessionOnConn[connID] = slices.DeleteFunc(bindedSessionOnConn[connID], func(s string) bool { return s == sessionID })
 	bindedSessionOnConnMu.Unlock()
-	scheduleSessionRelease(req.SessionID)
+	scheduleSessionRelease(sessionID)
 	return u.H{}, nil
 }
 
@@ -2479,8 +2629,9 @@ func SessionDelete(req SessionDeleteRequest, call func(string, any, *string) err
 		return u.H{}, fmt.Errorf("sessionId is empty")
 	}
 
-	// 纯字符串解析 sessionId（sess_<id>:<cwd>），不查内存注册表
-	cwd, id, err := parseSessionID(req.SessionID)
+	// 优先内存注册表；冷会话按字符串解析，但 cwd 必须规范且已有 .alkaid0，
+	// 不能凭客户端字符串在任意目录创建/读取会话库（见 resolveSessionTarget）。
+	cwd, id, err := resolveSessionTarget(req.SessionID)
 	if err != nil {
 		// 无效的会话ID，按规范静默成功
 		return u.H{}, nil
@@ -2551,12 +2702,11 @@ func HandleSessionUpdate(req SessionUpdateRequest, call func(string, any, *strin
 		return u.H{}, fmt.Errorf("unsupported session update variant: %q", upd.SessionUpdate)
 	}
 
-	// 解析会话：优先内存注册表（防伪造 cwd），未加载时退化为纯字符串解析
-	cwd, id, err := sessionID2Cwd(req.SessionID)
+	// 解析会话：优先内存注册表（防伪造 cwd）；冷会话退化为字符串解析时，
+	// cwd 必须是规范绝对路径且已有 .alkaid0（见 resolveSessionTarget）。
+	cwd, id, err := resolveSessionTarget(req.SessionID)
 	if err != nil {
-		if cwd, id, err = parseSessionID(req.SessionID); err != nil {
-			return u.H{}, err
-		}
+		return u.H{}, err
 	}
 
 	db, err := loadDB(cwd)

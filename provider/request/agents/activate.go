@@ -56,8 +56,10 @@ func ActivateAgent(session *structs.Chats, agentCode string, prompt string) erro
 	session.CurrentAgentID = obj.ID
 	session.CurrentAgentConfig = agentConfig
 
-	// 写DB
-	err = session.DB.Save(session).Error
+	// 写DB：只更新 now_agent 单列。整行 Save(session) 会把内存里可能已过期的
+	// ai_title/title/task 等列一并写回，覆盖标题 goroutine 等并发写入（P1-18 附带项）。
+	err = session.DB.Model(&structs.Chats{}).Where("id = ?", session.ID).
+		Update("now_agent", agentCode).Error
 	if err != nil {
 		return err
 	}

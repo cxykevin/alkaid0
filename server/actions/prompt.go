@@ -40,10 +40,19 @@ func SessionPrompt(req SessionPromptRequest, call func(string, any, *string) err
 		return SessionPromptResponse{}, fmt.Errorf("sessionId is empty")
 	}
 
+	// 校验并映射到注册表中的规范键：客户端提供的 sessionId 不得直接当作
+	// 注册表键使用，且只能操作本连接 new/resume 绑定过的会话。
+	cwd, id, err := sessionID2Cwd(req.SessionID)
+	if err != nil {
+		return SessionPromptResponse{}, fmt.Errorf("invalid sessionId: %v", err)
+	}
+	sessionID := cwd2SessionID(cwd, id)
+	if !sessionBoundToConn(connID, sessionID) {
+		return SessionPromptResponse{}, fmt.Errorf("session %s is not bound to this connection", sessionID)
+	}
+
 	// 获取会话对象
-	sessLock.Lock()
-	sessObj, ok := sessions[req.SessionID]
-	sessLock.Unlock()
+	sessObj, ok := lookupSession(sessionID)
 	if !ok {
 		return SessionPromptResponse{}, fmt.Errorf("session not found")
 	}
@@ -76,12 +85,12 @@ func SessionPrompt(req SessionPromptRequest, call func(string, any, *string) err
 		}
 		obj, ok := commandMaps[cmds[0]]
 		if !ok {
-			broadcastStateUpdate(req.SessionID, "idle", "refusal", "invalid command")
+			broadcastStateUpdate(sessionID, "idle", "refusal", "invalid command")
 			return SessionPromptResponse{}, fmt.Errorf("invalid command")
 		}
 		if !obj.NoCmdMessage {
-			broadcastSessionUpdate(req.SessionID, SessionUpdate{
-				SessionID: req.SessionID,
+			broadcastSessionUpdate(sessionID, SessionUpdate{
+				SessionID: sessionID,
 				Update: SessionUpdateUpdate{
 					SessionUpdate: "user_message",
 					MessageID:     cmdMsgID(sessObj),
@@ -89,7 +98,7 @@ func SessionPrompt(req SessionPromptRequest, call func(string, any, *string) err
 				},
 			}, 0)
 		}
-		broadcastStateUpdate(req.SessionID, "running", "", "")
+		broadcastStateUpdate(sessionID, "running", "", "")
 
 		wait, err := obj.Function(sessObj, cmdArgs)
 		if wait && err == nil {
@@ -102,31 +111,31 @@ func SessionPrompt(req SessionPromptRequest, call func(string, any, *string) err
 			reason = "refusal"
 			errMsg = err.Error()
 		}
-		broadcastStateUpdate(req.SessionID, "idle", reason, errMsg)
+		broadcastStateUpdate(sessionID, "idle", reason, errMsg)
 		return SessionPromptResponse{}, err
 	}
 
 	// 正常 prompt：持久化用户消息获取 DB ID（作为 messageId 基础，与回放一致）
 	userMsgID, err := funcs.UserAddMsgWithID(sessObj.session, text, nil)
 	if err != nil {
-		broadcastStateUpdate(req.SessionID, "idle", "refusal", err.Error())
+		broadcastStateUpdate(sessionID, "idle", "refusal", err.Error())
 		return SessionPromptResponse{}, fmt.Errorf("failed to add user message: %v", err)
 	}
 
 	// 广播 user_message（发送方也要收到——ACP v2 以 agent 的 user_message 为 messageId 真相来源）+ running
-	broadcastSessionUpdate(req.SessionID, SessionUpdate{
-		SessionID: req.SessionID,
+	broadcastSessionUpdate(sessionID, SessionUpdate{
+		SessionID: sessionID,
 		Update: SessionUpdateUpdate{
 			SessionUpdate: "user_message",
 			MessageID:     msgID(userMsgID),
 			Content:       []u.H{{"type": "text", "text": text}},
 		},
 	}, 0)
-	broadcastStateUpdate(req.SessionID, "running", "", "")
+	broadcastStateUpdate(sessionID, "running", "", "")
 
 	err = sessObj.loop.ChatWithID(text, userMsgID, nil)
 	if err != nil {
-		broadcastStateUpdate(req.SessionID, "idle", "refusal", err.Error())
+		broadcastStateUpdate(sessionID, "idle", "refusal", err.Error())
 		return SessionPromptResponse{}, err
 	}
 	return SessionPromptResponse{}, nil // 立即 ack
@@ -145,7 +154,6 @@ func SessionPrompt(req SessionPromptRequest, call func(string, any, *string) err
 // 		return "end_turn"
 // 	default:
 // 		return "end_turn"
-// 	}
 // }
 
 // SessionCancelRequest session 取消请求
@@ -159,9 +167,16 @@ func SessionCancel(req SessionCancelRequest, call func(string, any, *string) err
 		return nil, fmt.Errorf("sessionId is empty")
 	}
 
-	sessLock.Lock()
-	sess, ok := sessions[req.SessionID]
-	sessLock.Unlock()
+	// 校验并映射到注册表中的规范键；只能取消本连接绑定过的会话。
+	cwd, id, err := sessionID2Cwd(req.SessionID)
+	if err != nil {
+		return nil, fmt.Errorf("invalid sessionId: %v", err)
+	}
+	sessionID := cwd2SessionID(cwd, id)
+	if !sessionBoundToConn(connID, sessionID) {
+		return nil, fmt.Errorf("session %s is not bound to this connection", sessionID)
+	}
+	sess, ok := lookupSession(sessionID)
 	if !ok {
 		return nil, fmt.Errorf("session not found")
 	}
@@ -170,7 +185,7 @@ func SessionCancel(req SessionCancelRequest, call func(string, any, *string) err
 
 	// WaitApprove 时 loop 停在 sendQueue 上，Stop() 不产生回调，需手动拒绝并唤醒权限 goroutine。
 	// 权限 goroutine 发现 State != WaitApprove 后直接退出，不做任何事。
-	if sess.session.State == state.StateWaitApprove {
+	if sess.session.GetState() == state.StateWaitApprove {
 		_ = request.RejectToolCallsNoDeactivate(sess.session, "cancelled by user", nil)
 		signalPermission(sess, false)
 	}

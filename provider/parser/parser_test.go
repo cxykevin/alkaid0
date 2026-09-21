@@ -122,6 +122,11 @@ func TestParserTagsRequireLineStart(t *testing.T) {
 		{name: "line-start think", tokens: []string{"第一行\n<think>识别</think>"}, wantResp: "第一行\n", wantThink: "识别"},
 		{name: "split line-start think", tokens: []string{"\n<thi", "nk>识别</th", "ink>"}, wantResp: "\n", wantThink: "识别"},
 		{name: "split mid-line think", tokens: []string{"abc<thi", "nk>不识别</th", "ink>"}, wantResp: "abc<think>不识别</think>"},
+		// 标签候选里含换行：'<' 后跟 '\n' 说明这个 '<' 不是标签起始，
+		// 必须原样回吐候选并把换行后的 '<think>' 当作行首标签识别（修复前行首状态被吞掉）
+		{name: "newline inside tag candidate", tokens: []string{"\n<\n<think>识别</think>"}, wantResp: "\n<\n", wantThink: "识别"},
+		{name: "newline candidate chunk boundary", tokens: []string{"\n<\n", "<think>识别</think>"}, wantResp: "\n<\n", wantThink: "识别"},
+		{name: "split newline inside tag candidate", tokens: []string{"\n<\n<th", "ink>识别</think>"}, wantResp: "\n<\n", wantThink: "识别"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

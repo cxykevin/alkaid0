@@ -1,6 +1,7 @@
 package lsp
 
 import (
+	"path/filepath"
 	"testing"
 )
 
@@ -54,9 +55,72 @@ func TestIsStructOrClass(t *testing.T) {
 }
 
 func TestPathToURI(t *testing.T) {
-	uri := pathToURI("/home/user/file.go")
-	if uri != "file:///home/user/file.go" {
-		t.Errorf("pathToURI = %q, want %q", uri, "file:///home/user/file.go")
+	tests := []struct {
+		path string
+		want string
+	}{
+		{"/home/user/file.go", "file:///home/user/file.go"},
+		{"/home/user/my file.go", "file:///home/user/my%20file.go"},
+		{"/home/用户/文件.go", "file:///home/%E7%94%A8%E6%88%B7/%E6%96%87%E4%BB%B6.go"},
+		{"/tmp/a#b?c.go", "file:///tmp/a%23b%3Fc.go"},
+		{"C:\\Users\\user\\a b.go", "file:///C:/Users/user/a%20b.go"},
+		{"C:\\Users\\张三\\test.go", "file:///C:/Users/%E5%BC%A0%E4%B8%89/test.go"},
+	}
+	for _, tt := range tests {
+		if got := pathToURI(tt.path); got != tt.want {
+			t.Errorf("pathToURI(%q) = %q, want %q", tt.path, got, tt.want)
+		}
+	}
+}
+
+func TestURIToPath(t *testing.T) {
+	tests := []struct {
+		uri  string
+		want string
+		ok   bool
+	}{
+		{"file:///home/user/file.go", filepath.FromSlash("/home/user/file.go"), true},
+		{"file:///home/user/my%20file.go", filepath.FromSlash("/home/user/my file.go"), true},
+		{"file:///home/%E7%94%A8%E6%88%B7/a.go", filepath.FromSlash("/home/用户/a.go"), true},
+		{"file:///C:/Users/%E5%BC%A0%E4%B8%89/a%20b.go", filepath.FromSlash("C:/Users/张三/a b.go"), true},
+		{"https://example.com/a.go", "", false},
+	}
+	for _, tt := range tests {
+		got, ok := uriToPath(tt.uri)
+		if ok != tt.ok || got != tt.want {
+			t.Errorf("uriToPath(%q) = (%q, %v), want (%q, %v)", tt.uri, got, ok, tt.want, tt.ok)
+		}
+	}
+}
+
+// TestPathToURIRoundTrip 验证 URI 正向/反向转换对称（含空格与中文）
+func TestPathToURIRoundTrip(t *testing.T) {
+	paths := []string{
+		"/home/user/file.go",
+		"/home/user/my file.go",
+		"/home/用户/文件.go",
+		"/tmp/a#b?c.go",
+	}
+	for _, p := range paths {
+		uri := pathToURI(p)
+		got, ok := uriToPath(uri)
+		if !ok {
+			t.Errorf("uriToPath(%q) 未识别为 file URI", uri)
+			continue
+		}
+		if got != p {
+			t.Errorf("uriToPath(pathToURI(%q)) = %q", p, got)
+		}
+	}
+}
+
+// TestSameFileURI 验证服务器回传百分号解码后的 URI 时仍能匹配到同一文件
+func TestSameFileURI(t *testing.T) {
+	if !sameFileURI("file:///tmp/a%20b.go", "file:///tmp/a b.go") {
+		t.Error("百分号编码与解码后的 URI 应视为同一文件")
+	}
+	if sameFileURI("file:///tmp/a.go", "file:///tmp/b.go") {
+		t.Error("不同文件的 URI 不应视为同一文件")
 	}
 }
 

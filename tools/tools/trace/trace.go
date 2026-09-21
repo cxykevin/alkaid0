@@ -106,6 +106,19 @@ func updateInfo(session *structs.Chats, mp map[string]*any, cross []*any, toolID
 
 // Trace 跟踪文件
 func Trace(session *structs.Chats, mp map[string]*any, push []*any) (bool, []*any, map[string]*any, error) {
+	if session == nil || session.DB == nil {
+		// 会话未加载数据库（异常调用路径、单元测试等）：返回错误结果即可。
+		// 直接访问 session.DB.Model 会命中 gorm 的 nil 接收者并 panic，
+		// 而工具在独立 goroutine 中执行，panic 会终止整个进程。
+		boolx := false
+		success := any(boolx)
+		errMsg := any("session database is not available")
+		return false, push, map[string]*any{
+			"success": &success,
+			"error":   &errMsg,
+		}, nil
+	}
+
 	// 检查并获取path参数
 	pathPtr, ok := mp["path"]
 	if !ok || pathPtr == nil {
@@ -117,15 +130,14 @@ func Trace(session *structs.Chats, mp map[string]*any, push []*any) (bool, []*an
 			"error":   &errMsg,
 		}, nil
 	}
-	nowpath := session.Root
+	// 与 edit.go 一致：先拼接 Root 与激活路径，再决定是否回退到当前目录。
+	// 旧写法先把空 Root 换成 "."，此后 filepath.Join(".", "/abs/path") 会把
+	// 绝对路径清理成相对路径（"tmp/..."），Abs 之后指向一个不存在的位置，
+	// 包含性校验必然失败并报 "path escapes the workspace via symlink"。
+	nowpath := filepath.Join(session.Root, session.CurrentActivatePath)
 	if nowpath == "" {
 		nowpath = "."
 	}
-	activatePath := session.CurrentActivatePath
-	if activatePath == "" {
-		activatePath = "."
-	}
-	nowpath = filepath.Join(nowpath, activatePath)
 	nowpath, err := filepath.Abs(nowpath)
 	path, ok := (*pathPtr).(string)
 	if !ok || path == "" {
@@ -262,9 +274,19 @@ func Trace(session *structs.Chats, mp map[string]*any, push []*any) (bool, []*an
 		var str string
 		var err error
 		if vpath, ok := strings.CutPrefix(path, "@temp/"); ok {
-			// 查db
+			// 查db：记录不存在时必须报错。旧实现忽略 First 的错误，把空内容当成
+			// 读取成功，还写脏 Traces 行并递增 TraceID（模型看到"空文件"却无任何提示）。
 			var fileObj structs.ReferFiles
-			session.DB.Where("chat_id = ?", session.ID).Where("path = ?", vpath).First(&fileObj)
+			if err := session.DB.Where("chat_id = ?", session.ID).Where("path = ?", vpath).First(&fileObj).Error; err != nil {
+				logger.Warn("temp file not found: %s", path)
+				boolx := false
+				success := any(boolx)
+				errMsg := any("file not exist")
+				return false, push, map[string]*any{
+					"success": &success,
+					"error":   &errMsg,
+				}, nil
+			}
 			str = fileObj.Content
 		} else {
 			path2 := filepath.Join(nowpath, path)
@@ -287,6 +309,16 @@ func Trace(session *structs.Chats, mp map[string]*any, push []*any) (bool, []*an
 				boolx := false
 				success := any(boolx)
 				errMsg := any("file not exist")
+				return false, push, map[string]*any{
+					"success": &success,
+					"error":   &errMsg,
+				}, nil
+			}
+			// FIFO/设备/目录不是可读文件：os.ReadFile 会在 FIFO 上永久阻塞且不可取消
+			if !stat.Mode().IsRegular() {
+				boolx := false
+				success := any(boolx)
+				errMsg := any("not a regular file")
 				return false, push, map[string]*any{
 					"success": &success,
 					"error":   &errMsg,
@@ -511,7 +543,17 @@ func confirmTraceContent(session *structs.Chats, path, content string) {
 		confirmed = make(traceExpectedContent)
 		session.TemporyDataOfSession[structs.TempKeyTraceConfirmedContent] = confirmed
 	}
-	confirmed[path] = content
+	confirmed[normalizeTraceContentKey(path)] = content
+}
+
+// normalizeTraceContentKey 统一 confirmed 内容的路径键。
+// read 记录 "a.cs"、edit 用 "./a.cs" 必须命中同一条记录，否则外部修改保护会被
+// 静默绕过；虚拟对象路径（@temp/、@docs/ 等）保持原样。
+func normalizeTraceContentKey(path string) string {
+	if path == "" || strings.HasPrefix(path, "@") {
+		return path
+	}
+	return filepath.Clean(path)
 }
 
 // advanceTraceCache 将实际退化为完整内容块时的内容写回 trace 缓存。
@@ -522,7 +564,7 @@ func AdvanceTraceCache(session *structs.Chats, path string) {
 		return
 	}
 	confirmed, _ := session.TemporyDataOfSession[structs.TempKeyTraceConfirmedContent].(traceExpectedContent)
-	content, ok := confirmed[path]
+	content, ok := confirmed[normalizeTraceContentKey(path)]
 	if !ok {
 		return
 	}
@@ -553,10 +595,23 @@ func CheckEditContent(session *structs.Chats, path, content string) error {
 		return nil
 	}
 	confirmed, _ := session.TemporyDataOfSession[structs.TempKeyTraceConfirmedContent].(traceExpectedContent)
-	if expected, ok := confirmed[path]; ok && expected != content {
+	if expected, ok := confirmed[normalizeTraceContentKey(path)]; ok && expected != content {
 		return fmt.Errorf("file changed outside the agent after the current trace sync; call read for %q before editing", path)
 	}
 	return nil
+}
+
+// ForgetEditContent 删除某个路径的已确认内容。文件已被删除（想要重建该路径）时调用，
+// 否则残留的旧内容会让 CheckEditContent 永远报"内容已被外部修改"。
+func ForgetEditContent(session *structs.Chats, path string) {
+	if session == nil || session.TemporyDataOfSession == nil {
+		return
+	}
+	confirmed, _ := session.TemporyDataOfSession[structs.TempKeyTraceConfirmedContent].(traceExpectedContent)
+	if confirmed == nil {
+		return
+	}
+	delete(confirmed, normalizeTraceContentKey(path))
 }
 
 // InvalidateTraceCache 清理 summary 后不能继续使用的会话级 trace 派生缓存。
@@ -591,6 +646,12 @@ func readTraceFileContent(session *structs.Chats, nowpath string, traceObj struc
 	stat, err := os.Stat(path)
 	if err != nil {
 		logger.Warn("trace warning: \"%s\" get stat error: %v", traceObj.Path, err)
+		return "", false
+	}
+	// 已被跟踪的路径也可能在之后被换成 FIFO/设备：构建上下文时同样只读常规文件，
+	// 否则会永久阻塞请求构建
+	if !stat.Mode().IsRegular() {
+		logger.Warn("trace warning: \"%s\" is not a regular file", traceObj.Path)
 		return "", false
 	}
 	if stat.Size() > MaxFileSize {

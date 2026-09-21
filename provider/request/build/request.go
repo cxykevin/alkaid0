@@ -75,13 +75,19 @@ func RequestBody(chatID uint32, modelID int32, agentCode string, toolsList *[]*p
 			IncludeUsage: true,
 		}
 	}
-	if modelConfig.ProviderSpecificConfig.EnableTemperature && modelConfig.ModelTemperature != -1 && modelConfig.ModelTemperature != 0 {
+	// temperature=0 是合法的显式采样温度，仅 -1 表示"未设置"（此前 0 被一并忽略）
+	if modelConfig.ProviderSpecificConfig.EnableTemperature && modelConfig.ModelTemperature != -1 {
 		response.Temperature = &modelConfig.ModelTemperature
 	}
 	if modelConfig.ProviderSpecificConfig.EnableTopP && modelConfig.ModelTopP != -1 && modelConfig.ModelTopP != 0 {
 		response.TopP = &modelConfig.ModelTopP
 	}
-	var maxTokenObj int = maxToken
+	// max_tokens 默认上限 maxToken；模型显式配置了更小的 TokenLimit（上下文上限）时收敛到它，
+	// 避免向小上下文模型请求超出窗口的输出（此前硬编码 16384，TokenLimit 只影响 UI 显示）。
+	maxTokenObj := maxToken
+	if modelConfig.TokenLimit > 0 && int(modelConfig.TokenLimit) < maxTokenObj {
+		maxTokenObj = int(modelConfig.TokenLimit)
+	}
 	response.MaxTokens = &maxTokenObj
 	if modelConfig.ProviderSpecificConfig.EnableDeepseekThinking {
 		if modelConfig.EnableThinking {
@@ -119,9 +125,13 @@ scan:
 	for offsetPage := range maxPage {
 		var obj []structs.Messages
 		if agentCode == "" {
-			db.Where("`chat_id` = ? AND (`agent_id` = \"\" OR `agent_id` IS NULL)", chatID).Order("id DESC").Offset(offsetPage * readPageSize).Limit(readPageSize).Find(&obj)
+			if err := db.Where("`chat_id` = ? AND (`agent_id` = \"\" OR `agent_id` IS NULL)", chatID).Order("id DESC").Offset(offsetPage * readPageSize).Limit(readPageSize).Find(&obj).Error; err != nil {
+				return nil, err
+			}
 		} else {
-			db.Where("`chat_id` = ? AND `agent_id` = ?", chatID, agentCode).Order("id DESC").Offset(offsetPage * readPageSize).Limit(readPageSize).Find(&obj)
+			if err := db.Where("`chat_id` = ? AND `agent_id` = ?", chatID, agentCode).Order("id DESC").Offset(offsetPage * readPageSize).Limit(readPageSize).Find(&obj).Error; err != nil {
+				return nil, err
+			}
 		}
 		if len(obj) == 0 {
 			break
@@ -160,9 +170,13 @@ scan:
 	for offsetPage := range maxPage {
 		var obj []structs.Messages
 		if agentCode == "" {
-			db.Where("`chat_id` = ? AND (`agent_id` = \"\" OR `agent_id` IS NULL)", chatID).Order("id DESC").Offset(offsetPage * readPageSize).Limit(readPageSize).Find(&obj)
+			if err := db.Where("`chat_id` = ? AND (`agent_id` = \"\" OR `agent_id` IS NULL)", chatID).Order("id DESC").Offset(offsetPage * readPageSize).Limit(readPageSize).Find(&obj).Error; err != nil {
+				return nil, err
+			}
 		} else {
-			db.Where("`chat_id` = ? AND `agent_id` = ?", chatID, agentCode).Order("id DESC").Offset(offsetPage * readPageSize).Limit(readPageSize).Find(&obj)
+			if err := db.Where("`chat_id` = ? AND `agent_id` = ?", chatID, agentCode).Order("id DESC").Offset(offsetPage * readPageSize).Limit(readPageSize).Find(&obj).Error; err != nil {
+				return nil, err
+			}
 		}
 		if len(obj) == 0 {
 			break
@@ -554,9 +568,13 @@ scan:
 	for offsetPage := range maxPage {
 		var obj []structs.Messages
 		if agentCode == "" {
-			db.Where("`chat_id` = ? AND (`agent_id` = \"\" OR `agent_id` IS NULL)", session.ID).Order("id DESC").Offset(offsetPage * readPageSize).Limit(readPageSize).Find(&obj)
+			if err := db.Where("`chat_id` = ? AND (`agent_id` = \"\" OR `agent_id` IS NULL)", session.ID).Order("id DESC").Offset(offsetPage * readPageSize).Limit(readPageSize).Find(&obj).Error; err != nil {
+				return err
+			}
 		} else {
-			db.Where("`chat_id` = ? AND `agent_id` = ?", session.ID, agentCode).Order("id DESC").Offset(offsetPage * readPageSize).Limit(readPageSize).Find(&obj)
+			if err := db.Where("`chat_id` = ? AND `agent_id` = ?", session.ID, agentCode).Order("id DESC").Offset(offsetPage * readPageSize).Limit(readPageSize).Find(&obj).Error; err != nil {
+				return err
+			}
 		}
 		if len(obj) == 0 {
 			break

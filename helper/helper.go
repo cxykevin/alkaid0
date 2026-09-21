@@ -1,8 +1,6 @@
 package helper
 
 import (
-	"bufio"
-	"bytes"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -366,28 +364,34 @@ func sanitizeDialError(err error, key string) error {
 	return errors.New(msg)
 }
 
-// copyStdinToWS 将标准输入内容逐块转发到 WebSocket 连接。
-// 使用 64KB 缓冲区读取 stdin，跳过纯换行输入，连接断开或 EOF 时返回。
-func copyStdinToWS(conn *websocket.Conn) error {
-	reader := bufio.NewReader(os.Stdin)
-	buf := make([]byte, 65536)
+// readJSONMessages 从 r 中按完整 JSON 值分帧读取消息，每读到一条完整消息就调用 emit。
+// 使用 json.Decoder 流式解码：天然支持单次读取中的多条消息、跨行 pretty JSON，
+// 以及超过单次 Read 缓冲区上限的大消息，不会把一条消息切断成多帧。
+// 输入结束返回 io.EOF；JSON 非法时返回带原因的错误，不做静默丢弃。
+func readJSONMessages(r io.Reader, emit func([]byte) error) error {
+	dec := json.NewDecoder(r)
 	for {
-		n, err := reader.Read(buf)
-		if n > 0 {
-			// å»é¤åå¯¼æ¢è¡å­ç¬¦ï¼é¿åä»¥æ¢è¡å¼å¤´çè¯»åè¢«æ´åä¸¢å¼
-			data := buf[:n]
-			// 仅跳过纯空白块，不剥离载荷内部/前导换行（避免破坏以换行开头的合法消息）
-			if len(bytes.TrimSpace(data)) == 0 {
-				continue
+		var raw json.RawMessage
+		if err := dec.Decode(&raw); err != nil {
+			if errors.Is(err, io.EOF) {
+				return io.EOF
 			}
-			if writeErr := conn.WriteMessage(websocket.TextMessage, data); writeErr != nil {
-				return writeErr
-			}
+			return fmt.Errorf("invalid JSON message: %w", err)
 		}
-		if err != nil {
+		if err := emit(raw); err != nil {
 			return err
 		}
 	}
+}
+
+// copyStdinToWS 将标准输入中的完整 JSON-RPC 消息转发到 WebSocket 连接，
+// 每条消息一个 TextMessage 帧，与服务端"一帧 = 一条 JSON-RPC 消息"的约定一致
+// （server/client/jsonrpc/connect/ws.go 每条帧整体交给 jsonrpc handle）。
+// stdin EOF 时返回 io.EOF，StartHelper 依赖它触发正常关闭。
+func copyStdinToWS(conn *websocket.Conn) error {
+	return readJSONMessages(os.Stdin, func(msg []byte) error {
+		return conn.WriteMessage(websocket.TextMessage, msg)
+	})
 }
 
 // copyWSToStdout 将 WebSocket 接收到的消息逐条写入标准输出（每条后附加换行）。

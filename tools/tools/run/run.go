@@ -515,7 +515,7 @@ func runTask(session *structs.Chats, mp map[string]*any, cross []*any) (bool, []
 	// 前台命令结束时同样把输出写入该 ID 对应的 temp obj，客户端事后可按 terminal id 取回内容。
 	workspace := session.Root
 	workDir := path.Join(session.Root, session.CurrentActivatePath)
-	runID := NewRunID(workspace)
+	runID := NewRunIDForSession(session, workspace)
 	// temp obj 内部路径（@temp/run/7 → run/7）
 	tempPath, ok := TempPath(runID)
 	if !ok {
@@ -691,20 +691,9 @@ func runCmd(ctx context.Context, c *sandbox.Command, out io.Writer, command stri
 			job = value
 		}
 	}
+	// 结构化执行（type: python 等）：直接走管道模式，显式 Start/Wait 以便补终止检查
 	if !usePTY {
-		contextDone := make(chan struct{})
-		go func() {
-			select {
-			case <-ctx.Done():
-				logger.Info("Context cancelled, killing command: %s", command)
-				_ = c.Kill()
-			case <-contextDone:
-			}
-		}()
-		defer close(contextDone)
-		c.SetStdout(out)
-		c.SetStderr(out)
-		return c.Run()
+		return runCmdPipes(ctx, c, out, command, job)
 	}
 
 	master, slave, ptyErr := openPTYForCmd()
@@ -777,7 +766,15 @@ func runCmd(ctx context.Context, c *sandbox.Command, out io.Writer, command stri
 		return err
 	}
 
-	// 非 PTY 模式（Windows/fallback）：stdout/stderr 直接流式写入 out
+	// PTY 打开失败（fallback）：同样走管道模式
+	return runCmdPipes(ctx, c, out, command, job)
+}
+
+// runCmdPipes 以管道模式执行命令（非 PTY / PTY 打开失败）。
+// 显式 Start/Wait 而不是 Run：kill 可能落在 killFn 注册之后、进程真正启动之前
+// （对未启动的进程调用 Kill 无效），启动后必须补一次终止检查，否则已被终止的
+// 任务会继续跑到自然结束。命令退出后的输出排空由 sandbox 侧 WaitDelay 兜底。
+func runCmdPipes(ctx context.Context, c *sandbox.Command, out io.Writer, command string, job *Job) error {
 	contextDone := make(chan struct{})
 	go func() {
 		select {
@@ -790,7 +787,11 @@ func runCmd(ctx context.Context, c *sandbox.Command, out io.Writer, command stri
 	defer close(contextDone)
 	c.SetStdout(out)
 	c.SetStderr(out)
-	return c.Run()
+	if err := c.Start(); err != nil {
+		return err
+	}
+	killCommandIfJobKilled(c, job)
+	return c.Wait()
 }
 
 func getShell(shell string) string {

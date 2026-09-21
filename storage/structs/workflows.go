@@ -22,6 +22,9 @@ type Workflows struct {
 	StartedAt      *time.Time
 	FinishedAt     *time.Time
 	UpdatedAt      time.Time
+	// Chats 关联会话：此前该表既没有外键也没有清理路径，会话删除后 workflow 行永久残留。
+	// OnDelete:CASCADE 让会话删除时一并清理（没有外键的历史库由 AutoMigrate 补建约束）。
+	Chats *Chats `gorm:"foreignKey:ChatID;references:ID;constraint:OnDelete:CASCADE"`
 }
 
 // WorkflowEvents stores ordered workflow events.
@@ -36,4 +39,6 @@ type WorkflowEvents struct {
 	PayloadJSON string `gorm:"type:text"`
 	RawJSON     string `gorm:"type:text"`
 	CreatedAt   time.Time
+	// Chats 关联会话：事件表按 workflow 逐个累积且从不清理，这里同样跟随会话级联删除
+	Chats *Chats `gorm:"foreignKey:ChatID;references:ID;constraint:OnDelete:CASCADE"`
 }

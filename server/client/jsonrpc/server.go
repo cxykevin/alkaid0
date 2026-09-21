@@ -2,6 +2,7 @@ package jsonrpc
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sync"
 	"sync/atomic"
@@ -143,12 +144,21 @@ func (s *Server) handle(arg string, call func(string) error, connID uint64) (ret
 				// 通知请求的错误不返回响应
 				return nil, false
 			}
+			// 默认 -32099（docs/acp/fs.md 记录的服务端错误码）；
+			// handler 返回 *RPCError 时使用其指定错误码。
+			code := JRPCServerError
+			message := err.Error()
+			var rpcErr *RPCError
+			if errors.As(err, &rpcErr) && rpcErr != nil {
+				code = rpcErr.Code
+				message = rpcErr.Message
+			}
 			return &Response{
 				Version: JSONRPCVersion,
 				ID:      req.ID,
 				Error: &Error{
-					Code:    JRPCServerError,
-					Message: err.Error(),
+					Code:    code,
+					Message: message,
 				},
 			}, false
 		}
@@ -203,11 +213,24 @@ func (s *Server) handle(arg string, call func(string) error, connID uint64) (ret
 	var req InboundMessage
 	err = json.Unmarshal([]byte(arg), &req)
 	if err != nil {
-		// 解析失败时，检查是否为通知
-		// 注意：当 JSON 解析失败时，无法获取 ID，所以响应的 ID 应为 null
+		// JSON 合法但无法按请求结构解码（字段类型错误等）：id 往往仍可确定，
+		// 此时按 Invalid Request 处理并回显 id；只有真正无法确定 id 的解析
+		// 错误才返回 null。
+		if id, ok := recoverRequestID(arg); ok {
+			retByte, _ := json.Marshal(Response{
+				Version: JSONRPCVersion,
+				ID:      id,
+				Error: &Error{
+					Code:    JRPCInvalidRequest,
+					Message: err.Error(),
+				},
+			})
+			return string(retByte), false
+		}
+		// 解析失败且无法恢复 id：响应的 ID 为 null（id 字段仍必须存在）。
 		retByte, _ := json.Marshal(Response{
 			Version: JSONRPCVersion,
-			ID:      nil, // 解析错误时 ID 为 null
+			ID:      nil,
 			Error: &Error{
 				Code:    JRPCParseError,
 				Message: err.Error(),
@@ -225,6 +248,29 @@ func (s *Server) handle(arg string, call func(string) error, connID uint64) (ret
 	}
 	// 通知请求或其他情况不返回任何内容
 	return "", false
+}
+
+// recoverRequestID 尝试从无法按请求结构解码的报文中恢复 id。
+// JSON-RPC 规范要求能确定 id 时（Invalid Request）回显它，只有无法确定
+// （Parse error）才用 null。仅接受字符串/数字/null 形式的 id。
+func recoverRequestID(arg string) (any, bool) {
+	var obj map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(arg), &obj); err != nil {
+		return nil, false
+	}
+	raw, ok := obj["id"]
+	if !ok {
+		return nil, false
+	}
+	var id any
+	if err := json.Unmarshal(raw, &id); err != nil {
+		return nil, false
+	}
+	switch id.(type) {
+	case nil, string, float64:
+		return id, true
+	}
+	return nil, false
 }
 
 // Start 启动 jsonrpc 服务器（使用 stdio）
@@ -246,7 +292,9 @@ func Set[T any, T2 any](s *Server, method string, function func(T, func(string, 
 		params, err := u.Apply[T](v)
 		if err != nil {
 			logger.Debug("invalid params for %s: %v", method, err)
-			return nil, fmt.Errorf("invalid params: %v", err)
+			// 参数解码失败属于协议级的 Invalid Params（-32602），
+			// 不再与 handler 运行期错误一起映射成 -32099。
+			return nil, NewRPCError(JRPCInvalidParams, "invalid params: %v", err)
 		}
 		ret, err := function(params, f, id)
 		_, ok := any(ret).(IgnoreReply)

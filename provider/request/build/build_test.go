@@ -18,8 +18,9 @@ var (
 
 // setupBuildTest 设置构建测试环境和数据库
 func setupBuildTest(t *testing.T) *gorm.DB {
-	// 设置测试配置
-	config.GlobalConfigSwap(cfgStruct.Config{
+	// 设置测试配置。必须恢复：旧实现丢弃了 GlobalConfigSwap 的还原函数，
+	// 全局配置会泄漏到同包后续用例（以及依赖默认模型的用例）。
+	restoreConfig := config.GlobalConfigSwap(cfgStruct.Config{
 		Model: cfgStruct.ModelsConfig{
 			DefaultModelID: 1,
 			Models: map[int32]cfgStruct.ModelConfig{
@@ -40,6 +41,7 @@ func setupBuildTest(t *testing.T) *gorm.DB {
 			},
 		},
 	})
+	t.Cleanup(restoreConfig)
 
 	// 使用内存数据库，避免文件 I/O 依赖
 	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
@@ -161,12 +163,14 @@ func TestBuildChatNotFound(t *testing.T) {
 	// 调用 Build 函数
 	result, err := Build(db, &chat)
 
-	// 当数据库查询失败时，应该返回 nil 或错误
-	// 根据 Build() 的实现，会在查询后处理错误
-	if result != nil || err == nil {
-		// 如果没有创建聊天，查询应该会失败
-		// 验证行为是否符合预期
-		_ = db
+	// 旧断言体是空操作（只有 _ = db），行为改变也测不出来。
+	// Build 会用 db.Where("id = ?") 重读会话行，查不到时必须报错且不返回请求体，
+	// 不能用零值会话静默降级到错误的模型/agent 上下文。
+	if err == nil {
+		t.Fatal("会话不存在时 Build 必须返回错误")
+	}
+	if result != nil {
+		t.Errorf("会话不存在时不应返回请求体: %+v", result)
 	}
 }
 

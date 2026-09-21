@@ -230,9 +230,6 @@ func (m *Manager) reapIdle() {
 	maps.Copy(clients, m.clients)
 	m.clientsMu.Unlock()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
 	var idleKeys []string
 	for key, c := range clients {
 		c.lastUsedMu.Lock()
@@ -254,6 +251,10 @@ func (m *Manager) reapIdle() {
 		if c, ok := m.clients[key]; ok {
 			delete(m.clients, key)
 			go func(k string, cl *Client) {
+				// context 必须在 goroutine 内创建：若在 reapIdle 中用 defer cancel，
+				// 函数返回时便已取消，Shutdown 会立刻失败
+				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				defer cancel()
 				if err := cl.Shutdown(ctx); err != nil {
 					logger.Warn("reap idle client %s: %v", k, err)
 				} else {

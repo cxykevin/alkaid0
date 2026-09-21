@@ -71,10 +71,41 @@ const (
 
 // LibNetUserAdd 添加一个新用户
 // Windows API NetUserAdd 的 Go 绑定
-func LibNetUserAdd(serverName *string, level LibNetUserAddLevel, buf *byte, parmErr *uint32) (uint32, error) {
+//
+// serverName 必须是 LPCWSTR（UTF-16 指针）。此前参数类型是 *string，
+// 非 nil 时传给 API 的是 Go string header（数据指针+长度）而非字符串内容，
+// 会被 Windows 当作乱码路径读取；调用方传 nil（本机）时才凑巧正确。
+func LibNetUserAdd(serverName *uint16, level LibNetUserAddLevel, buf *byte, parmErr *uint32) (uint32, error) {
 	ret, _, err := netUserAdd.Call(
 		uintptr(unsafe.Pointer(serverName)),
 		uintptr(uint32(level)),
+		uintptr(unsafe.Pointer(buf)),
+		uintptr(unsafe.Pointer(parmErr)),
+	)
+	if ret == 0 {
+		return 0, err
+	}
+	return uint32(ret), nil
+}
+
+// UserInfo1003 用户密码信息结构体（USER_INFO_1003），
+// 配合 LibNetUserSetInfo 重置已存在账户的密码。
+type UserInfo1003 struct {
+	Password *uint16 // 新密码（UTF-16）
+}
+
+// LibNetUserSetInfoLevel1003 NetUserSetInfo 的 level：设置 USER_INFO_1003（密码）
+const LibNetUserSetInfoLevel1003 uint32 = 1003
+
+var netUserSetInfo = dllNetapi.NewProc("NetUserSetInfo")
+
+// LibNetUserSetInfo 修改用户信息
+// Windows API NetUserSetInfo 的 Go 绑定。serverName/username 均为 LPCWSTR（可为 nil）。
+func LibNetUserSetInfo(serverName *uint16, username *uint16, level uint32, buf *byte, parmErr *uint32) (uint32, error) {
+	ret, _, err := netUserSetInfo.Call(
+		uintptr(unsafe.Pointer(serverName)),
+		uintptr(unsafe.Pointer(username)),
+		uintptr(level),
 		uintptr(unsafe.Pointer(buf)),
 		uintptr(unsafe.Pointer(parmErr)),
 	)

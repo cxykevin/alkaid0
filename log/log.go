@@ -3,7 +3,9 @@ package log
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
+	"io/fs"
 	"log"
 	"os"
 	"path/filepath"
@@ -22,7 +24,7 @@ var globalLogLevel = 1
 
 const defaultLogDir = "~/.config/alkaid0"
 const envLogName = "ALKAID0_LOG_PATH"
-const logFilePattern = `^log[0-9]{8}-[0-9]{6}\.log$`
+const logFilePattern = `^log[0-9]{8}-[0-9]{6}(-[0-9]+)?\.log$`
 const maxLogFiles = 10
 
 var logPath string
@@ -31,6 +33,36 @@ var logFileNamePattern = regexp.MustCompile(logFilePattern)
 
 func defaultLogPathAt(now time.Time) string {
 	return filepath.Join(defaultLogDir, "log"+now.Format("20060102-150405")+".log")
+}
+
+// openLogFile 以独占方式创建日志文件。
+//
+// 默认日志文件名精确到秒（logYYYYMMDD-HHMMSS.log）。此前用 O_TRUNC 打开：
+// 同一秒内启动的第二个进程会把第一个进程刚写入的日志清空（多进程部署下丢日志）。
+// 改为 O_EXCL 独占创建，重名时追加 -<n> 后缀（该后缀仍被 logFilePattern 匹配，
+// 不会逃过 maxLogFiles 清理）。
+func openLogFile(path string) (*os.File, error) {
+	file, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
+	if err == nil {
+		return file, nil
+	}
+	if !errors.Is(err, fs.ErrExist) {
+		return nil, err
+	}
+
+	ext := filepath.Ext(path)
+	base := strings.TrimSuffix(path, ext)
+	for i := 1; i <= 100; i++ {
+		candidate := fmt.Sprintf("%s-%d%s", base, i, ext)
+		file, err = os.OpenFile(candidate, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
+		if err == nil {
+			return file, nil
+		}
+		if !errors.Is(err, fs.ErrExist) {
+			return nil, err
+		}
+	}
+	return nil, fmt.Errorf("log file %s already exists (tried 100 numbered suffixes)", path)
 }
 
 type storedLogFile struct {
@@ -104,6 +136,11 @@ var isShutdown uint32
 
 // var logLck sync.Mutex
 
+// syncOnly 为 true 时表示日志初始化失败、已降级为直写 stderr 的同步模式。
+// 此时 logChannel 为 nil，必须绕开异步通道，否则每条日志都会走 select-default
+// 变成 "log channel full" 警告，真实内容全部丢失。
+var syncOnly atomic.Bool
+
 var loadMu sync.Mutex
 
 // Load 加载配置文件。使用互斥锁保证并发安全，首次调用执行实际初始化。
@@ -141,17 +178,26 @@ func Load() {
 	// 确保目录存在
 	dir := filepath.Dir(expandedPath)
 	if err := os.MkdirAll(dir, 0755); err != nil {
-		// 目录创建失败：回退到 stderr，绝不 panic、绝不留下 nil Logger
+		// 目录创建失败：回退到 stderr，绝不 panic、绝不留下 nil Logger。
+		// 必须置 syncOnly 并把 loggerInited 置位：否则后续每条日志都会因为
+		// logChannel 为 nil 而走 select-default，被替换成无意义的
+		// "log channel full" 警告，真实日志内容全部丢失。
+		fmt.Fprintf(os.Stderr, "log: create log dir %s failed: %v (falling back to stderr)\n", dir, err)
 		Logger = log.New(os.Stderr, "", log.LstdFlags)
+		syncOnly.Store(true)
+		loggerInited.Store(true)
 		loadMu.Unlock()
 		return
 	}
 
 	// 使用覆盖模式打开日志文件，确保同名启动日志从本次启动内容开始。
-	file, err := os.OpenFile(expandedPath, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0600)
+	file, err := openLogFile(expandedPath)
 	if err != nil {
-		// 打开失败时回退到 stderr，绝不 panic
+		// 打开失败时回退到 stderr，绝不 panic（理由同上）
+		fmt.Fprintf(os.Stderr, "log: open %s failed: %v (falling back to stderr)\n", expandedPath, err)
 		Logger = log.New(os.Stderr, "", log.LstdFlags)
+		syncOnly.Store(true)
+		loggerInited.Store(true)
 		loadMu.Unlock()
 		return
 	}
@@ -264,6 +310,10 @@ func Shutdown() {
 		return
 	}
 	atomic.StoreUint32(&isShutdown, 1)
+	if syncOnly.Load() {
+		// 降级模式下没有异步 worker，logChannel 为 nil，close 会 panic
+		return
+	}
 	flushLogs()
 	close(logChannel)
 }
@@ -298,6 +348,12 @@ func sanitizeAndEscape(msg string, v ...any) string {
 //  4. 正常运行时使用有缓冲通道异步写入，select-default 在通道满时丢弃日志
 //     防止高频日志拖慢主程序
 func (l *LogsObj) log(level string, msg string, v ...any) {
+	if syncOnly.Load() {
+		// 初始化失败已降级为直写 stderr：没有异步通道可投递
+		l.logSync(level, msg, v...)
+		return
+	}
+
 	str := sanitizeAndEscape(msg, v...)
 
 	// 在 logFlushMutex 保护下检查 isShutdown。

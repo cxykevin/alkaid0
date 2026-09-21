@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -30,6 +31,29 @@ var httpClient = &http.Client{
 
 func init() {
 	logger = log.New("request")
+}
+
+// ErrRequestTimeout 表示请求被客户端自身的超时（httpClient.Timeout，120s）中断，
+// 与用户主动取消（context.Canceled）及上层 context 超时区分开：
+// 调用方据此决定是否重试，而不是误报"用户停止"。
+var ErrRequestTimeout = errors.New("request timed out")
+
+// classifyTransportError 区分"用户/上层取消"与"客户端自身超时"。
+// Go 的 http.Client 在自身 Timeout 触发时返回的错误会包裹 context.DeadlineExceeded
+// （"context deadline exceeded (Client.Timeout ...)"）；若不转换，上层会把
+// 120s 超时当成 context.DeadlineExceeded → 误判为用户主动停止（不重试、上报 StopReasonUser）。
+// 上层 context 已结束（用户取消 / summary 等调用方自带超时）时保持原语义，直接返回 ctx.Err()。
+func classifyTransportError(ctx context.Context, err error) error {
+	if err == nil {
+		return nil
+	}
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return ctxErr
+	}
+	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+		return fmt.Errorf("%w: %v", ErrRequestTimeout, err)
+	}
+	return err
 }
 
 // SimpleOpenAIRequest 发送 OpenAI ChatCompletion 请求（强制stream=true）。
@@ -72,7 +96,7 @@ func SimpleOpenAIRequest(ctx context.Context, baseURL, apiKey, model string, bod
 	resp, err := httpClient.Do(req)
 	if err != nil {
 		logger.Error("call openai chat error when call: %v", err)
-		return fmt.Errorf("failed to send request when call: %w", err)
+		return fmt.Errorf("failed to send request when call: %w", classifyTransportError(ctx, err))
 	}
 	defer resp.Body.Close()
 
@@ -107,16 +131,13 @@ func SimpleOpenAIRequest(ctx context.Context, baseURL, apiKey, model string, bod
 	reader := bufio.NewReader(resp.Body)
 	prefix, first, prefixErr := readResponsePrefix(reader)
 	if prefixErr != nil {
-		if ctx.Err() != nil {
-			return ctx.Err()
-		}
-		return fmt.Errorf("failed to read response: %w", prefixErr)
+		return fmt.Errorf("failed to read response: %w", classifyTransportError(ctx, prefixErr))
 	}
 	if first == '{' {
 		responseBody := io.MultiReader(bytes.NewReader(prefix), reader)
 		body, readErr := io.ReadAll(io.LimitReader(responseBody, 8<<20))
 		if readErr != nil {
-			return fmt.Errorf("failed to read response: %w", readErr)
+			return fmt.Errorf("failed to read response: %w", classifyTransportError(ctx, readErr))
 		}
 		var chatResp structs.ChatCompletionResponse
 		if err := json.Unmarshal(body, &chatResp); err != nil {
@@ -200,10 +221,7 @@ func SimpleOpenAIRequest(ctx context.Context, baseURL, apiKey, model string, bod
 	for !streamDone {
 		line, err := sseReader.ReadString('\n')
 		if err != nil && err != io.EOF {
-			if ctx.Err() != nil {
-				return ctx.Err()
-			}
-			return fmt.Errorf("failed to read response: %w", err)
+			return fmt.Errorf("failed to read response: %w", classifyTransportError(ctx, err))
 		}
 		line = strings.TrimSuffix(strings.TrimSuffix(line, "\n"), "\r")
 		line = strings.TrimLeft(line, " \t")

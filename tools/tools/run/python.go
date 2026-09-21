@@ -78,15 +78,23 @@ func resolveCurrentModel(session *storageStructs.Chats) (string, error) {
 	return modelCfg.ModelID, nil
 }
 
+// proxyKeyTTLMinutes 临时 OpenAI 代理 key 的有效期（分钟）。
+//
+// 维护者决定：**不做续期**，每次代码运行（前台/后台）现场分配一把新 key，
+// 有效期统一 24 小时——足以覆盖前台 300 秒上限与绝大多数后台长任务，
+// 又不会让 key 在任务结束后长期可用（正常情况下任务结束时 cleanupFn 会立即删除）。
+const proxyKeyTTLMinutes = 24 * 60
+
 // buildProxyEnv 构造 OpenAI proxy 环境变量。
+// ttlMinutes 为临时 key 的有效期，由 proxyKeyTTLMinutes 按任务类型计算。
 // 返回：OPENAI_API_KEY、OPENAI_BASE_URL、OPENAI_MODEL_ID。
-func buildProxyEnv(session *storageStructs.Chats) (key, baseURL, modelID string, err error) {
+func buildProxyEnv(session *storageStructs.Chats, ttlMinutes int) (key, baseURL, modelID string, err error) {
 	modelID, err = resolveCurrentModel(session)
 	if err != nil {
 		return "", "", "", err
 	}
 
-	key, err = apikey.New(30) // 30 分钟有效期
+	key, err = apikey.New(ttlMinutes)
 	if err != nil {
 		return "", "", "", fmt.Errorf("create temporary API key: %w", err)
 	}

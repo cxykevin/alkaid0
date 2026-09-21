@@ -446,12 +446,15 @@ func InitAlkaid0SandboxUser() error {
 	// 	return err
 	// }
 	if ret == 2224 { // 用户已经存在
-		if err = winExtra.SetRegistryKeyDACL(key); err != nil {
-			return err
+		// 上次初始化可能中途失败，留下"账户已存在、注册表却没有 accountPassword"
+		// 的状态。此处直接返回成功会让 createRunToken 永远登录失败，沙箱永久不可用。
+		// 用本次生成的随机密码重置该账户密码，再走下面的共同流程把密码记录下来。
+		ui := winExtra.UserInfo1003{Password: passwd}
+		ret, err = winExtra.LibNetUserSetInfo(nil, userName, winExtra.LibNetUserSetInfoLevel1003, (*byte)(unsafe.Pointer(&ui)), &errCode)
+		if ret != 0 {
+			return fmt.Errorf("重置已存在沙盒账户的密码失败: %d(%v)", ret, err)
 		}
-		return nil
-	}
-	if ret != 0 {
+	} else if ret != 0 {
 		return fmt.Errorf("NetUserAdd failed: %d(%v)", ret, err)
 	}
 
@@ -713,6 +716,13 @@ func getSecurityDescriptor(DACL *windows.ACL) (*windows.SecurityAttributes, erro
 
 // CreateProc 创建线程
 func CreateProc(appName string, commandLine string, workDir string, startupInfo *windows.StartupInfoEx, envPtr *uint16) (windows.ProcessInformation, error) {
+	return createProc(appName, commandLine, workDir, startupInfo, envPtr, 0)
+}
+
+// createProc 与 CreateProc 相同，但允许附加 CreateProcess 创建标志。
+// exec.Cmd.Start 传 CREATE_SUSPENDED：先加入 Job Object 再恢复运行，
+// 避免进程在加入 Job 之前抢先派生出逃出 Job 树的孙进程。
+func createProc(appName string, commandLine string, workDir string, startupInfo *windows.StartupInfoEx, envPtr *uint16, extraFlags uint32) (windows.ProcessInformation, error) {
 	err := InitAlkaid0SandboxUser()
 	if err != nil {
 		return windows.ProcessInformation{}, fmt.Errorf("init user failed: %v", err)
@@ -761,7 +771,7 @@ func CreateProc(appName string, commandLine string, workDir string, startupInfo 
 		sec,
 		nil,
 		inheritHandles,
-		windows.CREATE_UNICODE_ENVIRONMENT|windows.EXTENDED_STARTUPINFO_PRESENT,
+		windows.CREATE_UNICODE_ENVIRONMENT|windows.EXTENDED_STARTUPINFO_PRESENT|extraFlags,
 		envPtr,
 		pWorkDir,
 		startupInfo,

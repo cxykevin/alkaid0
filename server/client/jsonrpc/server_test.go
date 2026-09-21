@@ -100,21 +100,31 @@ func TestServerInvoke(t *testing.T) {
 	reqData, _ := json.Marshal(req)
 	outputs := []string{}
 
-	// 调用handle方法
-	_, _ = srv.handle(string(reqData), func(s string) error {
+	// 调用handle方法。注意响应由**第一个返回值**给出（call 回调只用于额外推送，
+	// 连接层在 server/client/jsonrpc/connect/ws.go 中也是这么用的）；旧测试丢掉了
+	// 返回值、只在有回调输出时 t.Logf，等于什么都没验证。
+	out, exit := srv.handle(string(reqData), func(s string) error {
 		outputs = append(outputs, s)
 		return nil
 	}, 1)
-
-	// 验证输出
-	if len(outputs) > 0 {
-		var resp Response
-		_ = json.Unmarshal([]byte(outputs[0]), &resp)
-		if resp.Result != "hello" {
-			t.Logf("方法调用返回值: %v", resp.Result)
-		}
-	} else {
-		t.Logf("方法调用可能异步处理或无输出")
+	if exit {
+		t.Error("echo 方法不应要求关闭连接")
+	}
+	if out == "" {
+		t.Fatalf("handle 未返回响应（callback 输出 %d 条）", len(outputs))
+	}
+	var resp Response
+	if err := json.Unmarshal([]byte(out), &resp); err != nil {
+		t.Fatalf("响应不是合法 JSON: %v (raw=%q)", err, out)
+	}
+	if resp.Result != "hello" {
+		t.Errorf("result = %v, want hello", resp.Result)
+	}
+	if resp.Error != nil {
+		t.Errorf("不应返回错误: %+v", resp.Error)
+	}
+	if resp.ID == nil {
+		t.Error("响应必须回带请求的 id（id 字段不得被省略）")
 	}
 }
 

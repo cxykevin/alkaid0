@@ -34,7 +34,8 @@ func SummaryWithKeepNumber(chatID uint32, agentID string, db *gorm.DB, keepNum i
 	// 配置模型信息
 	response.Model = modelConfig.ModelID
 	response.Stream = true
-	if modelConfig.ProviderSpecificConfig.EnableTemperature && modelConfig.ModelTemperature != -1 && modelConfig.ModelTemperature != 0 {
+	// temperature=0 是合法的显式采样温度，仅 -1 表示"未设置"（此前 0 被一并忽略）
+	if modelConfig.ProviderSpecificConfig.EnableTemperature && modelConfig.ModelTemperature != -1 {
 		response.Temperature = &modelConfig.ModelTemperature
 	}
 	if modelConfig.ProviderSpecificConfig.EnableTopP && modelConfig.ModelTopP != -1 && modelConfig.ModelTopP != 0 {
@@ -49,17 +50,25 @@ func SummaryWithKeepNumber(chatID uint32, agentID string, db *gorm.DB, keepNum i
 	var lastMsgID uint64
 	var totalMsgCount int64
 	if agentID == "" {
-		db.Model(&structs.Messages{}).Where("`chat_id` = ? AND (`agent_id` = \"\" OR `agent_id` IS NULL)", chatID).Count(&totalMsgCount)
+		if err := db.Model(&structs.Messages{}).Where("`chat_id` = ? AND (`agent_id` = \"\" OR `agent_id` IS NULL)", chatID).Count(&totalMsgCount).Error; err != nil {
+			return 0, nil, err
+		}
 	} else {
-		db.Model(&structs.Messages{}).Where("`chat_id` = ? AND `agent_id` = ?", chatID, agentID).Count(&totalMsgCount)
+		if err := db.Model(&structs.Messages{}).Where("`chat_id` = ? AND `agent_id` = ?", chatID, agentID).Count(&totalMsgCount).Error; err != nil {
+			return 0, nil, err
+		}
 	}
 
 	for offsetPage := range maxPage {
 		var obj []structs.Messages
 		if agentID == "" {
-			db.Where("`chat_id` = ? AND (`agent_id` = \"\" OR `agent_id` IS NULL)", chatID).Order("id DESC").Offset(offsetPage * readPageSize).Limit(readPageSize).Find(&obj)
+			if err := db.Where("`chat_id` = ? AND (`agent_id` = \"\" OR `agent_id` IS NULL)", chatID).Order("id DESC").Offset(offsetPage * readPageSize).Limit(readPageSize).Find(&obj).Error; err != nil {
+				return 0, nil, err
+			}
 		} else {
-			db.Where("`chat_id` = ? AND `agent_id` = ?", chatID, agentID).Order("id DESC").Offset(offsetPage * readPageSize).Limit(readPageSize).Find(&obj)
+			if err := db.Where("`chat_id` = ? AND `agent_id` = ?", chatID, agentID).Order("id DESC").Offset(offsetPage * readPageSize).Limit(readPageSize).Find(&obj).Error; err != nil {
+				return 0, nil, err
+			}
 		}
 		if len(obj) == 0 {
 			break
@@ -160,6 +169,12 @@ func SummaryWithKeepNumber(chatID uint32, agentID string, db *gorm.DB, keepNum i
 				} else {
 					msg.Content = v.Delta
 				}
+			}
+			// 空的 assistant 行（取消遗留 / 历史脏数据）没有任何可总结内容，
+			// 带上会让总结模型看到空回复，直接跳过。
+			if v.Type == structs.MessagesRoleAgent && msg.Content == "" &&
+				(msg.ReasoningContent == nil || *msg.ReasoningContent == "") {
+				skipMsg = true
 			}
 			if skipMsg {
 				continue

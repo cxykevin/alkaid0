@@ -79,8 +79,8 @@ type nativeCallState struct {
 type NativeToolCallAccumulator struct {
 	tools   []*ToolsDefine
 	session *structs.Chats
-	calls   map[int]*nativeCallState // index → 状态
-	order   []int                    // index 出现顺序（保证 Origin 稳定）
+	calls   map[int]*nativeCallState // index → 当前（最后一次）调用状态
+	order   []*nativeCallState       // 全部调用状态，按到达顺序（同一 index 可多次出现）
 	solved  []AIToolsResponse
 }
 
@@ -105,12 +105,21 @@ func (a *NativeToolCallAccumulator) findTool(name string) int {
 
 // AddDelta 喂入一个流式增量。OpenAI 流式中同一 index 的 id/name 通常先于 arguments 到达，
 // 且 arguments 会被切成多段增量，每段单独调用本方法。
+//
+// 同一 index 被复用给多次调用（兼容端点不递增 index，或历史回放按序号错误复用）时，
+// 已 finalize 的状态不再接收新增量，而是新建独立状态，保证每次调用都被保留。
 func (a *NativeToolCallAccumulator) AddDelta(index int, id, name, arguments string) error {
 	state := a.calls[index]
+	if state != nil && state.finalized {
+		// 新 id/name，或 finalize 之后又出现 arguments，说明这是复用同一 index 的下一次调用。
+		if (id != "" && id != state.id) || (name != "" && name != state.name) || arguments != "" {
+			state = nil
+		}
+	}
 	if state == nil {
 		state = &nativeCallState{index: index, toolID: -1}
 		a.calls[index] = state
-		a.order = append(a.order, index)
+		a.order = append(a.order, state)
 	}
 	if id != "" {
 		state.id = id
@@ -126,14 +135,6 @@ func (a *NativeToolCallAccumulator) AddDelta(index int, id, name, arguments stri
 		}
 	}
 	if arguments == "" || state.invalid || state.finalized {
-		// 已 finalize 的 index 又收到非空 arguments：调用方把同一个 index 复用给了另一次
-		// 调用。该增量会被丢弃，对应的工具既不会执行也不会产生 role:tool 结果（表现为
-		// "同一轮多个工具调用只有第一个生效"），因此必须告警而不是静默返回。
-		// 每个 index 只能对应一次调用，调用方须分配独立 index（见 ExecuteToolCalls）。
-		if state.finalized && arguments != "" {
-			logger.Warn("native tool call: index %d already finalized (id=%s), arguments of id=%s ignored; each call needs its own index",
-				state.index, state.id, id)
-		}
 		// name/id 可能晚于 arguments 到达：即使本片无新 arguments，也派发已有解析数据
 		if state.jsonParser != nil && !state.finalized && !state.invalid {
 			return a.dispatch(state)
@@ -144,7 +145,11 @@ func (a *NativeToolCallAccumulator) AddDelta(index int, id, name, arguments stri
 		state.jsonParser = json.New()
 	}
 	if err := state.jsonParser.AddToken(arguments); err != nil {
-		return err
+		// 单个工具调用的参数 JSON 畸形（模型生成错误/网关破坏）只丢弃该调用，
+		// 不能把错误抛给上游——否则整轮流式响应中止，已解析的正文与其他调用一起丢失。
+		state.invalid = true
+		logger.Warn("native tool call: malformed arguments JSON for id=%s, call dropped: %v", state.id, err)
+		return nil
 	}
 	return a.dispatch(state)
 }
@@ -209,14 +214,19 @@ func (a *NativeToolCallAccumulator) dispatch(state *nativeCallState) error {
 
 // DoneToken 流结束收尾：对尚未 finalize 且已有 jsonParser 的调用做 DoneToken，
 // 使 ObjectSlot 变为完整对象并补入 solved。
+//
+// 若流结束时参数仍未闭合（响应被截断/网关断流），只丢弃这一个调用并告警：
+// 参数不完整的工具调用不能执行，但也不能因此中止整轮——错误一旦上抛，
+// 已解析的正文与其他调用会一起丢失。
 func (a *NativeToolCallAccumulator) DoneToken() error {
-	for _, index := range a.order {
-		state := a.calls[index]
+	for _, state := range a.order {
 		if state == nil || state.invalid || state.finalized || state.jsonParser == nil {
 			continue
 		}
 		if err := state.jsonParser.DoneToken(); err != nil {
-			return err
+			state.invalid = true
+			logger.Warn("native tool call: truncated arguments JSON for id=%s, call dropped: %v", state.id, err)
+			continue
 		}
 		if err := a.dispatch(state); err != nil {
 			return err
@@ -225,24 +235,23 @@ func (a *NativeToolCallAccumulator) DoneToken() error {
 	return nil
 }
 
-// GetTools 返回按 delta index 顺序排列的已解决工具调用列表。
+// GetTools 返回按到达顺序排列的已解决工具调用列表。
+// 直接取每个调用自己的快照，不按 id 建索引：多个调用共用同一 id（部分网关/历史回放
+// 数据重复）时按 id 索引会互相覆盖，导致参数串到别的调用上甚至整批丢失。
 func (a *NativeToolCallAccumulator) GetTools() []AIToolsResponse {
 	if len(a.solved) == 0 {
 		return nil
 	}
-	byID := make(map[string]AIToolsResponse, len(a.solved))
-	for _, tool := range a.solved {
-		byID[tool.ID] = tool
-	}
 	tools := make([]AIToolsResponse, 0, len(a.solved))
-	for _, index := range a.order {
-		state := a.calls[index]
+	for _, state := range a.order {
 		if state == nil || !state.finalized {
 			continue
 		}
-		if tool, ok := byID[state.id]; ok {
-			tools = append(tools, tool)
-		}
+		tools = append(tools, AIToolsResponse{
+			Name:       state.name,
+			ID:         state.id,
+			Parameters: state.params,
+		})
 	}
 	return tools
 }
@@ -259,8 +268,7 @@ func (a *NativeToolCallAccumulator) Origin() string {
 		return ""
 	}
 	items := make([]map[string]any, 0, len(a.solved))
-	for _, index := range a.order {
-		state := a.calls[index]
+	for _, state := range a.order {
 		if state == nil || !state.finalized {
 			continue
 		}

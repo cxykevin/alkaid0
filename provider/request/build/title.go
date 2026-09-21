@@ -18,11 +18,15 @@ const titleMaxToken = 256
 func Title(chatID uint32, db *gorm.DB) (*reqStruct.ChatCompletionRequest, error) {
 	var userMsg, agentMsg structs.Messages
 	// 第一条用户请求：主线程消息（agent_id 为空或 NULL），排除空正文占位
-	db.Where("`chat_id` = ? AND `type` = ? AND `delta` != '' AND (`agent_id` = '' OR `agent_id` IS NULL)", chatID, structs.MessagesRoleUser).
-		Order("id ASC").Limit(1).Find(&userMsg)
+	if err := db.Where("`chat_id` = ? AND `type` = ? AND `delta` != '' AND (`agent_id` = '' OR `agent_id` IS NULL)", chatID, structs.MessagesRoleUser).
+		Order("id ASC").Limit(1).Find(&userMsg).Error; err != nil {
+		return nil, err
+	}
 	// 第一条 AI 响应：不过滤 agent_id（首轮委托子代理时回复带子代理 ID，也属于第一条响应）
-	db.Where("`chat_id` = ? AND `type` = ? AND `delta` != ''", chatID, structs.MessagesRoleAgent).
-		Order("id ASC").Limit(1).Find(&agentMsg)
+	if err := db.Where("`chat_id` = ? AND `type` = ? AND `delta` != ''", chatID, structs.MessagesRoleAgent).
+		Order("id ASC").Limit(1).Find(&agentMsg).Error; err != nil {
+		return nil, err
+	}
 	if userMsg.ID == 0 || agentMsg.ID == 0 {
 		return nil, nil
 	}
@@ -38,7 +42,9 @@ func TitleFull(chatID uint32, db *gorm.DB) (*reqStruct.ChatCompletionRequest, er
 	responseDeltaList := list.New()
 	for offsetPage := range maxPage {
 		var obj []structs.Messages
-		db.Where("`chat_id` = ? AND (`agent_id` = \"\" OR `agent_id` IS NULL)", chatID).Order("id DESC").Offset(offsetPage * readPageSize).Limit(readPageSize).Find(&obj)
+		if err := db.Where("`chat_id` = ? AND (`agent_id` = \"\" OR `agent_id` IS NULL)", chatID).Order("id DESC").Offset(offsetPage * readPageSize).Limit(readPageSize).Find(&obj).Error; err != nil {
+			return nil, err
+		}
 		if len(obj) == 0 {
 			break
 		}
@@ -74,7 +80,8 @@ func buildTitleRequest(dialogMessages []reqStruct.Message) (*reqStruct.ChatCompl
 	// 配置模型信息
 	response.Model = modelConfig.ModelID
 	response.Stream = true
-	if modelConfig.ProviderSpecificConfig.EnableTemperature && modelConfig.ModelTemperature != -1 && modelConfig.ModelTemperature != 0 {
+	// temperature=0 是合法的显式采样温度，仅 -1 表示"未设置"（此前 0 被一并忽略）
+	if modelConfig.ProviderSpecificConfig.EnableTemperature && modelConfig.ModelTemperature != -1 {
 		response.Temperature = &modelConfig.ModelTemperature
 	}
 	if modelConfig.ProviderSpecificConfig.EnableTopP && modelConfig.ModelTopP != -1 && modelConfig.ModelTopP != 0 {

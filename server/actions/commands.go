@@ -4,9 +4,11 @@ import (
 	"cmp"
 	"context"
 	"fmt"
+	"path/filepath"
 	"runtime"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/cxykevin/alkaid0/config"
@@ -47,6 +49,35 @@ func broadcastCmdText(obj *sessionObj, text string) {
 			},
 		},
 	}, 0)
+}
+
+// indexRuns 记录正在进行中的 /index（键为规范化后的绝对工作目录）。
+//
+// 第二次 /index 若直接进入 codebase.RunIndex，会在其 indexingLocks 并发检查**之前**
+// 覆盖 indexCancels[cwd]（见 context/codebase/index.go 的赋值顺序），使第一次索引
+// 的 cancel 句柄丢失、/index cancel 变成空操作。这里在 actions 层先做互斥，
+// 保证同一工作目录同时只有一个索引运行、其取消句柄不会被覆盖。
+var indexRuns = struct {
+	mu sync.Mutex
+	m  map[string]struct{}
+}{m: map[string]struct{}{}}
+
+// beginIndexRun 登记一个索引运行；该目录已有索引在跑时返回 false。
+func beginIndexRun(key string) bool {
+	indexRuns.mu.Lock()
+	defer indexRuns.mu.Unlock()
+	if _, ok := indexRuns.m[key]; ok {
+		return false
+	}
+	indexRuns.m[key] = struct{}{}
+	return true
+}
+
+// endIndexRun 注销索引运行登记。
+func endIndexRun(key string) {
+	indexRuns.mu.Lock()
+	delete(indexRuns.m, key)
+	indexRuns.mu.Unlock()
 }
 
 // commandMaps 存储所有聊天命令及其对应处理函数
@@ -138,7 +169,17 @@ var commandMaps = map[string]*cmdObj{
 				lsp.ResetLSPFailures()
 				// arg 为空或其他情况 → 开始索引
 			}
+			absCwd, err := filepath.Abs(obj.cwd)
+			if err != nil {
+				return false, fmt.Errorf("resolve workspace: %w", err)
+			}
+			// 已有索引运行时拒绝，避免覆盖其 cancel 句柄（见 indexRuns 注释）
+			if !beginIndexRun(absCwd) {
+				broadcastCmdText(obj, "Index is already running for this workspace. Use /index cancel to stop it.")
+				return false, nil
+			}
 			go func() {
+				defer endIndexRun(absCwd)
 				broadcastFn := func(status codebase.IndexStatus) {
 					_ = broadcastSessionUpdate(sessionID, SessionUpdate{
 						SessionID: sessionID,
@@ -194,6 +235,11 @@ var commandMaps = map[string]*cmdObj{
 			)
 			switch op {
 			case "add":
+				// 引擎禁用时 AddCustom 只会往 DB 里写一条永远不生效的记录，
+				// 却回复"已脱敏"。必须显式失败，避免用户误以为敏感值已被保护。
+				if !config.GlobalConfig.DataMask.Enable {
+					return false, fmt.Errorf("data mask is disabled (DataMask.Enable=false); /mask add has no effect")
+				}
 				err = mask.AddCustom(obj.session.DB, val)
 				if err == nil {
 					msg = fmt.Sprintf("**mask added**: `%s` 会在请求出站前脱敏，并在 AI 响应中还原为原文。", val)

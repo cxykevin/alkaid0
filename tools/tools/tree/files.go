@@ -14,6 +14,7 @@ import (
 	"strings"
 
 	"github.com/cxykevin/alkaid0/tools/tools/tree/ios"
+	u "github.com/cxykevin/alkaid0/utils"
 	"regexp"
 )
 
@@ -97,6 +98,17 @@ func init() {
 	maps.Copy(dirBlacklists, dirBlacklistsOrigin)
 }
 
+// isBlacklistedName 判断条目是否属于黑名单。
+// 除字面枚举外，还复用 utils.IsSensitivePathName 覆盖模式化名称
+// （.env 家族、密钥扩展名等），与 provider/request/rules/reject.expr 对齐：
+// 该规则拦得住 read/edit 的文件，tree 也不应展示或允许改写。
+func isBlacklistedName(name string) bool {
+	if _, ok := dirBlacklists[name]; ok {
+		return true
+	}
+	return u.IsSensitivePathName(name)
+}
+
 func sortNodeCmp(i, j *Node) int {
 	if i.IsDir && !j.IsDir {
 		return -1
@@ -163,7 +175,7 @@ func buildTree(dir string, ID *int32, depth int, ancestors map[string]bool) (*No
 	// 先过滤黑名单再统计数量，避免折叠判定被黑名单条目干扰
 	filteredEntries := entries[:0]
 	for _, entry := range entries {
-		if _, ok := dirBlacklists[entry.Name()]; ok {
+		if isBlacklistedName(entry.Name()) {
 			continue
 		}
 		filteredEntries = append(filteredEntries, entry)
@@ -355,7 +367,7 @@ func BuildNodeFromString(str string) (*Node, error) {
 			return nil, errors.New("indent too deep")
 		}
 
-		if _, ok := dirBlacklists[name]; ok {
+		if isBlacklistedName(name) {
 			return nil, fmt.Errorf("the '%s' file is not allowed to operate", name)
 		}
 

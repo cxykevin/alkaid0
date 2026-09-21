@@ -4,6 +4,9 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
+	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"sync"
@@ -184,11 +187,16 @@ func Load() {
 	// 读取并解析配置文件
 	data, err := os.ReadFile(expandedPath)
 	if err != nil {
-		// 文件不存在或读取失败时备份旧文件并创建新配置
-		if _, backupErr := os.Stat(expandedPath); backupErr == nil {
-			backupPath := expandedPath + ".bak"
-			_ = os.Rename(expandedPath, backupPath)
+		if !errors.Is(err, fs.ErrNotExist) {
+			// 文件存在但读取失败（权限、I/O 错误、路径其实是目录等）。
+			// 此前一律走"改名备份 + Save() 默认配置"分支，等于把用户的配置文件
+			// 覆盖成默认值（配置被清空），而读取失败往往只是暂时性的。
+			// 现在保留磁盘上的原文件不动，仅以默认配置在内存中继续运行并大声报错。
+			// 注意：不调用 ensureKey()，以避免其内部 Save() 再次覆盖原文件。
+			fmt.Fprintf(os.Stderr, "config: read %s failed: %v (kept the existing file untouched, running with in-memory defaults)\n", expandedPath, err)
+			return
 		}
+		// 文件确实不存在（首次运行）：落盘默认配置并生成密钥
 		Save()
 		// 新创建的配置文件需要自动生成密钥
 		ensureKey()

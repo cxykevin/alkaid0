@@ -5,11 +5,15 @@ package sandbox
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"os/exec"
 	"sync/atomic"
+	"syscall"
+	"unsafe"
 
 	winExtra "github.com/cxykevin/alkaid0/terminal/sandbox/scripts/windows/windows_extra"
+	"golang.org/x/sys/windows"
 )
 
 // ExecCmd 执行对象
@@ -34,7 +38,11 @@ func createIsolateNoneCmd(ctx context.Context, name string, args []string, env [
 	// （典型：powershell/cmd 启动的 node、npm、常驻服务）。此时 Wait 会无限
 	// 阻塞，任务永远停在 running、kill/ESC 都不再生效。WaitDelay 让 Wait 在
 	// 超时后关闭管道并返回（ErrWaitDelay 在 Wait 中按"命令已结束"处理）。
-	cmd.WaitDelay = winExtra.DrainTimeout
+	cmd.WaitDelay = drainTimeout
+	// 以挂起方式创建进程：Start 里先把 PID 加入 Job Object 再恢复运行，
+	// 关闭"进程已开始运行、但尚未加入 Job"这段窗口内派生的孙进程逃出
+	// Job 树、导致 Kill 杀不干净的竞态（见 resumeSuspendedProcess）。
+	cmd.SysProcAttr = &syscall.SysProcAttr{CreationFlags: windows.CREATE_SUSPENDED}
 
 	e := &ExecCmd{cmd: cmd, clean: func() {}}
 	// Windows 没有进程组语义，只杀直接子进程会留下存活且继续持有管道的后代，
@@ -78,7 +86,45 @@ func (e *ExecCmd) Start() error {
 			e.job.Store(nil)
 		}
 	}
+	// 进程此前一直挂起（CREATE_SUSPENDED），必须在加入 Job 成功后恢复运行。
+	// 恢复失败则终止进程并返回错误，避免留下永远挂起、Wait 永不返回的进程。
+	if e.cmd.Process != nil {
+		if err := resumeSuspendedProcess(e.cmd.Process.Pid); err != nil {
+			_ = e.Kill()
+			return fmt.Errorf("恢复挂起进程 %d 失败: %w", e.cmd.Process.Pid, err)
+		}
+	}
 	return nil
+}
+
+// resumeSuspendedProcess 恢复以 CREATE_SUSPENDED 创建的进程的主线程。
+// 刚创建且尚未运行的进程只有一个线程，按 OwnerProcessID 枚举即可找到它。
+func resumeSuspendedProcess(pid int) error {
+	snapshot, err := windows.CreateToolhelp32Snapshot(windows.TH32CS_SNAPTHREAD, 0)
+	if err != nil {
+		return fmt.Errorf("CreateToolhelp32Snapshot: %w", err)
+	}
+	defer windows.CloseHandle(snapshot)
+
+	var entry windows.ThreadEntry32
+	entry.Size = uint32(unsafe.Sizeof(entry))
+	err = windows.Thread32First(snapshot, &entry)
+	for err == nil {
+		if entry.OwnerProcessID == uint32(pid) {
+			thread, oerr := windows.OpenThread(windows.THREAD_SUSPEND_RESUME, false, entry.ThreadID)
+			if oerr != nil {
+				return fmt.Errorf("OpenThread(%d): %w", entry.ThreadID, oerr)
+			}
+			_, rerr := windows.ResumeThread(thread)
+			_ = windows.CloseHandle(thread)
+			if rerr != nil {
+				return fmt.Errorf("ResumeThread(%d): %w", entry.ThreadID, rerr)
+			}
+			return nil
+		}
+		err = windows.Thread32Next(snapshot, &entry)
+	}
+	return fmt.Errorf("未找到 pid %d 的主线程: %w", pid, err)
 }
 
 // Wait 等待

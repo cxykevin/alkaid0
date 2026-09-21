@@ -4,7 +4,10 @@ import (
 	_ "embed" // embed
 	"errors"
 	"fmt"
+	"strings"
 	"text/template"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/cxykevin/alkaid0/log"
 	"github.com/cxykevin/alkaid0/prompts"
@@ -190,6 +193,68 @@ func updateDeactivateInfo(session *structs.Chats, mp map[string]*any, cross []*a
 	return updateInfo(session, mp, cross, toolID, "deactivate_agent")
 }
 
+// agentNameMaxLen 子代理实例名长度上限（按字符计）。
+const agentNameMaxLen = 64
+
+// validateAgentNameChars 白名单校验实例名本身：只允许字母/数字/'-'/'_'/'.'
+// （允许中文等 Unicode 字母，保持既有合法名字可用），拒绝空白、控制字符、路径
+// 分隔符、引号与尖括号等结构性字符——实例名会作为 <instance name="..."> 渲染进
+// 全局提示词，也会作为 SubAgents 主键，这些字符可以被用来做提示注入。
+func validateAgentNameChars(name string) error {
+	if name == "" {
+		return errors.New("invalid or empty name parameter")
+	}
+	if utf8.RuneCountInString(name) > agentNameMaxLen {
+		return fmt.Errorf("invalid name: length must not exceed %d characters", agentNameMaxLen)
+	}
+	for _, r := range name {
+		if unicode.IsLetter(r) || unicode.IsDigit(r) || r == '-' || r == '_' || r == '.' {
+			continue
+		}
+		return fmt.Errorf("invalid name %q: only letters, digits, '-', '_' and '.' are allowed (no whitespace, path separators or control characters)", name)
+	}
+	// 纯点名（"."、".."、"..."）同时是路径穿越语义，禁止
+	if strings.Trim(name, ".") == "" {
+		return fmt.Errorf("invalid name %q: name cannot consist of dots only", name)
+	}
+	return nil
+}
+
+// validateAgentName 创建/更新实例时的完整校验：字符白名单 + 与已有 agent tag 重名检测。
+// 实例名与 tag 是两个命名空间，但重名会让提示词里的 <agents> 与 <agent_tags> 混淆，
+// 模型可能把实例名当成 tag 使用，因此这里一并拒绝。
+func validateAgentName(name string) error {
+	if err := validateAgentNameChars(name); err != nil {
+		return err
+	}
+	if _, ok := agentconfig.GetAgentConfig(name); ok {
+		return fmt.Errorf("invalid name %q: conflicts with an existing agent tag, choose another name", name)
+	}
+	return nil
+}
+
+// checkAgentActiveInOtherChat 检查子代理实例是否正被其它会话激活使用。
+// SubAgents 表当前没有 chat 归属列（storage/structs/subagents.go 的 ChatID 被注释掉），
+// 无法直接按 chat 过滤实例；唯一可判定的跨会话占用关系是 Chats.NowAgent。改/删别的
+// 会话正在使用的实例会让对方会话的绑定路径/配置/tag 静默变化，删除后 now_agent 悬空
+// 还会导致对方会话无法加载，因此这里拒绝跨会话改动；本会话自己的实例不受影响。
+func checkAgentActiveInOtherChat(session *structs.Chats, name string) error {
+	if session == nil || session.DB == nil {
+		return nil
+	}
+	var count int64
+	err := session.DB.Model(&structs.Chats{}).
+		Where("now_agent = ? AND id <> ?", name, session.ID).
+		Count(&count).Error
+	if err != nil {
+		return err
+	}
+	if count > 0 {
+		return fmt.Errorf("agent instance %q is currently active in another chat; deactivate it there first", name)
+	}
+	return nil
+}
+
 func editAgent(session *structs.Chats, mp map[string]*any, cross []*any) (bool, []*any, map[string]*any, error) {
 	name, err := CheckName(mp)
 	if err != nil {
@@ -206,6 +271,16 @@ func editAgent(session *structs.Chats, mp map[string]*any, cross []*any) (bool, 
 	deletePtr, ok := mp["delete"]
 	if ok && deletePtr != nil {
 		if delete, ok := (*deletePtr).(bool); ok && delete {
+			// 跨会话保护：别的会话正在激活使用的实例不能删，否则对方会话的 now_agent 悬空
+			if err := checkAgentActiveInOtherChat(session, name); err != nil {
+				boolx := false
+				success := any(boolx)
+				errMsg := any(err.Error())
+				return false, cross, map[string]*any{
+					"success": &success,
+					"error":   &errMsg,
+				}, nil
+			}
 			logger.Info("delete agent instance \"%s\" in ID=%d", name, session.ID)
 			err := agents.DeleteAgent(session, name)
 			if err != nil {
@@ -224,6 +299,19 @@ func editAgent(session *structs.Chats, mp map[string]*any, cross []*any) (bool, 
 				"success": &success,
 			}, nil
 		}
+	}
+
+	// 创建/更新前做白名单校验：名字会渲染进全局提示词模板并作为实例主键，
+	// 非法字符可被用于提示注入或构造越权配置键；删除分支不校验，保证历史遗留的
+	// 非法名实例仍能被清理。
+	if err := validateAgentName(name); err != nil {
+		boolx := false
+		success := any(boolx)
+		errMsg := any(err.Error())
+		return false, cross, map[string]*any{
+			"success": &success,
+			"error":   &errMsg,
+		}, nil
 	}
 
 	// 检查 tag 参数
@@ -276,6 +364,17 @@ func editAgent(session *structs.Chats, mp map[string]*any, cross []*any) (bool, 
 	var existingAgent structs.SubAgents
 	err = session.DB.Where("id = ?", name).First(&existingAgent).Error
 	if err == nil {
+		// 跨会话保护：不允许改动别的会话正在使用的实例（其绑定路径/配置/tag
+		// 被换掉后，对方会话重新加载会静默使用新配置）。
+		if guardErr := checkAgentActiveInOtherChat(session, name); guardErr != nil {
+			boolx := false
+			success := any(boolx)
+			errMsg := any(guardErr.Error())
+			return false, cross, map[string]*any{
+				"success": &success,
+				"error":   &errMsg,
+			}, nil
+		}
 		// 已存在，使用 UpdateAgent 更新
 		err = agents.UpdateAgent(session, name, tag, path)
 		if err != nil {
@@ -421,17 +520,23 @@ func unuseAgent(session *structs.Chats, mp map[string]*any, cross []*any) (bool,
 	}, nil
 }
 
+// agentPromptEntry 全局提示词中的子代理实例条目
+type agentPromptEntry struct {
+	Name string
+	Path string
+	Tag  string
+}
+
+// agentPromptTag 全局提示词中的子代理 tag 条目
+type agentPromptTag struct {
+	Name        string
+	Description string
+}
+
 // agentTemplate 子代理全局提示词模板的数据结构
 type agentTemplate struct {
-	Agents []struct {
-		Name string
-		Path string
-		Tag  string
-	}
-	Tags []struct {
-		Name        string
-		Description string
-	}
+	Agents []agentPromptEntry
+	Tags   []agentPromptTag
 }
 
 // buildGlobalPrompt 构建包含所有子代理信息的全局提示词
@@ -441,26 +546,26 @@ func buildGlobalPrompt(session *structs.Chats) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	tmpl.Agents = make([]struct {
-		Name string
-		Path string
-		Tag  string
-	}, len(listAgent))
-	for i, agent := range listAgent {
-		tmpl.Agents[i].Name = agent.ID
-		tmpl.Agents[i].Path = agent.BindPath
-		tmpl.Agents[i].Tag = agent.AgentID
+	for _, agent := range listAgent {
+		// 读路径同样做字符白名单过滤：写入校验加固之前落库的历史实例名字可能含
+		// 引号/换行等结构字符，原样渲染会破坏 <instance> 属性结构并造成提示注入。
+		// 这里只做字符校验（不做 tag 重名检测），避免隐藏历史遗留但结构安全的实例。
+		if err := validateAgentNameChars(agent.ID); err != nil {
+			logger.Warn("skip invalid agent instance in prompt: %v", err)
+			continue
+		}
+		tmpl.Agents = append(tmpl.Agents, agentPromptEntry{
+			Name: agent.ID,
+			Path: agent.BindPath,
+			Tag:  agent.AgentID,
+		})
 	}
 
-	tmpl.Tags = make([]struct {
-		Name        string
-		Description string
-	}, len(agentconfig.GetAgentConfigMap()))
-	idx := 0
-	for i, agent := range agentconfig.GetAgentConfigMap() {
-		tmpl.Tags[idx].Name = i
-		tmpl.Tags[idx].Description = agent.AgentDescription
-		idx++
+	for name, agent := range agentconfig.GetAgentConfigMap() {
+		tmpl.Tags = append(tmpl.Tags, agentPromptTag{
+			Name:        name,
+			Description: agent.AgentDescription,
+		})
 	}
 	rendered, err := prompts.Render(agentsTemplate, tmpl)
 	if err != nil {

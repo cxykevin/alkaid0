@@ -282,11 +282,13 @@ func TestWriteFile(t *testing.T) {
 	}
 
 	// @regex
+	// 原文件没有末尾换行：edit 现在保留"是否以换行结尾"（见
+	// TestWriteFile_PreservesMissingFinalNewline），因此这里不再凭空补一个 \n。
 	os.WriteFile(filepath.Join(tmpdir, "rx.txt"), []byte("Hello foo FOO world"), 0644)
 	mp = map[string]*any{"path": new(any("rx.txt")), "target": new(any("@regex:/foo/i")), "text": new(any("bar"))}
 	_, _, ret, _ = writeFile(session, mp, nil)
 	data, _ = os.ReadFile(filepath.Join(tmpdir, "rx.txt"))
-	if string(data) != "Hello bar FOO world\n" {
+	if string(data) != "Hello bar FOO world" {
 		t.Fatalf("regex write mismatch: %q", string(data))
 	}
 }

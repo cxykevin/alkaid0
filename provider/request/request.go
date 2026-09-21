@@ -26,6 +26,7 @@ import (
 	"github.com/cxykevin/alkaid0/ui/state"
 	"github.com/expr-lang/expr"
 	"github.com/expr-lang/expr/vm"
+	"gorm.io/gorm"
 )
 
 // UserAddMsg 处理用户发送的消息，更新数据库并处理子代理和审批状态
@@ -49,7 +50,7 @@ func UserAddMsgWithID(session *storageStructs.Chats, msg string, refers *storage
 	}
 
 	// 第 1 步：处理 WaitApprove 状态 — 先写入拒绝消息，再继续处理用户输入
-	if session.State == state.StateWaitApprove {
+	if session.GetState() == state.StateWaitApprove {
 		logger.Info("UserAddMsg: state=WaitApprove, rejecting pending tools and processing user input")
 		reason, err := prompts.Render(prompts.UserRejectTemplate, msg)
 		if err != nil {
@@ -63,8 +64,8 @@ func UserAddMsgWithID(session *storageStructs.Chats, msg string, refers *storage
 		}).Error; err != nil {
 			return 0, err
 		}
-		session.State = state.StateIdle
-		if err := db.Save(session).Error; err != nil {
+		// 单列更新 state，避免整行 Save 覆盖标题 goroutine 刚写入的 ai_title
+		if err := session.SaveState(state.StateIdle); err != nil {
 			return 0, err
 		}
 		// NOTE: 不 return — 继续执行后续逻辑，将用户输入作为正常消息插入
@@ -126,7 +127,7 @@ func SubAgentReject(session *storageStructs.Chats) error {
 	chatID := session.ID
 	var refer storageStructs.MessagesReferList
 
-	if session.State == state.StateWaitApprove {
+	if session.GetState() == state.StateWaitApprove {
 		reason := "<| tool call automatically rejected due to lack of explicit approval |>"
 		if err := db.Create(&storageStructs.Messages{
 			ChatID:  chatID,
@@ -137,8 +138,7 @@ func SubAgentReject(session *storageStructs.Chats) error {
 		}).Error; err != nil {
 			return err
 		}
-		session.State = state.StateIdle
-		return db.Save(session).Error
+		return session.SaveState(state.StateIdle)
 	}
 	return nil
 }
@@ -641,7 +641,7 @@ func ParseToolsFromJSON(payload string) ([]ToolCall, error) {
 
 // RejectToolCallsNoDeactivate 自动拒绝工具调用（不退出 subagent）
 func RejectToolCallsNoDeactivate(session *storageStructs.Chats, reason string, refers *storageStructs.MessagesReferList) error {
-	if session.State != state.StateWaitApprove {
+	if session.GetState() != state.StateWaitApprove {
 		return nil
 	}
 	if session.DB == nil {
@@ -664,8 +664,73 @@ func RejectToolCallsNoDeactivate(session *storageStructs.Chats, reason string, r
 	}).Error; err != nil {
 		return err
 	}
-	session.State = state.StateIdle
-	return session.DB.Save(session).Error
+	return session.SaveState(state.StateIdle)
+}
+
+// ErrPendingToolCallChanged 审批时指定的消息已不是当前待审批的工具调用
+// （用户批准的消息与将要执行的消息不一致）。调用方必须放弃执行。
+var ErrPendingToolCallChanged = errors.New("pending tool call changed")
+
+// PendingToolCallMessageID 返回当前待审批工具调用所在 assistant 消息的 DB ID；
+// 没有待审批消息时返回 (0, nil)。这是"审批身份"的权威来源——消息 ID，
+// 而不是模糊的"chat 内最新一条带 tool_calling_json_string 的消息"。
+func PendingToolCallMessageID(session *storageStructs.Chats) (uint64, error) {
+	if session == nil || session.DB == nil {
+		return 0, errors.New("db not initialized")
+	}
+	var msg storageStructs.Messages
+	err := session.DB.Where("chat_id = ? AND tool_calling_json_string != ''", session.ID).
+		Order("id DESC").First(&msg).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return 0, nil
+	}
+	if err != nil {
+		return 0, err
+	}
+	return msg.ID, nil
+}
+
+// ApproveToolCallsByID 执行指定消息（msgID）的待审批工具调用。
+//
+// P1-18/F2 审批身份绑定：ui/funcs.ApproveToolCalls 按 "chat 内最新一条带
+// tool_calling_json_string 的消息" 执行，不校验用户实际批准的是哪一条；若该批准
+// 在队列中排队期间第二个 prompt 产生了新的待审批工具调用，旧批准会执行新工具
+// （用户从未同意）。这里在执行前用 msgID 做最后一道校验：msgID != 0 时必须等于
+// 当前最新待审批消息，否则不执行任何工具并返回 ErrPendingToolCallChanged。
+// msgID == 0 表示未携带身份（旧调用方），保持原有语义。
+func ApproveToolCallsByID(session *storageStructs.Chats, msgID uint64) (uint64, error) {
+	if session == nil || session.DB == nil {
+		return 0, errors.New("db not initialized")
+	}
+	if session.GetState() != state.StateWaitApprove {
+		return 0, nil
+	}
+	latestID, err := PendingToolCallMessageID(session)
+	if err != nil {
+		return 0, err
+	}
+	if msgID != 0 && latestID != msgID {
+		logger.Warn("approve rejected: stale approve for chat %d (approved msg %d, pending msg %d)",
+			session.ID, msgID, latestID)
+		return 0, ErrPendingToolCallChanged
+	}
+	if latestID == 0 {
+		return 0, nil
+	}
+	var msg storageStructs.Messages
+	if err := session.DB.Where("chat_id = ? AND id = ? AND tool_calling_json_string != ''", session.ID, latestID).
+		First(&msg).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return 0, nil
+		}
+		return 0, err
+	}
+	if session.TemporyDataOfRequest == nil {
+		session.TemporyDataOfRequest = make(map[string]any)
+	}
+	session.SetCurrentMessageID(msg.ID)
+	_, err = ExecuteToolCalls(session, msg.ToolCallingJSONString)
+	return msg.ID, err
 }
 
 // ApplyToolOnHooks 应用工具调用，遍历所有已解析的工具调用并执行对应的 OnHook 回调
@@ -678,7 +743,7 @@ func ApplyToolOnHooks(session *storageStructs.Chats, toolCallingJSON string) err
 		return err
 	}
 	for _, call := range toolCalls {
-		session.CurrentToolID = fmt.Sprintf("call_%d_%d_%s", session.ID, session.CurrentMessageID, call.ID)
+		session.CurrentToolID = fmt.Sprintf("call_%d_%d_%s", session.ID, session.GetCurrentMessageID(), call.ID)
 		if err := tools.ExecToolOnHook(session, call.Name, call.Parameters, call.ID); err != nil {
 			return err
 		}
@@ -820,13 +885,27 @@ func injectToolCallLoopWarning(session *storageStructs.Chats, calls []ToolCall) 
 // ExecuteToolCalls 执行工具调用并持久化结果。
 // 流程：设置状态为 ToolCalling → 逐工具执行 OnHook → 通过 Solver 解析并保存工具响应 → 恢复 Idle 状态。
 // 任一环节失败都会回滚到 Idle 并返回错误。
-func ExecuteToolCalls(session *storageStructs.Chats, toolCallingJSON string) (bool, error) {
+func ExecuteToolCalls(session *storageStructs.Chats, toolCallingJSON string) (ok bool, err error) {
 	if toolCallingJSON == "" {
 		return true, nil
 	}
 	if session.DB == nil {
 		return true, errors.New("db not initialized")
 	}
+	// 错误返回时状态必然回到 Idle（P1-18/F3）：此前 validateAgentLifecycleCalls、
+	// JSON 反序列化等早期 return 会把会话永久留在 WaitApprove/ToolCalling，
+	// 客户端状态机卡死、后续请求无法开始。
+	defer func() {
+		if err == nil {
+			return
+		}
+		switch session.GetState() {
+		case state.StateWaitApprove, state.StateToolCalling:
+			if saveErr := session.SaveState(state.StateIdle); saveErr != nil {
+				logger.Warn("failed to reset state after tool execution error: %v", saveErr)
+			}
+		}
+	}()
 	// 一轮响应只能进行一次子代理生命周期切换。多个 activate_agent/
 	// deactivate_agent 会让同一轮后续调用依据过期的会话状态执行，导致激活、
 	// 停用顺序和回传内容不确定；在任何 OnHook 执行前拒绝整批调用。
@@ -842,21 +921,15 @@ func ExecuteToolCalls(session *storageStructs.Chats, toolCallingJSON string) (bo
 		}
 		logger.Warn("tool call loop detected in chat %d: %d identical %s call(s), injecting loop warning and skipping execution",
 			session.ID, len(loopCalls), loopCalls[0].Name)
-		session.State = state.StateIdle
-		if saveErr := session.DB.Save(session).Error; saveErr != nil {
+		if saveErr := session.SaveState(state.StateIdle); saveErr != nil {
 			return true, saveErr
 		}
 		return true, nil
 	}
-	session.State = state.StateToolCalling
-	if err := session.DB.Save(session).Error; err != nil {
-		return true, err
+	if saveErr := session.SaveState(state.StateToolCalling); saveErr != nil {
+		return true, saveErr
 	}
 	if err := ApplyToolOnHooks(session, toolCallingJSON); err != nil {
-		session.State = state.StateIdle
-		if saveErr := session.DB.Save(session).Error; saveErr != nil {
-			return true, saveErr
-		}
 		return true, err
 	}
 
@@ -867,10 +940,6 @@ func ExecuteToolCalls(session *storageStructs.Chats, toolCallingJSON string) (bo
 		Parameters map[string]*any `json:"parameters"`
 	}
 	if err := stdjson.Unmarshal([]byte(toolCallingJSON), &calls); err != nil {
-		session.State = state.StateIdle
-		if saveErr := session.DB.Save(session).Error; saveErr != nil {
-			return true, saveErr
-		}
 		return true, err
 	}
 	// 每个调用必须带各自独立的 Index：NativeToolCallAccumulator 以 index 为键维护
@@ -886,10 +955,6 @@ func ExecuteToolCalls(session *storageStructs.Chats, toolCallingJSON string) (bo
 		}
 		arguments, err := stdjson.Marshal(parameters)
 		if err != nil {
-			session.State = state.StateIdle
-			if saveErr := session.DB.Save(session).Error; saveErr != nil {
-				return true, saveErr
-			}
 			return true, err
 		}
 		if err := solver.AddNativeToolCallDelta([]structs.StreamToolCall{{
@@ -900,16 +965,11 @@ func ExecuteToolCalls(session *storageStructs.Chats, toolCallingJSON string) (bo
 				Arguments: string(arguments),
 			},
 		}}); err != nil {
-			session.State = state.StateIdle
-			if saveErr := session.DB.Save(session).Error; saveErr != nil {
-				return true, saveErr
-			}
 			return true, err
 		}
 	}
-	ok, _, _, err := solver.DoneToken()
-	session.State = state.StateIdle
-	if saveErr := session.DB.Save(session).Error; saveErr != nil {
+	ok, _, _, err = solver.DoneToken()
+	if saveErr := session.SaveState(state.StateIdle); saveErr != nil {
 		return ok, saveErr
 	}
 	return ok, err
@@ -1000,15 +1060,40 @@ func splitMultiToolCalls(messages []structs.Message) []structs.Message {
 	return out
 }
 
+// solverDoneToken 调用响应解析器的收尾方法（DoneToken）。抽成包级变量以便测试
+// 注入收尾错误，覆盖"收尾失败时未 flush 的尾部仍必须先落库"的路径。
+var solverDoneToken = func(s *response.Solver) (bool, string, string, error) {
+	return s.DoneToken()
+}
+
 // SendRequest 发送 LLM 请求并处理流式响应。
 // 流程：设置状态 → 构建请求体 → 发送请求 → 流式解析 → 持久化 → 处理工具调用。
 // token 使用阈值刷写策略（每 256 字符批量写库）平衡实时性与 I/O 性能。
 // 返回的 bool 值表示是否还有后续工具调用需要处理。
-func SendRequest(ctx context.Context, session *storageStructs.Chats, callback func(string, string, uint64, structs.Usage, *string) error) (bool, error) {
-	session.State = state.StateWaiting
+func SendRequest(ctx context.Context, session *storageStructs.Chats, callback func(string, string, uint64, structs.Usage, *string) error) (finish bool, err error) {
+	session.SetState(state.StateWaiting)
 	session.TemporyDataOfRequest = make(map[string]any)
-	session.ToolState = 0
+	session.SetToolState(0)
 	db := session.DB
+
+	// P1-18/F3：错误返回时状态必须回到 Idle。
+	// 此前 model-not-found、占位行 Create 失败、build.Build 失败、请求错误/取消等
+	// 直接 return 会把 State 永久留在 Waiting/GeneratingPrompt/Requesting/Reciving，
+	// 客户端状态机卡死（例如 background 会话释放会一直判定"仍在处理"而拒绝释放）。
+	// 只在"进行中"状态上复位，不覆盖 WaitApprove（有待审批工具，见下方有意设置）
+	// 与 ToolCalling（工具执行中，由 ExecuteToolCalls 管理）。ToolState 一并复位。
+	defer func() {
+		if err == nil {
+			return
+		}
+		switch session.GetState() {
+		case state.StateWaiting, state.StateGeneratingPrompt, state.StateRequesting, state.StateReciving:
+			session.SetToolState(0)
+			if saveErr := session.SaveState(state.StateIdle); saveErr != nil {
+				logger.Warn("failed to reset session state to idle after request error: %v", saveErr)
+			}
+		}
+	}()
 
 	// 确定使用的模型 ID：优先使用子代理配置的模型，否则使用会话最后选择的模型
 	modelID := session.EffectiveModelID()
@@ -1046,7 +1131,7 @@ func SendRequest(ctx context.Context, session *storageStructs.Chats, callback fu
 	}
 
 	// session.CurrentMessageID 用于后续工具调用关联到本次消息
-	session.CurrentMessageID = reqObj.ID
+	session.SetCurrentMessageID(reqObj.ID)
 
 	var gDelta strings.Builder
 	var gThinkingDelta strings.Builder
@@ -1098,8 +1183,8 @@ func SendRequest(ctx context.Context, session *storageStructs.Chats, callback fu
 	// solveFunc 是 SimpleOpenAIRequest 的回调函数，每次收到流式响应体时调用。
 	// 内部处理：增量解析 token → 累积内容 → 达到阈值时写库 → 实时推送到 UI
 	solveFunc := func(body structs.ChatCompletionResponse) error {
-		if session.State == state.StateRequesting {
-			session.State = state.StateReciving
+		if session.GetState() == state.StateRequesting {
+			session.SetState(state.StateReciving)
 		}
 		// 先累积 token 用量：OpenAI/DeepSeek 在流末尾发送 choices 为空的纯 usage 帧，
 		// 必须在 choices==0 提前返回之前处理，否则用量统计恒为 0、自动压缩永不触发。
@@ -1176,8 +1261,11 @@ func SendRequest(ctx context.Context, session *storageStructs.Chats, callback fu
 		return nil
 	}
 
-	session.State = state.StateGeneratingPrompt
+	session.SetState(state.StateGeneratingPrompt)
 	logger.Debug("SendRequest: generating prompt for chat %d", session.ID)
+	// 快照本次请求携带的一次性 system 通知（build.Build 只读取、不消费）：
+	// 请求成功后再清除；失败时保留，供调用方重试时重新构建进请求。
+	pendingSystemPrompt := session.SystemPrompt
 	obj, err := build.Build(db, session)
 	if err != nil {
 		// 构建失败时删除占位消息，避免空 assistant 消息残留 DB 污染后续上下文
@@ -1198,7 +1286,7 @@ func SendRequest(ctx context.Context, session *storageStructs.Chats, callback fu
 		logger.Debug("[request body] %s", buf.String())
 	}
 
-	session.State = state.StateRequesting
+	session.SetState(state.StateRequesting)
 
 	// 历史回放兼容（可选）：拆分一个 assistant 携带多个 tool_calls 的消息为逐条
 	// "单 tool_call + 对应结果"形式，保证 OpenAI→Anthropic 转换代理下每条 tool_use
@@ -1235,6 +1323,12 @@ func SendRequest(ctx context.Context, session *storageStructs.Chats, callback fu
 	// 时 promptUsage 等全为 0，stats.AddUsage 内部忽略全 0，不会产生记录。
 	usageRecorded = true
 
+	// 一次性 system 通知已随请求成功送达 → 消费；请求失败则保留给重试。
+	// 比较字符串而非直接清空，避免丢掉请求期间新排队的通知。
+	if requestErr == nil && session.SystemPrompt == pendingSystemPrompt {
+		session.SystemPrompt = ""
+	}
+
 	isCancel := requestErr != nil && errors.Is(requestErr, context.Canceled)
 
 	// 取消时在 goroutine 中异步完成最后一批内容的持久化，然后立即返回
@@ -1254,9 +1348,17 @@ func SendRequest(ctx context.Context, session *storageStructs.Chats, callback fu
 					logger.Error("cancel persist goroutine recovered: %v", r)
 				}
 			}()
-			_, delta, thinkingDelta, _ := solver.DoneToken()
+			_, delta, thinkingDelta, _ := solverDoneToken(solver)
 			fd := finalDelta + delta
 			ftd := finalThinkingDelta + thinkingDelta
+			if fd == "" && ftd == "" && toolCallingJSON == "" {
+				// 取消时一个字都没收到：删除空 assistant 占位行，
+				// 否则 summary/历史回放会带上一条空 assistant 消息。
+				if err := db.Delete(&storageStructs.Messages{}, msgID).Error; err != nil {
+					logger.Error("cancel delete empty placeholder: %v", err)
+				}
+				return
+			}
 			if len(fd) != lastFlushLen || len(ftd) != lastFlushThinkingLen {
 				if err := db.Model(&storageStructs.Messages{}).Where("id = ?", msgID).Updates(storageStructs.Messages{
 					Delta:            fd,
@@ -1282,13 +1384,12 @@ func SendRequest(ctx context.Context, session *storageStructs.Chats, callback fu
 	}
 
 	// 非取消路径（正常完成 或 其他错误）：同步持久化
-	ok, delta, thinkingDelta, solverErr := solver.DoneToken()
-	if solverErr != nil {
-		return true, solverErr
-	}
+	ok, delta, thinkingDelta, solverErr := solverDoneToken(solver)
+	// 先把 DoneToken 返回的尾部增量并入累积缓冲，再判断收尾错误：
+	// 未达刷写阈值的内容只能从这里落库，提前 return 会永久丢掉这段正文。
 	gDelta.WriteString(delta)
-	tools := solver.GetTools()
 	gThinkingDelta.WriteString(thinkingDelta)
+	tools := solver.GetTools()
 	// 处理响应：无内容且无工具调用时删除占位消息记录
 	if gDelta.String() == "" && gThinkingDelta.String() == "" && len(tools) == 0 {
 		// 空响应时删除占位消息，不保留无意义的记录
@@ -1311,12 +1412,19 @@ func SendRequest(ctx context.Context, session *storageStructs.Chats, callback fu
 				return true, err
 			}
 		}
-		// 保存工具调用的原始 JSON 字符串，用于后续审批和执行
-		if err := db.Model(&storageStructs.Messages{}).Where("id = ?", msgID).Update(
-			"tool_calling_json_string", string(solver.GetToolsOrigin()),
-		).Error; err != nil {
-			return true, err
+		// 保存工具调用的原始 JSON 字符串，用于后续审批和执行。
+		// 收尾失败时工具调用可能不完整，保持原有的"不落库"语义。
+		if solverErr == nil {
+			if err := db.Model(&storageStructs.Messages{}).Where("id = ?", msgID).Update(
+				"tool_calling_json_string", string(solver.GetToolsOrigin()),
+			).Error; err != nil {
+				return true, err
+			}
 		}
+	}
+
+	if solverErr != nil {
+		return true, solverErr
 	}
 
 	// 请求发生其他错误时，内容已持久化完毕，只需将错误向上传递
@@ -1339,8 +1447,8 @@ func SendRequest(ctx context.Context, session *storageStructs.Chats, callback fu
 		// 清空流式增量阶段可能被限流跳过的最后残留（最后一次 OnHook 写但未广播）。
 		// 审批展示走 DB 的 tool_calling_json_string，审批通过后 ExecuteToolCalls 会重新写入。
 		session.ClearToolCalling()
-		session.State = state.StateWaitApprove
-		if saveErr := db.Save(session).Error; saveErr != nil {
+		// 有意保留的中间态：等待审批期间不得被 F3 的错误复位逻辑覆盖
+		if saveErr := session.SaveState(state.StateWaitApprove); saveErr != nil {
 			return true, saveErr
 		}
 		return true, nil
@@ -1353,6 +1461,12 @@ func SendRequest(ctx context.Context, session *storageStructs.Chats, callback fu
 	}, &session.CurrentAgentID)
 	if err != nil {
 		return true, err
+	}
+
+	// 正常完成且无工具调用：状态回到 Idle（此前没有任何路径复位，State 停在
+	// Requesting/Reciving，客户端与 background 释放判定都读到错误的"仍在处理"）。
+	if saveErr := session.SaveState(state.StateIdle); saveErr != nil {
+		return ok, saveErr
 	}
 
 	logger.Debug("[tool body] %s", solver.GetToolsOrigin())

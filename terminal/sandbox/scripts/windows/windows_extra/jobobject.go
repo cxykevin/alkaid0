@@ -36,8 +36,11 @@ var DrainTimeout = 2 * time.Second
 //     （显式请求 breakaway 的程序会失败，这是为"杀得掉"付出的取舍）；
 //   - 不在句柄关闭时终止：与 Unix 一致，命令正常结束后自行脱离的后台进程继续存活。
 type JobObject struct {
+	// mu 串行化 handle 的读取与关闭：Kill（Terminate）可能来自其它 goroutine，
+	// 与 Wait/Clean（Close）并发。没有这把锁时，Close 关闭句柄的同时 Terminate
+	// 可能仍在用旧句柄值调用 API——句柄号被系统复用后会作用到无关对象上。
+	mu     sync.RWMutex
 	handle windows.Handle
-	once   sync.Once
 }
 
 // NewJobObject 创建一个匿名 Job Object。
@@ -53,11 +56,16 @@ func NewJobObject() (*JobObject, error) {
 // Assign 把进程句柄加入 Job Object：此后该进程派生的所有后代自动属于同一个 Job。
 // 进程已属于其它 Job 且系统不支持嵌套 Job（Windows 7 及更早）时会失败。
 func (j *JobObject) Assign(process windows.Handle) error {
-	if j == nil || j.handle == 0 {
+	if j == nil {
 		return errors.New("job object unavailable")
 	}
 	if process == 0 || process == windows.InvalidHandle {
 		return errors.New("invalid process handle")
+	}
+	j.mu.RLock()
+	defer j.mu.RUnlock()
+	if j.handle == 0 {
+		return errors.New("job object unavailable")
 	}
 	return windows.AssignProcessToJobObject(j.handle, process)
 }
@@ -79,7 +87,12 @@ func (j *JobObject) AssignPID(pid int) error {
 
 // Terminate 终止 Job Object 内的全部进程（整棵进程树），幂等。
 func (j *JobObject) Terminate() error {
-	if j == nil || j.handle == 0 {
+	if j == nil {
+		return errors.New("job object unavailable")
+	}
+	j.mu.RLock()
+	defer j.mu.RUnlock()
+	if j.handle == 0 {
 		return errors.New("job object unavailable")
 	}
 	return windows.TerminateJobObject(j.handle, 1)
@@ -91,12 +104,12 @@ func (j *JobObject) Close() error {
 	if j == nil {
 		return nil
 	}
-	var err error
-	j.once.Do(func() {
-		if j.handle != 0 {
-			err = windows.CloseHandle(j.handle)
-			j.handle = 0
-		}
-	})
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	if j.handle == 0 {
+		return nil
+	}
+	err := windows.CloseHandle(j.handle)
+	j.handle = 0
 	return err
 }

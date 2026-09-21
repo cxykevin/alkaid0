@@ -19,6 +19,14 @@ import (
 
 var logger = log.New("sandbox")
 
+// drainTimeout 命令主进程退出后，等待其输出管道排空的时间上限。
+// 主进程退出后管道读端未必立刻 EOF：命令可能留下仍持有继承句柄的后代进程
+// （例如 shell 启动的常驻子进程）。此时 os/exec 的拷贝 goroutine 永远等不到
+// EOF，Wait 会一直阻塞；超过该上限后 os/exec 强制关闭管道并返回
+// exec.ErrWaitDelay，由 ExecCmd.Wait 按"命令已结束"处理。
+// 与 Windows 路径的 winExtra.DrainTimeout、PTY 路径的 ptyDrainTimeout 保持一致。
+const drainTimeout = 2 * time.Second
+
 // IsolationMode 隔离模式，定义了沙盒对宿主系统的保护强度。
 type IsolationMode int
 
@@ -243,7 +251,16 @@ func (c *Command) Start() error {
 			return err
 		}
 	}
-	return c.cmd.Start()
+	if err := c.cmd.Start(); err != nil {
+		// 进程未创建成功：调用方不会再调用 Wait（Wait 才是 Clean 的常规调用点），
+		// 这里必须立即清理临时资源——否则 Windows 沙盒为目录授予的 ACL 会残留。
+		// PID 非 0 表示进程已在运行（例如重复 Start），此时不能清理正在使用的资源。
+		if c.PID() == 0 {
+			_ = c.Clean()
+		}
+		return err
+	}
+	return nil
 }
 
 // Wait 等待命令完成

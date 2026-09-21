@@ -24,34 +24,38 @@ func TestConfig(t *testing.T) {
 	}
 }
 
+// TestExpandPath 验证路径展开。
+//
+// 旧断言是
+//
+//	tt.contains != "" && result != filepath.Clean(tt.input) && !filepath.IsAbs(result) && ...^[0] != '~'
+//
+// 三个用例都无法让它成立（tilde 用例 IsAbs 为真、绝对路径用例 result 相等、
+// 空用例 contains 为空），即这个测试对任何输入都恒为真、永远不会失败。
+// 改为断言真实期望值。
 func TestExpandPath(t *testing.T) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Fatalf("UserHomeDir failed: %v", err)
+	}
+
 	tests := []struct {
-		name     string
-		input    string
-		contains string
+		name  string
+		input string
+		want  string
 	}{
-		{
-			name:     "tilde expansion",
-			input:    "~/test",
-			contains: "/test",
-		},
-		{
-			name:     "no tilde",
-			input:    "/absolute/path",
-			contains: "/absolute/path",
-		},
-		{
-			name:     "empty path",
-			input:    "",
-			contains: "",
-		},
+		{name: "tilde expansion", input: "~/test", want: filepath.Join(home, "test")},
+		{name: "no tilde", input: "/absolute/path", want: "/absolute/path"},
+		{name: "relative path", input: "relative/path", want: "relative/path"},
+		// filepath.Clean("") == "."，这是 ExpandPath 的既有语义
+		{name: "empty path", input: "", want: "."},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := configutil.ExpandPath(tt.input)
-			if tt.contains != "" && result != filepath.Clean(tt.input) && !filepath.IsAbs(result) && filepath.Clean(tt.input)[0] != '~' {
-				t.Errorf("ExpandPath(%s) = %s, expected to contain %s", filepath.Clean(tt.input), result, tt.contains)
+			got := configutil.ExpandPath(tt.input)
+			if got != filepath.Clean(tt.want) {
+				t.Errorf("ExpandPath(%q) = %q, want %q", tt.input, got, filepath.Clean(tt.want))
 			}
 		})
 	}
@@ -347,5 +351,42 @@ func TestSnapshotJSONIsDecoupled(t *testing.T) {
 	}
 	if decoded.Server.Port == probePort {
 		t.Error("已生成的快照被之后的写入改变了（快照未解耦）")
+	}
+}
+
+// TestLoadKeepsUnreadableConfigFileUntouched 回归：配置"读取失败"（但文件并非不存在）
+// 时，不得把磁盘上的原配置改名备份或覆盖成默认值。
+//
+// 旧实现只判断 err != nil，于是权限错误、I/O 错误、路径其实是目录等情况都会走
+// "改名备份 + Save() 默认配置"分支——磁盘上的用户配置被清空成默认值，而这类
+// 读取失败往往只是暂时性的。这里用"配置路径是一个目录"构造 EISDIR 型读取错误
+// （跨平台、且不依赖"非 root 用户"权限），修复后该目录必须原样保留。
+func TestLoadKeepsUnreadableConfigFileUntouched(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.json")
+	if err := os.Mkdir(cfgPath, 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	oldEnv := os.Getenv(envConfigName)
+	oldPath := configPath
+	t.Cleanup(func() {
+		os.Setenv(envConfigName, oldEnv)
+		configPath = oldPath
+	})
+	os.Setenv(envConfigName, cfgPath)
+	configPath = ""
+
+	Load()
+
+	info, err := os.Stat(cfgPath)
+	if err != nil {
+		t.Fatalf("配置路径在 Load 后消失（被改名或覆盖）: %v", err)
+	}
+	if !info.IsDir() {
+		t.Fatal("配置目录被覆盖成了普通文件：原配置被清空")
+	}
+	if _, err := os.Stat(cfgPath + ".bak"); err == nil {
+		t.Error("读取失败不应触发改名备份")
 	}
 }

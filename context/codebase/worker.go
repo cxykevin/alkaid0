@@ -12,41 +12,59 @@ import (
 	"github.com/cxykevin/alkaid0/provider/request/structs"
 )
 
-// startWorker 启动当前目录的 worker goroutine（如果尚未运行）
+// startWorker 启动当前目录的 worker goroutine（如果尚未运行）。
+//
+// 已注册的 worker 若其 ctx 已被取消（stopWorker 已发出 cancel、但状态尚未清理的
+// 停止窗口），同样视为不可用并启动新 worker 接管：只判断 workerCancel != nil
+// 会把停止窗口内入队的任务留给一个正在退出的 worker，队列将永久停摆（丢唤醒）。
 func (cdb *DB) startWorker() {
 	cdb.mu.Lock()
-	defer cdb.mu.Unlock()
-
-	if cdb.workerCancel != nil {
+	if cdb.workerCtx != nil && cdb.workerCtx.Err() == nil {
+		cdb.mu.Unlock()
 		return
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
 	cdb.workerCtx = ctx
 	cdb.workerCancel = cancel
-	cdb.workerWG.Add(1)
-	go cdb.worker(ctx)
+	cdb.workerDone = done
+	cdb.mu.Unlock()
+
+	go cdb.worker(ctx, done)
 }
 
-// stopWorker 停止当前目录的 worker，等待当前任务完成
+// stopWorker 停止当前目录的 worker，等待当前任务处理完成
 func (cdb *DB) stopWorker() {
 	cdb.mu.Lock()
 	cancel := cdb.workerCancel
+	ctx := cdb.workerCtx
+	done := cdb.workerDone
 	cdb.mu.Unlock()
 
-	if cancel != nil {
-		cancel()
-		cdb.workerWG.Wait()
-
-		cdb.mu.Lock()
-		cdb.workerCancel = nil
-		cdb.workerCtx = nil
-		cdb.mu.Unlock()
+	if cancel == nil {
+		return
 	}
+
+	cancel()
+	if done != nil {
+		<-done
+	}
+
+	cdb.mu.Lock()
+	// 只清理仍指向本次停止的 worker 的状态：等待退出期间可能有新的 worker
+	// 被 startWorker 启动（旧 ctx 已取消），不能把新 worker 的状态一并清掉。
+	if cdb.workerCtx == ctx {
+		cdb.workerCtx = nil
+		cdb.workerCancel = nil
+		cdb.workerDone = nil
+	}
+	cdb.mu.Unlock()
 }
 
 // worker 单个目录的嵌入任务处理 goroutine
-func (cdb *DB) worker(ctx context.Context) {
+func (cdb *DB) worker(ctx context.Context, done chan struct{}) {
+	defer close(done)
 	defer func() {
 		if r := recover(); r != nil {
 			cdb.logger.Error("worker panic: %v", r)
@@ -55,16 +73,19 @@ func (cdb *DB) worker(ctx context.Context) {
 			cdb.logger.Error("stack: %s", string(buf[:n]))
 
 			if ctx.Err() == nil {
-				// 先清除旧的 worker 状态再重启，否则 startWorker 会因
-				// workerCancel 仍非 nil 而直接返回，导致 worker 永久死亡、队列停摆。
+				// 先清除仍属于本 worker 的状态再重启，否则 startWorker 会因
+				// workerCtx 仍指向本（已 panic 的）worker 而直接返回，
+				// 导致 worker 永久死亡、队列停摆。
 				cdb.mu.Lock()
-				cdb.workerCancel = nil
-				cdb.workerCtx = nil
+				if cdb.workerCtx == ctx {
+					cdb.workerCancel = nil
+					cdb.workerCtx = nil
+					cdb.workerDone = nil
+				}
 				cdb.mu.Unlock()
 				cdb.startWorker()
 			}
 		}
-		cdb.workerWG.Done()
 	}()
 
 	cdb.logger.Info("worker started")
@@ -76,13 +97,22 @@ func (cdb *DB) worker(ctx context.Context) {
 			return
 		}
 
-		if err := cdb.embedAndStore(ctx, task); err != nil {
-			cdb.logger.Error("embed %s:%s: %v", task.FilePath, task.Symbol, err)
-		}
+		cdb.processTask(ctx, task)
+	}
+}
 
-		if task.Done != nil {
-			close(task.Done)
-		}
+// processTask 处理单个嵌入任务：无论成功与否都结束 in-flight 计数并关闭 Done；
+// 失败时记录失败数，供索引终态如实报告（不再"条目被丢弃但状态仍写 completed"）。
+func (cdb *DB) processTask(ctx context.Context, task *EmbedTask) {
+	defer cdb.queue.FinishTask()
+
+	if err := cdb.embedAndStore(ctx, task); err != nil {
+		cdb.queue.RecordFailure()
+		cdb.logger.Error("embed %s:%s: %v", task.FilePath, task.Symbol, err)
+	}
+
+	if task.Done != nil {
+		close(task.Done)
 	}
 }
 
@@ -120,10 +150,19 @@ func (cdb *DB) embedAndStore(ctx context.Context, task *EmbedTask) error {
 	}
 	embeddings, err := request.SimpleOpenAIEmbedding(ctx, cdb.providerURL, cdb.providerKey, cdb.modelID, req)
 	if err != nil {
-		return fmt.Errorf("api call: %w", err)
+		return cdb.storeContentOnly(task, fmt.Errorf("api call: %w", err))
 	}
 	if len(embeddings) == 0 {
-		return fmt.Errorf("api returned empty embeddings")
+		return cdb.storeContentOnly(task, fmt.Errorf("api returned empty embeddings"))
+	}
+
+	// 维度校验：写入 vec0 前必须确认向量维度与建表维度一致。
+	// 模型换版本或 Dimension 配置错误时，错误维度的向量要么写入失败（整条被丢弃）、
+	// 要么污染索引使检索结果随机错误；这里显式拒绝并给出可定位的错误。
+	if wantDim := cdb.expectedDim(); len(embeddings[0]) != wantDim {
+		return cdb.storeContentOnly(task, fmt.Errorf(
+			"embedding dimension mismatch: got %d, want %d (model=%s)；请检查 embedding 模型的 ProviderSpecificConfig.Dimension",
+			len(embeddings[0]), wantDim, cdb.modelID))
 	}
 
 	// 存入数据库
@@ -180,6 +219,39 @@ func (cdb *DB) embedAndStore(ctx context.Context, task *EmbedTask) error {
 
 	cdb.logger.Info("stored %s:%s id=%d dim=%d", task.FilePath, task.Symbol, itemID, len(embeddings[0]))
 	return nil
+}
+
+// storeContentOnly 嵌入失败时的兜底写入：内容照常入库供 BM25 全文检索，
+// 但 embed_hash 留空——表示尚未完成向量嵌入，既不会被后续索引当作"已完成"
+// 跳过重试，也不会留下与内容错配的旧向量。
+func (cdb *DB) storeContentOnly(task *EmbedTask, cause error) error {
+	itemID, err := cdb.upsertItem(task, "")
+	if err != nil {
+		cdb.logger.Error("store content-only %s:%s failed: %v", task.FilePath, task.Symbol, err)
+		return fmt.Errorf("%w（兜底写入内容也失败: %v）", cause, err)
+	}
+
+	// 内容已更新，删除可能残留的旧向量，避免旧向量与新内容错配返回错误结果
+	cdb.mu.Lock()
+	defer cdb.mu.Unlock()
+	if err := cdb.ensureDBOpen(); err != nil {
+		return fmt.Errorf("%w（清理旧向量失败: %v）", cause, err)
+	}
+	if _, err := cdb.db.Exec("DELETE FROM codebase_vec WHERE id=?", itemID); err != nil {
+		cdb.logger.Warn("delete stale vec id=%d: %v", itemID, err)
+	}
+	return cause
+}
+
+// expectedDim 返回索引实际使用的向量维度：优先使用 codebase_vec 建表时声明的维度，
+// 读不到时退回配置维度。检索与写入共用，保证两边校验一致。
+func (cdb *DB) expectedDim() int {
+	cdb.mu.RLock()
+	defer cdb.mu.RUnlock()
+	if cdb.vecDim > 0 {
+		return cdb.vecDim
+	}
+	return cdb.dimension
 }
 
 // upsertItem 插入或更新 codebase_items 记录（FTS5 触发器自动同步全文索引），返回记录 ID。

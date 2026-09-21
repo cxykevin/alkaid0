@@ -133,6 +133,14 @@ func (cdb *DB) VectorSearch(ctx context.Context, query string, limit int) ([]Vec
 		return nil, fmt.Errorf("embed query: %w", err)
 	}
 
+	// 查询向量维度防御：与索引维度不一致时 vec0 MATCH 只会抛出底层 SQL 错误
+	// （或返回不可预期的距离），这里提前拒绝并说明是模型/配置问题。
+	if wantDim := cdb.expectedDim(); len(vec) != wantDim {
+		return nil, fmt.Errorf(
+			"embedding dimension mismatch: query vector has %d dimensions, index expects %d (model=%s)",
+			len(vec), wantDim, cdb.modelID)
+	}
+
 	// vec0 距离查询
 	cdb.mu.RLock()
 	if err := cdb.ensureDBOpen(); err != nil {

@@ -71,9 +71,11 @@ func NewClient(workdir, language string, cfg LanguageServerConfig) *Client {
 // Start 启动 LSP 服务器进程并完成 initialize 握手
 func (c *Client) Start(ctx context.Context, cfg LanguageServerConfig) error {
 	c.stateMu.Lock()
-	if c.state != StateCreated {
+	// 错误信息里的 state 必须在锁内取样：解锁后再读 c.state 会与
+	// markTransportClosed/cleanupProcess 的写入并发（-race 实测报 data race）
+	if state := c.state; state != StateCreated {
 		c.stateMu.Unlock()
-		return fmt.Errorf("client already started (state=%s)", c.state)
+		return fmt.Errorf("client already started (state=%s)", state)
 	}
 	c.state = StateCreated // 保持创建状态，但继续执行
 	c.stateMu.Unlock()
@@ -85,6 +87,8 @@ func (c *Client) Start(ctx context.Context, cfg LanguageServerConfig) error {
 	// 进程生命周期由 Client.Close() / Shutdown() 管理）
 	cmd := exec.Command(cfg.Command, cfg.Args...)
 	cmd.Dir = c.workdir
+	// 独立进程组：Close/清理时可连同语言服务器派生的子进程一起终止
+	setProcessGroup(cmd)
 
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
@@ -110,8 +114,8 @@ func (c *Client) Start(ctx context.Context, cfg LanguageServerConfig) error {
 	// 读取 stderr（后台 goroutine，防止管道阻塞）
 	go c.readStderr(stderr)
 
-	// 创建传输层
-	c.transport = NewTransport(stdin, stdout)
+	// 创建传输层；读循环结束（进程退出/管道损坏）时标记客户端不可用
+	c.attachTransport(NewTransport(stdin, stdout))
 
 	// 发送 initialize 请求
 	initParams := InitializeParams{
@@ -145,9 +149,11 @@ func (c *Client) Start(ctx context.Context, cfg LanguageServerConfig) error {
 		return fmt.Errorf("initialized notification: %w", err)
 	}
 
-	c.stateMu.Lock()
-	c.state = StateReady
-	c.stateMu.Unlock()
+	// 标记就绪前确认传输层未在 initialize 期间断开，避免把已死的客户端标成 Ready 被复用
+	if err := c.markReady(); err != nil {
+		c.cleanupProcess()
+		return err
+	}
 
 	c.markUsed()
 	c.logger.Info("LSP server ready: %s", cfg.Command)
@@ -157,9 +163,9 @@ func (c *Client) Start(ctx context.Context, cfg LanguageServerConfig) error {
 // SendRequest 发送请求（线程安全）
 func (c *Client) SendRequest(ctx context.Context, method string, params any) ([]byte, error) {
 	c.stateMu.Lock()
-	if c.state != StateReady {
+	if state := c.state; state != StateReady {
 		c.stateMu.Unlock()
-		return nil, fmt.Errorf("client not ready (state=%s)", c.state)
+		return nil, fmt.Errorf("client not ready (state=%s)", state)
 	}
 	c.stateMu.Unlock()
 
@@ -170,9 +176,9 @@ func (c *Client) SendRequest(ctx context.Context, method string, params any) ([]
 // SendNotification 发送通知（线程安全）
 func (c *Client) SendNotification(method string, params any) error {
 	c.stateMu.Lock()
-	if c.state != StateReady {
+	if state := c.state; state != StateReady {
 		c.stateMu.Unlock()
-		return fmt.Errorf("client not ready (state=%s)", c.state)
+		return fmt.Errorf("client not ready (state=%s)", state)
 	}
 	c.stateMu.Unlock()
 
@@ -251,6 +257,41 @@ func (c *Client) Workdir() string {
 // 内部方法
 // ---------------------------------------------------------------------------
 
+// attachTransport 绑定传输层，并在其读循环结束（进程退出/管道损坏）时标记客户端不可用
+func (c *Client) attachTransport(t *Transport) {
+	c.transport = t
+	t.SetCloseHandler(c.markTransportClosed)
+}
+
+// markTransportClosed 传输层关闭回调：读循环结束时标记客户端不可用，
+// 供 manager 在取用时发现并重建（否则会一直复用已死的客户端直到请求超时）
+func (c *Client) markTransportClosed() {
+	c.stateMu.Lock()
+	// 无论处于哪个阶段都必须标记不可用，否则 Start 可能在传输层已死时又把状态写回 Ready
+	unexpected := c.state == StateReady
+	c.state = StateClosed
+	c.stateMu.Unlock()
+
+	if !unexpected {
+		return
+	}
+	c.logger.Warn("LSP transport closed unexpectedly, cleaning up process")
+	// 异步清理：可能仍需杀死残留进程，不能在读循环里同步等待
+	go func() { _ = c.cleanupProcess() }()
+}
+
+// markReady 在 initialize 成功后标记客户端就绪；
+// 若传输层已在此前断开（状态已非 StateCreated）则返回错误，防止复用已死客户端
+func (c *Client) markReady() error {
+	c.stateMu.Lock()
+	defer c.stateMu.Unlock()
+	if c.state != StateCreated {
+		return fmt.Errorf("client closed during initialize (state=%s)", c.state)
+	}
+	c.state = StateReady
+	return nil
+}
+
 // markUsed 更新最后使用时间
 func (c *Client) markUsed() {
 	c.lastUsedMu.Lock()
@@ -268,7 +309,7 @@ func (c *Client) cleanupProcess() error {
 			}
 		}
 		if c.cmd != nil && c.cmd.Process != nil {
-			_ = c.cmd.Process.Kill()
+			_ = killProcess(c.cmd)
 			// 等待进程退出（短暂超时）
 			done := make(chan struct{})
 			go func() {
@@ -288,9 +329,15 @@ func (c *Client) cleanupProcess() error {
 	return err
 }
 
+// maxStderrLineSize stderr 单行上限
+// 默认 Scanner 上限只有 64KiB，单行超限会直接终止扫描、stderr 管道不再被排空，
+// 语言服务器持续写 stderr 时可能因此阻塞
+const maxStderrLineSize = 1 << 20
+
 // readStderr 读取 LSP 服务器 stderr 输出（后台 goroutine）
 func (c *Client) readStderr(stderr io.ReadCloser) {
 	scanner := bufio.NewScanner(stderr)
+	scanner.Buffer(make([]byte, 64*1024), maxStderrLineSize)
 	for scanner.Scan() {
 		line := scanner.Text()
 		// 只记录非空行

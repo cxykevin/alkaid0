@@ -157,6 +157,11 @@ type gitignorePattern struct {
 	dirOnly  bool // 以 / 结尾，仅匹配目录
 	rooted   bool // 以 / 开头，从根目录匹配
 	hasSlash bool // 模式中包含 /
+	// base 该规则所属 .gitignore 相对索引根目录的路径（""=根目录规则）。
+	// 嵌套 .gitignore 中的 /foo、a/b 等锚定规则只相对其所在目录生效，
+	// 匹配前必须把路径换算到该目录下；否则子目录里的 /build 会被当成根锚定
+	// 规则——既漏忽略子目录目标，又误忽略根目录下的同名路径。
+	base string
 }
 
 // loadGitignore 加载 .gitignore 文件
@@ -214,12 +219,18 @@ func parseGitignore(content string) []gitignorePattern {
 
 // matchGitignore 判断路径是否匹配 gitignore 规则
 func matchGitignore(patterns []gitignorePattern, path string, isDir bool) bool {
+	normalized := normalizePath(path)
 	matched := false
 	for _, p := range patterns {
 		if p.dirOnly && !isDir {
 			continue
 		}
-		if matchPattern(p, normalizePath(path)) {
+		// 嵌套 .gitignore 的规则只作用于其所在目录子树，换算后再匹配
+		rel, ok := pathUnderBase(normalized, p.base)
+		if !ok {
+			continue
+		}
+		if matchPattern(p, rel) {
 			if p.negate {
 				return false
 			}
@@ -227,6 +238,45 @@ func matchGitignore(patterns []gitignorePattern, path string, isDir bool) bool {
 		}
 	}
 	return matched
+}
+
+// pathUnderBase 返回 path 相对规则基准目录（.gitignore 所在目录）的路径；
+// path 不在该基准目录下时 ok=false，表示该规则不适用。
+func pathUnderBase(path, base string) (string, bool) {
+	if base == "" {
+		return path, true
+	}
+	if path == base {
+		return "", true
+	}
+	if strings.HasPrefix(path, base+"/") {
+		return path[len(base)+1:], true
+	}
+	return "", false
+}
+
+// withBase 为同一 .gitignore 中的规则统一设置基准目录
+func withBase(patterns []gitignorePattern, base string) []gitignorePattern {
+	if base == "" {
+		return patterns
+	}
+	for i := range patterns {
+		patterns[i].base = base
+	}
+	return patterns
+}
+
+// relDir 返回 dir 相对 root 的斜杠路径；dir 不在 root 之下时返回 ""
+func relDir(root, dir string) string {
+	rel, err := filepath.Rel(root, dir)
+	if err != nil || rel == "" || rel == "." {
+		return ""
+	}
+	rel = filepath.ToSlash(rel)
+	if rel == ".." || strings.HasPrefix(rel, "../") {
+		return ""
+	}
+	return rel
 }
 
 // normalizePath 将路径统一为使用 / 分隔符，移除末尾 /
@@ -375,6 +425,20 @@ func isPrivacyFile(path string) bool {
 	baseLower := strings.ToLower(base)
 	for _, prefix := range privacyNamePrefixes {
 		if strings.HasPrefix(baseLower, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+// syntheticPathPrefixes 由索引流程合成、不对应磁盘文件的条目路径前缀
+// （见 server/actions/index_extras.go 的 tempfs/<chatID>/<path> 与 chathistory/<chatID>）。
+var syntheticPathPrefixes = []string{"tempfs/", "chathistory/"}
+
+// isSyntheticPath 判断是否为非磁盘来源的合成索引路径
+func isSyntheticPath(relPath string) bool {
+	for _, prefix := range syntheticPathPrefixes {
+		if strings.HasPrefix(relPath, prefix) {
 			return true
 		}
 	}
@@ -666,7 +730,7 @@ func RunIndex(ctx context.Context, cwd string, broadcastFn func(IndexStatus)) er
 		base := getRules(filepath.Dir(dir))
 		rules := make([]gitignorePattern, 0, len(base)+8)
 		rules = append(rules, base...)
-		rules = append(rules, loadGitignore(dir)...)
+		rules = append(rules, withBase(loadGitignore(dir), relDir(cwd, dir))...)
 		dirRules[dir] = rules
 		return rules
 	}
@@ -676,13 +740,9 @@ func RunIndex(ctx context.Context, cwd string, broadcastFn func(IndexStatus)) er
 		return fmt.Errorf("abs cwd: %w", err)
 	}
 
-	// 创建可取消的 context 用于 /index cancel
-	ctx, cancel := context.WithCancel(ctx)
-	indexCancelsMu.Lock()
-	indexCancels[absCwd] = cancel
-	indexCancelsMu.Unlock()
-
-	// 防止同一目录并发索引
+	// 防止同一目录并发索引。必须先占锁再注册 cancel：
+	// 若先注册后判锁，被拒绝的第二次 RunIndex 会覆盖第一次的活动 cancel 句柄，
+	// /index cancel 便只能取消那个已返回的第二次调用，真正在跑的索引无法停止。
 	indexingLocksMu.Lock()
 	if indexingLocks[absCwd] {
 		indexingLocksMu.Unlock()
@@ -690,7 +750,16 @@ func RunIndex(ctx context.Context, cwd string, broadcastFn func(IndexStatus)) er
 	}
 	indexingLocks[absCwd] = true
 	indexingLocksMu.Unlock()
+
+	// 创建可取消的 context 用于 /index cancel
+	ctx, cancel := context.WithCancel(ctx)
+	indexCancelsMu.Lock()
+	indexCancels[absCwd] = cancel
+	indexCancelsMu.Unlock()
+
 	defer func() {
+		// 先删 cancel 再放锁：反序会让新的 RunIndex 在两步之间拿到锁并注册
+		// 自己的 cancel，随后被这里的清理误删。
 		indexCancelsMu.Lock()
 		delete(indexCancels, absCwd)
 		indexCancelsMu.Unlock()
@@ -721,6 +790,14 @@ func RunIndex(ctx context.Context, cwd string, broadcastFn func(IndexStatus)) er
 	}
 	scannedPaths := make(map[string]bool)
 
+	// 记录本轮开始前已累计的嵌入失败数：终态只报告本轮新增的失败，
+	// 避免上一轮遗留的计数把本轮状态永久标成 error。
+	// （已有任务可能在扫描期间处理失败，因此基准必须在入队前取。）
+	var failuresBefore int
+	if db, err := getOrCreateDB(cwd); err == nil && db.queue != nil {
+		_, _, _, failuresBefore = db.queue.Stats()
+	}
+
 	// -----------------------------------------------------------------------
 	// 第一遍：遍历目录，收集合规文件
 	// -----------------------------------------------------------------------
@@ -743,6 +820,13 @@ func RunIndex(ctx context.Context, cwd string, broadcastFn func(IndexStatus)) er
 		}
 		relPath = filepath.ToSlash(relPath)
 		if relPath == "." {
+			return nil
+		}
+
+		// 符号链接一律跳过：WalkDir/lstat 看到的是链接本身（无法做越界判断），
+		// 而 os.ReadFile 会跟随链接读到目标——工作区内一个指向外部的链接
+		// 即可把工作区外（甚至隐私路径）的内容读入索引。
+		if d.Type()&os.ModeSymlink != 0 {
 			return nil
 		}
 
@@ -907,20 +991,29 @@ func RunIndex(ctx context.Context, cwd string, broadcastFn func(IndexStatus)) er
 		})
 	}
 
-	// 删除已被移除的文件对应的索引条目
+	// 删除已被移除的文件对应的索引条目。
+	// 合成条目（tempfs/chathistory）不在磁盘上、无法被扫描到，跳过清理；
+	// 否则每轮索引都会先把它们删掉（嵌入失败时即永久丢失，只能靠 extras 重新入队重建）。
 	for p := range existingPathSet {
-		if !scannedPaths[p] {
-			_ = RemoveFile(cwd, p)
+		if scannedPaths[p] || isSyntheticPath(p) {
+			continue
 		}
+		_ = RemoveFile(cwd, p)
 	}
 
-	// 检查队列剩余，广播 embedding 进度
-	if qLen := DirectoryStatus(cwd).QueueLen; qLen > 0 {
-		initQueueLen := qLen
+	// 检查队列剩余与在途任务，广播 embedding 进度。
+	// 必须同时判断 Processing：最后一条任务可能刚被 worker 取走（队列已空但
+	// 仍在写入/统计失败），此时直接报终态会与真实结果不一致。
+	ds0 := DirectoryStatus(cwd)
+	if ds0.QueueLen > 0 || ds0.Processing > 0 {
+		initQueueLen := ds0.QueueLen
+		if initQueueLen <= 0 {
+			initQueueLen = ds0.Processing
+		}
 		broadcastFn(IndexStatus{
 			Total:     initQueueLen,
 			Processed: 0,
-			Remaining: qLen,
+			Remaining: ds0.QueueLen,
 			Status:    "embedding",
 		})
 		// 后台轮询队列进度直到完成。
@@ -947,12 +1040,10 @@ func RunIndex(ctx context.Context, cwd string, broadcastFn func(IndexStatus)) er
 				if total <= 0 {
 					total = initQueueLen // 兜底
 				}
-				if ds.QueueLen == 0 {
-					broadcastFn(IndexStatus{
-						Total:     total,
-						Processed: total,
-						Status:    "completed",
-					})
+				// 队列空且没有在途任务才算结束：最后一条任务可能刚被取走、
+				// 仍在写入或失败统计，提前报 completed 会与真实结果不一致。
+				if ds.QueueLen == 0 && ds.Processing == 0 {
+					broadcastFn(terminalIndexStatus(total, ds.Failed-failuresBefore))
 					return
 				}
 				broadcastFn(IndexStatus{
@@ -964,11 +1055,26 @@ func RunIndex(ctx context.Context, cwd string, broadcastFn func(IndexStatus)) er
 			}
 		}()
 	} else {
-		broadcastFn(IndexStatus{
-			Total:     total,
-			Processed: total,
-			Status:    "completed",
-		})
+		// ds0.Processing == 0 保证所有失败都已计入 Failed（失败统计先于
+		// in-flight 计数递减），可以直接判定终态。
+		broadcastFn(terminalIndexStatus(total, ds0.Failed-failuresBefore))
 	}
 	return nil
+}
+
+// terminalIndexStatus 构造索引终态：本轮有嵌入失败时如实报告 error，
+// 而不是无论真实结果如何都写 completed（失败条目已降级 BM25，可重新索引重试）。
+func terminalIndexStatus(total, failed int) IndexStatus {
+	st := IndexStatus{
+		Total:     total,
+		Processed: total,
+		Status:    "completed",
+	}
+	if failed > 0 {
+		st.Status = "error"
+		st.Error = fmt.Sprintf(
+			"%d embedding task(s) failed; 失败条目已降级为 BM25，重新索引会重试嵌入",
+			failed)
+	}
+	return st
 }
