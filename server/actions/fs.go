@@ -18,9 +18,20 @@ import (
 )
 
 const (
-	fsIOTimeout        = 200 * time.Millisecond
+	// fsRmTimeout 递归删除的超时上限。删除耗时与目录规模成正比，不能与单文件
+	// 操作共用一个短超时：200ms 量级的上限只够删掉很小的目录，稍大的目录会
+	// 删到一半就报超时，留下半删的树。
+	fsRmTimeout        = 60 * time.Second
 	maxFileContentSize = 1 << 20 // 1 MiB
 )
+
+// fsIOTimeout 单个文件系统操作（stat/read/write/mkdir/chmod…）的超时上限。
+// 取 5s 而不是更短：Windows 上实时防护与冷缓存会让一次 MkdirAll/Stat 轻易超过
+// 200ms，过短的超时会把"慢但正常"的操作误报成失败（Windows 实机在整机负载下
+// 曾复现 FsMkdir 报 "filesystem operation timed out"）。
+// 声明为变量仅为让回归测试能把它压到极小值（见 TestFsRm_NotLimitedBySingleIOTimeout）；
+// 生产代码不应修改它。
+var fsIOTimeout = 5 * time.Second
 
 // ---- Timeout helpers ----
 
@@ -743,7 +754,7 @@ func FsRm(req FsCommonRequest, _ func(string, any, *string) error, _ uint64) (u.
 		return u.H{}, fmt.Errorf("refusing to delete the session working directory")
 	}
 
-	err = fsOpVoidWithTimeout(fsIOTimeout, func(ctx context.Context) error {
+	err = fsOpVoidWithTimeout(fsRmTimeout, func(ctx context.Context) error {
 		// 可中断的递归删除：超时后提前退出，避免后台继续删改磁盘
 		return removeAllCtx(ctx, fullPath)
 	})

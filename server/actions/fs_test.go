@@ -1243,3 +1243,35 @@ func TestFsRead_LengthClampedToEOF(t *testing.T) {
 		t.Errorf("expected %q, got %q", "world", got)
 	}
 }
+
+// ---- 回归测试：递归删除不受单文件操作超时限制 ----
+//
+// 背景：FsRm 曾与 stat/read/mkdir 共用 fsIOTimeout(200ms)。递归删除的耗时与目录
+// 规模成正比，200ms 只够删掉很小的目录；稍大的目录会删到一半就报
+// "filesystem operation timed out"，客户端以为失败、磁盘上却留下半删的树。
+// 这里把单文件操作超时压到 1ms（模拟慢文件系统上的卡顿），FsRm 仍必须成功——
+// 因为它走的是独立的 fsRmTimeout。
+func TestFsRm_NotLimitedBySingleIOTimeout(t *testing.T) {
+	tmpDir := t.TempDir()
+	victim := filepath.Join(tmpDir, "victim")
+	if err := os.MkdirAll(filepath.Join(victim, "sub"), 0755); err != nil {
+		t.Fatalf("prepare victim dir failed: %v", err)
+	}
+	for i := range 3000 {
+		if err := os.WriteFile(filepath.Join(victim, "sub", fmt.Sprintf("f%d.txt", i)), []byte("x"), 0644); err != nil {
+			t.Fatalf("prepare file %d failed: %v", i, err)
+		}
+	}
+	sessionID := registerTestSession(t, tmpDir, 1)
+
+	restore := fsIOTimeout
+	fsIOTimeout = time.Millisecond
+	t.Cleanup(func() { fsIOTimeout = restore })
+
+	if _, err := FsRm(FsCommonRequest{SessionID: sessionID, Path: "victim"}, nil, 1); err != nil {
+		t.Fatalf("FsRm must not be limited by fsIOTimeout: %v", err)
+	}
+	if _, err := os.Stat(victim); !os.IsNotExist(err) {
+		t.Errorf("victim directory should be fully removed (stat err=%v)", err)
+	}
+}
