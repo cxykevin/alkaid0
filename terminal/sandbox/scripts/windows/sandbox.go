@@ -118,27 +118,27 @@ func createRestrictedToken(currentToken *windows.Token, wkSIDs *WellknownSIDs) (
 		},
 	}
 
-	backupPriv, err := getPrivilegeLUID("SeBackupPrivilege")
+	backupPriv, err := getPrivilegeLUID(privSeBackupPrivilege)
 	if err != nil {
 		return nil, err
 	}
-	restorePriv, err := getPrivilegeLUID("SeRestorePrivilege")
+	restorePriv, err := getPrivilegeLUID(privSeRestorePrivilege)
 	if err != nil {
 		return nil, err
 	}
-	debugPriv, err := getPrivilegeLUID("SeDebugPrivilege")
+	debugPriv, err := getPrivilegeLUID(privSeDebugPrivilege)
 	if err != nil {
 		return nil, err
 	}
-	shutdownPriv, err := getPrivilegeLUID("SeShutdownPrivilege")
+	shutdownPriv, err := getPrivilegeLUID(privSeShutdownPrivilege)
 	if err != nil {
 		return nil, err
 	}
-	securityPriv, err := getPrivilegeLUID("SeSecurityPrivilege")
+	securityPriv, err := getPrivilegeLUID(privSeSecurityPrivilege)
 	if err != nil {
 		return nil, err
 	}
-	assignPrimaryTokenPriv, err := getPrivilegeLUID("SeAssignPrimaryTokenPrivilege")
+	assignPrimaryTokenPriv, err := getPrivilegeLUID(privSeAssignPrimaryToken)
 	if err != nil {
 		return nil, err
 	}
@@ -146,7 +146,7 @@ func createRestrictedToken(currentToken *windows.Token, wkSIDs *WellknownSIDs) (
 	// if err != nil {
 	// 	return nil, err
 	// }
-	impersonatePriv, err := getPrivilegeLUID("SeImpersonatePrivilege")
+	impersonatePriv, err := getPrivilegeLUID(privSeImpersonatePrivilege)
 	if err != nil {
 		return nil, err
 	}
@@ -290,6 +290,42 @@ func setTokenIntegrityMediumLevel(token *windows.Token) error {
 	return err
 }
 
+// 本包用到的全部 Windows 权限名。
+//
+// 这些字符串不会在编译期校验，拼错时 LsaAddAccountRights / LookupPrivilegeValue
+// 只会在运行期返回 STATUS_NONE_MAPPED(0xC0000060)：
+// "SeIncraseQuotaPrivilege" 这个拼写错误一度让 grantCurrentUserAssignLogonRight 恒失败，
+// InitAlkaid0SandboxUser 因而直接返回错误、沙盒账户根本不会被创建，整个 Windows 沙盒不可用。
+// TestPrivilegeNamesAreValid 会逐个向 Windows 解析这些名字，防止同类错误再次混入。
+const (
+	privSeBackupPrivilege        = "SeBackupPrivilege"
+	privSeRestorePrivilege       = "SeRestorePrivilege"
+	privSeDebugPrivilege         = "SeDebugPrivilege"
+	privSeShutdownPrivilege      = "SeShutdownPrivilege"
+	privSeSecurityPrivilege      = "SeSecurityPrivilege"
+	privSeAssignPrimaryToken     = "SeAssignPrimaryTokenPrivilege"
+	privSeImpersonatePrivilege   = "SeImpersonatePrivilege"
+	privSeIncreaseQuotaPrivilege = "SeIncreaseQuotaPrivilege"
+	privSeBatchLogonRight        = "SeBatchLogonRight"
+	privSeChangeNotifyPrivilege  = "SeChangeNotifyPrivilege"
+	privSeTakeOwnershipPrivilege = "SeTakeOwnershipPrivilege"
+)
+
+// sandboxPrivilegeNames 是需要校验的权限名清单（与上面的常量保持同源）。
+var sandboxPrivilegeNames = []string{
+	privSeBackupPrivilege,
+	privSeRestorePrivilege,
+	privSeDebugPrivilege,
+	privSeShutdownPrivilege,
+	privSeSecurityPrivilege,
+	privSeAssignPrimaryToken,
+	privSeImpersonatePrivilege,
+	privSeIncreaseQuotaPrivilege,
+	privSeBatchLogonRight,
+	privSeChangeNotifyPrivilege,
+	privSeTakeOwnershipPrivilege,
+}
+
 // UserName 沙盒用户名
 const UserName = "alk-sandbox$"
 
@@ -327,7 +363,7 @@ func grantBatchLogonRight(accountName string) error {
 		return err
 	}
 	defer winExtra.LibLsaClose(policyHandle)
-	err = winExtra.LibLsaAddAccountRights(policyHandle, SID, "SeBatchLogonRight")
+	err = winExtra.LibLsaAddAccountRights(policyHandle, SID, privSeBatchLogonRight)
 	return err
 	// return nil
 }
@@ -350,11 +386,14 @@ func grantCurrentUserAssignLogonRight() error {
 		return err
 	}
 	defer winExtra.LibLsaClose(policyHandle)
-	err = winExtra.LibLsaAddAccountRights(policyHandle, SID, "SeAssignPrimaryTokenPrivilege")
+	err = winExtra.LibLsaAddAccountRights(policyHandle, SID, privSeAssignPrimaryToken)
 	if err != nil {
 		return err
 	}
-	err = winExtra.LibLsaAddAccountRights(policyHandle, SID, "SeIncraseQuotaPrivilege")
+	// 权限名拼错会让 LsaAddAccountRights 返回 STATUS_NONE_MAPPED(0xC0000060)，
+	// grantCurrentUserAssignLogonRight 失败 → InitAlkaid0SandboxUser 直接返回错误 →
+	// 沙盒账户根本不会被创建，整个 Windows 沙盒不可用。
+	err = winExtra.LibLsaAddAccountRights(policyHandle, SID, privSeIncreaseQuotaPrivilege)
 	if err != nil {
 		return err
 	}
@@ -728,11 +767,11 @@ func createProc(appName string, commandLine string, workDir string, startupInfo 
 		return windows.ProcessInformation{}, fmt.Errorf("init user failed: %v", err)
 	}
 
-	err = addPrivilegeToCurrentToken("SeAssignPrimaryTokenPrivilege")
+	err = addPrivilegeToCurrentToken(privSeAssignPrimaryToken)
 	if err != nil {
 		return windows.ProcessInformation{}, fmt.Errorf("add privilege failed: %v", err)
 	}
-	err = addPrivilegeToCurrentToken("SeIncreaseQuotaPrivilege")
+	err = addPrivilegeToCurrentToken(privSeIncreaseQuotaPrivilege)
 	if err != nil {
 		return windows.ProcessInformation{}, fmt.Errorf("add privilege failed: %v", err)
 	}

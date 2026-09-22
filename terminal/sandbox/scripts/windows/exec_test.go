@@ -144,7 +144,9 @@ func TestStdinPipe(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Command finished with error: %v", err)
 		}
-	case <-time.After(8 * time.Second):
+	// powershell 冷启动在负载高的机器上可能超过 8s（实机在整机测试并行时复现），
+	// 这里只作为"句柄泄漏导致卡死"的兜底，给足启动时间。
+	case <-time.After(30 * time.Second):
 		t.Fatal("Test timed out: StdinPipe stuck (possible handle leak)")
 	}
 

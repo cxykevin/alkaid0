@@ -12,6 +12,7 @@ import (
 	"time"
 	"unsafe"
 
+	winExtra "github.com/cxykevin/alkaid0/terminal/sandbox/scripts/windows/windows_extra"
 	"golang.org/x/sys/windows"
 	"golang.org/x/sys/windows/registry"
 )
@@ -28,6 +29,25 @@ func TestGetToken(t *testing.T) {
 	}
 	defer tkn.Close()
 	t.Log(tkn)
+}
+
+// TestPrivilegeNamesAreValid 回归测试：本包用到的每个权限名都必须能被 Windows 解析。
+//
+// 背景：grantCurrentUserAssignLogonRight 曾把 "SeIncreaseQuotaPrivilege" 写成
+// "SeIncraseQuotaPrivilege"。拼错的权限名让 LsaAddAccountRights 返回
+// STATUS_NONE_MAPPED(0xC0000060)，该函数随即失败 → InitAlkaid0SandboxUser 直接返回
+// 错误 → 沙盒账户从未被创建，整个 Windows 沙盒（OS 隔离）不可用。
+// 这类错误没有任何编译期提示，运行日志里只有一个十六进制错误码，
+// 因此用"权限名清单 + 逐个向 LSA 校验"兜底。校验走只读的
+// LsaEnumerateAccountsWithUserRight，既能覆盖 privilege，也能覆盖
+// SeBatchLogonRight 这类 account right（LookupPrivilegeValue 解析不了后者）。
+// 本用例不需要管理员权限，Windows CI 会执行。
+func TestPrivilegeNamesAreValid(t *testing.T) {
+	for _, name := range sandboxPrivilegeNames {
+		if err := winExtra.LibLsaValidateAccountRight(name); err != nil {
+			t.Errorf("权限名 %q 无法解析: %v（拼写错误会让沙盒初始化返回 STATUS_NONE_MAPPED）", name, err)
+		}
+	}
 }
 
 func TestCreateWellknownSIDs(t *testing.T) {

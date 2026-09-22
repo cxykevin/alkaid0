@@ -150,11 +150,20 @@ jobs:
           # 打开沙箱开关：默认被 skip 的沙箱/隔离用例（OS 级隔离、写权限、
           # Python 沙箱等）在 CI 真正执行。此前该开关被注释掉，52 个用例永远
           # 不跑——深度审查修复 Linux 沙箱 remount,rw 时正是靠打开它才暴露出来。
-          # 仅在 Linux 打开：macOS/Windows 走各自平台隔离实现，尚未验证。
-          # 注意非 Linux 必须给**空字符串**而不是 'false'：用例判定是
+          #
+          # Linux / Windows 都打开。Windows 侧此前一直 skip，真实原因是两个缺陷：
+          #   1) grantCurrentUserAssignLogonRight 把 SeIncreaseQuotaPrivilege 拼成
+          #      "SeIncraseQuotaPrivilege"，LsaAddAccountRights 恒返回
+          #      STATUS_NONE_MAPPED(0xC0000060)，沙盒账户从未被创建 —— 整个
+          #      Windows 沙盒不可用，而日志里只有一个十六进制错误码；
+          #   2) 部分用例硬编码 Unix 命令（echo/sleep）与 /tmp。
+          # 两者都已在 Windows 实机（管理员身份跑全量 sandbox 用例）修复并验证；
+          # 另有 TestPrivilegeNamesAreValid 在 Windows 上静态校验权限名，防止回归。
+          # macOS 仍留空：其隔离实现尚未在实机验证。
+          # 注意未开启的平台必须给**空字符串**而不是 'false'：用例判定是
           # os.Getenv("ALKAID0_TEST_SANDBOX") == ""，任何非空值（含 "false"）
-          # 都会把沙箱用例真正跑起来（CI 实测 Windows 因此多出 42 个失败）。
-          ALKAID0_TEST_SANDBOX: ${{ matrix.os == 'ubuntu-latest' && 'true' || '' }}
+          # 都会把沙箱用例真正跑起来。
+          ALKAID0_TEST_SANDBOX: ${{ matrix.os != 'macos-latest' && 'true' || '' }}
           ALKAID0_TEST_LESS_MEMORY_MODE: "true"
           CGO_ENABLED: "0"
         run: |

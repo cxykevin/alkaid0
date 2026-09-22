@@ -128,7 +128,15 @@ func TestServiceFinishedCommandReleasesPipes(t *testing.T) {
 	if !waitForFile(t, exited, 60*time.Second) {
 		t.Fatalf("直接子进程未在 60s 内退出")
 	}
+	// 用标记文件的 mtime 作为 shell 的真实退出时刻。waitForFile 每 100ms 轮询一次，
+	// 而"观察到的时刻"还取决于前面等心跳文件的耗时：标记文件很可能在开始轮询前
+	// 就已写下，于是 time.Now() 会比真实退出晚近 1 秒，把下面的排空断言压到阈值
+	// 之下（Windows 实机因此稳定失败，而产品行为其实正确：实测任务在 shell 退出
+	// 2.07s 后结束，后代进程仍然存活）。
 	exitTime := time.Now()
+	if info, err := os.Stat(exited); err == nil {
+		exitTime = info.ModTime()
+	}
 
 	// 命令本身必须结束，不能因为后代进程持有管道而卡死
 	waitJobDone(t, job, 60*time.Second)
