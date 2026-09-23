@@ -41,8 +41,9 @@ func SummaryWithKeepNumber(chatID uint32, agentID string, db *gorm.DB, keepNum i
 	if modelConfig.ProviderSpecificConfig.EnableTopP && modelConfig.ModelTopP != -1 && modelConfig.ModelTopP != 0 {
 		response.TopP = &modelConfig.ModelTopP
 	}
-	var maxTokenObj int = maxToken
-	response.MaxTokens = &maxTokenObj
+	// 与主请求同一套规则：最大输出 token 数走 max_completion_tokens 并夹到区间内
+	completionTokens := completionTokenLimit(modelConfig.MaxCompletionTokens)
+	response.MaxCompletionTokens = &completionTokens
 
 	// 生成 messages
 	responseDeltaList := list.New()

@@ -353,11 +353,14 @@ func TestBuildModelTemperatureAndTopP(t *testing.T) {
 		t.Errorf("Expected TopP 0.9, got %f", *result.TopP)
 	}
 
-	// 验证MaxTokens参数
-	if result.MaxTokens == nil {
-		t.Errorf("Expected non-nil MaxTokens")
-	} else if *result.MaxTokens != 16384 {
-		t.Errorf("Expected MaxTokens 16384, got %d", *result.MaxTokens)
+	// 验证最大输出 token 数（max_completion_tokens）
+	if result.MaxTokens != nil {
+		t.Errorf("不应再发送 max_tokens，实际 %d", *result.MaxTokens)
+	}
+	if result.MaxCompletionTokens == nil {
+		t.Errorf("Expected non-nil MaxCompletionTokens")
+	} else if *result.MaxCompletionTokens != defaultCompletionTokens {
+		t.Errorf("Expected MaxCompletionTokens %d, got %d", defaultCompletionTokens, *result.MaxCompletionTokens)
 	}
 }
 

@@ -40,8 +40,12 @@ func TestTitle_Basic(t *testing.T) {
 	if !request.Stream {
 		t.Error("Expected stream to be true")
 	}
-	if request.MaxTokens == nil || *request.MaxTokens != titleMaxToken {
-		t.Errorf("Expected max_tokens %d, got %v", titleMaxToken, request.MaxTokens)
+	wantTitleTokens := completionTokenLimit(titleMaxToken)
+	if request.MaxTokens != nil {
+		t.Errorf("不应再发送 max_tokens，实际 %d", *request.MaxTokens)
+	}
+	if request.MaxCompletionTokens == nil || *request.MaxCompletionTokens != wantTitleTokens {
+		t.Errorf("Expected max_completion_tokens %d, got %v", wantTitleTokens, request.MaxCompletionTokens)
 	}
 	if request.Temperature == nil || *request.Temperature != 0.7 {
 		t.Error("Expected temperature to be 0.7")

@@ -68,9 +68,12 @@ func TestSummary_Basic(t *testing.T) {
 		t.Error("Expected top_p to be 0.9")
 	}
 
-	// 验证最大令牌数
-	if request.MaxTokens == nil || *request.MaxTokens != maxToken {
-		t.Errorf("Expected max_tokens %d, got %d", maxToken, *request.MaxTokens)
+	// 验证最大输出 token 数
+	if request.MaxTokens != nil {
+		t.Errorf("不应再发送 max_tokens，实际 %d", *request.MaxTokens)
+	}
+	if request.MaxCompletionTokens == nil || *request.MaxCompletionTokens != defaultCompletionTokens {
+		t.Errorf("Expected max_completion_tokens %d, got %v", defaultCompletionTokens, request.MaxCompletionTokens)
 	}
 
 	// 验证消息至少包含系统消息
@@ -640,9 +643,9 @@ func TestSummary_ModelConfiguration(t *testing.T) {
 		t.Errorf("Expected TopP 0.9, got %v", *request.TopP)
 	}
 
-	// 验证MaxTokens
-	if request.MaxTokens == nil {
-		t.Error("Expected MaxTokens to be set")
+	// 验证 MaxCompletionTokens
+	if request.MaxCompletionTokens == nil {
+		t.Error("Expected MaxCompletionTokens to be set")
 	}
 }
 

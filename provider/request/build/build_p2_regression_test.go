@@ -94,9 +94,36 @@ func TestBuild_KeepsSystemPromptForRetry(t *testing.T) {
 	}
 }
 
-// TestRequestBody_MaxTokensRespectsModelTokenLimit 复现 P2-7：
-// max_tokens 不能硬编码 16384，模型配置的 TokenLimit 必须生效（小上下文模型收敛）。
-func TestRequestBody_MaxTokensRespectsModelTokenLimit(t *testing.T) {
+// swapP2ConfigWithCompletion 同 swapP2Config，但额外指定 MaxCompletionTokens（最大输出 token 数）。
+func swapP2ConfigWithCompletion(t *testing.T, tokenLimit, maxCompletion int32) {
+	t.Helper()
+	restore := config.GlobalConfigSwap(cfgStruct.Config{
+		Model: cfgStruct.ModelsConfig{
+			DefaultModelID: 1,
+			Models: map[int32]cfgStruct.ModelConfig{
+				1: {
+					ModelName:           "p2-model",
+					ModelID:             "p2-model-id",
+					ModelTemperature:    -1,
+					TokenLimit:          tokenLimit,
+					MaxCompletionTokens: maxCompletion,
+				},
+			},
+		},
+		Agent: cfgStruct.AgentsConfig{
+			SummaryModel: 1,
+			TitleModel:   1,
+			GlobalPrompt: "You are a helpful assistant",
+		},
+	})
+	t.Cleanup(restore)
+}
+
+// TestRequestBody_MaxCompletionTokensClamped 复现 P2-7 的最终语义：
+// 最大输出 token 数走 max_completion_tokens（不再发 max_tokens），
+// 取模型配置的 MaxCompletionTokens 并夹到 [4096, 32768]；
+// TokenLimit 是上下文上限，与输出上限互相独立，不得影响该值。
+func TestRequestBody_MaxCompletionTokensClamped(t *testing.T) {
 	db := setupTestDB(t)
 	buildReq := func() *reqStruct.ChatCompletionRequest {
 		t.Helper()
@@ -106,20 +133,50 @@ func TestRequestBody_MaxTokensRespectsModelTokenLimit(t *testing.T) {
 		}
 		return req
 	}
-
-	swapP2Config(t, -1, 4096, false)
-	if req := buildReq(); req.MaxTokens == nil || *req.MaxTokens != 4096 {
-		t.Errorf("TokenLimit=4096 时 max_tokens 应为 4096，实际 %v（硬编码 16384）", req.MaxTokens)
+	got := func() (int, bool) {
+		t.Helper()
+		req := buildReq()
+		if req.MaxTokens != nil {
+			t.Errorf("不应再发送 max_tokens，实际 %d", *req.MaxTokens)
+		}
+		if req.MaxCompletionTokens == nil {
+			t.Fatal("MaxCompletionTokens 未设置")
+		}
+		return *req.MaxCompletionTokens, true
 	}
 
-	swapP2Config(t, -1, 0, false)
-	if req := buildReq(); req.MaxTokens == nil || *req.MaxTokens != maxToken {
-		t.Errorf("TokenLimit 未配置时应保持默认 %d，实际 %v", maxToken, req.MaxTokens)
+	cases := []struct {
+		name       string
+		tokenLimit int32
+		configured int32
+		want       int
+	}{
+		{"低于下限抬到 4096", 8192, 1000, minCompletionTokens},
+		{"高于上限压到 32768", 8192, 200000, maxCompletionTokens},
+		{"区间内原样使用", 8192, 8192, 8192},
+		{"未配置用默认值", 8192, 0, defaultCompletionTokens},
+		{"TokenLimit 小于默认值也不影响输出上限", 4096, 0, defaultCompletionTokens},
+		{"TokenLimit 很大时仍用配置值", 200000, 16384, 16384},
+	}
+	for _, tc := range cases {
+		swapP2ConfigWithCompletion(t, tc.tokenLimit, tc.configured)
+		if v, _ := got(); v != tc.want {
+			t.Errorf("%s: max_completion_tokens = %d, want %d (TokenLimit=%d, configured=%d)",
+				tc.name, v, tc.want, tc.tokenLimit, tc.configured)
+		}
 	}
 
-	swapP2Config(t, -1, 200000, false)
-	if req := buildReq(); req.MaxTokens == nil || *req.MaxTokens != maxToken {
-		t.Errorf("TokenLimit 大于默认上限时应保持默认 %d，实际 %v", maxToken, req.MaxTokens)
+	// 线上字段名必须是 max_completion_tokens，且不得再出现 max_tokens
+	swapP2ConfigWithCompletion(t, 8192, 8192)
+	raw, err := json.Marshal(buildReq())
+	if err != nil {
+		t.Fatalf("marshal request: %v", err)
+	}
+	if !strings.Contains(string(raw), "\"max_completion_tokens\":8192") {
+		t.Errorf("请求体应包含 max_completion_tokens:8192，实际 %s", raw)
+	}
+	if strings.Contains(string(raw), "\"max_tokens\"") {
+		t.Errorf("请求体不应再出现 max_tokens：%s", raw)
 	}
 }
 

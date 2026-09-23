@@ -85,6 +85,7 @@ C:\ProgramData\alkaid0\config.json
                 "ModelTopK": -1,
                 "ModelTemperature": -1,
                 "TokenLimit": 8192,
+                "MaxCompletionTokens": 16384,
                 "ProviderURL": "https://模型供应商/v1",
                 "ProviderKey": "sk-模型密钥",
                 "EnableThinking": true,
@@ -252,6 +253,10 @@ C:\ProgramData\alkaid0\config.json
     }
 }
 ```
+
+> 模型的两个 token 字段语义不同：`TokenLimit` 是**上下文上限**（输入+输出的总预算，用于压缩/截断判定）；
+> `MaxCompletionTokens` 是**最大输出 token 数**，会作为请求里的 `max_completion_tokens` 发出，
+> 并夹到 4096–32768（未配置时用 16384）。
 
 ### 远程配置 RPC
 

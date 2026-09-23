@@ -21,7 +21,32 @@ import (
 
 const readPageSize = 20
 const maxPage = 10
-const maxToken = 16384
+
+// max_completion_tokens（最大输出 token 数）的默认值与允许区间。
+// 下限来自网关对推理模型最小输出预算的要求，上限避免单次请求申请过大输出。
+const (
+	defaultCompletionTokens = 16384
+	minCompletionTokens     = 4096
+	maxCompletionTokens     = 32768
+)
+
+// completionTokenLimit 计算请求里的 max_completion_tokens：未配置（<=0）时用默认值，
+// 并夹到 [minCompletionTokens, maxCompletionTokens]。
+// 注意 TokenLimit 是**上下文上限**（输入+输出的总预算），不是输出上限，
+// 两者互相独立，因此这里不读 TokenLimit。
+func completionTokenLimit(configured int32) int {
+	v := int(configured)
+	if v <= 0 {
+		v = defaultCompletionTokens
+	}
+	if v < minCompletionTokens {
+		v = minCompletionTokens
+	}
+	if v > maxCompletionTokens {
+		v = maxCompletionTokens
+	}
+	return v
+}
 
 // toolCallTerminatedMsg 工具调用被强行终止（无对应结果消息）时补发的占位结果内容。
 // 保证 assistant 的每个 tool_call_id 都有 role:"tool" 响应，满足 OpenAI 兼容 API 校验，
@@ -82,13 +107,10 @@ func RequestBody(chatID uint32, modelID int32, agentCode string, toolsList *[]*p
 	if modelConfig.ProviderSpecificConfig.EnableTopP && modelConfig.ModelTopP != -1 && modelConfig.ModelTopP != 0 {
 		response.TopP = &modelConfig.ModelTopP
 	}
-	// max_tokens 默认上限 maxToken；模型显式配置了更小的 TokenLimit（上下文上限）时收敛到它，
-	// 避免向小上下文模型请求超出窗口的输出（此前硬编码 16384，TokenLimit 只影响 UI 显示）。
-	maxTokenObj := maxToken
-	if modelConfig.TokenLimit > 0 && int(modelConfig.TokenLimit) < maxTokenObj {
-		maxTokenObj = int(modelConfig.TokenLimit)
-	}
-	response.MaxTokens = &maxTokenObj
+	// max_completion_tokens：最大输出 token 数，取模型配置的 MaxCompletionTokens
+	// 并夹到 [4096, 32768]。TokenLimit 是上下文上限，与输出上限无关，不参与计算。
+	completionTokens := completionTokenLimit(modelConfig.MaxCompletionTokens)
+	response.MaxCompletionTokens = &completionTokens
 	if modelConfig.ProviderSpecificConfig.EnableDeepseekThinking {
 		if modelConfig.EnableThinking {
 			response.Thinking = &reqStruct.ChatCompletionThinkingType{

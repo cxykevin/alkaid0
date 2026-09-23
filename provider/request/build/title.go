@@ -87,8 +87,10 @@ func buildTitleRequest(dialogMessages []reqStruct.Message) (*reqStruct.ChatCompl
 	if modelConfig.ProviderSpecificConfig.EnableTopP && modelConfig.ModelTopP != -1 && modelConfig.ModelTopP != 0 {
 		response.TopP = &modelConfig.ModelTopP
 	}
-	maxTokenObj := titleMaxToken
-	response.MaxTokens = &maxTokenObj
+	// 标题期望的预算很小，但网关对 max_completion_tokens 有下限要求，
+	// 统一由 completionTokenLimit 夹到 [4096, 32768]。
+	titleTokens := completionTokenLimit(titleMaxToken)
+	response.MaxCompletionTokens = &titleTokens
 
 	// 生成 messages：标题专用 system 提示词 + 对话消息 + 标题指令。
 	// 注意：不能复用 GlobalTemplate（global.md，面向软件工程师的编码提示词）——

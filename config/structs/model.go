@@ -32,7 +32,8 @@ type ModelConfig struct {
 	ModelTopP              float32                `default:"-1"`                            // 模型TopP，-1 代表默认
 	ModelTopK              float32                `default:"-1"`                            // 模型TopK，-1 代表默认
 	ModelTemperature       float32                `default:"-1"`                            // 模型温度，-1 代表默认
-	TokenLimit             int32                  `default:"8192"`                          // 模型Token限制
+	TokenLimit             int32                  `default:"8192"`                          // 模型上下文上限（输入+输出总预算），不是输出上限
+	MaxCompletionTokens    int32                  `default:"16384"`                         // 最大输出 token 数（请求的 max_completion_tokens），使用时会夹到 4096–32768
 	ProviderURL            string                 `default:"https://openrouter.com/api/v1"` // 覆写模型提供者URL
 	ProviderKey            string                 `default:"sk-or-xxx"`                     // 复写模型提供者Key
 	EnableThinking         bool                   `default:"false"`                         // 是否启用思考
