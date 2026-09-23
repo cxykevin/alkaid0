@@ -14,7 +14,9 @@ import (
 	"time"
 )
 
-// 注意：这些测试需要 root 权限和 ALKAID0_TEST_SANDBOX=true 环境变量
+// 注意：这些测试需要 root 权限和 ALKAID0_TEST_SANDBOX=true 环境变量。
+// Windows 上 OS 隔离用例使用机器级共享的沙盒账户（见 scripts/windows），
+// 与那个包并行执行会互相干扰，跑全量测试请加 -p 1。
 
 // ---- 平台无关的测试命令 ----
 //
@@ -243,7 +245,10 @@ func TestCommandShortTimeout(t *testing.T) {
 		t.Errorf("命令在超时前就结束了，用例前提不成立: elapsed=%v err=%v", elapsed, err)
 	}
 
-	if elapsed > 2*time.Second {
+	// 上界必须容纳"超时终止后再等输出管道排空"的时间：Windows 路径有 2s 的
+	// DrainTimeout/WaitDelay 兜底（P1-13 引入），实测被杀进程的输出句柄最长要 2s
+	// 才关闭，整机负载下总耗时 2.1s。这里只要求"没有一直等到 sleep 自然结束"。
+	if elapsed > 5*time.Second {
 		t.Errorf("Timeout took too long: %v", elapsed)
 	}
 

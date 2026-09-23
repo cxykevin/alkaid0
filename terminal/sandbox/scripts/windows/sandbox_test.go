@@ -19,6 +19,16 @@ import (
 
 var securityTestMutex sync.Mutex
 
+// 注意：沙盒账户 alk-sandbox$ 与 HKLM\Software\Alkaid0\sandbox 是**机器级共享状态**，
+// 而 go test 默认并行执行多个包。terminal/sandbox 的隔离用例与本包的用例
+// （尤其 TestInitAlkaid0SandboxUser 会先 net user /delete 再重建账户）并行时会互相
+// 破坏密码，表现为 createRunToken 报 "The user name or password is incorrect"。
+// 因此 Windows 上跑全量或 ./terminal/sandbox/... 时请加 -p 1：
+//
+//	go test -p 1 -count=1 ./...
+//
+// 实测：并行跑 ./... 时 scripts/windows 会出现该失败；-p 1 后 61 个包全绿。
+
 func TestGetToken(t *testing.T) {
 	if os.Getenv("ALKAID0_TEST_SANDBOX") == "" {
 		t.Skip("跳过隔离测试（设置 ALKAID0_TEST_SANDBOX=true 启用）")
