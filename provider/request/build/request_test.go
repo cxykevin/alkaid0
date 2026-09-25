@@ -390,6 +390,70 @@ func TestRequestBody_EmptyThinkingPlaceholderSkipped(t *testing.T) {
 	}
 }
 
+// TestRequestBody_SummaryKeepsThinkingField 回归：压缩完成后摘要内容会被回放到承载它的
+// 历史消息上，而截断点消息可能是 assistant（lastMsgID 只看消息顺序、不看类型）。
+// thinking 模式下 assistant 消息必须携带 reasoning_content 字段（摘要不是思考产物，
+// 空串占位即可），否则压缩后的下一次请求即 400
+// "The content[].thinking in the thinking mode must be passed back to the API"。
+func TestRequestBody_SummaryKeepsThinkingField(t *testing.T) {
+	setupTestConfig()
+	db := setupTestDB(t)
+
+	if err := db.Create(&structs.Messages{
+		ChatID:  79,
+		Type:    structs.MessagesRoleAgent,
+		Delta:   "old reply",
+		Summary: "previous conversation summary",
+	}).Error; err != nil {
+		t.Fatalf("Failed to create summary message: %v", err)
+	}
+
+	toolsList := []*parser.ToolsDefine{}
+	request, err := RequestBody(79, 1, "", &toolsList, db, "", "", cfgStruct.AgentConfig{}, &structs.Chats{})
+	if err != nil {
+		t.Fatalf("RequestBody failed: %v", err)
+	}
+
+	var asst *reqStruct.Message
+	for i := range request.Messages {
+		if request.Messages[i].Role == reqStruct.RoleAssistant &&
+			strings.Contains(request.Messages[i].Content, "previous conversation summary") {
+			asst = &request.Messages[i]
+			break
+		}
+	}
+	if asst == nil {
+		t.Fatal("expected an assistant message replaying the summary content")
+	}
+	if asst.ReasoningContent == nil {
+		t.Error("thinking 模式下摘要回放的 assistant 消息必须携带 reasoning_content 字段（空串占位），当前为 nil")
+	} else if *asst.ReasoningContent != "" {
+		t.Errorf("expected empty placeholder reasoning_content for summary, got %q", *asst.ReasoningContent)
+	}
+
+	// 线级契约：omitempty 只省略 nil 指针，空串占位必须真的序列化出该字段
+	payload, err := json.Marshal(request)
+	if err != nil {
+		t.Fatalf("marshal request: %v", err)
+	}
+	if !strings.Contains(string(payload), "\"reasoning_content\":\"\"") {
+		t.Error("摘要回放的 assistant 消息序列化后缺少 reasoning_content 字段（空串占位）")
+	}
+
+	// 非 thinking 模型不注入该字段（与普通 assistant 回放保持一致）
+	requestNoThink, err := RequestBody(79, 2, "", &toolsList, db, "", "", cfgStruct.AgentConfig{}, &structs.Chats{})
+	if err != nil {
+		t.Fatalf("RequestBody (no-think model) failed: %v", err)
+	}
+	for _, m := range requestNoThink.Messages {
+		if m.Role == reqStruct.RoleAssistant && strings.Contains(m.Content, "previous conversation summary") {
+			if m.ReasoningContent != nil {
+				t.Errorf("非 thinking 模型不应注入 reasoning_content，got %q", *m.ReasoningContent)
+			}
+		}
+	}
+}
+
 // TestRequestBody_WithSummary 测试包含摘要的情况
 func TestRequestBody_WithSummary(t *testing.T) {
 	setupTestConfig()
@@ -927,9 +991,9 @@ func replayArguments(t *testing.T, chatID uint32, msgs []structs.Messages, callI
 	return ""
 }
 
-// TestRequestBody_ShortArgsReplayedReal 短参数（≤maxReplayArgRunes 字符）历史回放真实 JSON：
+// TestRequestBody_ShortArgsReplayedReal 短参数（字段值 ≤maxReplayFieldRunes 字符）历史回放真实 JSON：
 // 模型曾以错误参数名（"paht"）调用 edit —— 回放时 arguments 为当初传入的真实 JSON，
-// 让模型看到自己传错的参数名（仅超阈值的长参数才截断为 "..."）。
+// 让模型看到自己传错的参数名（只有超阈值的字段值才被结构化省略）。
 func TestRequestBody_ShortArgsReplayedReal(t *testing.T) {
 	args := replayArguments(t, 12, []structs.Messages{
 		{ChatID: 12, Type: structs.MessagesRoleUser, Delta: "edit a.txt"},
@@ -990,11 +1054,13 @@ func TestRequestBody_AllShortArgsReplayed(t *testing.T) {
 	}
 }
 
-// TestParseStoredToolCalls_AllArgsTruncated parseStoredToolCalls（单参数签名）统一参数截断：
-// 非空参数 >maxReplayArgRunes 字符（rune）→ "..."；≤ 阈值 → 真实 JSON；空参数 → 占位符。
-func TestParseStoredToolCalls_AllArgsTruncated(t *testing.T) {
-	// call_long：长参数（>100 rune）→ "..."；call_short：短参数 → 真实 JSON；call_empty：空参数 → 占位符
-	longJSON := `{"path":"` + strings.Repeat("a", 200) + `"}`
+// TestParseStoredToolCalls_FieldElisionKeepsKeys 结构化省略：只有超过
+// maxReplayFieldRunes（200 rune）的**字段值**被替换为占位符，参数名与 JSON 结构完整保留。
+// 回归背景：整包替换为 "..." 会让模型模仿出 {"arguments":"..."}——把 OpenAI 包装字段名
+// 当成工具参数名——run 工具随即报 "[System] Parameter Error: type is required"。
+func TestParseStoredToolCalls_FieldElisionKeepsKeys(t *testing.T) {
+	// call_long：字段值 201 rune → 省略；call_short：字段值短 → 原样；call_empty：空参数 → 占位符
+	longJSON := `{"path":"` + strings.Repeat("a", 201) + `"}`
 	payload := `[{"name":"edit","id":"call_long","parameters":` + longJSON + `},{"name":"edit","id":"call_short","parameters":{"path":"b.txt"}},{"name":"edit","id":"call_empty"}]`
 
 	calls, err := parseStoredToolCalls(payload)
@@ -1004,8 +1070,18 @@ func TestParseStoredToolCalls_AllArgsTruncated(t *testing.T) {
 	if len(calls) != 3 {
 		t.Fatalf("expected 3 calls, got %d", len(calls))
 	}
-	if got := calls[0].Function.Arguments; got != "..." {
-		t.Errorf("long args should be truncated to \"...\", got %q", got)
+	var got map[string]string
+	if err := json.Unmarshal([]byte(calls[0].Function.Arguments), &got); err != nil {
+		t.Fatalf("elided args must stay a valid JSON object: %v (%q)", err, calls[0].Function.Arguments)
+	}
+	if _, ok := got["path"]; !ok {
+		t.Errorf("key 'path' must be preserved on elision, got %q", calls[0].Function.Arguments)
+	}
+	if !strings.Contains(got["path"], "omitted") || !strings.Contains(got["path"], "201") {
+		t.Errorf("oversized field should carry an omission marker with its length, got %q", got["path"])
+	}
+	if _, ok := got["arguments"]; ok {
+		t.Errorf("replay must never fabricate an 'arguments' parameter: %q", calls[0].Function.Arguments)
 	}
 	if got := calls[1].Function.Arguments; got != `{"path":"b.txt"}` {
 		t.Errorf("short args should replay real JSON, got %q", got)
@@ -1014,20 +1090,54 @@ func TestParseStoredToolCalls_AllArgsTruncated(t *testing.T) {
 		t.Errorf("empty args should keep placeholder, got %q", got)
 	}
 
-	// 中文按字符（rune）而非字节计数：80 汉字（240 字节，rune 数 91≤100）回放真实；
-	// 100 汉字（300 字节，rune 数 111>100）截断为 "..."
-	cnShort := strings.Repeat("汉", 80)
-	cnLong := strings.Repeat("汉", 100)
+	// 阈值按字符（rune）而非字节：200 汉字（≤200 rune）保留原值，201 汉字（>200 rune）省略
+	cnShort := strings.Repeat("汉", 200)
+	cnLong := strings.Repeat("汉", 201)
 	payload2 := `[{"name":"edit","id":"cn_short","parameters":{"text":"` + cnShort + `"}},{"name":"edit","id":"cn_long","parameters":{"text":"` + cnLong + `"}}]`
 	calls2, err := parseStoredToolCalls(payload2)
 	if err != nil {
 		t.Fatalf("parse cn: %v", err)
 	}
-	if got := calls2[0].Function.Arguments; got == "..." {
-		t.Error("80 汉字（≤100 rune）参数不应被截断")
+	if got := calls2[0].Function.Arguments; strings.Contains(got, "omitted") {
+		t.Errorf("200 汉字（≤200 rune）字段不应被省略，got %q", got)
 	}
-	if got := calls2[1].Function.Arguments; got != "..." {
-		t.Errorf("100 汉字（>100 rune）参数应被截断为 \"...\"，got %q", got)
+	if got := calls2[1].Function.Arguments; !strings.Contains(got, "omitted") || !strings.Contains(got, "201") {
+		t.Errorf("201 汉字（>200 rune）字段应被省略并保留长度，got %q", got)
+	}
+}
+
+// TestRequestBody_LongArgsKeepKeysAndElide 端到端回归（RequestBody 层）：run 这类长参数
+// 调用回放时 type/reason/command 三个参数名一个不少，只有超大字段被结构化省略。
+// 旧实现把整个 arguments 换成 "..."，模型因此在 chat 458 模仿出 {"arguments":"..."}，
+// 触发 "[System] Parameter Error: type is required"。
+func TestRequestBody_LongArgsKeepKeysAndElide(t *testing.T) {
+	command := strings.Repeat("echo hello; ", 60) // 720 rune > maxReplayFieldRunes
+	toolCall := fmt.Sprintf("[{\"name\":\"run\",\"id\":\"call_long\",\"parameters\":{\"type\":\"shell\",\"reason\":\"check build\",\"command\":%q}}]", command)
+	args := replayArguments(t, 14, []structs.Messages{
+		{ChatID: 14, Type: structs.MessagesRoleUser, Delta: "run it"},
+		{ChatID: 14, Type: structs.MessagesRoleAgent, Delta: "", ToolCallingJSONString: toolCall},
+	}, "call_long")
+
+	if args == "..." {
+		t.Fatal("long args must not be replaced by a bare ... placeholder")
+	}
+	var got map[string]string
+	if err := json.Unmarshal([]byte(args), &got); err != nil {
+		t.Fatalf("replayed arguments must be a valid JSON object: %v (%q)", err, args)
+	}
+	for _, k := range []string{"type", "reason", "command"} {
+		if _, ok := got[k]; !ok {
+			t.Errorf("parameter %q must survive replay, got %q", k, args)
+		}
+	}
+	if got["type"] != "shell" || got["reason"] != "check build" {
+		t.Errorf("small fields must replay verbatim, got %q", args)
+	}
+	if !strings.Contains(got["command"], "omitted") {
+		t.Errorf("oversized command should be structurally elided, got %q", got["command"])
+	}
+	if _, ok := got["arguments"]; ok {
+		t.Errorf("replay must not fabricate an 'arguments' parameter: %q", args)
 	}
 }
 
