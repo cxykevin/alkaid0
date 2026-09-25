@@ -933,7 +933,7 @@ func ExecuteToolCalls(session *storageStructs.Chats, toolCallingJSON string) (ok
 		return true, err
 	}
 
-	solver := response.NewNativeSolver(session.DB, session)
+	solver := response.NewSolver(session.DB, session)
 	var calls []struct {
 		Name       string          `json:"name"`
 		ID         string          `json:"id"`
@@ -1112,7 +1112,7 @@ func SendRequest(ctx context.Context, session *storageStructs.Chats, callback fu
 	// }
 
 	// 统一使用原生 tool_calls 解析器；原生调用增量通过 Delta.ToolCalls 回放。
-	solver := response.NewNativeSolver(db, session)
+	solver := response.NewSolver(db, session)
 	agent := session.CurrentAgentID
 	// 在数据库中创建一条空的 Messages 记录作为本次请求的占位符
 	// 后续流式响应内容会逐步更新该记录的各个字段
@@ -1218,7 +1218,7 @@ func SendRequest(ctx context.Context, session *storageStructs.Chats, callback fu
 				return err
 			}
 		}
-		// 调用 solver 解析 token（可能包含 <think> 或 <tools> 标签）
+		// 调用 solver 解析 token（仅正文与 <think>；工具调用由上面的原生增量通道处理）
 		delta, thinkingDelta, err := solver.AddToken(body.Choices[0].Delta.Content, stringDefault(body.Choices[0].Delta.ReasoningContent))
 		gDelta.WriteString(delta)
 		gThinkingDelta.WriteString(thinkingDelta)

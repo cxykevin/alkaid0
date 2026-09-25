@@ -24,7 +24,7 @@ func newTestDB(t *testing.T) *gorm.DB {
 	return db
 }
 
-// TestSolver_AddToken 验证普通文本和 think 内容仍由文本解析器处理。
+// TestSolver_AddToken 验证文本解析器只处理正文与 <think>（工具调用走原生 tool_calls 通道）。
 func TestSolver_AddToken(t *testing.T) {
 	db := newTestDB(t)
 	session := &storageStructs.Chats{ID: 1001, DB: db}
@@ -57,8 +57,7 @@ func TestSolver_AddToken(t *testing.T) {
 }
 
 // TestNativeSolver_ToolCalls 验证响应层把原生 tool_calls 增量交给 accumulator，
-// 并保留多个 index 的顺序、参数和内部 Origin 表示。旧的 <tools> prompt-mode
-// 落库/解析路径不再属于 Solver 的职责，因此不在此测试。
+// 并保留多个 index 的顺序、参数和内部 Origin 表示。
 func TestNativeSolver_ToolCalls(t *testing.T) {
 	db := newTestDB(t)
 	toolobj.ToolsList = make(map[string]*toolobj.Tools)
@@ -87,7 +86,7 @@ func TestNativeSolver_ToolCalls(t *testing.T) {
 		DB:           db,
 		EnableScopes: map[string]bool{"test_scope": true},
 	}
-	s := response.NewNativeSolver(db, session)
+	s := response.NewSolver(db, session)
 
 	chunks := []structs.StreamToolCall{
 		{Index: 0, ID: "call_1", Function: &structs.StreamToolCallFunc{Name: "test_calculator"}},
@@ -132,10 +131,10 @@ func TestNativeSolver_ToolCalls(t *testing.T) {
 	}
 }
 
-// TestNewNativeSolverBuildsToolsSolverOnce 同一轮只应构建一次工具求解器：
-// NewNativeSolver 此前经由 NewSolver 构建一次、再为 nativeAcc 构建一次，会重复
-// 执行 ToolsSolver 的 Enable 判定与 PreHook（这里用 Enable 计数断言构建次数）。
-func TestNewNativeSolverBuildsToolsSolverOnce(t *testing.T) {
+// TestNewSolverBuildsToolsSolverOnce 同一轮只应构建一次工具求解器：
+// 构造器会执行 ToolsSolver 的 Enable 判定与 PreHook，重复构建既浪费又有副作用
+// （这里用 Enable 计数断言构建次数恰好为 1）。
+func TestNewSolverBuildsToolsSolverOnce(t *testing.T) {
 	db := newTestDB(t)
 	toolobj.ToolsList = make(map[string]*toolobj.Tools)
 	toolobj.Scopes = make(map[string]string)
@@ -154,8 +153,8 @@ func TestNewNativeSolverBuildsToolsSolverOnce(t *testing.T) {
 		},
 	}
 	session := &storageStructs.Chats{ID: 3003, DB: db, EnableScopes: map[string]bool{"test_scope": true}}
-	if s := response.NewNativeSolver(db, session); s == nil {
-		t.Fatal("NewNativeSolver returned nil")
+	if s := response.NewSolver(db, session); s == nil {
+		t.Fatal("NewSolver returned nil")
 	}
 	if enableCalls != 1 {
 		t.Fatalf("ToolsSolver built %d times in one round, want 1", enableCalls)
@@ -179,7 +178,7 @@ func TestSolver_TruncatedNativeToolCallKeepsTextTail(t *testing.T) {
 		},
 	}
 	session := &storageStructs.Chats{ID: 3004, DB: db, EnableScopes: map[string]bool{"test_scope": true}}
-	s := response.NewNativeSolver(db, session)
+	s := response.NewSolver(db, session)
 
 	if _, _, err := s.AddToken("正文\n<th", ""); err != nil {
 		t.Fatalf("AddToken error: %v", err)

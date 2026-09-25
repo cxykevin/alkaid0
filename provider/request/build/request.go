@@ -229,9 +229,9 @@ scan:
 				exitFlag = true
 			} else {
 				if v.Type == structs.MessagesRoleAgent {
-					// 原生模式：assistant 历史消息回放原生 tool_calls —— content 保留文本 Delta，
+					// assistant 历史消息回放原生 tool_calls —— content 保留文本 Delta，
 					// 工具调用解析 ToolCallingJSONString 为 msg.ToolCalls（tool_call_id + function.name/arguments），
-					// 与当前轮请求的 tools 参数/响应解析同一种格式，不再出现 <tools> 文本段。
+					// 与当前轮请求的 tools 参数/响应解析同一种格式。
 					msg.Role = reqStruct.RoleAssistant
 					thinkingWrap := ""
 					if modelConfig.EnableThinking {

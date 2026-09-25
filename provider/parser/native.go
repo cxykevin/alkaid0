@@ -7,7 +7,7 @@ import (
 	structs "github.com/cxykevin/alkaid0/storage/structs"
 )
 
-// validateParams 实时参数类型校验，对齐 solveTool 的宽松语义：
+// validateParams 实时参数类型校验（宽松语义：类型不匹配只告警跳过）：
 // 单个参数类型不匹配仅记录告警并跳过校验，不中止整个流式响应，也不移除参数。
 // 支持流式解析未完成状态的 Slot 占位符类型（StringSlot/ArraySlot/ObjectSlot）。
 func validateParams(tool *ToolsDefine, params map[string]*any) {
@@ -74,7 +74,7 @@ type nativeCallState struct {
 //
 // 按 delta.tool_calls[i].index 维护独立状态，每个 index 一个 libjson.Parser，
 // 把 function.arguments 的增量片段喂给 libjson，复用 ObjectSlot/ArraySlot 增量提取。
-// 与 parser.solveTool 语义对齐：未完整 → Func(id, params, false)（流式预览 OnHook）；
+// 派发语义：未完整 → Func(id, params, false)（流式预览 OnHook）；
 // 完整 → Func(id, params, true)，追加 solved 并清 TemporyDataOfRequest。
 type NativeToolCallAccumulator struct {
 	tools   []*ToolsDefine

@@ -1,7 +1,6 @@
 package parser
 
 import (
-	"errors"
 	"strings"
 	"unicode/utf8"
 
@@ -65,19 +64,15 @@ const (
 // Parser 流式解析器，仅负责从 AI 响应流中提取 <think> 标签内容。
 // 原生 tool_calls 由 NativeToolCallAccumulator 独立累积。
 type Parser struct {
-	Session     *structs.Chats
 	TokenCache  string // 缓存正在解析中的标签名
 	Mode        int16  // 状态机主模式
 	KeyMode     int16  // 当前所处的逻辑区域
-	Stop        bool   // 发生错误时停止解析
 	atLineStart bool   // 当前是否位于行首
 }
 
 // AddToken 流式传入 token 并解析其中的 <think> 标签。
-func (p *Parser) AddToken(token string, tokenThinking string) (string, string, *any, error) {
-	if p.Stop {
-		return "", "", nil, errors.New("parser stop")
-	}
+// 只返回（正文增量, 思考增量, error）；工具调用不经由此通道。
+func (p *Parser) AddToken(token string, tokenThinking string) (string, string, error) {
 	var response strings.Builder
 	var responseThinking strings.Builder
 	responseThinking.WriteString(tokenThinking)
@@ -182,36 +177,38 @@ func (p *Parser) AddToken(token string, tokenThinking string) (string, string, *
 			}
 		}
 	}
-	return response.String(), responseThinking.String(), nil, nil
+	return response.String(), responseThinking.String(), nil
 }
 
-// DoneToken 传入结束 token。
-func (p *Parser) DoneToken() (string, string, *[]AIToolsResponse, error) {
+// DoneToken 传入结束 token，回吐尚未输出的尾部文本。
+func (p *Parser) DoneToken() (string, string, error) {
 	switch p.Mode {
 	case ModeOutside:
-		return "", "", nil, nil
+		return "", "", nil
 	case ModeEnterTag:
-		return "<" + p.TokenCache, "", nil, nil
+		return "<" + p.TokenCache, "", nil
 	case ModeInTag:
 		if p.KeyMode == KeyModeThink {
-			return "", "", nil, nil
+			return "", "", nil
 		}
 	case ModePossibleEnd:
 		if p.KeyMode == KeyModeThink {
-			return "", "<", nil, nil
+			return "", "<", nil
 		}
 	case ModeEndTagName:
 		if p.KeyMode == KeyModeThink {
-			return "", "</" + p.TokenCache, nil, nil
+			return "", "</" + p.TokenCache, nil
 		}
 	}
-	return "", "", nil, nil
+	return "", "", nil
 }
 
-// NewParser 创建解析器。tools 参数保留以兼容现有构造调用；工具累积由 native.go 负责。
-func NewParser(session *structs.Chats, _ []*ToolsDefine) *Parser {
+// NewParser 创建解析器。工具调用由 NativeToolCallAccumulator 独立累积，
+// 本解析器只负责正文与 <think>；同时重置会话的本轮临时数据容器
+// （部分工具的 PreHook/OnHook 会往 TemporyDataOfRequest 里写内容）。
+func NewParser(session *structs.Chats) *Parser {
 	if session != nil {
 		session.TemporyDataOfRequest = make(map[string]any)
 	}
-	return &Parser{Session: session, atLineStart: true}
+	return &Parser{atLineStart: true}
 }

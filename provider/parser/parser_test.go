@@ -8,7 +8,7 @@ import (
 )
 
 func newParser() *parser.Parser {
-	return parser.NewParser(nil, nil)
+	return parser.NewParser(nil)
 }
 
 func TestNewParser(t *testing.T) {
@@ -19,11 +19,11 @@ func TestNewParser(t *testing.T) {
 
 func TestAddTokenNormalText(t *testing.T) {
 	p := newParser()
-	response, thinking, _, err := p.AddToken("Hello World", "")
+	response, thinking, err := p.AddToken("Hello World", "")
 	if err != nil {
 		t.Fatalf("AddToken failed: %v", err)
 	}
-	response2, thinking2, _, err := p.DoneToken()
+	response2, thinking2, err := p.DoneToken()
 	if err != nil {
 		t.Fatalf("DoneToken failed: %v", err)
 	}
@@ -37,11 +37,11 @@ func TestAddTokenNormalText(t *testing.T) {
 
 func TestAddTokenThinkTag(t *testing.T) {
 	p := newParser()
-	response, thinking, _, err := p.AddToken("<think>这是思考内容</think>", "")
+	response, thinking, err := p.AddToken("<think>这是思考内容</think>", "")
 	if err != nil {
 		t.Fatalf("AddToken failed: %v", err)
 	}
-	response2, thinking2, _, err := p.DoneToken()
+	response2, thinking2, err := p.DoneToken()
 	if err != nil {
 		t.Fatalf("DoneToken failed: %v", err)
 	}
@@ -55,11 +55,11 @@ func TestAddTokenThinkTag(t *testing.T) {
 
 func TestAddTokenMixedContent(t *testing.T) {
 	p := newParser()
-	response, thinking, _, err := p.AddToken("普通文本\n<think>思考内容</think>更多文本", "")
+	response, thinking, err := p.AddToken("普通文本\n<think>思考内容</think>更多文本", "")
 	if err != nil {
 		t.Fatalf("AddToken failed: %v", err)
 	}
-	response2, thinking2, _, err := p.DoneToken()
+	response2, thinking2, err := p.DoneToken()
 	if err != nil {
 		t.Fatalf("DoneToken failed: %v", err)
 	}
@@ -73,7 +73,7 @@ func TestAddTokenMixedContent(t *testing.T) {
 
 func TestParserThinkNotFull(t *testing.T) {
 	p := newParser()
-	response, thinking, _, err := p.AddToken("aaaa\n<think>内容</inner></outer>", "")
+	response, thinking, err := p.AddToken("aaaa\n<think>内容</inner></outer>", "")
 	if err != nil {
 		t.Fatalf("AddToken failed: %v", err)
 	}
@@ -89,14 +89,14 @@ func TestParserMultipleAddTokens(t *testing.T) {
 	p := newParser()
 	var response, thinking strings.Builder
 	for _, token := range []string{"第一段文本开始", "\n<think>思考内容", "</think>继续文本"} {
-		r, th, _, err := p.AddToken(token, "")
+		r, th, err := p.AddToken(token, "")
 		if err != nil {
 			t.Fatalf("AddToken failed: %v", err)
 		}
 		response.WriteString(r)
 		thinking.WriteString(th)
 	}
-	r, th, _, err := p.DoneToken()
+	r, th, err := p.DoneToken()
 	if err != nil {
 		t.Fatalf("DoneToken failed: %v", err)
 	}
@@ -133,14 +133,14 @@ func TestParserTagsRequireLineStart(t *testing.T) {
 			p := newParser()
 			var response, thinking strings.Builder
 			for _, token := range tc.tokens {
-				r, th, _, err := p.AddToken(token, "")
+				r, th, err := p.AddToken(token, "")
 				if err != nil {
 					t.Fatalf("AddToken failed: %v", err)
 				}
 				response.WriteString(r)
 				thinking.WriteString(th)
 			}
-			r, th, _, err := p.DoneToken()
+			r, th, err := p.DoneToken()
 			if err != nil {
 				t.Fatalf("DoneToken failed: %v", err)
 			}
@@ -159,13 +159,13 @@ func TestParserTagsRequireLineStart(t *testing.T) {
 func BenchmarkParserAddToken(b *testing.B) {
 	p := newParser()
 	for range b.N {
-		_, _, _, _ = p.AddToken("这是一个测试 token\n<think>思考内容</think>更多内容", "")
+		_, _, _ = p.AddToken("这是一个测试 token\n<think>思考内容</think>更多内容", "")
 	}
 }
 
 func BenchmarkParserDoneToken(b *testing.B) {
 	p := newParser()
 	for range b.N {
-		_, _, _, _ = p.DoneToken()
+		_, _, _ = p.DoneToken()
 	}
 }
