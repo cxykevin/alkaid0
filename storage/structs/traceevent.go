@@ -26,6 +26,10 @@ const (
 	// TempKeyTraceDiffPlan 每个 traced 文件的缓存决策结果（map[string]trace.DiffPlan）。
 	// 由 trace.RenderTraceBlocks 决策写入，供 build 包按方案拼装旧块/diff 块/新块。
 	TempKeyTraceDiffPlan = "trace:diffplan"
+	// TempKeyTraceAnchorPlan 每个 traced 文件本轮内容块的落位决策（map[string]*trace.AnchorPlan）。
+	// 与 DiffPlan 的分工：DiffPlan 只描述"破坏缓存 vs 保留+diff"的成本结论并携带旧块/diff 块；
+	// AnchorPlan 描述"块插到哪"（最新事件 / 原注入锚点 / 消息列表末尾 / 差分双锚点）。
+	TempKeyTraceAnchorPlan = "trace:anchorplan"
 	// TempKeyTraceConfirmedContent 保存当前会话中 Agent 最近一次确认/写入的内容，
 	// 用于 edit 在写盘前区分 Agent 自身后续编辑与外部修改。
 	TempKeyTraceConfirmedContent = "trace:confirmed_content"
@@ -33,4 +37,9 @@ const (
 	TempKeyTraceDocsSnapshots = "trace:docs_snapshots"
 	// TempKeyTaskEventBlock @task 有最近 edit 事件时的任务列表内容块（string）。
 	TempKeyTaskEventBlock = "task:eventblock"
+	// TempKeySystemNotices 内部运行期通知（后台任务结束、shell 停止等）。
+	// 它变化频繁且与对话无关，**不能**放进 system 消息——system 在 tools 之后，
+	// 一次通知就会把 tools 之后的整个前缀（含全部历史）打掉（实测命中掉到 tools 前缀大小）。
+	// 由 Build 写入、RequestBody 作为消息列表末尾的独立块注入。
+	TempKeySystemNotices = "system:notices"
 )

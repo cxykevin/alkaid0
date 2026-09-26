@@ -1450,6 +1450,74 @@ func TestRequestBody_DiffPlanFallbackAdvancesCache(t *testing.T) {
 	}
 }
 
+// TestRequestBody_OmittedAllToolCallsNoEmptyArray 回归实战发现的问题：
+// 某个 assistant 消息的工具调用被 omitSupersededEditCalls 全部省略、但消息本身带 thinking
+// 而保留时，绝不能再序列化出 "tool_calls":[]（DeepSeek 400：
+// Invalid 'messages[N].tool_calls': empty array）。
+func TestRequestBody_OmittedAllToolCallsNoEmptyArray(t *testing.T) {
+	db := setupTestDB(t)
+	toolsList := []*parser.ToolsDefine{}
+
+	setupTestConfig()
+	cfg := *config.GlobalConfig
+	m := cfg.Model.Models[cfg.Model.DefaultModelID]
+	cfg.Model.Models[cfg.Model.DefaultModelID] = m
+	config.GlobalConfigSwap(cfg)
+
+	// "edit 创建文件 → read 确认"：最新事件是 read，唯一 edit 调用会被省略；消息带 thinking。
+	msgs := []structs.Messages{
+		{ChatID: 47, Type: structs.MessagesRoleUser, Delta: "创建并确认"},
+		{ChatID: 47, Type: structs.MessagesRoleAgent, ThinkingDelta: "我先创建文件，然后读一遍确认。",
+			ToolCallingJSONString: `[{"name":"edit","id":"call_e1","parameters":{"path":"E2E_NOTES.md","target":"@all","text":"notes"}}]`},
+		{ChatID: 47, Type: structs.MessagesRoleTool, Delta: `[{"name":"edit","id":"call_e1","return":"{\"success\":true}"}]`},
+		{ChatID: 47, Type: structs.MessagesRoleAgent, ThinkingDelta: "读一遍确认。",
+			ToolCallingJSONString: `[{"name":"read","id":"call_r1","parameters":{"path":"E2E_NOTES.md"}}]`},
+		{ChatID: 47, Type: structs.MessagesRoleTool, Delta: `[{"name":"read","id":"call_r1","return":"notes"}]`},
+	}
+	for i := range msgs {
+		if err := db.Create(&msgs[i]).Error; err != nil {
+			t.Fatalf("create msg: %v", err)
+		}
+	}
+
+	chatLn := eventTestChatLn(
+		map[string]*structs.TraceEvent{
+			"E2E_NOTES.md": {MsgID: msgs[3].ID, ToolCallID: "call_r1", IsEdit: false},
+		},
+		map[string]trace.FileBlock{
+			"E2E_NOTES.md": {Name: "E2E_NOTES.md", Size: "5", Length: 5, Text: "notes"},
+		},
+	)
+	chatLn.TemporyDataOfSession[structs.TempKeyTracePrevEvents] = map[string]*structs.TraceEvent{
+		"E2E_NOTES.md": {MsgID: msgs[1].ID, ToolCallID: "call_e1", IsEdit: true},
+	}
+
+	req, err := RequestBody(47, 1, "", &toolsList, db, "", "", cfgStruct.AgentConfig{}, chatLn)
+	if err != nil {
+		t.Fatalf("RequestBody failed: %v", err)
+	}
+	raw, err := json.Marshal(req)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if strings.Contains(string(raw), `"tool_calls":[]`) {
+		t.Fatalf("省略光工具调用后不得输出空数组 tool_calls，序列化结果含 \"tool_calls\":[]")
+	}
+	// 带 thinking 的消息本身应保留（省略的是调用，不是整轮思考）
+	foundReasoning := false
+	for _, msg := range req.Messages {
+		if msg.Role == reqStruct.RoleAssistant && msg.ReasoningContent != nil && *msg.ReasoningContent == "我先创建文件，然后读一遍确认。" {
+			foundReasoning = true
+			if len(msg.ToolCalls) != 0 {
+				t.Errorf("被省略的调用不应残留: %+v", msg.ToolCalls)
+			}
+		}
+	}
+	if !foundReasoning {
+		t.Error("带 thinking 的 assistant 消息应保留（只省略工具调用）")
+	}
+}
+
 func messagesContent(messages []reqStruct.Message) string {
 	var builder strings.Builder
 	for _, message := range messages {
@@ -1652,9 +1720,10 @@ func TestRequestBody_TraceFollowsEvent_MultiFileOneMessage(t *testing.T) {
 	}
 }
 
-// TestRequestBody_NonRecentEvent_FallsBackTop 不可锚定事件（事件消息被 skip/超分页）的内容块
-// 进入顶部 fallback（addUserPrompt 之后、历史之前），不丢失文件。
-func TestRequestBody_NonRecentEvent_FallsBackTop(t *testing.T) {
+// TestRequestBody_MissingAnchor_FallsBackTail 锚点不可渲染（事件消息被 skip / 超出回放窗口）时，
+// 内容块回退到**消息列表末尾**，而不是"历史之前的顶部"：顶部 fallback 会把块放到整个对话之前，
+// 块一变后面全部历史都失去前缀缓存（docs/trace-cache-spec.md §4.2）。
+func TestRequestBody_MissingAnchor_FallsBackTail(t *testing.T) {
 	db := setupTestDB(t)
 	toolsList := []*parser.ToolsDefine{}
 
@@ -1674,7 +1743,7 @@ func TestRequestBody_NonRecentEvent_FallsBackTop(t *testing.T) {
 		}
 	}
 
-	// 事件 MsgID 指向不存在的记录 → findEventAnchor 返回 nil → 顶部 fallback
+	// 事件 MsgID 指向不存在的记录 → findEventAnchor 返回 nil → 末尾 fallback
 	chatLn := eventTestChatLn(
 		map[string]*structs.TraceEvent{
 			"a.txt": {MsgID: 99999, ToolCallID: "call_1", IsEdit: false, InRecent: true},
@@ -1702,10 +1771,13 @@ func TestRequestBody_NonRecentEvent_FallsBackTop(t *testing.T) {
 		t.Fatal("expected addUserPrompt top marker")
 	}
 	if blockIdx < 0 {
-		t.Fatal("expected fallback content block at top")
+		t.Fatal("expected fallback content block")
 	}
-	if blockIdx != topIdx+1 {
-		t.Errorf("fallback block should follow addUserPrompt: topIdx=%d blockIdx=%d", topIdx, blockIdx)
+	if blockIdx != len(req.Messages)-1 {
+		t.Errorf("fallback block should be appended at the tail: blockIdx=%d total=%d", blockIdx, len(req.Messages))
+	}
+	if blockIdx < topIdx {
+		t.Errorf("fallback block must not precede the global prehook block: topIdx=%d blockIdx=%d", topIdx, blockIdx)
 	}
 }
 

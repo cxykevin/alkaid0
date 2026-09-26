@@ -18,6 +18,7 @@ import (
 	"github.com/cxykevin/alkaid0/tools/index"
 	"github.com/cxykevin/alkaid0/tools/toolobj"
 	"github.com/cxykevin/alkaid0/tools/tools/edit"
+	"github.com/cxykevin/alkaid0/tools/tools/trace"
 )
 
 const toolName = "tree"
@@ -34,6 +35,8 @@ var logger = log.New("tools:tree")
 
 func init() {
 	treeTempate = prompts.Load("tools:tree:tree", treePrompt)
+	// @tree 作为虚拟对象接入 trace 的落位/差分机制（tree → edit → trace 已有依赖，反向无环）
+	trace.RegisterVirtualContent("@tree", TreeContent)
 }
 
 type treeEntryState struct {
@@ -456,7 +459,8 @@ func InvalidateTreeCache(session *structs.Chats) {
 	delete(session.TemporyDataOfRequest, treeCacheKey)
 }
 
-func buildGlobalPrompt(session *structs.Chats) (string, error) {
+// buildTreeBlock 渲染 @tree 内容块（虚拟对象文本，已带行号与格式）。
+func buildTreeBlock(session *structs.Chats) (string, error) {
 	workPath, err := treeWorkPath(session)
 	if err != nil {
 		logger.Warn("tree get abs error: %v", err)
@@ -521,6 +525,25 @@ func buildGlobalPrompt(session *structs.Chats) (string, error) {
 		return "", err
 	}
 	return rendered, nil
+}
+
+// buildGlobalPrompt 全局 PreHook：只负责构建/刷新会话级 tree 快照，不再把内容塞进全局注入块。
+// 内容块改由 trace 层按"事件跟随 / 末尾前移 / 差分"注入（docs/trace-cache-spec.md §10.1）：
+// 此前它位于"整个对话历史之前"的全局块尾部，工作区一变，后面全部历史都失去前缀缓存。
+func buildGlobalPrompt(session *structs.Chats) (string, error) {
+	if _, err := buildTreeBlock(session); err != nil {
+		return "", err
+	}
+	return "", nil
+}
+
+// TreeContent 返回 @tree 当前内容块文本，供 trace 层作为虚拟对象内容源使用。
+func TreeContent(session *structs.Chats) (string, bool) {
+	content, err := buildTreeBlock(session)
+	if err != nil || content == "" {
+		return "", false
+	}
+	return content, true
 }
 
 func buildPrompt(session *structs.Chats) (string, error) {

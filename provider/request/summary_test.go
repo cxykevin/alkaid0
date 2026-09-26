@@ -2,6 +2,7 @@ package request
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/cxykevin/alkaid0/config"
@@ -242,5 +243,42 @@ func TestSummarySession_WithAgent(t *testing.T) {
 	// 空聊天应该返回空总结
 	if summary != "" {
 		t.Errorf("Expected empty summary for empty chat, got: %s", summary)
+	}
+}
+
+// TestSummary_EchoMock_KeepsTraces 压缩只写摘要，**不删 trace**（审计优先）：
+// 边界之前的 trace 改由拼接期按"边界后是否有事件"跳过（docs/trace-cache-spec.md §4.5）。
+func TestSummary_EchoMock_KeepsTraces(t *testing.T) {
+	openai.StartServerTask()
+	setupTestConfig()
+	db := setupTestDB(t)
+
+	chatID := uint32(102)
+	db.Create(&structs.Chats{ID: chatID})
+	for i := 1; i <= 10; i++ {
+		if err := db.Create(&structs.Messages{ChatID: chatID, Type: structs.MessagesRoleUser, Delta: strings.Repeat("B", i)}).Error; err != nil {
+			t.Fatalf("create msg: %v", err)
+		}
+	}
+	traces := []structs.Traces{
+		{ChatID: chatID, Path: "@temp/run/1", AgentID: "", TraceID: 1},
+		{ChatID: chatID, Path: "a.txt", AgentID: "", TraceID: 2},
+	}
+	for i := range traces {
+		if err := db.Create(&traces[i]).Error; err != nil {
+			t.Fatalf("create trace: %v", err)
+		}
+	}
+
+	if _, err := Summary(context.Background(), db, chatID, ""); err != nil {
+		t.Fatalf("Summary failed: %v", err)
+	}
+
+	var kept int64
+	if err := db.Model(&structs.Traces{}).Where("chat_id = ?", chatID).Count(&kept).Error; err != nil {
+		t.Fatalf("count traces: %v", err)
+	}
+	if kept != int64(len(traces)) {
+		t.Fatalf("summary 不得删 trace（审计优先）: want %d got %d", len(traces), kept)
 	}
 }

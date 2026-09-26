@@ -1240,7 +1240,9 @@ func TestBuildTraceConcurrent(t *testing.T) {
 	}
 }
 
-// TestRenderTraceBlocks_Partition 验证按事件映射分区：有事件文件进 eventBlocks、无事件文件进 topBlock。
+// TestRenderTraceBlocks_Partition 验证拼接期活跃裁剪（docs/trace-cache-spec.md §4.5）：
+// 只有"边界后存在事件"的 trace 会被注入（进 eventBlocks），无事件的 trace 本轮跳过但**不删库**
+// （审计数据保留；旧实现靠 summary 删库收敛，顶部聚合已作废）。
 func TestRenderTraceBlocks_Partition(t *testing.T) {
 	db := setupTestDB(t)
 	defer u.Unwrap(db.DB()).Close()
@@ -1278,14 +1280,22 @@ func TestRenderTraceBlocks_Partition(t *testing.T) {
 	if strings.Contains(topBlock, "line A1") {
 		t.Error("top block should NOT contain event file a.txt")
 	}
-	if !strings.Contains(topBlock, "line B1") {
-		t.Error("top block should contain non-event file b.txt")
+	if strings.Contains(topBlock, "line B1") {
+		t.Error("无事件的 trace 不应再进顶部聚合（拼接期已裁剪）")
 	}
 	if _, ok := eventBlocks["a.txt"]; !ok {
 		t.Error("eventBlocks should contain a.txt")
 	}
 	if _, ok := eventBlocks["b.txt"]; ok {
-		t.Error("eventBlocks should NOT contain b.txt")
+		t.Error("无事件的 trace 不应进 eventBlocks")
+	}
+	// 审计要求：裁剪只影响本轮注入，库里两行都必须保留
+	var kept int64
+	if err := db.Model(&structs.Traces{}).Where("chat_id = 1").Count(&kept).Error; err != nil {
+		t.Fatalf("count traces: %v", err)
+	}
+	if kept != 2 {
+		t.Errorf("traces must be kept in database, want 2 got %d", kept)
 	}
 }
 

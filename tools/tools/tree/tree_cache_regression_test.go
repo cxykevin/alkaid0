@@ -101,12 +101,17 @@ func TestBuildGlobalPrompt_IncompleteScanNoStaleSnapshot(t *testing.T) {
 
 	// 模拟下一次请求：request 级缓存清空，session 级缓存保留。
 	session.TemporyDataOfRequest = make(map[string]any)
-	prompt, err := buildGlobalPrompt(session)
-	if err != nil {
+	if _, err := buildGlobalPrompt(session); err != nil {
 		t.Fatalf("second buildGlobalPrompt: %v", err)
 	}
+	// 内容块不再由全局 PreHook 返回（改由 trace 层注入），这里取虚拟对象内容源校验：
+	// 扫描不完整时也不能沿用陈旧快照。
+	prompt, ok := TreeContent(session)
+	if !ok {
+		t.Fatal("expected tree content")
+	}
 	if !strings.Contains(prompt, "created.txt") {
-		t.Fatalf("incomplete scan served a stale snapshot: created.txt missing from prompt")
+		t.Fatalf("incomplete scan served a stale snapshot: created.txt missing from content")
 	}
 }
 

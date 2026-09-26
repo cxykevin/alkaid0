@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"strings"
 	"sync"
 	"testing"
 
@@ -584,5 +585,44 @@ func TestUnuseAgent_MissingPrompt(t *testing.T) {
 	}
 	if result == nil || result["error"] == nil {
 		t.Fatal("unuseAgent should return an error result")
+	}
+}
+
+// --- 全局注入块确定性 ---
+
+// TestBuildGlobalPrompt_DeterministicTagOrder 全局注入块必须逐字节确定。
+// Available Agent Tags 来自配置 map，直接 range 会让同一批 tag 每轮以不同顺序渲染，
+// 使 system 之后的前部块字节不稳定 —— 它位于整个对话历史之前，一变后面全部历史都
+// 失去前缀缓存（docs/trace-cache-spec.md §4.6）。
+func TestBuildGlobalPrompt_DeterministicTagOrder(t *testing.T) {
+	db := setupTestDB(t)
+	session := setupTestSession(t, db) // 注意：该 helper 会重置全局配置，必须在它之后再设置 tags
+
+	cfg := *config.GlobalConfig
+	cfg.Agent.Agents = map[string]cfgStruct.AgentConfig{
+		"zeta":  {AgentDescription: "Z agent"},
+		"alpha": {AgentDescription: "A agent"},
+		"mid":   {AgentDescription: "M agent"},
+	}
+	config.GlobalConfigSwap(cfg)
+
+	first, err := buildGlobalPrompt(session)
+	if err != nil {
+		t.Fatalf("buildGlobalPrompt: %v", err)
+	}
+	for i := 0; i < 8; i++ {
+		next, err := buildGlobalPrompt(session)
+		if err != nil {
+			t.Fatalf("buildGlobalPrompt #%d: %v", i+2, err)
+		}
+		if next != first {
+			t.Fatalf("全局注入块必须逐字节确定（第 %d 次构建结果不同）", i+2)
+		}
+	}
+	if strings.Index(first, "alpha") < 0 || strings.Index(first, "zeta") < 0 {
+		t.Fatalf("tags 未渲染进全局块: %q", first)
+	}
+	if strings.Index(first, "alpha") > strings.Index(first, "zeta") {
+		t.Errorf("tags 必须按名字排序渲染，got %q", first)
 	}
 }

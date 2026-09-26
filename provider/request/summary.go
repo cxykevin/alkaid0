@@ -59,46 +59,18 @@ func Summary(ctx context.Context, db *gorm.DB, chatID uint32, agentID string) (s
 	}
 
 	respStr := resp.String()
-	paths, err := build.CollectTracePathsAfter(db, chatID, agentID, msgID)
-	if err != nil {
+
+	// 只写摘要，**不删 trace**（审计优先，docs/trace-cache-spec.md §4.5）。
+	// 压缩边界之前的 trace 不再靠删库收敛，而是在拼接期按"边界后是否有事件"跳过：
+	// DetectTraceEvents 本身就在 summary 处截断扫描，其事件表天然就是活跃集合。
+	if err := db.Model(&storageStructs.Messages{}).
+		Where("id = ?", msgID).
+		Select("summary").
+		Updates(&storageStructs.Messages{Summary: respStr}).Error; err != nil {
+		logger.Error("failed to save summary: %v", err)
 		return respStr, err
 	}
-
-	// 摘要边界和过期 trace 必须在同一事务中提交，避免只写入摘要或只删除 trace。
-	err = db.Transaction(func(tx *gorm.DB) error {
-		if err := tx.Model(&storageStructs.Messages{}).
-			Where("id = ?", msgID).
-			Select("summary").
-			Updates(&storageStructs.Messages{Summary: respStr}).Error; err != nil {
-			return err
-		}
-
-		query := tx.Where("chat_id = ?", chatID)
-		if agentID == "" {
-			query = query.Where("(agent_id = '' OR agent_id IS NULL)")
-		} else {
-			query = query.Where("agent_id = ?", agentID)
-		}
-		var traces []storageStructs.Traces
-		if err := query.Find(&traces).Error; err != nil {
-			return err
-		}
-		for _, traceObj := range traces {
-			if _, keep := paths[traceObj.Path]; keep {
-				continue
-			}
-			if err := tx.Where("chat_id = ? AND path = ? AND agent_id = ?", chatID, traceObj.Path, traceObj.AgentID).
-				Delete(&storageStructs.Traces{}).Error; err != nil {
-				return err
-			}
-		}
-		return nil
-	})
-	if err != nil {
-		logger.Error("failed to save summary and clean traces: %v", err)
-		return respStr, err
-	}
-	logger.Info("summary saved and traces cleaned successfully for chatID=%d", chatID)
+	logger.Info("summary saved for chatID=%d (traces kept, filtered at assembly)", chatID)
 
 	return respStr, nil
 

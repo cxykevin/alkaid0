@@ -4,6 +4,7 @@ import (
 	_ "embed" // embed
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"text/template"
 	"unicode"
@@ -561,7 +562,16 @@ func buildGlobalPrompt(session *structs.Chats) (string, error) {
 		})
 	}
 
-	for name, agent := range agentconfig.GetAgentConfigMap() {
+	// Tag 列表按名字排序后再渲染：配置是 map，直接 range 会让全局注入块每轮
+	// 以不同顺序输出同一批 tag —— 前部块字节不稳定，整段对话历史失去前缀缓存
+	// （docs/trace-cache-spec.md §4.6 确定性要求）。
+	tagNames := make([]string, 0, len(agentconfig.GetAgentConfigMap()))
+	for name := range agentconfig.GetAgentConfigMap() {
+		tagNames = append(tagNames, name)
+	}
+	sort.Strings(tagNames)
+	for _, name := range tagNames {
+		agent := agentconfig.GetAgentConfigMap()[name]
 		tmpl.Tags = append(tmpl.Tags, agentPromptTag{
 			Name:        name,
 			Description: agent.AgentDescription,

@@ -1,6 +1,7 @@
 package trace
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -18,17 +19,25 @@ func TestDecideDiffPlan(t *testing.T) {
 	if _, keep := decideDiffPlan("a.txt", "old\n", "new\n", true, 0.2); keep {
 		t.Error("timeout should be 方案1")
 	}
-	// @temp 临时文件 → 方案1
+	// 内容太短：统一 diff 的固定开销（文件头 + @@ + 上下文行）就会超过 2× 比例上限 → 方案1
 	if _, keep := decideDiffPlan("@temp/x", "old", "new", false, 0.2); keep {
-		t.Error("@temp should be 方案1")
+		t.Error("短内容 + 固定 diff 开销应走方案1（比例上限）")
 	}
-	// 大改动（diff 比原文件长）→ 强制方案1
+	// 大改动（diff 超过 2× 安全阀）→ 方案1
 	var newBig strings.Builder
 	for range 20 {
 		newBig.WriteString("line\n")
 	}
 	if _, keep := decideDiffPlan("a.txt", "one\n", newBig.String(), false, 0.2); keep {
-		t.Error("diff longer than original should force 方案1")
+		t.Error("diff exceeding the 2x cap should force 方案1")
+	}
+	// 比例上限的另一侧：内容够大时同一比例的小改动 diff 占比很低 → 保留
+	var bigOld strings.Builder
+	for i := range 40 {
+		fmt.Fprintf(&bigOld, "long content line %02d with plenty of text\n", i)
+	}
+	if _, keep := decideDiffPlan("a.txt", bigOld.String(), bigOld.String()+"one more line\n", false, 0.2); !keep {
+		t.Error("长内容 + 小增量应保留（diff 占比低）")
 	}
 
 	// 小改动 → 方案2

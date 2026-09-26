@@ -258,13 +258,15 @@ func TestBuildGlobalPrompt_ValidTree(t *testing.T) {
 		TemporyDataOfRequest: make(map[string]any),
 	}
 
-	prompt, err := buildGlobalPrompt(session)
-
-	if err != nil {
+	// 全局 PreHook 不再返回内容（内容改由 trace 层按落位/差分注入），但仍需构建/刷新快照
+	if global, err := buildGlobalPrompt(session); err != nil {
 		t.Fatalf("expected no error, got %v", err)
+	} else if global != "" {
+		t.Fatalf("global prehook must not return the tree block anymore, got %q", global)
 	}
-	if prompt == "" {
-		t.Fatalf("expected non-empty prompt")
+	prompt, ok := TreeContent(session)
+	if !ok || prompt == "" {
+		t.Fatalf("expected non-empty tree content")
 	}
 
 	// 验证缓存被设置
@@ -282,13 +284,14 @@ func TestBuildGlobalPrompt_EmptyRoot(t *testing.T) {
 		TemporyDataOfRequest: make(map[string]any),
 	}
 
-	prompt, err := buildGlobalPrompt(session)
-
-	if err != nil {
+	if global, err := buildGlobalPrompt(session); err != nil {
 		t.Fatalf("expected no error, got %v", err)
+	} else if global != "" {
+		t.Fatalf("global prehook must not return the tree block anymore, got %q", global)
 	}
-	if prompt == "" {
-		t.Fatalf("expected non-empty prompt with default paths")
+	prompt, ok := TreeContent(session)
+	if !ok || prompt == "" {
+		t.Fatalf("expected non-empty tree content with default paths")
 	}
 }
 
