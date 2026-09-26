@@ -1133,6 +1133,174 @@ func TestRequestBody_LongArgsReplayedComplete(t *testing.T) {
 	}
 }
 
+// TestRequestBody_RebuildOmitsSupersededEdits 方案1（放弃 diff 缓存、注入完整内容）之后：
+// 该文件在注入 read 之前的 edit 调用（及其 role:"tool" 结果）不再出现在请求体里；
+// 注入点本身的 read 调用与注入的完整内容块保持不动。
+func TestRequestBody_RebuildOmitsSupersededEdits(t *testing.T) {
+	db := setupTestDB(t)
+	toolsList := []*parser.ToolsDefine{}
+
+	setupTestConfig()
+	cfg := *config.GlobalConfig
+	m := cfg.Model.Models[cfg.Model.DefaultModelID]
+	cfg.Model.Models[cfg.Model.DefaultModelID] = m
+	config.GlobalConfigSwap(cfg)
+
+	msgs := []structs.Messages{
+		{ChatID: 40, Type: structs.MessagesRoleUser, Delta: "edit a.txt"},
+		{ChatID: 40, Type: structs.MessagesRoleAgent, ToolCallingJSONString: `[{"name":"edit","id":"call_e1","parameters":{"path":"a.txt","target":"@all","text":"NEW CONTENT"}}]`},
+		{ChatID: 40, Type: structs.MessagesRoleTool, Delta: `[{"name":"edit","id":"call_e1","return":"{"success":true}"}]`},
+		{ChatID: 40, Type: structs.MessagesRoleUser, Delta: "read a.txt"},
+		{ChatID: 40, Type: structs.MessagesRoleAgent, ToolCallingJSONString: `[{"name":"read","id":"call_r1","parameters":{"path":"a.txt"}}]`},
+		{ChatID: 40, Type: structs.MessagesRoleTool, Delta: `[{"name":"read","id":"call_r1","return":"data"}]`},
+	}
+	for i := range msgs {
+		if err := db.Create(&msgs[i]).Error; err != nil {
+			t.Fatalf("create msg: %v", err)
+		}
+	}
+
+	// 最新事件是 read、最早事件是 edit，没有 diff 计划 → 方案1（注入完整内容）。
+	chatLn := eventTestChatLn(
+		map[string]*structs.TraceEvent{
+			"a.txt": {MsgID: msgs[4].ID, ToolCallID: "call_r1", IsEdit: false},
+		},
+		map[string]trace.FileBlock{
+			"a.txt": {Name: "a.txt", Size: "11", Length: 11, Text: "NEW CONTENT"},
+		},
+	)
+	chatLn.TemporyDataOfSession[structs.TempKeyTracePrevEvents] = map[string]*structs.TraceEvent{
+		"a.txt": {MsgID: msgs[1].ID, ToolCallID: "call_e1", IsEdit: true},
+	}
+
+	req, err := RequestBody(40, 1, "", &toolsList, db, "", "", cfgStruct.AgentConfig{}, chatLn)
+	if err != nil {
+		t.Fatalf("RequestBody failed: %v", err)
+	}
+
+	var hasEditCall, hasEditResult, hasReadCall, hasReadResult, hasBlock bool
+	for _, msg := range req.Messages {
+		if msg.Role == reqStruct.RoleAssistant {
+			for _, tc := range msg.ToolCalls {
+				switch tc.ID {
+				case "call_e1":
+					hasEditCall = true
+				case "call_r1":
+					hasReadCall = true
+				}
+			}
+		}
+		if msg.Role == reqStruct.RoleTool {
+			switch msg.ToolCallID {
+			case "call_e1":
+				hasEditResult = true
+			case "call_r1":
+				hasReadResult = true
+			}
+		}
+		if msg.Role == reqStruct.RoleUser && strings.Contains(msg.Content, `path="a.txt"`) {
+			hasBlock = true
+		}
+	}
+	if hasEditCall || hasEditResult {
+		t.Errorf("方案1 注入完整内容后，注入点之前的 edit 调用应被省略：call=%v result=%v", hasEditCall, hasEditResult)
+	}
+	if !hasReadCall || !hasReadResult {
+		t.Errorf("注入点本身的 read 调用与结果必须保留：call=%v result=%v", hasReadCall, hasReadResult)
+	}
+	if !hasBlock {
+		t.Error("expected injected full content block for a.txt")
+	}
+
+	// 只省略请求体的拼接：数据库行必须原样保留（不删、不改）。
+	var row structs.Messages
+	if err := db.Where("id = ?", msgs[1].ID).First(&row).Error; err != nil {
+		t.Fatalf("reload edit message: %v", err)
+	}
+	if !strings.Contains(row.ToolCallingJSONString, "call_e1") || !strings.Contains(row.ToolCallingJSONString, "NEW CONTENT") {
+		t.Errorf("数据库行不得被请求体省略影响：%q", row.ToolCallingJSONString)
+	}
+
+	// 前端展示（session/resume 从落库参数重建）也必须保持完整内容。
+	var stored []map[string]any
+	if err := json.Unmarshal([]byte(row.ToolCallingJSONString), &stored); err != nil || len(stored) != 1 {
+		t.Fatalf("stored tool call unparsable: %v (%q)", err, row.ToolCallingJSONString)
+	}
+	display := fmt.Sprintf("%v", structs.BuildToolCallingContent("edit", msgs[1].ID, stored[0]["parameters"]))
+	if !strings.Contains(display, "NEW CONTENT") || !strings.Contains(display, "a.txt") {
+		t.Errorf("前端展示必须保留完整参数：%s", display)
+	}
+}
+
+// TestRequestBody_KeepDiffPlanRetainsEdits 方案2（保留缓存 + diff）不得省略 edit 调用：
+// 只有真正放弃缓存、注入完整内容的路径才做省略。
+func TestRequestBody_KeepDiffPlanRetainsEdits(t *testing.T) {
+	db := setupTestDB(t)
+	toolsList := []*parser.ToolsDefine{}
+
+	setupTestConfig()
+	cfg := *config.GlobalConfig
+	m := cfg.Model.Models[cfg.Model.DefaultModelID]
+	cfg.Model.Models[cfg.Model.DefaultModelID] = m
+	config.GlobalConfigSwap(cfg)
+
+	msgs := []structs.Messages{
+		{ChatID: 41, Type: structs.MessagesRoleUser, Delta: "edit a.txt"},
+		{ChatID: 41, Type: structs.MessagesRoleAgent, ToolCallingJSONString: `[{"name":"edit","id":"call_e1","parameters":{"path":"a.txt","target":"@all","text":"NEW CONTENT"}}]`},
+		{ChatID: 41, Type: structs.MessagesRoleTool, Delta: `[{"name":"edit","id":"call_e1","return":"{"success":true}"}]`},
+		{ChatID: 41, Type: structs.MessagesRoleUser, Delta: "read a.txt"},
+		{ChatID: 41, Type: structs.MessagesRoleAgent, ToolCallingJSONString: `[{"name":"read","id":"call_r1","parameters":{"path":"a.txt"}}]`},
+		{ChatID: 41, Type: structs.MessagesRoleTool, Delta: `[{"name":"read","id":"call_r1","return":"data"}]`},
+	}
+	for i := range msgs {
+		if err := db.Create(&msgs[i]).Error; err != nil {
+			t.Fatalf("create msg: %v", err)
+		}
+	}
+
+	chatLn := eventTestChatLn(
+		map[string]*structs.TraceEvent{
+			"a.txt": {MsgID: msgs[4].ID, ToolCallID: "call_r1", IsEdit: false},
+		},
+		map[string]trace.FileBlock{
+			"a.txt": {Name: "a.txt", Size: "11", Length: 11, Text: "NEW CONTENT"},
+		},
+	)
+	chatLn.TemporyDataOfSession[structs.TempKeyTracePrevEvents] = map[string]*structs.TraceEvent{
+		"a.txt": {MsgID: msgs[1].ID, ToolCallID: "call_e1", IsEdit: true},
+	}
+	// 方案2：保留旧块 + diff（此处 token 计数为 0，软条件必然成立）。
+	chatLn.TemporyDataOfSession[structs.TempKeyTraceDiffPlan] = map[string]trace.DiffPlan{
+		"a.txt": {
+			Keep:      true,
+			OldBlock:  trace.FileBlock{Name: "a.txt", Size: "3", Length: 3, Text: "OLD"},
+			DiffBlock: trace.FileBlock{Name: "a.txt", Size: "9", Length: 9, Text: "-OLD+NEW", Type: "diff"},
+		},
+	}
+
+	req, err := RequestBody(41, 1, "", &toolsList, db, "", "", cfgStruct.AgentConfig{}, chatLn)
+	if err != nil {
+		t.Fatalf("RequestBody failed: %v", err)
+	}
+
+	hasEditCall, hasEditResult := false, false
+	for _, msg := range req.Messages {
+		if msg.Role == reqStruct.RoleAssistant {
+			for _, tc := range msg.ToolCalls {
+				if tc.ID == "call_e1" {
+					hasEditCall = true
+				}
+			}
+		}
+		if msg.Role == reqStruct.RoleTool && msg.ToolCallID == "call_e1" {
+			hasEditResult = true
+		}
+	}
+	if !hasEditCall || !hasEditResult {
+		t.Errorf("方案2 保留缓存时不应省略 edit 调用：call=%v result=%v", hasEditCall, hasEditResult)
+	}
+}
+
 // eventTestChatLn 构造带事件映射与内容块的 chatLn（模拟 DetectTraceEvents + PreHook 分区的结果）。
 func eventTestChatLn(events map[string]*structs.TraceEvent, fileBlocks map[string]trace.FileBlock) *structs.Chats {
 	return &structs.Chats{

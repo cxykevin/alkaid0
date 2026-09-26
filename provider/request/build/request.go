@@ -386,7 +386,11 @@ scan:
 		if em, ok := chatLn.TemporyDataOfSession[structs.TempKeyTraceEvents].(map[string]*structs.TraceEvent); ok && len(em) > 0 {
 			prevEm, _ := chatLn.TemporyDataOfSession[structs.TempKeyTracePrevEvents].(map[string]*structs.TraceEvent)
 			diffPlans, _ := chatLn.TemporyDataOfSession[structs.TempKeyTraceDiffPlan].(map[string]trace.DiffPlan)
-			fallbackTop = insertEventContentBlocks(responseDeltaList, dbIDToElement, em, prevEm, diffPlans, chatLn)
+			var rebuilt map[string]*structs.TraceEvent
+			fallbackTop, rebuilt = insertEventContentBlocks(responseDeltaList, dbIDToElement, em, prevEm, diffPlans, chatLn)
+			// 方案1（放弃 diff 缓存、注入完整内容）之后，该文件在注入点之前的 edit 调用
+			// 已被完整内容覆盖，从请求体里去掉（连同其结果）。
+			omitSupersededEditCalls(responseDeltaList, dbIDToElement, rebuilt)
 		}
 	}
 	if addUserPrompt != "" || fallbackTop != "" {
@@ -709,12 +713,19 @@ type eventInsertGroup struct {
 // insertEventContentBlocks 按事件把 trace/@task 内容块插入历史（紧跟最近 read/edit 事件之后），
 // 返回不可锚定事件的顶部 fallback 内容（独立 user 消息，插在 addUserPrompt 之后）。
 // 内容块在 PreHook 阶段已渲染并暂存于 chatLn.TemporyDataOfSession，此处只做拼装插入，不重复读盘。
+//
+// 第二个返回值是「方案1 实际注入完整内容」的 read 事件（path → 事件）：调用方据此省略该文件
+// 在注入点之前的 edit 调用（见 omitSupersededEditCalls）。
 func insertEventContentBlocks(l *list.List, dbIDToElement map[uint64]*list.Element,
-	eventMap, prevMap map[string]*structs.TraceEvent, diffPlans map[string]trace.DiffPlan, chatLn *structs.Chats) string {
+	eventMap, prevMap map[string]*structs.TraceEvent, diffPlans map[string]trace.DiffPlan, chatLn *structs.Chats) (string, map[string]*structs.TraceEvent) {
 
 	fileBlocks, _ := chatLn.TemporyDataOfSession[structs.TempKeyTraceFileBlocks].(map[string]trace.FileBlock)
 	taskBlock, _ := chatLn.TemporyDataOfSession[structs.TempKeyTaskEventBlock].(string)
 
+	// 方案1 候选：最新事件是 read 的文件（随后会把完整内容块放进请求体）。
+	candidates := make(map[string]*structs.TraceEvent)
+	// 实际渲染出文件内容块的 path（渲染失败/块缺失时不能算注入成功）。
+	rendered := make(map[string]struct{})
 	groups := make(map[uint64]*eventInsertGroup)
 	fallbackPaths := make([]string, 0)
 	for path, ev := range eventMap {
@@ -744,6 +755,11 @@ func insertEventContentBlocks(l *list.List, dbIDToElement map[uint64]*list.Eleme
 				// 方案2在上方未能实际插入，下面将发送完整当前块；同步完整块缓存基线。
 				trace.AdvanceTraceCache(chatLn, path)
 			}
+			// 缓存被放弃（方案1）且最新事件是 read：完整内容即将注入，
+			// 该文件在注入点之前的 edit 调用随后会被省略。
+			if !ev.IsEdit {
+				candidates[path] = ev
+			}
 		} else if taskBlock == "" {
 			continue
 		}
@@ -764,6 +780,7 @@ func insertEventContentBlocks(l *list.List, dbIDToElement map[uint64]*list.Eleme
 	for _, g := range groups {
 		sort.Strings(g.paths)
 		var frags []trace.FileBlock
+		var contributed []string
 		var extra strings.Builder
 		for _, p := range g.paths {
 			if p == "@task" {
@@ -771,13 +788,20 @@ func insertEventContentBlocks(l *list.List, dbIDToElement map[uint64]*list.Eleme
 				extra.WriteString("\n\n")
 			} else if fb, ok := fileBlocks[p]; ok {
 				frags = append(frags, fb)
+				contributed = append(contributed, p)
 			}
 		}
-		content, err := trace.RenderTraceBlock(frags)
+		fragContent, err := trace.RenderTraceBlock(frags)
 		if err != nil {
 			logger.Error("render trace event block error: %v", err)
-			content = ""
+			fragContent = ""
 		}
+		if fragContent != "" {
+			for _, p := range contributed {
+				rendered[p] = struct{}{}
+			}
+		}
+		content := fragContent
 		if content != "" && extra.Len() > 0 {
 			content += "\n\n"
 		}
@@ -798,12 +822,95 @@ func insertEventContentBlocks(l *list.List, dbIDToElement map[uint64]*list.Eleme
 			continue
 		}
 		if blk, ok := fileBlocks[p]; ok {
-			if s, err := trace.RenderTraceBlock([]trace.FileBlock{blk}); err == nil {
+			if s, err := trace.RenderTraceBlock([]trace.FileBlock{blk}); err == nil && s != "" {
 				fb = append(fb, s)
+				rendered[p] = struct{}{}
 			}
 		}
 	}
-	return strings.Join(fb, "\n\n")
+	rebuilt := make(map[string]*structs.TraceEvent)
+	for p, ev := range candidates {
+		if _, ok := rendered[p]; ok {
+			rebuilt[p] = ev
+		}
+	}
+	return strings.Join(fb, "\n\n"), rebuilt
+}
+
+// omitSupersededEditCalls 在「方案1：放弃 diff 缓存、注入完整内容」发生后，把该文件在注入事件
+// 之前的所有 edit 调用连同其 role:"tool" 结果从请求体里去掉：注入的完整块已经代表文件当前内容，
+// 逐次 edit 的参数（尤其是整文件 text）纯属重复占用上下文。
+//
+// rebuilt 由 insertEventContentBlocks 返回（path → 注入完整内容的 read 事件）。
+// 只处理确实进入本次回放窗口的消息（dbIDToElement 里有的），且只省略注入点之前（dbID 更小）的调用；
+// 注入点及其之后的 edit 保持回放。整个 assistant 轮次只剩被省略的调用时，连该消息一起移除。
+func omitSupersededEditCalls(l *list.List, dbIDToElement map[uint64]*list.Element, rebuilt map[string]*structs.TraceEvent) {
+	if len(rebuilt) == 0 {
+		return
+	}
+	omitted := make(map[string]struct{})
+	var emptied []*list.Element
+	for dbID, el := range dbIDToElement {
+		if el == nil {
+			continue
+		}
+		m, ok := el.Value.(reqStruct.Message)
+		if !ok || len(m.ToolCalls) == 0 {
+			continue
+		}
+		kept := make([]reqStruct.StreamToolCall, 0, len(m.ToolCalls))
+		removed := false
+		for _, c := range m.ToolCalls {
+			if c.ID != "" && c.Function != nil && c.Function.Name == "edit" {
+				if ev, ok := rebuilt[toolCallArgumentPath(c.Function.Arguments)]; ok && dbID < ev.MsgID {
+					omitted[c.ID] = struct{}{}
+					removed = true
+					continue
+				}
+			}
+			kept = append(kept, c)
+		}
+		if !removed {
+			continue
+		}
+		m.ToolCalls = kept
+		// 与回放时的空 assistant 判定保持一致：没有任何可展示内容时整条消息移除。
+		if len(m.ToolCalls) == 0 && m.Content == "" && (m.ReasoningContent == nil || *m.ReasoningContent == "") {
+			emptied = append(emptied, el)
+			continue
+		}
+		el.Value = m
+	}
+	for _, el := range emptied {
+		l.Remove(el)
+	}
+	if len(omitted) == 0 {
+		return
+	}
+	// 结果消息（含被终止调用的占位）按 tool_call_id 删除，保证 assistant 的每个 tool_call 仍有配对的 role:tool。
+	for e := l.Front(); e != nil; {
+		next := e.Next()
+		if m, ok := e.Value.(reqStruct.Message); ok && m.Role == reqStruct.RoleTool {
+			if _, hit := omitted[m.ToolCallID]; hit {
+				l.Remove(e)
+			}
+		}
+		e = next
+	}
+}
+
+// toolCallArgumentPath 从回放后的工具调用 arguments JSON 里取 path 参数；取不到返回空串。
+// 只用于判断 edit 作用于哪个文件（参数已是完整回放，不存在省略占位符）。
+func toolCallArgumentPath(arguments string) string {
+	if arguments == "" {
+		return ""
+	}
+	var m map[string]any
+	if err := json.Unmarshal([]byte(arguments), &m); err != nil {
+		return ""
+	}
+	p, _ := m["path"].(string)
+	return p
 }
 
 // findEventAnchor 返回事件内容块的插入锚点（内容块插到该元素之后）。
