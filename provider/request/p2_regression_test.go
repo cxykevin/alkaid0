@@ -29,9 +29,25 @@ func requestSystemContains(req structs.ChatCompletionRequest, text string) bool 
 	return false
 }
 
+// requestContainsAnywhere 判断请求体的任意消息（system / user / tool）中是否包含指定文本。
+// 运行期内部通知（后台任务结束 / shell 停止等）现在注入**消息列表末尾**的独立块，
+// 而不是 system 消息——system 消息排在 tools 之后，任何一次通知变动都会把 tools
+// 之后的整个前缀（含全部历史）打掉，前缀缓存命中率会掉到 tools 前缀大小。
+// 因此"通知是否随请求发出"要按整份请求体判断，"不许进 system"另行断言。
+func requestContainsAnywhere(req structs.ChatCompletionRequest, text string) bool {
+	for _, m := range req.Messages {
+		if strings.Contains(m.Content, text) {
+			return true
+		}
+	}
+	return false
+}
+
 // TestSendRequest_RetryKeepsQueuedSystemNotice 复现 P2-1：首次请求失败后 ui/loop 会
 // 重新调用 SendRequest，重试请求必须仍带着排队的 system 通知。
 // 此前 build.Build 在构建时就把 session.SystemPrompt 清空，重试请求不再包含通知。
+// 通知的**落位**随后改为消息列表末尾（缓存优化，见 build.RequestBody 的注释），
+// 但"重试不丢通知"这一契约不变：两次请求都必须带着它，且都不许塞进 system 消息。
 func TestSendRequest_RetryKeepsQueuedSystemNotice(t *testing.T) {
 	initAgentsConsumer()
 
@@ -96,8 +112,11 @@ func TestSendRequest_RetryKeepsQueuedSystemNotice(t *testing.T) {
 		t.Fatalf("期望 2 次请求，实际 %d 次", len(bodies))
 	}
 	for i, b := range bodies {
-		if !requestSystemContains(b, "background shell") {
-			t.Errorf("第 %d 次请求的 system 提示词丢失了排队的 system 通知（重试丢失）", i+1)
+		if !requestContainsAnywhere(b, "background shell") {
+			t.Errorf("第 %d 次请求丢失了排队的 system 通知（重试丢失）", i+1)
+		}
+		if requestSystemContains(b, "background shell") {
+			t.Errorf("第 %d 次请求把运行期通知放进了 system 消息：会打掉 tools 之后的整个前缀缓存", i+1)
 		}
 	}
 }
