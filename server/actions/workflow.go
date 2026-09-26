@@ -56,7 +56,8 @@ func persistWorkflowEvent(sessionID, runID string, ev runTool.WorkflowEvent) {
 	key := workflowRunKey(chatID, runID)
 	var row structs.Workflows
 	if db.Where("chat_id = ? AND run_id IN ?", chatID, workflowStoredRunIDs(chatID, runID)).First(&row).Error != nil {
-		row = structs.Workflows{WorkflowID: runID, ChatID: chatID, RunID: key, TerminalID: runID, Status: "running", CreatedAt: time.Now().UTC()}
+		now := time.Now().UTC()
+		row = structs.Workflows{WorkflowID: runID, ChatID: chatID, RunID: key, TerminalID: runID, Status: "running", CreatedAt: now, StartedAt: &now}
 		_ = db.Create(&row).Error
 	}
 	row.LastSequence++
@@ -93,11 +94,8 @@ func intValue(v any) int {
 	return 0
 }
 
-func broadcastWorkflowEvent(sessionID, runID string, event any) {
-	ev, ok := event.(runTool.WorkflowEvent)
-	if !ok {
-		return
-	}
+// broadcastWorkflowEvent 落库并广播一条 workflow 事件（由会话队列的 worker 顺序调用）。
+func broadcastWorkflowEvent(sessionID, runID string, ev runTool.WorkflowEvent) {
 	if ev.Type == "" {
 		return
 	}
@@ -120,19 +118,6 @@ func broadcastWorkflowEvent(sessionID, runID string, event any) {
 		logger.Warn("workflow event broadcast failed: %v", err)
 	}
 	_ = json.Valid(ev.Raw)
-}
-
-func workflowMethodType(method string) (string, bool) {
-	const prefix = "alk.cxykevin.top/session/terminal/workflow/"
-	if !strings.HasPrefix(method, prefix) {
-		return "", false
-	}
-	typ := strings.TrimPrefix(method, prefix)
-	switch typ {
-	case "status", "input", "stop", "list":
-		return typ, true
-	}
-	return "", false
 }
 
 type SessionWorkflowRequest struct {
@@ -183,6 +168,19 @@ func workflowJob(req SessionWorkflowRequest) (*runTool.Job, error) {
 	}
 	if job.SessionID != id || job.BackgroundKind != "workflow" {
 		return nil, fmt.Errorf("run does not belong to session")
+	}
+	return job, nil
+}
+
+// activeWorkflowJob 校验 runId 指向该会话**正在运行**的 workflow 终端：
+// workflow/input 与 workflow/stop 只允许活动 workflow（见 docs/acp/extension.md §3.2）。
+func activeWorkflowJob(req SessionWorkflowRequest) (*runTool.Job, error) {
+	job, err := workflowJob(req)
+	if err != nil {
+		return nil, err
+	}
+	if job.Status() != runTool.JobRunning {
+		return nil, fmt.Errorf("workflow run %s is not active", req.RunID)
 	}
 	return job, nil
 }
@@ -248,7 +246,7 @@ func SessionWorkflowStatus(req SessionWorkflowRequest, _ func(string, any, *stri
 }
 
 func SessionWorkflowInput(req SessionWorkflowInputRequest, _ func(string, any, *string) error, _ uint64) (SessionWorkflowInputResponse, error) {
-	job, err := workflowJob(SessionWorkflowRequest{SessionID: req.SessionID, RunID: req.RunID})
+	job, err := activeWorkflowJob(SessionWorkflowRequest{SessionID: req.SessionID, RunID: req.RunID})
 	if err != nil {
 		return SessionWorkflowInputResponse{}, err
 	}
@@ -277,13 +275,25 @@ func SessionWorkflowInput(req SessionWorkflowInputRequest, _ func(string, any, *
 }
 
 func SessionWorkflowStop(req SessionWorkflowRequest, _ func(string, any, *string) error, _ uint64) (SessionWorkflowInputResponse, error) {
-	job, err := workflowJob(req)
+	job, err := activeWorkflowJob(req)
 	if err != nil {
 		return SessionWorkflowInputResponse{}, err
 	}
 	raw := []byte("{\"cmd\":\"shutdown\"}\n")
 	if err := job.WriteStdin(raw); err != nil {
-		return SessionWorkflowInputResponse{}, err
+		// 优雅关闭写不进 stdin（管道已关闭/写失败）时复用 terminal 的 kill 路径
+		// 强制终止，与终端强制终止语义一致；kill 失败（例如任务刚好结束）返回该错误。
+		id, verr := validateTerminalSession(req.SessionID)
+		if verr != nil {
+			return SessionWorkflowInputResponse{}, verr
+		}
+		workspace, werr := sessionWorkspaceOf(req.SessionID)
+		if werr != nil {
+			return SessionWorkflowInputResponse{}, werr
+		}
+		if kerr := runTool.Default.Stop(id, workspace, req.RunID); kerr != nil {
+			return SessionWorkflowInputResponse{}, workflowError(req.RunID, kerr)
+		}
 	}
 	return SessionWorkflowInputResponse{Accepted: true, RunID: req.RunID}, nil
 }
@@ -433,6 +443,67 @@ func broadcastWorkflowSnapshot(sessionID string, chatID uint32, cwd, runID strin
 	}
 	if err := broadcastSessionUpdate(sessionID, SessionUpdate{SessionID: sessionID, Update: workflowSnapshotNotification(sessionID, runID, snap)}, 0); err != nil {
 		logger.Warn("broadcast workflow snapshot failed: %v", err)
+	}
+}
+
+// applyWorkflowFinalize 把 workflow 终态实时写入持久化记录：status 与终端状态
+// 同源（running/finished/killed），同时落 finished_at；失败时写 error，结果按
+// 统一的终端内容路径（@temp/run/<n>）写 result_path。由会话队列的 worker 顺序
+// 调用，保证排在全部事件之后。
+func applyWorkflowFinalize(sessionID, runID string, fin *workflowFinalize) {
+	if fin == nil || fin.status == "" {
+		return
+	}
+	cwd, chatID, err := sessionID2Cwd(sessionID)
+	if err != nil {
+		return
+	}
+	db, err := loadDB(cwd)
+	if err != nil {
+		return
+	}
+	defer closeDB(cwd)
+	now := time.Now().UTC()
+	updates := map[string]any{
+		"status":      fin.status,
+		"finished_at": now,
+		"updated_at":  now,
+		"result_path": runID,
+	}
+	if fin.result != nil && !fin.result.Success {
+		msg := strings.TrimSpace(fin.result.ErrString)
+		if msg == "" {
+			msg = "workflow failed"
+		}
+		updates["error"] = msg
+	}
+	if err := db.Model(&structs.Workflows{}).Where("chat_id = ? AND run_id IN ?", chatID, workflowStoredRunIDs(chatID, runID)).Updates(updates).Error; err != nil {
+		logger.Warn("persist workflow final state failed: %v", err)
+		return
+	}
+	broadcastWorkflowFinalSnapshot(sessionID, cwd, chatID, runID)
+}
+
+// broadcastWorkflowFinalSnapshot 终态落库后广播一次快照。终态变化不改变
+// lastSequence，序号去重会把它挡掉，因此这里强制推送。
+func broadcastWorkflowFinalSnapshot(sessionID, cwd string, chatID uint32, runID string) {
+	sessLock.Lock()
+	obj := sessions[sessionID]
+	sessLock.Unlock()
+	if obj == nil {
+		return
+	}
+	workspace, err := sessionWorkspaceOf(sessionID)
+	if err != nil {
+		return
+	}
+	job := runTool.Default.Status(workspace, runID)
+	snap, ok := loadWorkflowSnapshot(sessionID, cwd, chatID, runID, job)
+	if !ok {
+		return
+	}
+	if err := broadcastSessionUpdate(sessionID, SessionUpdate{SessionID: sessionID, Update: workflowSnapshotNotification(sessionID, runID, snap)}, 0); err != nil {
+		logger.Warn("broadcast workflow final snapshot failed: %v", err)
 	}
 }
 

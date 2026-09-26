@@ -16,7 +16,7 @@ import dynworkflow as d
 flow = d.Flow("workflow-id")
 ```
 
-The positional argument is the workflow ID. Agent connectivity is resolved by the runtime configuration.
+The positional argument is the workflow ID. Agent connectivity is resolved by the runtime configuration; under Alkaid0 the runtime injects the ACP connection automatically, so do not hard-code agent endpoints or keys.
 
 ## Define Nodes
 

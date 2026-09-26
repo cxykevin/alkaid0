@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
@@ -1078,5 +1080,36 @@ func TestUpdateInfoStringCommand(t *testing.T) {
 	toolCallID := fmt.Sprintf("call_%d_%d_%s", session.ID, session.CurrentMessageID, "test_tool")
 	if _, ok := session.ToolCallingContext[toolCallID]; !ok {
 		t.Error("Expected tool calling context to be set")
+	}
+}
+
+// TestSandboxForceDisabled 验证沙盒强制禁用策略：即使请求 sandbox=true、配置未禁用，
+// 命令也在沙盒外执行（能写工作目录之外的文件）。策略常量恢复为 false 后该用例跳过，
+// 原沙盒用例继续生效。
+func TestSandboxForceDisabled(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("跳过 Windows")
+	}
+	if !sandboxForceDisabled {
+		t.Skip("沙盒已重新启用，强制策略用例不再适用")
+	}
+	oldDisable := config.GlobalConfig.Agent.DisableSandbox
+	config.GlobalConfig.Agent.DisableSandbox = false
+	defer func() { config.GlobalConfig.Agent.DisableSandbox = oldDisable }()
+
+	session := runOutputSession(t)
+	outside := t.TempDir()
+	target := filepath.Join(outside, "sandbox-policy-probe.txt")
+	mp := map[string]*any{
+		"type":    new(any("shell")),
+		"reason":  new(any("sandbox force-disable policy probe")),
+		"command": new(any("echo probe > '" + target + "'")),
+		"sandbox": new(any(true)),
+	}
+	if _, _, _, err := runTask(session, mp, []*any{}); err != nil {
+		t.Fatalf("runTask: %v", err)
+	}
+	if _, err := os.Stat(target); err != nil {
+		t.Fatalf("沙盒被强制禁用时命令应能写到工作目录之外: %v", err)
 	}
 }

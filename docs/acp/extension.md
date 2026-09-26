@@ -239,19 +239,48 @@ alkaid0 现在遵循 ACP v2 标准事件，且字段置于 update 对象**顶层
 
 ### 3.2. dynworkflow stdout 与 workflow 私有方法
 
-只有 `run` 工具的 `type: "python"` 可以触发 workflow。Python 源码包含 `import dynworkflow`、`import dynworkflow as ...` 或 `from dynworkflow import ...` 时，服务端强制将任务后台化，并注入 `ALKAID0_WORKFLOW_REPORT=1` 和会话标识。不会注册 workflow/start 方法。
+只有 `run` 工具的 `type: "python"` 可以触发 workflow。Python 源码包含 dynworkflow 导入语句时（`import dynworkflow[.x]`、`import os, dynworkflow`、`import os; import dynworkflow`、`import dynworkflow as ...`、`from dynworkflow import ...`；注释中的同名文本不匹配），服务端强制将任务后台化，并注入：
+
+- `ALKAID0_WORKFLOW_REPORT=1`：开启 stdout JSONL 状态上报；
+- `ALKAID0_WORKFLOW_SESSION_ID=<chatId>`：会话作用域（缓存隔离）；
+- `ALKAID0_WORKFLOW_CONN_INFO=<ws URL>`：dynworkflow `AgentClient` 的连接信息，指向本机 WebSocket ACP 服务端（`ws://<host>:<port><path>`，`0.0.0.0`/`::` 等通配地址改写为 `127.0.0.1`，`key` 非空时附加 `?key=<key>`），工作流代码无需硬编码地址与 key。沙盒当前在所有平台被强制禁用（临时策略，后续版本恢复），因此工作流不受沙盒网络限制；恢复后 macOS seatbelt 默认禁网会让沙盒内的工作流建立不了该连接，Linux/Windows 沙盒不限制回环网络。
+
+不会注册 workflow/start 方法。
 
 Python run 的 `runId` 是 workflow 的唯一关联标识，同时绑定 Job、terminal、tool call、数据库记录和控制通道。只有已由该 Python run 的合法 stdout 事件登记的 runId 才能使用 workflow 控制协议。
 
+#### workflow 会话的隐藏标记
+
+dynworkflow 在 `session/new` 创建 Agent 会话时，按 alkaid0 的根级扩展约定在 params 顶层携带 `"dyn.cxykevin.top/hidden": true`。服务端同时接受 params 根级与 `params.args` 内两种位置：值为布尔 `true` 时新建会话被标记为隐藏（不出现在 `session/list`）；其他类型按未设置处理，不会导致 `session/new` 解码失败。
+
 #### stdout 握手与过滤
 
-`Flow.run()` 的 stdout 使用 bracketed-paste 握手：开始标记为 `\u001b[?2004h`，结束标记为 `\u001b[?2004l`。握手帧内每行是一个 JSONL 事件。服务端按增量数据解析，因此标记可以跨 read 分片。握手标记与帧内 JSON 从 terminal 输出中剔除；帧内无法解析为协议事件的行，以及超过缓冲上限（1 MiB）的异常帧内容，会作为普通终端输出返回而不是静默丢弃（避免命令崩溃在帧中途时整段输出消失）。帧外普通 stdout 和 stderr 仍作为终端输出。
+`Flow.run()` 的 stdout 使用 bracketed-paste 握手：开始标记为 `\u001b[?2004h`，结束标记为 `\u001b[?2004l`。握手帧内每行是一个 JSONL 事件。服务端按增量数据解析，因此标记可以跨 read 分片。握手标记与帧内 JSON 从 terminal 输出中剔除；帧内无法解析为协议事件的行，以及超过缓冲上限（1 MiB）的异常帧内容，会作为普通终端输出返回而不是静默丢弃（避免命令崩溃在帧中途时整段输出消失）。帧外普通 stdout 和 stderr 仍作为终端输出。`Flow.run()` 还会在启动时输出一行 `\u001e dynworkflow \u001f` 运行标记；服务端在未成帧的普通输出中识别并把该行整行剔除（标记与行尾换行可跨 read 分片）。该标记不参与 workflow 判定——判定只依据上面的源码检测。
 
 #### 事件更新
 
-workflow 事件按 runId 持久化完整 graph、当前 node/agent 状态和有序事件日志，并广播为以下顶层 `session/update`：`alk.cxykevin.top/session/terminal/workflow/update_graph`、`update_node`、`update_agents_start`、`update_agent`、`update_node_code`、`update_node_log`。公共字段 `sessionId`、`runId`、`sessionUpdate`、`eventType`、`time`、`workflow` 以及事件字段直接放在 `update` 顶层，不放 `_meta` 或 `body`。graph 是完整快照，其余事件是增量更新。
+workflow 事件按 runId 持久化完整 graph、当前 node/agent 状态和有序事件日志，并广播为以下顶层 `session/update`：`alk.cxykevin.top/session/terminal/workflow/update_graph`、`update_node`、`update_node_result`、`update_agents_start`、`update_agent`、`update_node_code`、`update_node_log`。公共字段 `sessionId`、`runId`、`sessionUpdate`、`eventType`、`time`、`workflow` 以及事件字段直接放在 `update` 顶层，不放 `_meta` 或 `body`。graph 是完整快照，其余事件是增量更新。`node_result` 携带节点 `Result(value)` 的终值（缓存命中重放同样上报），需要 dynworkflow ≥ 0.1.3；`graph.nodes[].name` 是 `@flow.node("...")` 的显示名。
 
 持久化查询不依赖客户端断线恢复：客户端需要状态时直接调用 status，从数据库读取最新快照和完整事件日志。服务端不保证通过 resume 重放 workflow 事件。
+
+#### workflow 视图（read `@temp/run/<n>`）
+
+workflow 终端的临时对象内容不是原始 stdout，而是按事件流渲染的节点视图（终端内容与推送仍是原始输出）：
+
+```
+{id1}->{id2}
+{id2}->{id3}
+- [ ] {id}: {NodeName}
+  {logs}
+  Result: {result}
+```
+
+- 前若干行是节点图的 mermaid 边（按 graph 中的节点/边顺序，去掉重复边）；
+- 每个节点一行：未运行为 `[ ]`、运行中为 `[-]`、结束（done/error/terminated）为 `[X]`；`{id}` 是节点函数名，`{NodeName}` 是显示名（dynworkflow < 0.1.3 时回退到节点启动事件 `node_code.name`）；
+- 该节点的 `node_log` 逐行缩进两格；有 `node_result` 时追加 `Result: {value}`（字符串原样，其余为紧凑 JSON）；
+- 视图之后用 `----- raw output -----` 分隔并附加原始 stdout/stderr（Python traceback 等仍可见）。
+
+视图尚未收到 `graph` 时（workflow 启动阶段）临时对象仍是原始输出，与 terminal 一致。内存与落盘均有上界：每节点保留最近 100 行日志（超出以 `(earlier log lines omitted)` 提示），视图与附加原始输出合计不超过 1900 行——临时对象只保留末尾 2000 行，超过会把视图顶部截掉。
 
 #### workflow 控制与查询方法
 
@@ -262,7 +291,7 @@ workflow 事件按 runId 持久化完整 graph、当前 node/agent 状态和有�
 - `alk.cxykevin.top/session/terminal/workflow/stop`：写入 shutdown，必要时复用 terminal kill 强制终止；操作幂等。
 - `alk.cxykevin.top/session/terminal/workflow/list`：请求 `{ "sessionId": string }`，返回当前会话 workflow 列表。
 
-所有方法执行 session、runId 和 terminal 所有权校验。shell、sleep、wait 和普通 Python run 不能作为 workflow 控制目标。input/stop 仅允许活动 workflow，status/list 可读取已结束记录。
+所有方法执行 session、runId 和 terminal 所有权校验。shell、sleep、wait 和普通 Python run 不能作为 workflow 控制目标。input/stop 仅允许活动 workflow，status/list 可读取已结束记录；对已结束的 workflow 调用 input/stop 返回错误（stop 的幂等性只体现在对运行中的 workflow 重复发送 shutdown）。`workflow/stop` 先写入 shutdown，写入失败（stdin 已关闭或写失败）时复用 terminal 的 kill 路径强制终止。
 
 #### 快照通知 `alk.cxykevin.top/session/terminal/workflow/snapshot`
 
@@ -278,6 +307,8 @@ workflow 事件按 runId 持久化完整 graph、当前 node/agent 状态和有�
 #### 数据库
 
 服务端通过 AutoMigrate 保存 `Workflows` 和 `WorkflowEvents`：前者保存 runId、workflowId、ChatID、TerminalID、状态、时间、最新 graph、当前 node/agent 状态和最后日志序号；后者按 runId 和 sequence 保存结构化事件及 payload，用于 status 查询。查询优先使用数据库中的持久化状态；workflow 仍在内存运行时，仅用活动 Job 状态覆盖返回的状态字段。
+
+状态随 job 实时落库：首个事件建行时写 `status="running"` 与 `started_at`；终端结束（正常结束、失败、被 kill、进程 panic 均包含）时立刻写终态 `finished`/`killed`（与终端状态同源）与 `finished_at`，失败时写 `error`，并写 `result_path`（统一终端内容路径 `@temp/run/<n>`）。终态落库后强制广播一次快照：终态不改变 `lastSequence`，按序号去重会把它挡掉。事件与终态的落库/广播在会话级有序队列中异步执行：Python stdout 拷贝协程只入队，不等待数据库与网络；队列满时丢弃并告警，避免反压工作流输出。
 
 ### 3.3. `session/resume` 与 `replayFrom`
 

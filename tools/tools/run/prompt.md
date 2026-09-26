@@ -15,7 +15,7 @@ Workflow usage:
 - `reason` (string, required): A short reason for the operation (20 words or fewer).
 - `command` (string, required): The shell command for `shell`, an integer number of seconds for `sleep`, the `run_id` returned by a background run for `wait`, or complete Python source code for `python`.
 - `timeout` (number, optional): For `shell` and `python`. Defaults to 60 seconds for foreground runs. Foreground values must be less than 300 seconds; a background run defaults to no timeout. A non-positive foreground value falls back to 60 seconds.
-- `sandbox` (boolean, optional): For `shell` and `python`; defaults to `true`. The effective setting can still be restricted by project configuration or platform support.
+- `sandbox` (boolean, optional): For `shell` and `python`; defaults to `true`. The sandbox is currently force-disabled on all platforms by runtime policy, so this parameter has no effect: commands always run unsandboxed until the sandbox is re-enabled in a later release.
 - `background` (boolean, optional): For `shell` and `python`; defaults to `false`. When true, return immediately with a `run_id` and update its temporary result while the command runs.
 
 #### Types
@@ -28,13 +28,13 @@ Workflow usage:
 
 #### Background jobs
 
-Set `background: true` for a command that may outlive the current request. Interactive shell commands that remain blocked for 10 seconds are automatically promoted to background and return a `run_id`/`@temp` path. Use `wait` when you need a definitive completion or failure result; use `read` to inspect progress without waiting — the temporary object is refreshed with the command's live output while it runs (about twice per second), so partial results are visible before it finishes. Do not infer completion from elapsed time or repeat the same command. Background jobs may continue after the session stops and are governed by their timeout and process lifecycle. Stop a job that is no longer needed with `kill` (or the terminal stop control) instead of starting another one.
+Set `background: true` for a command that may outlive the current request. Interactive shell commands that remain blocked for 10 seconds are automatically promoted to background and return a `run_id`/`@temp` path. Use `wait` when you need a definitive completion or failure result; use `read` to inspect progress without waiting — the temporary object is refreshed with the command's live output while it runs (about twice per second), so partial results are visible before it finishes. Do not infer completion from elapsed time or repeat the same command. Background jobs may continue after the session stops and are governed by their timeout and process lifecycle. Stop a job that is no longer needed with `kill` (or the terminal stop control) instead of starting another one. A workflow run (Python importing dynworkflow) refreshes its temporary object with a rendered node view — mermaid edges, per-node status boxes, indented node logs and `Result:` values — followed by the raw output after a `----- raw output -----` separator; read that view to follow workflow progress.
 
 #### Safety and scope
 
 - Do not use `run` as a substitute for a dedicated tool.
 - Review commands before execution. Avoid destructive or externally visible commands unless the user has authorized them; do not expose credentials in commands or output.
-- Prefer sandboxed execution. Disable the sandbox only when the operation genuinely requires it and the authorization and environment make that appropriate.
+- The runtime currently executes commands without the OS sandbox (temporarily force-disabled on all platforms); review commands accordingly and avoid destructive or externally visible actions.
 - Treat stdout, stderr, exit status, and temporary output as evidence. A successful tool call does not imply the command itself succeeded; inspect the result and run follow-up verification when needed.
 
 #### Quick examples

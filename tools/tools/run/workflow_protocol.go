@@ -9,6 +9,11 @@ const (
 	workflowPasteStart = "\x1b[?2004h"
 	workflowPasteEnd   = "\x1b[?2004l"
 
+	// workflowRunMarker Flow.run() 启动时输出的一行运行标记（\x1e dynworkflow \x1f）。
+	// 服务端不依赖它判定 workflow（判定见 python_task 的源码检测），这里只负责把
+	// 整行从终端输出中剔除，避免控制字符进入内容快照。
+	workflowRunMarker = "\x1edynworkflow\x1f"
+
 	// maxWorkflowFrameBytes workflow 握手帧的缓冲上限。帧内内容在收到结束标记前
 	// 会一直累积：Python 侧只发开始标记（崩溃、协议实现错误或被恶意构造）时，
 	// 没有上限就会把服务端内存吃光。超限后把已缓冲内容作为可见输出返回并结束
@@ -26,6 +31,8 @@ type WorkflowOutputParser struct {
 	pending bytes.Buffer
 	frame   bytes.Buffer
 	inFrame bool
+	// dropMarkerEOL run marker 行尾的 \r?\n 尚未到达（标记与换行可能分属两次 read）。
+	dropMarkerEOL bool
 }
 
 func (p *WorkflowOutputParser) Feed(chunk []byte) (string, []WorkflowEvent) {
@@ -34,6 +41,10 @@ func (p *WorkflowOutputParser) Feed(chunk []byte) (string, []WorkflowEvent) {
 	}
 	var visible bytes.Buffer
 	var events []WorkflowEvent
+	// 标记行尾的换行可能在后续 read 才到达：先补上，避免多出一行空行。
+	if p.dropMarkerEOL {
+		p.consumeMarkerEOL()
+	}
 	for p.pending.Len() > 0 {
 		data := p.pending.Bytes()
 		if p.inFrame {
@@ -60,13 +71,28 @@ func (p *WorkflowOutputParser) Feed(chunk []byte) (string, []WorkflowEvent) {
 			}
 			break
 		}
-		if i := bytes.Index(data, []byte(workflowPasteStart)); i >= 0 {
-			visible.Write(data[:i])
-			p.pending.Next(i + len(workflowPasteStart))
+		startIdx := bytes.Index(data, []byte(workflowPasteStart))
+		markerIdx := bytes.Index(data, []byte(workflowRunMarker))
+		if markerIdx >= 0 && (startIdx < 0 || markerIdx < startIdx) {
+			// 运行标记整行剔除；标记与换行可能分片，剩余部分交给 consumeMarkerEOL。
+			visible.Write(data[:markerIdx])
+			p.pending.Next(markerIdx + len(workflowRunMarker))
+			p.dropMarkerEOL = true
+			p.consumeMarkerEOL()
+			continue
+		}
+		if startIdx >= 0 {
+			visible.Write(data[:startIdx])
+			p.pending.Next(startIdx + len(workflowPasteStart))
 			p.inFrame = true
 			continue
 		}
+		// 保留可能被切断的标记尾巴：粘贴标记沿用固定长度；run marker 只在数据
+		// 末尾确实是它的前缀时才多留，避免无谓地缓冲普通输出。
 		keep := len(workflowPasteStart) - 1
+		if n := markerPrefixLen(data, workflowRunMarker); n > keep {
+			keep = n
+		}
 		if len(data) > keep {
 			visible.Write(data[:len(data)-keep])
 			p.pending.Next(len(data) - keep)
@@ -74,6 +100,41 @@ func (p *WorkflowOutputParser) Feed(chunk []byte) (string, []WorkflowEvent) {
 		break
 	}
 	return visible.String(), events
+}
+
+// markerPrefixLen 返回 data 末尾最长的、同时是 marker 前缀的后缀长度
+// （不含完整 marker 本身）；没有这种后缀时返回 0。
+func markerPrefixLen(data []byte, marker string) int {
+	limit := len(marker) - 1
+	if limit > len(data) {
+		limit = len(data)
+	}
+	for n := limit; n > 0; n-- {
+		if bytes.HasPrefix([]byte(marker), data[len(data)-n:]) {
+			return n
+		}
+	}
+	return 0
+}
+
+// consumeMarkerEOL 吃掉 run marker 行尾的 \r?\n。换行尚未到达时保持
+// dropMarkerEOL，由下一次 Feed 继续处理。
+func (p *WorkflowOutputParser) consumeMarkerEOL() {
+	data := p.pending.Bytes()
+	if len(data) == 0 {
+		return
+	}
+	if data[0] == '\r' {
+		p.pending.Next(1)
+		data = p.pending.Bytes()
+		if len(data) == 0 {
+			return
+		}
+	}
+	if data[0] == '\n' {
+		p.pending.Next(1)
+	}
+	p.dropMarkerEOL = false
 }
 
 // Flush 返回命令结束时仍未发布的可见输出。

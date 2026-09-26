@@ -425,8 +425,9 @@ func runTask(session *structs.Chats, mp map[string]*any, cross []*any) (bool, []
 		}
 	}
 
-	// 检查配置和环境变量以禁用沙盒
-	disableSandbox := config.GlobalConfig.Agent.DisableSandbox ||
+	// 检查强制策略、配置和环境变量以禁用沙盒（策略见 sandbox_policy.go）
+	disableSandbox := sandboxForceDisabled ||
+		config.GlobalConfig.Agent.DisableSandbox ||
 		session.CurrentAgentConfig.DisableSandbox ||
 		os.Getenv("ALKAID0_DISABLE_SANDBOX") == "true"
 
@@ -439,7 +440,11 @@ func runTask(session *structs.Chats, mp map[string]*any, cross []*any) (bool, []
 	}
 
 	if disableSandbox {
-		logger.Info("sandbox disabled by config or environment")
+		if sandboxForceDisabled {
+			logger.Info("sandbox force-disabled by policy on all platforms")
+		} else {
+			logger.Info("sandbox disabled by config or environment")
+		}
 		sandboxFlag = false
 	}
 

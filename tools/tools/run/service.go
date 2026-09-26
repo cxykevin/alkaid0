@@ -180,6 +180,9 @@ type Request struct {
 	ShellStopFn func(runID, command string, result *Result)
 	// WorkflowOutputFn receives filtered output and dynworkflow events from Python stdout.
 	WorkflowOutputFn func(runID, visible string, events []WorkflowEvent)
+	// WorkflowStopFn 工作流终端结束时回调一次（finished/killed，含 panic 路径），
+	// 用于把终态与结果持久化到 workflow 记录。
+	WorkflowStopFn func(runID string, result *Result, state JobState)
 	// PromoteFn is called when a foreground command is exposed as a background run.
 	PromoteFn        func(runID string, job *Job)
 	InteractiveStdin bool
@@ -731,6 +734,8 @@ func (s *Service) execute(ctx context.Context, job *Job, req *Request) {
 			delete(s.active, jobKey(job.Workspace, job.ID))
 			s.mu.Unlock()
 		}
+		// 终态回调：正常结束与 panic 路径都会经过这里，此时 state/result 已确定。
+		s.notifyWorkflowStop(job, req)
 		close(job.done)
 	}()
 
@@ -764,6 +769,19 @@ func (s *Service) execute(ctx context.Context, job *Job, req *Request) {
 	if req.ShellStopFn != nil && req.BackgroundKind == "shell" {
 		req.ShellStopFn(job.ID, job.DisplayCommand, result)
 	}
+}
+
+// notifyWorkflowStop 在工作流终端结束时回调 WorkflowStopFn（每个 job 恰好一次：
+// execute 的 defer 在正常结束与 panic 路径都会执行）。
+func (s *Service) notifyWorkflowStop(job *Job, req *Request) {
+	if job == nil || req == nil || req.WorkflowStopFn == nil {
+		return
+	}
+	job.resultMu.Lock()
+	result := job.result
+	state := job.State
+	job.resultMu.Unlock()
+	req.WorkflowStopFn(job.ID, result, state)
 }
 
 // backgroundUpdateInterval 后台任务状态（elapsed）的心跳刷新间隔：

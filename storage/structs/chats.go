@@ -107,6 +107,8 @@ type Chats struct {
 	TerminalPushFn  func(terminalID, status, content string) `gorm:"-" json:"-"`
 	WorkflowEventFn func(runID string, event any)            `gorm:"-" json:"-"`
 	ShellStopFn     func(runID, command string, result any)  `gorm:"-" json:"-"`
+	// WorkflowStopFn workflow 终端结束回调（runID、终态、最终结果），用于终态落库。
+	WorkflowStopFn func(runID string, status string, result any) `gorm:"-" json:"-"`
 }
 
 // PlanEntry ACP plan 更新条目（session/update 通知中 update.sessionUpdate="plan"）。
@@ -348,6 +350,16 @@ func (c *Chats) SetShellStopFn(fn func(runID, command string, result any)) {
 	c.ShellStopFn = fn
 }
 
+// SetWorkflowStopFn 注册 workflow 终端结束回调。
+func (c *Chats) SetWorkflowStopFn(fn func(runID string, status string, result any)) {
+	if c == nil {
+		return
+	}
+	c.planPushMu.Lock()
+	defer c.planPushMu.Unlock()
+	c.WorkflowStopFn = fn
+}
+
 func (c *Chats) PushShellStop(runID, command string, result any) {
 	if c == nil {
 		return
@@ -357,6 +369,19 @@ func (c *Chats) PushShellStop(runID, command string, result any) {
 	c.planPushMu.RUnlock()
 	if fn != nil {
 		fn(runID, command, result)
+	}
+}
+
+// PushWorkflowStop 在 workflow 终端结束时回调（回调未注册时为空操作）。
+func (c *Chats) PushWorkflowStop(runID, status string, result any) {
+	if c == nil {
+		return
+	}
+	c.planPushMu.RLock()
+	fn := c.WorkflowStopFn
+	c.planPushMu.RUnlock()
+	if fn != nil {
+		fn(runID, status, result)
 	}
 }
 

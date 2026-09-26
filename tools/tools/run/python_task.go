@@ -3,13 +3,17 @@ package run
 import (
 	"context"
 	"fmt"
+	"net"
+	"net/url"
 	"os"
 	"path"
 	"regexp"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/cxykevin/alkaid0/config"
+	cfgStructs "github.com/cxykevin/alkaid0/config/structs"
 	"github.com/cxykevin/alkaid0/server/apikey"
 	"github.com/cxykevin/alkaid0/storage/structs"
 	"github.com/cxykevin/alkaid0/terminal/pythonenv"
@@ -17,10 +21,43 @@ import (
 	"github.com/cxykevin/alkaid0/tools/tools/trace"
 )
 
-var dynworkflowImportPattern = regexp.MustCompile(`(?m)^\s*(?:import\s+dynworkflow(?:\s+as\s+\w+)?(?:\s*$)|from\s+dynworkflow(?:\s+import\s+|\s*$))`)
+// dynworkflowImportPattern 匹配 dynworkflow 导入语句：支持完整模块与子模块
+// （import dynworkflow[.x] / from dynworkflow[.x] import ...）、同行逗号并列表
+// （import os, dynworkflow）以及分号后的语句（import os; import dynworkflow）。
+// 注释（# 之后）不参与匹配；dynworkflow_extra 这类前缀相同的模块名不匹配。
+var dynworkflowImportPattern = regexp.MustCompile(`(?m)(?:^|;)\s*(?:import\s+[^\n#]*?\bdynworkflow\b|from\s+dynworkflow\b)`)
 
 func containsDynworkflowImport(code string) bool {
 	return dynworkflowImportPattern.MatchString(code)
+}
+
+// workflowConnInfo 构造注入给 dynworkflow 的 AgentClient 连接信息：指向本机
+// WebSocket ACP 服务端的 ws:// URL。通配监听地址（0.0.0.0/::）改写为回环地址，
+// 否则子进程无法连接；key 非空时按 helper 的约定附加 key 查询参数。
+func workflowConnInfo(cfg cfgStructs.RPCConfig) string {
+	host := strings.TrimSpace(cfg.Host)
+	switch host {
+	case "", "0.0.0.0", "::", "[::]", "::0", "[::0]":
+		host = "127.0.0.1"
+	}
+	port := cfg.Port
+	if port == 0 {
+		port = 7433 // 与配置默认值一致
+	}
+	path := cfg.Path
+	if path == "" {
+		path = "/acp"
+	}
+	if !strings.HasPrefix(path, "/") {
+		path = "/" + path
+	}
+	u := url.URL{Scheme: "ws", Host: net.JoinHostPort(host, strconv.Itoa(int(port))), Path: path}
+	if cfg.Key != "" {
+		query := url.Values{}
+		query.Set("key", cfg.Key)
+		u.RawQuery = query.Encode()
+	}
+	return u.String()
 }
 
 // pythonTask 处理 run 工具的 "python" 类型：在全局 venv 中执行 Python 代码。
@@ -81,7 +118,9 @@ func pythonTask(session *structs.Chats, mp map[string]*any, cross []*any) (bool,
 		}
 	}
 
-	disableSandbox := config.GlobalConfig.Agent.DisableSandbox ||
+	// 强制策略优先（见 sandbox_policy.go）：沙盒修复前一律在沙盒外执行。
+	disableSandbox := sandboxForceDisabled ||
+		config.GlobalConfig.Agent.DisableSandbox ||
 		session.CurrentAgentConfig.DisableSandbox ||
 		os.Getenv("ALKAID0_DISABLE_SANDBOX") == "true"
 
@@ -93,7 +132,11 @@ func pythonTask(session *structs.Chats, mp map[string]*any, cross []*any) (bool,
 	}
 
 	if disableSandbox {
-		logger.Info("sandbox disabled by config or environment")
+		if sandboxForceDisabled {
+			logger.Info("sandbox force-disabled by policy on all platforms")
+		} else {
+			logger.Info("sandbox disabled by config or environment")
+		}
 		sandboxFlag = false
 	}
 
@@ -104,8 +147,11 @@ func pythonTask(session *structs.Chats, mp map[string]*any, cross []*any) (bool,
 		}
 	}
 	dynworkflow := containsDynworkflowImport(code)
+	var wfView *workflowView
 	if dynworkflow {
 		backgroundFlag = true
+		// 事件流渲染成节点图视图，写入临时对象供 read 查看（终端内容仍是原始输出）。
+		wfView = newWorkflowView()
 		logger.Info("forcing dynworkflow Python task into background mode")
 	}
 
@@ -155,6 +201,9 @@ func pythonTask(session *structs.Chats, mp map[string]*any, cross []*any) (bool,
 	if dynworkflow {
 		env = append(env, "ALKAID0_WORKFLOW_REPORT=1")
 		env = append(env, fmt.Sprintf("ALKAID0_WORKFLOW_SESSION_ID=%d", session.ID))
+		// dynworkflow 的 Agent 节点经 AgentClient 连回本机 ACP 服务端；连接信息由
+		// 运行时注入，工作流代码无需硬编码地址与 key。
+		env = append(env, "ALKAID0_WORKFLOW_CONN_INFO="+workflowConnInfo(config.GlobalConfig.Server))
 	}
 
 	for k, v := range config.GlobalConfig.Agent.TerminalEnvs {
@@ -203,9 +252,11 @@ func pythonTask(session *structs.Chats, mp map[string]*any, cross []*any) (bool,
 	}
 	var updateFn func(string)
 	if backgroundFlag {
-		updateFn = func(content string) {
+		writeTemp := func(content string) {
 			_ = trace.UpdateTempObject(session, tempPath, content)
 		}
+		// workflow：临时对象写渲染后的节点图视图（+原始输出）；终端内容不变。
+		updateFn = workflowUpdateFn(wfView, writeTemp)
 	}
 
 	req := &Request{
@@ -239,10 +290,19 @@ func pythonTask(session *structs.Chats, mp map[string]*any, cross []*any) (bool,
 		TerminalUpdateFn: func(terminalID, status, content string) { session.PushTerminalUpdate(terminalID, status, content) },
 		InteractiveStdin: dynworkflow,
 		WorkflowOutputFn: func(runID, visible string, events []WorkflowEvent) {
-			// 可见输出已由服务层实时内容刷新（完整快照）推送，这里只广播 workflow 事件。
+			// 可见输出已由服务层实时内容刷新（完整快照）推送，这里只处理事件：
+			// 一份喂给视图渲染器（read 用），一份广播给会话。
 			for _, event := range events {
+				if wfView != nil {
+					wfView.Apply(event)
+				}
 				session.PushWorkflowEvent(runID, event)
 			}
+		},
+		// 终态（finished/killed，正常结束与 panic 路径都会触发）与事件走同一队列，
+		// 保证落库顺序。
+		WorkflowStopFn: func(runID string, result *Result, state JobState) {
+			session.PushWorkflowStop(runID, state.String(), result)
 		},
 	}
 

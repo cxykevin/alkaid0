@@ -258,6 +258,10 @@ C:\ProgramData\alkaid0\config.json
 > `MaxCompletionTokens` 是**最大输出 token 数**，会作为请求里的 `max_completion_tokens` 发出，
 > 并夹到 4096–32768（未配置时用 16384）。
 
+> 沙盒当前在所有平台被**强制禁用**（临时策略：沙盒存在 Linux 缺少 `/dev/shm` 等已知问题，修复前
+`run` 工具一律在沙盒外执行）。配置里的 `DisableSandbox` 与 `run` 的 `sandbox` 参数
+> 暂时不产生效果，后续版本恢复。
+
 ### 远程配置 RPC
 
 支持通过 RPC 方法 `alk.cxykevin.top/config/get` 和 `alk.cxykevin.top/config/set` 远程读取和修改配置，方便客户端集成。

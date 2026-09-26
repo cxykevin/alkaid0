@@ -241,24 +241,54 @@ func TestToolNameToType(t *testing.T) {
 func TestSessionNewHidden(t *testing.T) {
 	tests := []struct {
 		name string
+		root json.RawMessage
 		args map[string]json.RawMessage
 		want bool
 	}{
-		{name: "true", args: map[string]json.RawMessage{sessionNewHiddenArg: json.RawMessage(`true`)}, want: true},
-		{name: "false", args: map[string]json.RawMessage{sessionNewHiddenArg: json.RawMessage(`false`)}},
-		{name: "null", args: map[string]json.RawMessage{sessionNewHiddenArg: json.RawMessage(`null`)}},
-		{name: "string", args: map[string]json.RawMessage{sessionNewHiddenArg: json.RawMessage(`"true"`)}},
-		{name: "number", args: map[string]json.RawMessage{sessionNewHiddenArg: json.RawMessage(`1`)}},
-		{name: "object", args: map[string]json.RawMessage{sessionNewHiddenArg: json.RawMessage(`{}`)}},
-		{name: "array", args: map[string]json.RawMessage{sessionNewHiddenArg: json.RawMessage(`[]`)}},
+		{name: "args true", args: map[string]json.RawMessage{sessionNewHiddenArg: json.RawMessage(`true`)}, want: true},
+		{name: "args false", args: map[string]json.RawMessage{sessionNewHiddenArg: json.RawMessage(`false`)}},
+		{name: "args null", args: map[string]json.RawMessage{sessionNewHiddenArg: json.RawMessage(`null`)}},
+		{name: "args string", args: map[string]json.RawMessage{sessionNewHiddenArg: json.RawMessage(`"true"`)}},
+		{name: "args number", args: map[string]json.RawMessage{sessionNewHiddenArg: json.RawMessage(`1`)}},
+		{name: "args object", args: map[string]json.RawMessage{sessionNewHiddenArg: json.RawMessage(`{}`)}},
+		{name: "args array", args: map[string]json.RawMessage{sessionNewHiddenArg: json.RawMessage(`[]`)}},
 		{name: "meta is ignored", args: nil, want: false},
+		// 根级扩展（dynworkflow 的实际形状）与 args 历史形状都要接受。
+		{name: "root true", root: json.RawMessage(`true`), want: true},
+		{name: "root false", root: json.RawMessage(`false`)},
+		{name: "root string", root: json.RawMessage(`"true"`)},
+		{name: "root wins over args", root: json.RawMessage(`true`), args: map[string]json.RawMessage{sessionNewHiddenArg: json.RawMessage(`false`)}, want: true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := sessionNewHidden(tt.args); got != tt.want {
+			if got := sessionNewHidden(tt.root, tt.args); got != tt.want {
 				t.Errorf("sessionNewHidden() = %v, want %v", got, tt.want)
 			}
 		})
+	}
+}
+
+// TestSessionNewRequestHiddenRootLevel 验证 dynworkflow 的根级扩展参数能被解码：
+// 该键不在 args 里，必须由 SessionNewRequest 自己承接；类型不符不能导致整个
+// session/new 解码失败。
+func TestSessionNewRequestHiddenRootLevel(t *testing.T) {
+	var req SessionNewRequest
+	if err := json.Unmarshal([]byte(`{"cwd":"/tmp/x","mcpServers":[],"dyn.cxykevin.top/hidden":true}`), &req); err != nil {
+		t.Fatalf("unmarshal session/new params failed: %v", err)
+	}
+	if req.Cwd != "/tmp/x" {
+		t.Errorf("cwd = %q", req.Cwd)
+	}
+	if !sessionNewHidden(req.Hidden, req.Args) {
+		t.Error("根级 dyn.cxykevin.top/hidden 应被识别为隐藏会话")
+	}
+
+	var bad SessionNewRequest
+	if err := json.Unmarshal([]byte(`{"cwd":"/tmp/x","dyn.cxykevin.top/hidden":"true"}`), &bad); err != nil {
+		t.Fatalf("类型不符也不应解码失败: %v", err)
+	}
+	if sessionNewHidden(bad.Hidden, bad.Args) {
+		t.Error("字符串 true 不应被视为隐藏")
 	}
 }
 

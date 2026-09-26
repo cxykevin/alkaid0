@@ -33,13 +33,25 @@ import (
 type SessionNewRequest struct {
 	Cwd  string                     `json:"cwd"`
 	Args map[string]json.RawMessage `json:"args,omitempty"`
+	// Hidden 根级扩展参数：按 alkaid0 扩展约定（docs/acp/extension.md §0），
+	// dynworkflow 等客户端把 dyn.cxykevin.top/hidden 直接放在 params 顶层。
+	// 用 RawMessage 承接，类型不符时按未设置处理，避免整个 session/new 解码失败。
+	Hidden json.RawMessage `json:"dyn.cxykevin.top/hidden,omitempty"`
 }
 
 const sessionNewHiddenArg = "dyn.cxykevin.top/hidden"
 
-func sessionNewHidden(args map[string]json.RawMessage) bool {
-	raw, ok := args[sessionNewHiddenArg]
-	if !ok {
+// sessionNewHidden 读取 dyn.cxykevin.top/hidden：同时接受 params 根级（扩展约定）
+// 与 params.args 内（历史形状）两种位置；值必须是布尔 true，其余类型按未设置处理。
+func sessionNewHidden(root json.RawMessage, args map[string]json.RawMessage) bool {
+	if sessionNewHiddenFlag(root) {
+		return true
+	}
+	return sessionNewHiddenFlag(args[sessionNewHiddenArg])
+}
+
+func sessionNewHiddenFlag(raw json.RawMessage) bool {
+	if len(raw) == 0 {
 		return false
 	}
 	var hidden bool
@@ -133,7 +145,10 @@ type sessionObj struct {
 	// （同一序号不重复广播，避免终端周期刷新重复推送未变化的 workflow 状态）。
 	workflowSnapMu  sync.Mutex
 	workflowSnapSeq map[string]uint64
-	streamMu        sync.Mutex
+	// workflowQueue workflow 事件/终态的会话级有序队列（loadSession 创建，
+	// 会话释放时排空停止）。
+	workflowQueue *workflowQueue
+	streamMu      sync.Mutex
 	// activeAgentMessages 保存正在流式输出的消息，供中途加入的连接补齐。
 	activeAgentMessages map[uint64]*activeAgentMessage
 	// loopLifecycleMu 保护 loopWG/loopReleasing：启动 loop 与释放会话互斥，
@@ -796,8 +811,15 @@ func loadSession(cwd string, id *uint32, knowID bool, hidden ...bool) (*structs.
 				logger.Warn("failed to broadcast terminal update: %v", err)
 			}
 		})
+		// workflow 事件与终态走会话级有序队列：落库与广播移出 Python stdout
+		// 拷贝协程，事件与终态之间保持先后顺序（见 workflow_queue.go）。
+		wfQueue := newWorkflowQueue(processWorkflowQueueItem)
+		obj.workflowQueue = wfQueue
 		sess.SetWorkflowEventFn(func(runID string, event any) {
-			broadcastWorkflowEvent(sessID, runID, event)
+			enqueueWorkflowEvent(wfQueue, sessID, runID, event)
+		})
+		sess.SetWorkflowStopFn(func(runID, status string, result any) {
+			enqueueWorkflowFinalize(wfQueue, sessID, runID, status, result)
 		})
 		sess.SetShellStopFn(func(runID, command string, result any) {
 			r, ok := result.(*runTool.Result)
@@ -1219,6 +1241,14 @@ func (obj *sessionObj) releaseSessionLoop() {
 	}
 }
 
+// stopWorkflowQueue 停止会话的 workflow 事件队列：排空已入队的事件与终态后返回。
+func (obj *sessionObj) stopWorkflowQueue() {
+	if obj == nil || obj.workflowQueue == nil {
+		return
+	}
+	obj.workflowQueue.stop()
+}
+
 // closeSession 关闭会话，引用计数递减，处理资源清理
 func closeSession(sessionID string) {
 	var released *sessionObj
@@ -1256,6 +1286,7 @@ func closeSession(sessionID string) {
 		logger.Warn("session %s: callback goroutine still running after 5s, closing DB anyway", sessionID)
 	}
 	indexChatHistory(released.session, released.cwd)
+	released.stopWorkflowQueue()
 	closeDB(released.cwd)
 }
 
@@ -1839,6 +1870,7 @@ func scheduleSessionRelease(sessionID string) {
 			logger.Warn("session %s: callback goroutine still running after 5s, closing DB anyway", sessionID)
 		}
 		indexChatHistory(obj2.session, obj2.cwd)
+		obj2.stopWorkflowQueue()
 		closeDB(obj2.cwd)
 	}
 
@@ -1858,7 +1890,7 @@ func SessionNew(req SessionNewRequest, call func(string, any, *string) error, co
 	}
 
 	var id uint32
-	hidden := sessionNewHidden(req.Args)
+	hidden := sessionNewHidden(req.Hidden, req.Args)
 	sess, err := loadSession(req.Cwd, &id, false, hidden)
 	if err != nil {
 		return SessionNewResponse{}, fmt.Errorf("new session failed: %v", err)
