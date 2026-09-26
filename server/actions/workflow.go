@@ -142,12 +142,6 @@ type SessionWorkflowInputResponse struct {
 	Accepted bool   `json:"accepted"`
 	RunID    string `json:"runId"`
 }
-type SessionWorkflowListRequest struct {
-	SessionID string `json:"sessionId"`
-}
-type SessionWorkflowListResponse struct {
-	Workflows []SessionWorkflowStatusResponse `json:"workflows"`
-}
 
 func workflowJob(req SessionWorkflowRequest) (*runTool.Job, error) {
 	if req.RunID == "" {
@@ -296,22 +290,6 @@ func SessionWorkflowStop(req SessionWorkflowRequest, _ func(string, any, *string
 		}
 	}
 	return SessionWorkflowInputResponse{Accepted: true, RunID: req.RunID}, nil
-}
-
-func SessionWorkflowList(req SessionWorkflowListRequest, _ func(string, any, *string) error, _ uint64) (SessionWorkflowListResponse, error) {
-	id, err := validateTerminalSession(req.SessionID)
-	if err != nil {
-		return SessionWorkflowListResponse{}, err
-	}
-	jobs := runTool.Default.ListActive(id)
-	out := make([]SessionWorkflowStatusResponse, 0, len(jobs))
-	for _, job := range jobs {
-		if job.BackgroundKind != "workflow" {
-			continue
-		}
-		out = append(out, SessionWorkflowStatusResponse{RunID: job.ID, TerminalID: job.ID, Status: job.Status().String()})
-	}
-	return SessionWorkflowListResponse{Workflows: out}, nil
 }
 
 // workflowJob 校验 runId 指向的 job 确为该会话的 workflow 终端。

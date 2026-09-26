@@ -48,7 +48,7 @@ alkaid0 对于客户端并 **不强制** 要求客户端初始化，这与 [ACP 
 }
 ```
 
-其中 `alk.cxykevin.top/alkaid0/v0.4`、`alk.cxykevin.top/alkaid0/v0.5` 与 `alk.cxykevin.top/alkaid0/v0.6` 为 alkaid0 扩展协议版本能力标记。v0.6 包含已结束终端会话内容查询（`alk.cxykevin.top/session/terminal/history`）、`tool_call_update` 顶层的 `alk.cxykevin.top/terminal_id`（终端 ID 与 run id 统一为 `@temp/run/<n>`，终端内容持久化于该路径，见 §5.4）；v0.5 包含 dynworkflow stdout 握手、workflow stdio 控制、workflow 状态持久化以及 workflow/update_xxx 实时广播协议；v0.4 能力保持兼容。
+其中 `alk.cxykevin.top/alkaid0/v0.4`、`alk.cxykevin.top/alkaid0/v0.5` 与 `alk.cxykevin.top/alkaid0/v0.6` 为 alkaid0 扩展协议版本能力标记。v0.6 包含已结束终端会话内容查询（`alk.cxykevin.top/session/terminal/history`）、`tool_call_update` 顶层的 `alk.cxykevin.top/terminal_id`（终端 ID 与 run id 统一为 `@temp/run/<n>`，终端内容持久化于该路径，见 §5.4）；v0.5 包含 dynworkflow stdout 握手、workflow stdio 控制、workflow 状态持久化、workflow/update_xxx 实时广播与 workflow 快照通知。**v0.5 不提供 workflow 列表方法**——workflow 的枚举统一走 `alk.cxykevin.top/session/terminal/list`（活动）与 `.../terminal/history`（已结束）的 `workflow` 标记（见 §3.1/§3.2）。v0.4 能力保持兼容。
 
 `session/list`、`session/resume`、`session/close` 是 `session` 基线能力，无需标记。
 
@@ -200,6 +200,10 @@ alkaid0 现在遵循 ACP v2 标准事件，且字段置于 update 对象**顶层
 
 请求：`{ "sessionId": string }`。返回 `{ "terminals": TerminalInfo[] }`，只包含当前活动终端；每个终端包含 `terminalId`（统一为 `@temp/run/<n>`，见 §5.4）、`sessionId`、`kind`、`status`、`command`、`reason`、`agentId`、`toolId`、`content`、`createdAt`，以及 `workflow`（***boolean?***，为 `true` 表示该终端是 workflow，见 §3.2）。列表中的 workflow 终端会各自附带一条 workflow 快照通知（§3.2）。
 
+`kind` 取值：`foreground`（前台任务，默认）、`background`（`background: true` 的 shell / python 任务）、`shell`（阻塞超时被自动转为后台的交互式 shell）、`workflow`（dynworkflow 工作流，见 §3.2）。
+
+**workflow 的枚举入口就是本方法与 `terminal/history`**：活动 workflow 出现在本方法的列表里并带 `workflow: true`，已结束 workflow 出现在 `history` 中并同样带该标记；服务端不提供单独的 workflow 列表方法。
+
 #### `alk.cxykevin.top/session/terminal/status`
 
 请求：`{ "sessionId": string, "terminalId": string }`（`terminalId` 为统一的 `@temp/run/<n>`，服务端校验前缀；ID 只在工作目录内唯一，故必须带 `sessionId` 才能定位到该会话工作目录下的终端）。返回 `{ "terminal": TerminalInfo }`，包含当前终端完整内容。成功时还会通过该请求的 callback 立即发送一条 `alk.cxykevin.top/terminal_update`，其 `updateType` 为 `full`；若该终端是 workflow，则再附带一条 workflow 快照通知（§3.2），客户端无需另行请求 `workflow/status` 即可渲染。
@@ -229,8 +233,8 @@ alkaid0 现在遵循 ACP v2 标准事件，且字段置于 update 对象**顶层
 
 - 终端还在服务端内存中（同一次服务端运行周期内）：`content` 为内存内容快照，与终端全量推送完全一致，`kind` / `command` / `reason` / `agentId` / `toolId` / `createdAt` 等元数据齐全。
   - 已结束终端：完整的最终内容（命令头 + 全部输出 + `[Background] Finished: success=…`）。
-  - 未结束的终端不会被本方法返回；若用 `terminal/status` 或 `list` 查询运行中的终端，拿到的同样是 §2.2 描述的**实时内容快照**（末尾 2000 行 + `Running... (elapsed)`），因此前端与 LLM 都能在命令结束前看到中间结果；LLM 侧对应 `@temp/run/<n>` 临时对象，运行期按同一节流刷新。
-- 服务端重启后内存中已无该终端：读取上述持久化副本（`AddTempObject` 会截取末尾 5000 行），此时条目带 `restored: true`，只有 `terminalId` / `sessionId` / `content` 可信，`status` 固定为 `finished`，其余元数据为空。
+  - 未结束的终端不会被本方法返回；若用 `terminal/status` 或 `list` 查询运行中的终端，拿到的同样是 §2.2 描述的**实时内容快照**（末尾 2000 行 + `Running... (elapsed)`），因此前端与 LLM 都能在命令结束前看到中间结果；LLM 侧对应 `@temp/run/<n>` 临时对象，运行期按同一节流刷新。**例外：workflow 终端的临时对象是渲染后的节点视图**（§3.2），终端 `content` / 推送仍是原始输出。
+- 服务端重启后内存中已无该终端：读取上述持久化副本，此时条目带 `restored: true`，只有 `terminalId` / `sessionId` / `content` 可信，`status` 固定为 `finished`，其余元数据为空。持久化副本的截断规则取决于写入路径：提交时的 `AddTempObject` 保留末尾 `MaxFileLine`（10000）行，运行期刷新的 `UpdateTempObject` 保留末尾 2000 行——后台任务与 workflow 走后者，因此最终内容最多 2000 行。workflow 终端重启后取回的 `content` 同样是 §3.2 的节点视图（视图末尾附加了原始输出）。
 - 运行中的终端不属于已结束历史，其持久化副本同样不会出现在结果中。
 
 > 客户端通常无需先调用本方法的列表形式：历史工具调用回放时，每条 `run` 调用都带 `alk.cxykevin.top/terminal_id`（见 §2.1），直接用该 ID 查询即可。`restored` 条目缺少元数据也正是因为元数据由工具调用侧提供。
@@ -261,6 +265,23 @@ dynworkflow 在 `session/new` 创建 Agent 会话时，按 alkaid0 的根级扩�
 
 workflow 事件按 runId 持久化完整 graph、当前 node/agent 状态和有序事件日志，并广播为以下顶层 `session/update`：`alk.cxykevin.top/session/terminal/workflow/update_graph`、`update_node`、`update_node_result`、`update_agents_start`、`update_agent`、`update_node_code`、`update_node_log`。公共字段 `sessionId`、`runId`、`sessionUpdate`、`eventType`、`time`、`workflow` 以及事件字段直接放在 `update` 顶层，不放 `_meta` 或 `body`。graph 是完整快照，其余事件是增量更新。`node_result` 携带节点 `Result(value)` 的终值（缓存命中重放同样上报），需要 dynworkflow ≥ 0.1.3；`graph.nodes[].name` 是 `@flow.node("...")` 的显示名。
 
+#### 事件字段
+
+`update_<type>` 的载荷就是 dynworkflow 上报事件的字段（服务端原样透传，只补公共字段），完整定义以 dynworkflow 仓库的 `docs/protocol.md` 为准。常用字段速查：
+
+| 事件 | 关键字段 |
+|---|---|
+| `graph` | `graph.nodes`（节点 id → `{ "name": 显示名 }`）、`graph.edges`（节点 id → 目标 id 数组）、`graph.start`（起始节点 id 数组） |
+| `node` | `nodeId`、`state`（`wait` / `queue` / `running` / `done` / `error` / `terminated`）、`cached`、`args` |
+| `node_result` | `nodeId`、`result`（节点 `Result(value)` 的终值；不可 JSON 序列化时序列化为字符串） |
+| `agents_start` | `nodeId`、`callIndex`、`count`、`prompts` |
+| `agent` | `nodeId`、`callIndex`、`agentIndex`、`agentCount`、`prompt`、`path`、`state`（`waiting` / `running` / `success` / `failure`）、`sessionId`、`attempt`、`tools` |
+| `node_code` | `nodeId`、`name`（显示名）、`code`（源码，取不到时为 `null`） |
+| `node_log` | `nodeId`、`message`（节点线程 `print` 的一行输出） |
+
+- 公共字段 `workflow`：dynworkflow 事件自带该字段（其 flow id，如 `"e2e-full"`）时原样保留；事件没有该字段时服务端填 run ID 兜底。需要稳定的终端标识请用 `runId` / `terminalId`。
+- 未知事件类型：服务端不做白名单，任何带非空 `type` 的帧内 JSONL 行都会作为 `update_<type>` 广播并持久化；客户端应忽略不认识的类型。
+
 持久化查询不依赖客户端断线恢复：客户端需要状态时直接调用 status，从数据库读取最新快照和完整事件日志。服务端不保证通过 resume 重放 workflow 事件。
 
 #### workflow 视图（read `@temp/run/<n>`）
@@ -284,14 +305,57 @@ workflow 终端的临时对象内容不是原始 stdout，而是按事件流渲�
 
 #### workflow 控制与查询方法
 
-不会注册 `alk.cxykevin.top/session/terminal/workflow/start`。workflow 只能由 Python run 自动产生。提供以下方法：
+**workflow 没有独立的列表方法**：活动 workflow 用 `alk.cxykevin.top/session/terminal/list` 枚举（`workflow: true` 标记 + 附带快照），已结束 workflow 用 `.../terminal/history` 枚举（`workflow` 标记由持久化记录判定），详情统一用 `workflow/status` 查询（见 §3.1）。不会注册 `alk.cxykevin.top/session/terminal/workflow/start`，workflow 只能由 Python run 自动产生。提供以下方法：
 
-- `alk.cxykevin.top/session/terminal/workflow/status`：请求 `{ "sessionId": string, "runId": string }`，从持久化数据库返回完整 workflow、terminal、graph、当前 agent 状态和日志；workflow 已结束或当前不在内存中时也可查询。响应中的 `workflow` 包含 `workflowId`、`runId`、`terminalId`、`name`、`status`、`currentNode`、`currentAgent`、`lastSequence`、时间及可选的 `error` / `resultPath`；`graph` 和 `agentState` 为 JSON 快照，`logs` 按 `sequence` 升序返回事件日志。
-- `alk.cxykevin.top/session/terminal/workflow/input`：按 runId 将受校验的控制对象写入 Python stdin。允许 shutdown、node terminate/restart、agent terminate/retry。
-- `alk.cxykevin.top/session/terminal/workflow/stop`：写入 shutdown，必要时复用 terminal kill 强制终止；操作幂等。
-- `alk.cxykevin.top/session/terminal/workflow/list`：请求 `{ "sessionId": string }`，返回当前会话 workflow 列表。
+- `alk.cxykevin.top/session/terminal/workflow/status`：请求 `{ "sessionId": string, "runId": string }`。从持久化数据库返回完整 workflow、terminal、graph、当前 agent 状态和事件日志；workflow 已结束或当前不在内存中时也可查询。响应：
 
-所有方法执行 session、runId 和 terminal 所有权校验。shell、sleep、wait 和普通 Python run 不能作为 workflow 控制目标。input/stop 仅允许活动 workflow，status/list 可读取已结束记录；对已结束的 workflow 调用 input/stop 返回错误（stop 的幂等性只体现在对运行中的 workflow 重复发送 shutdown）。`workflow/stop` 先写入 shutdown，写入失败（stdin 已关闭或写失败）时复用 terminal 的 kill 路径强制终止。
+```json
+{
+  "runId": "@temp/run/3",
+  "terminalId": "@temp/run/3",
+  "status": "finished",
+  "workflow": {
+    "workflowId": "@temp/run/3",
+    "runId": "@temp/run/3",
+    "terminalId": "@temp/run/3",
+    "name": "",
+    "status": "finished",
+    "currentNode": "report",
+    "currentAgent": "",
+    "lastSequence": 10,
+    "createdAt": "2026-09-26T14:03:25Z",
+    "updatedAt": "2026-09-26T14:03:27Z",
+    "resultPath": "@temp/run/3"
+  },
+  "graph": { "nodes": { "scan": { "name": "Scan Docs" } }, "edges": { "scan": ["report"] }, "start": ["scan"] },
+  "agentState": { "type": "agent", "nodeId": "report", "state": "success" },
+  "logs": [
+    { "sequence": 1, "type": "graph", "nodeId": "", "agentIndex": 0, "payload": { "type": "graph" }, "raw": { "type": "graph" }, "createdAt": "2026-09-26T14:03:25Z" }
+  ]
+}
+```
+
+  - `workflow` 与快照通知中的 `workflow` 同构；`workflowId` 当前等于 run ID（dynworkflow 的 flow id 见事件里的 `workflow` 字段与 `logs[].payload.workflow`）；`name` 与 `currentAgent` 为**预留字段，当前恒为空字符串**（服务端尚未写入）。
+  - `graph` / `agentState` 为 JSON 快照，无数据时省略；`logs` 按 `sequence` 升序返回全部事件，每项含 `sequence`、`type`、`nodeId`、`agentIndex`、`payload`（持久化的结构化事件）、`raw`（原始 JSONL 行）、`createdAt`。
+  - `status` 优先取活动 Job 的实时状态（`running` / `finished` / `killed`），Job 不在内存时用持久化终态。
+  - 该 run 从未产生事件（库内无记录）、`runId` 不属于本会话或不是 workflow 时返回错误；可选字段 `error` 仅在失败时出现。
+
+- `alk.cxykevin.top/session/terminal/workflow/input`：请求 `{ "sessionId": string, "runId": string, "input": object }`。`input.cmd` 必须为字符串，按 `cmd` 校验后续字段：
+
+```json
+{"cmd":"shutdown"}
+{"cmd":"node","nodeId":"scan_docs","action":"terminate"}
+{"cmd":"agent","nodeId":"scan_project","callIndex":1,"agentIndex":1,"action":"retry"}
+```
+
+  - `shutdown`：无额外字段；
+  - `node`：`nodeId` + `action` ∈ `terminate` / `restart`；
+  - `agent`：`nodeId` + `callIndex` + `agentIndex` + `action` ∈ `terminate` / `retry`。
+  - 校验通过后服务端把 `input` 对象作为一行 JSON 写入 Python stdin，响应 `{ "accepted": true, "runId": "@temp/run/<n>" }`；`input` 为空、`input.cmd` 非法或 run 不是活动 workflow 时返回错误。
+
+- `alk.cxykevin.top/session/terminal/workflow/stop`：请求 `{ "sessionId": string, "runId": string }`。先写入 `{"cmd":"shutdown"}` 优雅关闭；写入失败（stdin 已关闭或写失败）时复用 terminal 的 kill 路径强制终止。响应 `{ "accepted": true, "runId": "@temp/run/<n>" }`；对已结束的 workflow 返回错误。
+
+所有方法执行 session、runId 和 terminal 所有权校验。shell、sleep、wait 和普通 Python run 不能作为 workflow 控制目标；`input` / `stop` 仅允许活动 workflow，`status` 可读取已结束记录。
 
 #### 快照通知 `alk.cxykevin.top/session/terminal/workflow/snapshot`
 
