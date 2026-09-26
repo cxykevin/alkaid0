@@ -198,7 +198,7 @@ func TestIndexCommandRejectsConcurrentRun(t *testing.T) {
 // ---- A5: /feedback 上传的日志尾部必须擦除自定义脱敏值 ----
 
 func TestFeedbackCommandScrubsCustomMasks(t *testing.T) {
-	t.Setenv("ALKAID0_DEBUG", "false")
+	forceFeedbackEnabled(t)
 
 	const customSecret = "custom-secret-value-123"
 	const providerKey = "provider-key-abc-xyz"
@@ -245,7 +245,7 @@ func TestFeedbackCommandScrubsCustomMasks(t *testing.T) {
 // ---- A6: 遥测失败也要记录尝试时间，避免无限重试 ----
 
 func TestRunAutoTelemetryFailureRecordsAttempt(t *testing.T) {
-	t.Setenv("ALKAID0_DEBUG", "false")
+	forceFeedbackEnabled(t)
 
 	oldPath := telemetryLastPath
 	oldSubmit := feedbackSubmit

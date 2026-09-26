@@ -75,7 +75,7 @@ func TestBuildTelemetryModelLogs(t *testing.T) {
 
 // TestRunAutoTelemetry 验证自动 Telemetry 的禁用、周期与上报行为。
 func TestRunAutoTelemetry(t *testing.T) {
-	t.Setenv("ALKAID0_DEBUG", "false")
+	forceFeedbackEnabled(t)
 
 	oldPath := telemetryLastPath
 	oldSubmit := feedbackSubmit

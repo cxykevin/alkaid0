@@ -109,9 +109,17 @@ func feedbackDisabled() bool {
 	return log.DebugLevelEnabled()
 }
 
+// feedbackDisabledFn 运行期旁路（/feedback、自动 Telemetry）的禁用判定入口。
+// 生产恒为 feedbackDisabled；测试可注入 false 以摆脱运行环境的日志级别——
+// log.DebugLevelEnabled() 读的是**进程启动时**缓存的 ALKAID0_LOG_LEVEL，测试里的
+// t.Setenv 改不动它，于是在带 ALKAID0_LOG_LEVEL=debug 的 shell 里这些用例会全部
+// 误判为"debug 模式"而失败（CI 是干净环境，因此只在本地复现）。
+// 真实判定（含 ALKAID0_DEBUG 分支）仍由 TestFeedbackCommandDisabledInDebug 覆盖。
+var feedbackDisabledFn = feedbackDisabled
+
 // feedbackCommand 处理 /feedback <内容>：异步提交反馈到反馈服务端。
 func feedbackCommand(obj *sessionObj, arg string) (bool, error) {
-	if feedbackDisabled() {
+	if feedbackDisabledFn() {
 		broadcastCmdText(obj, "Feedback is disabled in debug mode.")
 		return false, nil
 	}

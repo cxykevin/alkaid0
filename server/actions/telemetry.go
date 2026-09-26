@@ -34,7 +34,7 @@ func runAutoTelemetry() {
 	if config.GlobalConfigSafe().Feedback.DisableAutoTelemetry {
 		return
 	}
-	if feedbackDisabled() {
+	if feedbackDisabledFn() {
 		return
 	}
 	path := telemetryLastPath()

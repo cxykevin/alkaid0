@@ -15,8 +15,23 @@ import (
 	u "github.com/cxykevin/alkaid0/utils"
 )
 
+// forceFeedbackEnabled 把运行期旁路（/feedback、自动 Telemetry）的禁用判定固定为
+// "未禁用"，让用例只验证提交与广播行为、不受运行环境影响。
+//
+// 背景：feedbackDisabled() 除 ALKAID0_DEBUG 外还读 log.DebugLevelEnabled()，而后者
+// 读的是进程启动时缓存的 ALKAID0_LOG_LEVEL（首次 log.New → Load() 时确定），测试里的
+// t.Setenv 改不动它。开发者 shell 常带 ALKAID0_LOG_LEVEL=debug（CI 是干净环境），
+// 于是这些用例本地全挂、CI 全过。真实判定由 TestFeedbackCommandDisabledInDebug 覆盖。
+func forceFeedbackEnabled(t *testing.T) {
+	t.Helper()
+	old := feedbackDisabledFn
+	feedbackDisabledFn = func() bool { return false }
+	t.Cleanup(func() { feedbackDisabledFn = old })
+}
+
 // TestFeedbackCommandEmptyArg 空参数应返回用法错误，且不等待。
 func TestFeedbackCommandEmptyArg(t *testing.T) {
+	forceFeedbackEnabled(t)
 	obj := &sessionObj{cwd: "/tmp/fb", id: 1}
 	wait, err := feedbackCommand(obj, "   ")
 	if err == nil {
@@ -64,7 +79,7 @@ func collectFeedbackBroadcasts(t *testing.T, obj *sessionObj, arg string) []Sess
 
 // TestFeedbackCommandSubmitSuccess 成功提交应广播"正在提交"与成功结果。
 func TestFeedbackCommandSubmitSuccess(t *testing.T) {
-	t.Setenv("ALKAID0_DEBUG", "false")
+	forceFeedbackEnabled(t)
 
 	oldSubmit := feedbackSubmit
 	defer func() { feedbackSubmit = oldSubmit }()
@@ -89,7 +104,7 @@ func TestFeedbackCommandSubmitSuccess(t *testing.T) {
 
 // TestFeedbackCommandSubmitFailure 失败提交应广播失败信息。
 func TestFeedbackCommandSubmitFailure(t *testing.T) {
-	t.Setenv("ALKAID0_DEBUG", "false")
+	forceFeedbackEnabled(t)
 
 	oldSubmit := feedbackSubmit
 	defer func() { feedbackSubmit = oldSubmit }()
