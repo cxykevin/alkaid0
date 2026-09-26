@@ -20,8 +20,8 @@ const ToolCallingInfoType = "alk.cxykevin.top/calling_info"
 // 每个参数一行 "Key: value"（键排序；值为 null/缺失的跳过；非字符串值用 JSON 表示）。
 //
 // 直播（工具 OnHook 写入 content）与 session/resume 历史回放共用这一份渲染，
-// 因此同一个工具调用在两端展示逐字节一致。参数一律不省略——只有面向 AI 的历史回放
-// 才会对超大字段值做结构化省略（provider/request/build.replayToolArguments）。
+// 因此同一个工具调用在两端展示逐字节一致。参数一律不省略——面向 AI 的历史回放
+// 同样回放完整参数（provider/request/build.replayToolArguments）。
 func RenderToolCallingText(params any) string {
 	args := NormalizeToolCallingParams(params)
 	m, ok := args.(map[string]any)

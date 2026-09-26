@@ -4,9 +4,7 @@ import (
 	"container/list"
 	"encoding/json"
 	"sort"
-	"strconv"
 	"strings"
-	"unicode/utf8"
 
 	"github.com/cxykevin/alkaid0/config"
 	cfgStruct "github.com/cxykevin/alkaid0/config/structs"
@@ -484,94 +482,33 @@ scan:
 
 // storedToolCall 存储层工具调用项（tool_calling_json_string 内部格式 [{"name","id","parameters"}]）。
 // 存储层为标准 encoding/json 序列化（nativeAcc.Origin()），此处直接解析，避免依赖 request 包（循环依赖）。
-// id/name 用于回放调用结构；Parameters 保留真实参数，回放时按字段做结构化省略
-// （见 replayToolArguments），参数名不省略。
+// id/name 用于回放调用结构；Parameters 保留真实参数并原样回放（见 replayToolArguments）。
 type storedToolCall struct {
 	Name       string          `json:"name"`
 	ID         string          `json:"id"`
 	Parameters json.RawMessage `json:"parameters"`
 }
 
-// maxReplayFieldRunes 历史回放时单个参数字段值的最大字符数（rune）。
-// 只有超过阈值的字段值会被替换为占位符，参数名与 JSON 结构保持不变。
-//
-// 早期实现把整个 arguments 换成字面量 "..."（超 maxReplayArgRunes 的调用），
-// 模型下一轮会模仿这个壳：把 OpenAI 包装字段名 arguments 当成工具参数名、把
-// "..." 当成参数值，产出 {"arguments":"..."} 这类坏调用，run 工具随即报
-// "[System] Parameter Error: type is required"。参数名是模型正确调用所依赖的
-// 结构信息，绝不能省。
-const maxReplayFieldRunes = 200
-
-// omittedFieldPlaceholder 渲染被省略的超大字段占位符，保留原始长度供模型判断是否需要回读。
-func omittedFieldPlaceholder(n int) string {
-	return "<omitted: " + strconv.Itoa(n) + " chars>"
-}
-
 // replayToolArguments 把存储层参数回放为原生 tool_calls 的 arguments 字符串。
 //
-// 规则：
-//   - 空参数 → 沿用兼容占位符（不伪造参数结构）；
-//   - 对象参数 → 无超大字段时逐字节原样回放（前缀缓存稳定）；存在超大字段时才
-//     重排 JSON（键有序）并把超大字段值替换为占位符，键名一个不少；
-//   - 非对象/畸形参数 → 原样回放（写入侧只会落对象，这里仅做防御）。
+// 始终回放**完整参数**，不做任何形式的内容省略：省略占位符会被模型当成合法取值照抄，
+// 两种形态都已在真实会话里复现：
+//   - 整体换成 "..."：模型产出 {"arguments":"..."}，run 随即报
+//     "[System] Parameter Error: type is required"；
+//   - 换成 "<omitted: N chars>"：模型把该字面量当成 text 参数写进文件
+//     （edit 把 4554 字符的内容写成了一行 "<omitted: 4554 chars>"，文件被污染）。
 //
-// 除空参数占位符外返回值均为合法 JSON，且参数名与工具 schema 一致。
+// 省略省下的那点上下文，不值得让模型把占位符学成真实取值；上下文膨胀交给摘要/压缩机制处理。
+// 参数缺失（防御性分支，正常写入侧不会发生）回放为合法的空对象 {}。
 func replayToolArguments(params json.RawMessage) string {
 	if len(params) == 0 {
-		return "(omit successed tool call arguments)"
+		return "{}"
 	}
-	var fields map[string]json.RawMessage
-	if err := json.Unmarshal(params, &fields); err != nil || fields == nil {
-		return string(params)
-	}
-	elided := false
-	out := make(map[string]json.RawMessage, len(fields))
-	for k, v := range fields {
-		display, ok := fieldDisplayText(v)
-		n := utf8.RuneCountInString(display)
-		if !ok || n <= maxReplayFieldRunes {
-			out[k] = v
-			continue
-		}
-		placeholder, err := json.Marshal(omittedFieldPlaceholder(n))
-		if err != nil {
-			out[k] = v
-			continue
-		}
-		out[k] = placeholder
-		elided = true
-	}
-	if !elided {
-		return string(params)
-	}
-	buf, err := json.Marshal(out)
-	if err != nil {
-		return string(params)
-	}
-	return string(buf)
-}
-
-// fieldDisplayText 返回字段值用于计长的文本：字符串取其本身（不含 JSON 引号与转义），
-// 其它值取压缩后的 JSON 编码；无法解析时返回 false，调用方按原样保留该字段。
-func fieldDisplayText(raw json.RawMessage) (string, bool) {
-	var s string
-	if err := json.Unmarshal(raw, &s); err == nil {
-		return s, true
-	}
-	var v any
-	if err := json.Unmarshal(raw, &v); err != nil {
-		return "", false
-	}
-	buf, err := json.Marshal(v)
-	if err != nil {
-		return "", false
-	}
-	return string(buf), true
+	return string(params)
 }
 
 // parseStoredToolCalls 解析存储层工具调用 JSON 为原生 tool_calls 消息。
-// 空参数使用兼容占位符；非空参数按字段做结构化省略（见 replayToolArguments），
-// 参数名始终保留。
+// 参数一律完整回放（见 replayToolArguments），不省略任何字段。
 func parseStoredToolCalls(payload string) ([]reqStruct.StreamToolCall, error) {
 	if strings.TrimSpace(payload) == "" {
 		return nil, nil
@@ -737,8 +674,8 @@ scan:
 }
 
 // toolCallPath 从存储层工具调用参数中提取 path。
-// 不能复用 parseStoredToolCalls：其回放时会对超大字段做结构化省略（见 replayToolArguments），
-// 此处需要完整 path。
+// 不复用 parseStoredToolCalls：那条路径返回的是回放用的 arguments 字符串，
+// 这里需要直接解析参数对象取出 path。
 func toolCallPath(c storedToolCall) string {
 	if len(c.Parameters) == 0 {
 		return ""

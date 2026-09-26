@@ -991,9 +991,9 @@ func replayArguments(t *testing.T, chatID uint32, msgs []structs.Messages, callI
 	return ""
 }
 
-// TestRequestBody_ShortArgsReplayedReal 短参数（字段值 ≤maxReplayFieldRunes 字符）历史回放真实 JSON：
+// TestRequestBody_ShortArgsReplayedReal 历史回放始终是真实 JSON：
 // 模型曾以错误参数名（"paht"）调用 edit —— 回放时 arguments 为当初传入的真实 JSON，
-// 让模型看到自己传错的参数名（只有超阈值的字段值才被结构化省略）。
+// 让模型看到自己传错的参数名（回放不做任何省略）。
 func TestRequestBody_ShortArgsReplayedReal(t *testing.T) {
 	args := replayArguments(t, 12, []structs.Messages{
 		{ChatID: 12, Type: structs.MessagesRoleUser, Delta: "edit a.txt"},
@@ -1054,13 +1054,13 @@ func TestRequestBody_AllShortArgsReplayed(t *testing.T) {
 	}
 }
 
-// TestParseStoredToolCalls_FieldElisionKeepsKeys 结构化省略：只有超过
-// maxReplayFieldRunes（200 rune）的**字段值**被替换为占位符，参数名与 JSON 结构完整保留。
-// 回归背景：整包替换为 "..." 会让模型模仿出 {"arguments":"..."}——把 OpenAI 包装字段名
-// 当成工具参数名——run 工具随即报 "[System] Parameter Error: type is required"。
-func TestParseStoredToolCalls_FieldElisionKeepsKeys(t *testing.T) {
-	// call_long：字段值 201 rune → 省略；call_short：字段值短 → 原样；call_empty：空参数 → 占位符
-	longJSON := `{"path":"` + strings.Repeat("a", 201) + `"}`
+// TestParseStoredToolCalls_ReplaysCompleteArgs 历史回放始终回放完整参数，不做任何省略。
+// 回归背景：任何省略占位符都会被模型当成真实取值照抄——
+//   - 整包换成 "..." → 模型产出 {"arguments":"..."}，run 报 "type is required"；
+//   - 换成 "<omitted: N chars>" → 模型把该字面量写成 edit 的 text，文件被污染。
+func TestParseStoredToolCalls_ReplaysCompleteArgs(t *testing.T) {
+	longPath := strings.Repeat("a", 201)
+	longJSON := `{"path":"` + longPath + `"}`
 	payload := `[{"name":"edit","id":"call_long","parameters":` + longJSON + `},{"name":"edit","id":"call_short","parameters":{"path":"b.txt"}},{"name":"edit","id":"call_empty"}]`
 
 	calls, err := parseStoredToolCalls(payload)
@@ -1070,74 +1070,66 @@ func TestParseStoredToolCalls_FieldElisionKeepsKeys(t *testing.T) {
 	if len(calls) != 3 {
 		t.Fatalf("expected 3 calls, got %d", len(calls))
 	}
-	var got map[string]string
-	if err := json.Unmarshal([]byte(calls[0].Function.Arguments), &got); err != nil {
-		t.Fatalf("elided args must stay a valid JSON object: %v (%q)", err, calls[0].Function.Arguments)
-	}
-	if _, ok := got["path"]; !ok {
-		t.Errorf("key 'path' must be preserved on elision, got %q", calls[0].Function.Arguments)
-	}
-	if !strings.Contains(got["path"], "omitted") || !strings.Contains(got["path"], "201") {
-		t.Errorf("oversized field should carry an omission marker with its length, got %q", got["path"])
-	}
-	if _, ok := got["arguments"]; ok {
-		t.Errorf("replay must never fabricate an 'arguments' parameter: %q", calls[0].Function.Arguments)
+	if got := calls[0].Function.Arguments; got != longJSON {
+		t.Errorf("long args must replay complete, got %q", got)
 	}
 	if got := calls[1].Function.Arguments; got != `{"path":"b.txt"}` {
-		t.Errorf("short args should replay real JSON, got %q", got)
+		t.Errorf("short args should replay unchanged, got %q", got)
 	}
-	if got := calls[2].Function.Arguments; got != "(omit successed tool call arguments)" {
-		t.Errorf("empty args should keep placeholder, got %q", got)
+	if got := calls[2].Function.Arguments; got != "{}" {
+		t.Errorf("missing params should replay as an empty object, got %q", got)
+	}
+	for _, c := range calls {
+		args := c.Function.Arguments
+		if !json.Valid([]byte(args)) {
+			t.Errorf("replayed arguments must be valid JSON: %q", args)
+		}
+		if strings.Contains(args, "omitted") || args == "..." || strings.Contains(args, `"arguments"`) {
+			t.Errorf("replay must not contain omission markers or an invented arguments key: %q", args)
+		}
 	}
 
-	// 阈值按字符（rune）而非字节：200 汉字（≤200 rune）保留原值，201 汉字（>200 rune）省略
-	cnShort := strings.Repeat("汉", 200)
-	cnLong := strings.Repeat("汉", 201)
-	payload2 := `[{"name":"edit","id":"cn_short","parameters":{"text":"` + cnShort + `"}},{"name":"edit","id":"cn_long","parameters":{"text":"` + cnLong + `"}}]`
+	// 超长字段（含中文）同样完整回放：回放层不存在任何长度阈值
+	cnLong := strings.Repeat("汉", 5000)
+	payload2 := `[{"name":"edit","id":"cn_long","parameters":{"text":"` + cnLong + `"}}]`
 	calls2, err := parseStoredToolCalls(payload2)
 	if err != nil {
 		t.Fatalf("parse cn: %v", err)
 	}
-	if got := calls2[0].Function.Arguments; strings.Contains(got, "omitted") {
-		t.Errorf("200 汉字（≤200 rune）字段不应被省略，got %q", got)
+	var gotCN map[string]string
+	if err := json.Unmarshal([]byte(calls2[0].Function.Arguments), &gotCN); err != nil {
+		t.Fatalf("cn args must be valid JSON: %v", err)
 	}
-	if got := calls2[1].Function.Arguments; !strings.Contains(got, "omitted") || !strings.Contains(got, "201") {
-		t.Errorf("201 汉字（>200 rune）字段应被省略并保留长度，got %q", got)
+	if gotCN["text"] != cnLong {
+		t.Errorf("long CJK field must replay complete, got %d bytes want %d", len(gotCN["text"]), len(cnLong))
 	}
 }
 
-// TestRequestBody_LongArgsKeepKeysAndElide 端到端回归（RequestBody 层）：run 这类长参数
-// 调用回放时 type/reason/command 三个参数名一个不少，只有超大字段被结构化省略。
+// TestRequestBody_LongArgsReplayedComplete 端到端回归（RequestBody 层）：run 这类长参数
+// 调用回放时 type/reason/command 三个参数名一个不少，且每个字段都是完整原值。
 // 旧实现把整个 arguments 换成 "..."，模型因此在 chat 458 模仿出 {"arguments":"..."}，
-// 触发 "[System] Parameter Error: type is required"。
-func TestRequestBody_LongArgsKeepKeysAndElide(t *testing.T) {
-	command := strings.Repeat("echo hello; ", 60) // 720 rune > maxReplayFieldRunes
+// 触发 "[System] Parameter Error: type is required"；改成字段级 "<omitted: N chars>" 后
+// 模型又把占位符当成 text 写进文件，因此现在一律完整回放、不做任何省略。
+func TestRequestBody_LongArgsReplayedComplete(t *testing.T) {
+	command := strings.Repeat("echo hello; ", 60) // 720 rune，故意远超任何"大字段"直觉阈值
 	toolCall := fmt.Sprintf("[{\"name\":\"run\",\"id\":\"call_long\",\"parameters\":{\"type\":\"shell\",\"reason\":\"check build\",\"command\":%q}}]", command)
 	args := replayArguments(t, 14, []structs.Messages{
 		{ChatID: 14, Type: structs.MessagesRoleUser, Delta: "run it"},
 		{ChatID: 14, Type: structs.MessagesRoleAgent, Delta: "", ToolCallingJSONString: toolCall},
 	}, "call_long")
 
-	if args == "..." {
-		t.Fatal("long args must not be replaced by a bare ... placeholder")
-	}
 	var got map[string]string
 	if err := json.Unmarshal([]byte(args), &got); err != nil {
 		t.Fatalf("replayed arguments must be a valid JSON object: %v (%q)", err, args)
 	}
-	for _, k := range []string{"type", "reason", "command"} {
-		if _, ok := got[k]; !ok {
-			t.Errorf("parameter %q must survive replay, got %q", k, args)
-		}
-	}
-	if got["type"] != "shell" || got["reason"] != "check build" {
-		t.Errorf("small fields must replay verbatim, got %q", args)
-	}
-	if !strings.Contains(got["command"], "omitted") {
-		t.Errorf("oversized command should be structurally elided, got %q", got["command"])
+	if got["type"] != "shell" || got["reason"] != "check build" || got["command"] != command {
+		t.Errorf("every field must replay complete, got %q", args)
 	}
 	if _, ok := got["arguments"]; ok {
 		t.Errorf("replay must not fabricate an 'arguments' parameter: %q", args)
+	}
+	if strings.Contains(args, "omitted") || strings.Contains(args, "...") {
+		t.Errorf("replay must not contain omission markers: %q", args)
 	}
 }
 
