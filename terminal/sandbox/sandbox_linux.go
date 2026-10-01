@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"os/user"
 	"strconv"
 	"strings"
 	"syscall"
@@ -56,14 +55,9 @@ func (s *Sandbox) createLinuxIsolatedCommand(ctx context.Context, name string, a
 		realUser = "user"
 	}
 
-	// 工作目录实际属主
-	runUid, runGid := s.getWorkDirOwner()
-	runUser := "user"
-	if runUid != 0 {
-		if u, err := user.LookupId(strconv.Itoa(runUid)); err == nil && u.Username != "" {
-			runUser = u.Username
-		}
-	}
+	// 运行属主：优先使用配置指定的用户（Agents.User），否则回落工作目录实际属主。
+	// 沙盒命令最终以该身份运行（mount.sh 中按 ALK_RUN_UID 做 setpriv 降权）。
+	runUid, runGid, runUser := s.sandboxRunOwner()
 
 	// uid/gid 映射参数
 	var mapArgs []string

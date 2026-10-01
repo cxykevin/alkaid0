@@ -13,7 +13,7 @@ import (
 // CREATE_SUSPENDED 创建进程、先加入 Job Object 再恢复主线程。命令必须能正常
 // 恢复运行并产生输出；若恢复逻辑缺失，进程会永远挂起、Wait 永不返回。
 func TestIsolateNoneCmdSuspendedStartResumes(t *testing.T) {
-	e := createIsolateNoneCmd(context.Background(), "cmd", []string{"/C", "echo alkaid0-resumed"}, nil, "")
+	e := createIsolateNoneCmd(context.Background(), &Sandbox{}, "cmd", []string{"/C", "echo alkaid0-resumed"})
 	var out bytes.Buffer
 	e.SetStdout(&out)
 	e.SetStderr(&out)

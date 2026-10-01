@@ -54,6 +54,8 @@ type Sandbox struct {
 	baseContext context.Context
 	// 隔离模式，决定了安全限制的实现方式。
 	isolationMode IsolationMode
+	// runAs 目标运行用户（配置指定且确认可切换时非 nil，否则为当前用户）
+	runAs *runAsUser
 	// 互斥锁，保证多线程环境下沙盒配置的安全性。
 	mu sync.RWMutex
 }
@@ -74,6 +76,9 @@ type Config struct {
 	Timeout time.Duration
 	// 隔离模式（默认使用OS级隔离）
 	IsolationMode IsolationMode
+	// User 命令运行使用的 OS 用户（空为当前用户；Linux 沙盒内为工作目录属主）。
+	// 仅在当前进程有权限切换时生效（Linux 需 root），无法切换时记录警告并以当前用户运行。
+	User string
 }
 
 // New 创建一个新的沙盒
@@ -107,6 +112,14 @@ func New(cfg Config) (*Sandbox, error) {
 		env = os.Environ()
 	}
 
+	// 配置指定的运行用户：无法切换时只记录警告并回退当前用户（不影响命令执行）
+	runAs := resolveRunAsOrWarn(cfg.User)
+	if runAs != nil {
+		// HOME/USER/LOGNAME 改为目标用户，避免"以 A 身份运行却读 B 的配置/keyring"
+		env = applyRunAsEnv(env, runAs)
+		logger.Info("Sandbox: run commands as user %s (uid=%d, gid=%d)", runAs.Name, runAs.UID, runAs.GID)
+	}
+
 	isolationMode := cfg.IsolationMode
 	// 注意：IsolationMode的零值是IsolationNone(0)，所以不能简单判断==0
 	// 如果用户没有显式设置，使用OS级隔离
@@ -121,6 +134,7 @@ func New(cfg Config) (*Sandbox, error) {
 		timeout:       cfg.Timeout,
 		baseContext:   cfg.Context,
 		isolationMode: isolationMode,
+		runAs:         runAs,
 	}, nil
 }
 
@@ -179,7 +193,7 @@ func (s *Sandbox) Execute(name string, args ...string) (*Command, error) {
 	switch s.isolationMode {
 	case IsolationNone:
 		// 无隔离模式：无需沙箱限制，直接在当前进程空间运行
-		cmd := createIsolateNoneCmd(ctx, name, args, s.env, s.workDir)
+		cmd := createIsolateNoneCmd(ctx, s, name, args)
 		return &Command{
 			sandbox: s,
 			cmd:     cmd,

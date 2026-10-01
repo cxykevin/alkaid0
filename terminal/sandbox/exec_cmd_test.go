@@ -19,7 +19,7 @@ import (
 // 任务永远停在 running、kill/ESC 无效。
 func TestExecCmdWaitDelayBoundsOrphanPipe(t *testing.T) {
 	// 后台 sleep 继承 stdout 管道并存活 8 秒；前台 shell 立即退出。
-	e := createIsolateNoneCmd(context.Background(), "sh", []string{"-c", "sleep 8 & echo hi"}, nil, "")
+	e := createIsolateNoneCmd(context.Background(), &Sandbox{}, "sh", []string{"-c", "sleep 8 & echo hi"})
 	var out bytes.Buffer
 	e.SetStdout(&out)
 
@@ -47,7 +47,7 @@ func TestExecCmdWaitDelayBoundsOrphanPipe(t *testing.T) {
 // os/exec 的 Wait 会并发写该字段，而 Kill 常来自另一条 goroutine（run 工具的 kill 通道），
 // macOS/Windows 的 -race 会直接报 data race 并让 CI 变红。
 func TestExecCmdKillOnWaitedProcessReturnsErrProcessDone(t *testing.T) {
-	e := createIsolateNoneCmd(context.Background(), "sh", []string{"-c", "exit 0"}, nil, "")
+	e := createIsolateNoneCmd(context.Background(), &Sandbox{}, "sh", []string{"-c", "exit 0"})
 	if err := e.Start(); err != nil {
 		t.Fatalf("Start 失败: %v", err)
 	}
@@ -63,7 +63,7 @@ func TestExecCmdKillOnWaitedProcessReturnsErrProcessDone(t *testing.T) {
 // 时序：doKill → job.kill → Command.Kill，同时 runCmd 正在 Wait）不得构成 data race，
 // 且 Kill 必须真的终止命令。旧实现里 Kill 读 cmd.ProcessState 就是在这里被 -race 抓到的。
 func TestExecCmdKillConcurrentWithWait(t *testing.T) {
-	e := createIsolateNoneCmd(context.Background(), "sh", []string{"-c", "sleep 5"}, nil, "")
+	e := createIsolateNoneCmd(context.Background(), &Sandbox{}, "sh", []string{"-c", "sleep 5"})
 	if err := e.Start(); err != nil {
 		t.Fatalf("Start 失败: %v", err)
 	}

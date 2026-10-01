@@ -547,6 +547,8 @@ func runTask(session *structs.Chats, mp map[string]*any, cross []*any) (bool, []
 		Sandbox:          sandboxFlag,
 		SandboxSpecified: sandboxSpecified,
 		WritableDirs:     nonEmptyDirs(pythonenv.VenvDir()),
+		// 终端任务的运行用户（配置 Agents.User；无法切换时沙盒侧告警并回退当前用户）
+		User:             config.GlobalConfig.Agent.User,
 		RunID:            runID,
 		Workspace:        workspace,
 		InteractiveStdin: true,

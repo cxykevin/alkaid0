@@ -21,9 +21,12 @@ func CreateExecFromCmd(cmd *exec.Cmd, clean func()) *ExecCmd {
 	return &ExecCmd{cmd: cmd, clean: clean}
 }
 
-func createIsolateNoneCmd(ctx context.Context, name string, args []string, env []string, dir string) *ExecCmd {
+func createIsolateNoneCmd(ctx context.Context, s *Sandbox, name string, args []string) *ExecCmd {
+	// 指定了运行用户时把命令包装成以该用户执行（平台不支持/无权限时原样返回，
+	// 见 wrapIsolateNoneCommand）
+	cmdName, cmdArgs := wrapIsolateNoneCommand(s, name, args)
 
-	cmd := exec.CommandContext(ctx, name, args...)
+	cmd := exec.CommandContext(ctx, cmdName, cmdArgs...)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	// 输出 writer 不是 *os.File 时（run 工具把 stdout/stderr 接到内存 writer），
 	// os/exec 会起拷贝 goroutine 逐块转发；若后代进程继承管道并存活，Wait 会
@@ -39,8 +42,8 @@ func createIsolateNoneCmd(ctx context.Context, name string, args []string, env [
 		}
 		return nil
 	}
-	cmd.Dir = dir
-	cmd.Env = env
+	cmd.Dir = s.workDir
+	cmd.Env = s.env
 
 	return &ExecCmd{cmd: cmd, clean: func() {}}
 }

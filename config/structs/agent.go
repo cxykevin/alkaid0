@@ -34,6 +34,10 @@ type AgentsConfig struct {
 	IgnoreDefaultRules      bool   `default:"false"`
 	DisablePromptPreprocess bool   `default:"false"` // 禁用提示词预处理（prompt分类器）
 	UseShell                string `default:""`
+	// User 终端任务（run 工具执行的命令）运行使用的操作系统用户。
+	// 为空表示使用当前用户（Linux 沙盒内为工作目录属主）。
+	// 切换到其它用户需要 root（Linux）/管理员（Windows）权限，切换失败时仅记录警告并回退当前用户。
+	User string `default:""`
 	// FetchProxy fetch 工具的全局 HTTP 代理地址（支持 http/https/socks5），空为直连
 	FetchProxy string `default:""`
 	// TerminalEnvs 终端启动时注入的环境变量

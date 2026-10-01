@@ -274,10 +274,12 @@ func pythonTask(session *structs.Chats, mp map[string]*any, cross []*any) (bool,
 		Sandbox:          sandboxFlag,
 		SandboxSpecified: sandboxSpecified,
 		WritableDirs:     nonEmptyDirs(pythonenv.VenvDir()),
-		RunID:            runID,
-		Workspace:        workspace,
-		UpdateFn:         updateFn,
-		CleanupFn:        cleanupFn,
+		// 终端任务的运行用户（配置 Agents.User；无法切换时沙盒侧告警并回退当前用户）
+		User:      config.GlobalConfig.Agent.User,
+		RunID:     runID,
+		Workspace: workspace,
+		UpdateFn:  updateFn,
+		CleanupFn: cleanupFn,
 		BackgroundKind: func() string {
 			if dynworkflow {
 				return "workflow"

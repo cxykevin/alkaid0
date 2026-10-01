@@ -30,10 +30,14 @@ func CreateExecFromCmd(cmd *exec.Cmd, clean func()) *ExecCmd {
 	return &ExecCmd{cmd: cmd, clean: clean}
 }
 
-func createIsolateNoneCmd(ctx context.Context, name string, args []string, env []string, dir string) *ExecCmd {
-	cmd := exec.CommandContext(ctx, name, args...)
-	cmd.Dir = dir
-	cmd.Env = env
+func createIsolateNoneCmd(ctx context.Context, s *Sandbox, name string, args []string) *ExecCmd {
+	// 指定了运行用户时把命令包装成以该用户执行（Windows 上跨用户需要凭据，
+	// 见 runas_windows.go：无法切换时原样返回，以当前用户运行）
+	cmdName, cmdArgs := wrapIsolateNoneCommand(s, name, args)
+
+	cmd := exec.CommandContext(ctx, cmdName, cmdArgs...)
+	cmd.Dir = s.workDir
+	cmd.Env = s.env
 	// 子进程退出后管道未必立刻 EOF：命令可能留下仍持有继承句柄的后代进程
 	// （典型：powershell/cmd 启动的 node、npm、常驻服务）。此时 Wait 会无限
 	// 阻塞，任务永远停在 running、kill/ESC 都不再生效。WaitDelay 让 Wait 在
