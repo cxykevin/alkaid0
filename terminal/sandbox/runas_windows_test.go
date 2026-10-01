@@ -48,7 +48,13 @@ func TestWindowsRunAsResolution(t *testing.T) {
 		t.Skipf("无法获取当前用户: %v", err)
 	}
 
-	for _, name := range []string{cur.Username, strings.ToUpper(cur.Username), `.\administrator`} {
+	// 「.\用户」是本机账户的常见写法，用当前用户派生，避免依赖具体测试机的用户名。
+	local := cur.Username
+	if idx := strings.LastIndex(local, `\`); idx >= 0 {
+		local = local[idx+1:]
+	}
+
+	for _, name := range []string{cur.Username, strings.ToUpper(cur.Username), `.\` + local} {
 		ru, err := resolveRunAsUser(name)
 		if err != nil {
 			t.Fatalf("resolveRunAsUser(%q) 失败: %v", name, err)

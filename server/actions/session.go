@@ -1146,10 +1146,15 @@ func loadSession(cwd string, id *uint32, knowID bool, hidden ...bool) (*structs.
 	return obj.session, nil
 }
 
-// indexChatHistory 将会话聊天历史打包索引到 codebase（打 chathistory 标签）
-func indexChatHistory(session *structs.Chats, cwd string) {
+// indexChatHistory 触发会话历史的后台索引，返回等待后台任务收尾的 join 函数。
+//
+// 调用方（关闭会话 / 延迟释放）必须在返回前 join：后台任务里的 CheckContentHash
+// 与 AddToQueue 会按目录重新打开索引库（getOrCreateDB），若此时目录相关资源
+// 已经清理，就会出现「释放后仍在写索引库」的竞态。
+func indexChatHistory(session *structs.Chats, cwd string) func(timeout time.Duration) bool {
+	skip := func(time.Duration) bool { return true }
 	if session == nil || session.DB == nil {
-		return
+		return skip
 	}
 
 	var messages []structs.Messages
@@ -1157,11 +1162,11 @@ func indexChatHistory(session *structs.Chats, cwd string) {
 		Order("id ASC").
 		Find(&messages).Error; err != nil {
 		logger.Warn("index chat history: query messages failed: %v", err)
-		return
+		return skip
 	}
 	if len(messages) == 0 {
 		logger.Debug("index chat history: no user/agent messages for session %d", session.ID)
-		return
+		return skip
 	}
 
 	var buf strings.Builder
@@ -1175,11 +1180,13 @@ func indexChatHistory(session *structs.Chats, cwd string) {
 
 	contentStr := buf.String()
 	if contentStr == "" {
-		return
+		return skip
 	}
 
 	// 后台静默索引
+	done := make(chan struct{})
 	go func() {
+		defer close(done)
 		filePath := fmt.Sprintf("chathistory/%d", session.ID)
 		if same, _ := codebase.CheckContentHash(cwd, filePath, "", contentStr); !same {
 			_ = codebase.AddToQueue(cwd, codebase.EmbedTask{
@@ -1190,6 +1197,14 @@ func indexChatHistory(session *structs.Chats, cwd string) {
 			})
 		}
 	}()
+	return func(timeout time.Duration) bool {
+		select {
+		case <-done:
+			return true
+		case <-time.After(timeout):
+			return false
+		}
+	}
 }
 
 // closePermDone 关闭会话的权限等待信号（防重复关闭；permDone 未初始化时为 no-op）
@@ -1285,9 +1300,13 @@ func closeSession(sessionID string) {
 	if released.loop != nil && !released.loop.WaitCallback(5*time.Second) {
 		logger.Warn("session %s: callback goroutine still running after 5s, closing DB anyway", sessionID)
 	}
-	indexChatHistory(released.session, released.cwd)
+	waitIndex := indexChatHistory(released.session, released.cwd)
 	released.stopWorkflowQueue()
 	closeDB(released.cwd)
+	// 等后台索引收尾后再返回：它可能重新打开该目录的索引库，与释放后的目录清理相互踩踏。
+	if !waitIndex(5 * time.Second) {
+		logger.Warn("session %s: chat history index goroutine still running after 5s", sessionID)
+	}
 }
 
 // cancelSessionRelease 取消会话的延迟释放定时器
@@ -1869,9 +1888,13 @@ func scheduleSessionRelease(sessionID string) {
 		if obj2.loop != nil && !obj2.loop.WaitCallback(5*time.Second) {
 			logger.Warn("session %s: callback goroutine still running after 5s, closing DB anyway", sessionID)
 		}
-		indexChatHistory(obj2.session, obj2.cwd)
+		waitIndex := indexChatHistory(obj2.session, obj2.cwd)
 		obj2.stopWorkflowQueue()
 		closeDB(obj2.cwd)
+		// 等后台索引收尾后再返回：它可能重新打开该目录的索引库，与释放后的目录清理相互踩踏。
+		if !waitIndex(5 * time.Second) {
+			logger.Warn("session %s: chat history index goroutine still running after 5s", sessionID)
+		}
 	}
 
 	obj.releaseTimer = time.AfterFunc(time.Duration(timeout)*time.Second, releaseFunc)
