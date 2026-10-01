@@ -885,6 +885,74 @@ func TestRequestBody_TerminatedToolCall(t *testing.T) {
 	}
 }
 
+// TestRequestBody_UserMessageDuringToolCall 回归实战 400：
+// "An assistant message with 'tool_calls' must be followed by tool messages responding to
+// each 'tool_call_id'. (insufficient tool messages following tool_calls message)"。
+// 工具执行期间用户继续发言（"好了"），该 user 行 id 落在 assistant 调用与其结果之间；
+// 回放时必须把结果消息上移到调用之后，保证每个 tool_call_id 都有紧邻的 role:"tool" 响应。
+func TestRequestBody_UserMessageDuringToolCall(t *testing.T) {
+	db := setupTestDB(t)
+	toolsList := []*parser.ToolsDefine{}
+
+	setupTestConfig()
+	cfg := *config.GlobalConfig
+	m := cfg.Model.Models[cfg.Model.DefaultModelID]
+	cfg.Model.Models[cfg.Model.DefaultModelID] = m
+	config.GlobalConfigSwap(cfg)
+
+	msgs := []structs.Messages{
+		{ChatID: 50, Type: structs.MessagesRoleUser, Delta: "开始推送"},
+		{ChatID: 50, Type: structs.MessagesRoleAgent, Delta: "开始推送。", ToolCallingJSONString: `[{"name":"run","id":"call_push","parameters":{"command":"git push"}}]`},
+		// 工具还在跑时用户发话：该行 id 小于结果行，落库后天然夹在调用与结果之间
+		{ChatID: 50, Type: structs.MessagesRoleUser, Delta: "好了"},
+		{ChatID: 50, Type: structs.MessagesRoleTool, Delta: `[{"name":"run","id":"call_push","return":"{\"ok\":true}"}]`},
+		{ChatID: 50, Type: structs.MessagesRoleUser, Delta: "continue"},
+	}
+	for i := range msgs {
+		if err := db.Create(&msgs[i]).Error; err != nil {
+			t.Fatalf("create msg: %v", err)
+		}
+	}
+
+	req, err := RequestBody(50, 1, "", &toolsList, db, "", "", cfgStruct.AgentConfig{}, &structs.Chats{})
+	if err != nil {
+		t.Fatalf("RequestBody failed: %v", err)
+	}
+
+	asstIdx, toolIdx, userDuringIdx, resultCount := -1, -1, -1, 0
+	for i, msg := range req.Messages {
+		if msg.Role == reqStruct.RoleAssistant {
+			for _, tc := range msg.ToolCalls {
+				if tc.ID == "call_push" {
+					asstIdx = i
+				}
+			}
+		}
+		if msg.Role == reqStruct.RoleTool && msg.ToolCallID == "call_push" {
+			toolIdx = i
+			resultCount++
+			if strings.Contains(msg.Content, "terminated") {
+				t.Errorf("真实结果已存在，不应补终止占位：%q", msg.Content)
+			}
+		}
+		if msg.Role == "user" && strings.Contains(msg.Content, "好了") {
+			userDuringIdx = i
+		}
+	}
+	if asstIdx < 0 || toolIdx < 0 {
+		t.Fatalf("expected assistant call and tool result: asst=%d tool=%d", asstIdx, toolIdx)
+	}
+	if resultCount != 1 {
+		t.Errorf("expected exactly one role:tool response for call_push, got %d", resultCount)
+	}
+	if toolIdx != asstIdx+1 {
+		t.Errorf("tool result must immediately follow its assistant tool_calls: asst=%d tool=%d", asstIdx, toolIdx)
+	}
+	if userDuringIdx >= 0 && userDuringIdx < toolIdx {
+		t.Errorf("user message sent during tool execution must not sit between call and result: user=%d tool=%d", userDuringIdx, toolIdx)
+	}
+}
+
 // TestRequestBody_RecentFiveToolTurns 只对最近 5 轮工具调用完整回放：
 // 更旧的工具调用轮次（assistant 带 tool_calls）降级为纯文本，其调用与结果均不回放。
 // TestRequestBody_AllToolTurnsReplayed 截断点之后所有工具调用轮次完整回放 tool_calls：

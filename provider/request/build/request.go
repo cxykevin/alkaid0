@@ -395,6 +395,11 @@ scan:
 		}
 	}
 
+	// 工具结果紧跟其调用：工具执行期间用户新发的消息（如"好了"/"continue"）以更大的 id
+	// 落在 assistant 调用与其结果之间，回放顺序变成 assistant(tool_calls) → user → tool。
+	// 数据库行序不可回改（id 只增），因此在拼装请求体时把结果消息上移到调用之后。
+	hoistToolResultsAfterCalls(responseDeltaList)
+
 	// 放置全局信息
 	// 放置额外动态信息
 	// trace/@task 内容块按落位计划插入历史（事件锚点 / 差分双锚点 / 消息列表末尾）；
@@ -510,6 +515,75 @@ scan:
 	}
 	logCacheFingerprint(response)
 	return response, nil
+}
+
+// hoistToolResultsAfterCalls 把 role:"tool" 结果消息上移到其调用 assistant 消息之后，
+// 保证「assistant(tool_calls) 之后紧跟全部对应结果」这一结构约束在请求体里成立。
+//
+// 背景：工具执行期间用户可以继续发言。用户消息按 id 追加落库，于是它会插在 assistant
+// 调用与其结果之间（真实案例：assistant 调用 run 推送 → 用户回"好了" → run 的结果才落库）。
+// 数据库行序不可回改（id 只增），拼出来的请求体就是 assistant(tool_calls) → user → tool，
+// OpenAI 兼容端点（DeepSeek 等）直接 400：
+//
+//	An assistant message with 'tool_calls' must be followed by tool messages responding to
+//	each 'tool_call_id'. (insufficient tool messages following tool_calls message)
+//
+// 只搬运真实结果：被终止调用（无结果行）的占位结果已在回放时紧跟调用，无需在此处理；
+// 结果确实缺失的调用同样不受影响。结果本身不依赖位置，位置只影响 API 校验与前缀缓存。
+func hoistToolResultsAfterCalls(l *list.List) {
+	if l == nil || l.Len() == 0 {
+		return
+	}
+	// 每个 tool_call_id 只登记首个结果元素，避免同一条消息被搬运两次
+	toolElByID := make(map[string]*list.Element)
+	for e := l.Front(); e != nil; e = e.Next() {
+		m, ok := e.Value.(reqStruct.Message)
+		if !ok || m.Role != reqStruct.RoleTool || m.ToolCallID == "" {
+			continue
+		}
+		if _, exists := toolElByID[m.ToolCallID]; !exists {
+			toolElByID[m.ToolCallID] = e
+		}
+	}
+	if len(toolElByID) == 0 {
+		return
+	}
+	for e := l.Front(); e != nil; {
+		next := e.Next()
+		m, ok := e.Value.(reqStruct.Message)
+		if !ok || m.Role != reqStruct.RoleAssistant || len(m.ToolCalls) == 0 {
+			e = next
+			continue
+		}
+		// 已经紧跟其后的连续结果（正常情况）：登记 id，并取该段最后一个元素做插入点
+		adjacent := make(map[string]struct{}, len(m.ToolCalls))
+		anchor := e
+		for c := e.Next(); c != nil; c = c.Next() {
+			t, ok := c.Value.(reqStruct.Message)
+			if !ok || t.Role != reqStruct.RoleTool {
+				break
+			}
+			adjacent[t.ToolCallID] = struct{}{}
+			anchor = c
+		}
+		for _, call := range m.ToolCalls {
+			if call.ID == "" {
+				continue
+			}
+			if _, ok := adjacent[call.ID]; ok {
+				continue
+			}
+			te, ok := toolElByID[call.ID]
+			if !ok || te == nil {
+				continue
+			}
+			// 被用户消息等隔开的结果上移：顺序即 assistant 的 tool_calls 顺序
+			l.MoveAfter(te, anchor)
+			anchor = te
+			adjacent[call.ID] = struct{}{}
+		}
+		e = next
+	}
 }
 
 // logCacheFingerprint 由 ALKAID0_DEBUG_CACHE=1 打开：每个请求打一行"消息指纹"，
