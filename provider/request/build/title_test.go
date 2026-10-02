@@ -1,6 +1,7 @@
 package build
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/cxykevin/alkaid0/config"
@@ -263,7 +264,7 @@ func TestTitle_ModelNotFound(t *testing.T) {
 	}
 }
 
-// TestTitleFull_AllMessages 测试完整对话重生成：全量消息按序纳入、指令在最后
+// TestTitleFull_AllMessages 测试完整对话重生成：对话消息按序纳入、工具结果不计入、指令在最后
 func TestTitleFull_AllMessages(t *testing.T) {
 	setupTestConfig()
 	config.GlobalConfig.Agent.TitleModel = 1
@@ -291,21 +292,20 @@ func TestTitleFull_AllMessages(t *testing.T) {
 		t.Fatal("Expected non-nil request")
 	}
 
-	// system + 6 条对话消息 + 标题指令
-	if len(request.Messages) != 8 {
-		t.Fatalf("Expected 8 messages, got %d", len(request.Messages))
+	// system + 5 条对话消息 + 标题指令（工具结果行既不算一条，也不进上下文）
+	if len(request.Messages) != 7 {
+		t.Fatalf("Expected 7 messages, got %d", len(request.Messages))
 	}
 	if request.Messages[0].Role != "system" {
 		t.Errorf("Messages[0] should be system, got %s", request.Messages[0].Role)
 	}
-	// 顺序：user, assistant, tool, communicate, user, assistant, 指令
+	// 顺序：user, assistant, communicate, user, assistant, 指令
 	expects := []struct {
 		role    string
 		content string
 	}{
 		{"user", "请求一"},
 		{"assistant", "回复一"},
-		{"user", `[{"return":"工具结果"}]`},
 		{"user", "拒绝原因"},
 		{"user", "请求二"},
 		{"assistant", "回复二"},
@@ -316,8 +316,59 @@ func TestTitleFull_AllMessages(t *testing.T) {
 				i+1, request.Messages[i+1].Role, request.Messages[i+1].Content, e.role, e.content)
 		}
 	}
-	if request.Messages[7].Role != "user" || request.Messages[7].Content != prompts.Title {
-		t.Errorf("Messages[7] should be the title instruction, got role=%s", request.Messages[7].Role)
+	if request.Messages[6].Role != "user" || request.Messages[6].Content != prompts.Title {
+		t.Errorf("Messages[6] should be the title instruction, got role=%s", request.Messages[6].Role)
+	}
+}
+
+// TestTitleFull_WindowLimit 验证标题重生成只取最近 titleWindowMessages 条对话消息：
+// 更旧的消息被窗口挤掉，工具结果行既不占窗口也不出现在上下文里。
+func TestTitleFull_WindowLimit(t *testing.T) {
+	setupTestConfig()
+	config.GlobalConfig.Agent.TitleModel = 1
+	db := setupTestDB(t)
+
+	// 5 条最旧的 user 消息（应被挤出窗口），随后 60 组「user 消息 + 工具结果行」
+	for i := range 5 {
+		if err := db.Create(&structs.Messages{ChatID: 1, Type: structs.MessagesRoleUser, Delta: fmt.Sprintf("旧-%d", i)}).Error; err != nil {
+			t.Fatalf("Failed to create test message: %v", err)
+		}
+	}
+	for i := range 60 {
+		msgs := []structs.Messages{
+			{ChatID: 1, Type: structs.MessagesRoleUser, Delta: fmt.Sprintf("新-%d", i)},
+			{ChatID: 1, Type: structs.MessagesRoleTool, Delta: `[{"return":"工具结果"}]`},
+		}
+		for _, msg := range msgs {
+			if err := db.Create(&msg).Error; err != nil {
+				t.Fatalf("Failed to create test message: %v", err)
+			}
+		}
+	}
+
+	request, err := TitleFull(1, db)
+	if err != nil {
+		t.Fatalf("TitleFull failed: %v", err)
+	}
+	if request == nil {
+		t.Fatal("Expected non-nil request")
+	}
+
+	// system + titleWindowMessages 条对话消息 + 标题指令
+	if len(request.Messages) != titleWindowMessages+2 {
+		t.Fatalf("Expected %d messages, got %d", titleWindowMessages+2, len(request.Messages))
+	}
+	// 窗口取最新的 50 条：最早一条是 新-10，最新一条是 新-59
+	if got := request.Messages[1].Content; got != "新-10" {
+		t.Errorf("Expected oldest kept message 新-10, got %q", got)
+	}
+	if got := request.Messages[len(request.Messages)-2].Content; got != "新-59" {
+		t.Errorf("Expected newest message 新-59, got %q", got)
+	}
+	for i, m := range request.Messages {
+		if m.Content == `[{"return":"工具结果"}]` {
+			t.Errorf("Messages[%d] must not carry tool results", i)
+		}
 	}
 }
 

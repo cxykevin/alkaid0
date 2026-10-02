@@ -455,3 +455,24 @@ func TestWithinOrEqual(t *testing.T) {
 		t.Fatalf("expected /a NOT within /a/b")
 	}
 }
+
+// TestAgentsContent 虚拟对象内容源：无指导文件时 ok=false（@agents 不注入），有文件时返回渲染内容
+func TestAgentsContent(t *testing.T) {
+	disableUserHomeDir(t)
+	session := &structs.Chats{Root: t.TempDir()}
+
+	if content, ok := AgentsContent(session); ok || content != "" {
+		t.Fatalf("expected no @agents content when no instruction files, got ok=%v content=%q", ok, content)
+	}
+
+	if err := os.WriteFile(filepath.Join(session.Root, "AGENTS.md"), []byte("agents 内容"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	content, ok := AgentsContent(session)
+	if !ok {
+		t.Fatal("expected ok=true when AGENTS.md exists")
+	}
+	if !strings.Contains(content, "agents 内容") {
+		t.Fatalf("expected AGENTS.md content, got %q", content)
+	}
+}

@@ -1909,12 +1909,13 @@ func TestCollectTracePathsAfter(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, path := range []string{"new.txt", "@temp/run"} {
+	// @task 与 @memory 一样是 trace 虚拟对象路径，按普通路径收集（不再特殊排除）
+	for _, path := range []string{"new.txt", "@temp/run", "@task"} {
 		if _, ok := paths[path]; !ok {
 			t.Errorf("expected %q to be retained", path)
 		}
 	}
-	for _, path := range []string{"old.txt", "child.txt", "@task"} {
+	for _, path := range []string{"old.txt", "child.txt"} {
 		if _, ok := paths[path]; ok {
 			t.Errorf("did not expect %q to be retained", path)
 		}

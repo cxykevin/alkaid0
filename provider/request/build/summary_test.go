@@ -1,6 +1,7 @@
 package build
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -748,5 +749,56 @@ func TestSummary_ExcludesToolCalls(t *testing.T) {
 	}
 	if !foundDone {
 		t.Error("summary input should keep pure-text assistant message")
+	}
+}
+
+// TestSummary_WindowLimit 断言总结窗口上限：只纳入最近 summaryWindowMessages 条消息
+//（工具轮计入窗口条数，只是不进正文），更旧的消息不被扫描、也不进总结上下文。
+func TestSummary_WindowLimit(t *testing.T) {
+	setupTestConfig()
+	config.GlobalConfig.Agent.SummaryModel = 1
+	db := setupTestDB(t)
+
+	// 先插入 10 条最旧消息（应被窗口挤掉），再插入 summaryWindowMessages 条（应全部纳入）
+	for i := range 10 {
+		if err := db.Create(&structs.Messages{ChatID: 1, Type: structs.MessagesRoleUser, Delta: fmt.Sprintf("old-%03d", i)}).Error; err != nil {
+			t.Fatalf("Failed to create test message: %v", err)
+		}
+	}
+	for i := range summaryWindowMessages {
+		if err := db.Create(&structs.Messages{ChatID: 1, Type: structs.MessagesRoleUser, Delta: fmt.Sprintf("new-%03d", i)}).Error; err != nil {
+			t.Fatalf("Failed to create test message: %v", err)
+		}
+	}
+
+	msgID, request, err := Summary(1, "", db)
+	if err != nil {
+		t.Fatalf("Summary failed: %v", err)
+	}
+	if request == nil {
+		t.Fatal("Expected non-nil request")
+	}
+	if msgID == 0 {
+		t.Fatal("Expected non-zero last msg id (compression boundary)")
+	}
+
+	// system + 窗口内 summaryWindowMessages 条 + 总结指令
+	if len(request.Messages) != summaryWindowMessages+2 {
+		t.Fatalf("Expected %d messages, got %d", summaryWindowMessages+2, len(request.Messages))
+	}
+	var joined strings.Builder
+	for _, m := range request.Messages {
+		joined.WriteString(m.Content)
+	}
+	all := joined.String()
+	// 窗口内最新一条在；窗口外的最旧一批不在
+	newest := fmt.Sprintf("new-%03d", summaryWindowMessages-1)
+	if !strings.Contains(all, newest) || !strings.Contains(all, "new-000") {
+		t.Errorf("expected window contents (new-000 … %s) in summary request", newest)
+	}
+	for i := range 10 {
+		if strings.Contains(all, fmt.Sprintf("old-%03d", i)) {
+			t.Errorf("old-%03d is outside the summary window and must be excluded", i)
+		}
 	}
 }

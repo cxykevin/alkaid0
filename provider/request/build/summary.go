@@ -12,6 +12,12 @@ import (
 
 const summaryKeepNumber = 6
 
+// summaryWindowMessages 总结上下文纳入的消息条数上限（含工具轮：工具结果行占用窗口，
+// 只是不产生正文，见下方 skipMsg）。
+// 摘要按需截断即可、不参与前缀稳定性，因此与 maxReplayPage 的"只增不减"无关。
+// 该值同时决定压缩边界能回溯多远：窗口扫不到的更旧消息既不被总结、也不再回放。
+const summaryWindowMessages = 250
+
 // Summary 请求总结
 func Summary(chatID uint32, agentID string, db *gorm.DB) (uint64, *reqStruct.ChatCompletionRequest, error) {
 	keepNum := summaryKeepNumber
@@ -48,6 +54,9 @@ func SummaryWithKeepNumber(chatID uint32, agentID string, db *gorm.DB, keepNum i
 	// 生成 messages
 	responseDeltaList := list.New()
 	exitFlag := false
+	// scanned 统计已纳入窗口的消息条数（含被 skipMsg 跳过的工具轮），windowReached 表示窗口已满。
+	scanned := 0
+	windowReached := false
 	var lastMsgID uint64
 	var totalMsgCount int64
 	if agentID == "" {
@@ -60,7 +69,9 @@ func SummaryWithKeepNumber(chatID uint32, agentID string, db *gorm.DB, keepNum i
 		}
 	}
 
-	for offsetPage := range maxPage {
+	// 窗口条数可能超过 maxPage*readPageSize（250 > 200），分页上限由窗口推导。
+	windowPages := (summaryWindowMessages + readPageSize - 1) / readPageSize
+	for offsetPage := range windowPages {
 		var obj []structs.Messages
 		if agentID == "" {
 			if err := db.Where("`chat_id` = ? AND (`agent_id` = \"\" OR `agent_id` IS NULL)", chatID).Order("id DESC").Offset(offsetPage * readPageSize).Limit(readPageSize).Find(&obj).Error; err != nil {
@@ -75,6 +86,12 @@ func SummaryWithKeepNumber(chatID uint32, agentID string, db *gorm.DB, keepNum i
 			break
 		}
 		for idx, v := range obj {
+			// 窗口已满：不再向更旧的方向扫描（工具轮也计入窗口，只是在下方被跳过正文）。
+			if scanned >= summaryWindowMessages {
+				windowReached = true
+				break
+			}
+			scanned++
 			// 最近 keepNum 条保持完整（不设置 lastMsgID、不触发 exitFlag），
 			// 但仍作为上下文输入给总结模型——否则模型看不到最近的进展，
 			// 在 summary 提示词强制 100-300 词的约束下会对缺失内容产生幻觉（瞎编）。
@@ -185,7 +202,7 @@ func SummaryWithKeepNumber(chatID uint32, agentID string, db *gorm.DB, keepNum i
 				break
 			}
 		}
-		if exitFlag {
+		if exitFlag || windowReached {
 			break
 		}
 	}

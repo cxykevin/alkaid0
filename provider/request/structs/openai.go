@@ -44,6 +44,9 @@ type ChatCompletionRequest struct {
 	Tools               []Tool                       `json:"tools,omitempty"`
 	ToolChoice          any                          `json:"tool_choice,omitempty"`
 	ParallelToolCalls   *bool                        `json:"parallel_tool_calls,omitempty"`
+	// PromptCacheKey 显式缓存路由键（OpenAI 系网关用来把同一会话×同一模型路由到同一缓存分片），
+	// 由 ProviderSpecificConfig.EnablePromptCacheKey 打开；值不含任何对话内容。
+	PromptCacheKey string `json:"prompt_cache_key,omitempty"`
 }
 
 // Tool 请求级工具定义（OpenAI tools 参数）
@@ -86,6 +89,18 @@ type StreamToolCallFunc struct {
 	Arguments string `json:"arguments,omitempty"`
 }
 
+// PromptCacheControl 显式缓存断点（cache_control），挂在 content block 上。
+type PromptCacheControl struct {
+	Type string `json:"type"` // 目前仅 "ephemeral"
+}
+
+// promptCacheContentBlock 带缓存断点的文本内容块（Anthropic content block 形态）。
+type promptCacheContentBlock struct {
+	Type         string              `json:"type"`
+	Text         string              `json:"text"`
+	CacheControl *PromptCacheControl `json:"cache_control,omitempty"`
+}
+
 // Message 消息结构体
 type Message struct {
 	Role             string           `json:"role"` // RoleUser | RoleAssistant | RoleSystem | RoleTool
@@ -93,14 +108,36 @@ type Message struct {
 	ReasoningContent *string          `json:"reasoning_content,omitempty"`
 	ToolCalls        []StreamToolCall `json:"tool_calls"`             // assistant 消息的 tool_calls（含流式 delta 反序列化目标）
 	ToolCallID       string           `json:"tool_call_id,omitempty"` // tool 角色结果关联的调用 id
+	// CacheControl 显式缓存断点（仅出站设置，由 ProviderSpecificConfig.EnablePromptCacheBreakpoints 打开）：
+	// 序列化时把 content 转成带 cache_control 的块数组，字段本身不出现在报文里。
+	CacheControl *PromptCacheControl `json:"-"`
 }
 
-// MarshalJSON 自定义序列化：assistant 消息携带 tool_calls 且正文为空时省略 content 字段。
-// OpenAI 规范允许携带 tool_calls 的 assistant 消息不带 content；Anthropic 转换代理会拒绝
-// 空 text content block（text content blocks must be non-empty）。此前 Content 无 omitempty，
-// 纯工具调用回放会发出 "content":""。
+// MarshalJSON 自定义序列化：
+//   - 带 CacheControl 的纯文本消息：content 转成带 cache_control 的块数组（显式缓存断点）；
+//   - assistant 消息携带 tool_calls 且正文为空时省略 content 字段：OpenAI 规范允许携带
+//     tool_calls 的 assistant 消息不带 content；Anthropic 转换代理会拒绝空 text content
+//     block（text content blocks must be non-empty）。此前 Content 无 omitempty，
+//     纯工具调用回放会发出 "content":""。
 func (m Message) MarshalJSON() ([]byte, error) {
 	type messageAlias Message
+	if m.CacheControl != nil && m.Content != "" && len(m.ToolCalls) == 0 {
+		// 显式缓存断点：cache_control 只能挂在 content block 上，把纯文本 content
+		// 转成单元素块数组 [{"type":"text","text":...,"cache_control":{"type":"ephemeral"}}]。
+		// 无正文或带 tool_calls 的消息不参与（前者无法挂块，后者块形态与 tool_use 混排会被代理拒绝）。
+		type messageWithCacheControl struct {
+			messageAlias
+			Content []promptCacheContentBlock `json:"content"`
+		}
+		return json.Marshal(messageWithCacheControl{
+			messageAlias: messageAlias(m),
+			Content: []promptCacheContentBlock{{
+				Type:         "text",
+				Text:         m.Content,
+				CacheControl: m.CacheControl,
+			}},
+		})
+	}
 	if m.Content == "" && len(m.ToolCalls) > 0 {
 		// 外层 Content 指针遮蔽内嵌别名的 Content 字段，nil + omitempty 即省略该字段
 		type messageWithoutContent struct {

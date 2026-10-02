@@ -178,6 +178,16 @@
                                         "type": "boolean",
                                         "description": "收尾消息兼容模式：请求以 role:\"tool\"（tool_result）结果消息结尾时追加一条 user 收尾消息，适配拒绝以 tool_result 结尾请求的 OpenAI→Anthropic 转换代理（默认关闭）",
                                         "default": false
+                                    },
+                                    "EnablePromptCacheKey": {
+                                        "type": "boolean",
+                                        "description": "显式缓存路由键：按会话（子代理再按 agent）生成 prompt_cache_key，让网关把同一会话路由到同一前缀缓存分片（默认关闭）",
+                                        "default": false
+                                    },
+                                    "EnablePromptCacheBreakpoints": {
+                                        "type": "boolean",
+                                        "description": "显式缓存断点（Anthropic 系）：在 system 与最后一条历史回放消息上插入 cache_control:{\"type\":\"ephemeral\"}，让网关显式缓存稳定前缀（默认关闭）",
+                                        "default": false
                                     }
                                 }
                             }

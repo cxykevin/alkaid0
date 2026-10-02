@@ -13,6 +13,10 @@ import (
 // titleMaxToken 标题生成的最大 token 数（标题很短，小预算即可）
 const titleMaxToken = 256
 
+// titleWindowMessages 标题重生成（TitleFull）纳入的对话消息条数上限。
+// 工具调用（工具结果行）既不计入该窗口，也不进标题上下文：它们对标题没有信息量。
+const titleWindowMessages = 50
+
 // Title 构建会话标题生成请求（首次生成：第一条用户请求 + 第一条 AI 响应）。
 // 消息不足时返回 (nil, nil)，调用方应跳过。
 func Title(chatID uint32, db *gorm.DB) (*reqStruct.ChatCompletionRequest, error) {
@@ -36,10 +40,13 @@ func Title(chatID uint32, db *gorm.DB) (*reqStruct.ChatCompletionRequest, error)
 	})
 }
 
-// TitleFull 构建会话标题生成请求（compress 重生成：完整对话）。
+// TitleFull 构建会话标题生成请求（compress 重生成：最近 titleWindowMessages 条对话消息）。
 // 无有效消息时返回 (nil, nil)，调用方应跳过。
 func TitleFull(chatID uint32, db *gorm.DB) (*reqStruct.ChatCompletionRequest, error) {
 	responseDeltaList := list.New()
+	// collected 统计已纳入窗口的对话消息条数；工具结果行不计数（见下）。
+	collected := 0
+	windowReached := false
 	for offsetPage := range maxPage {
 		var obj []structs.Messages
 		if err := db.Where("`chat_id` = ? AND (`agent_id` = \"\" OR `agent_id` IS NULL)", chatID).Order("id DESC").Offset(offsetPage * readPageSize).Limit(readPageSize).Find(&obj).Error; err != nil {
@@ -49,6 +56,13 @@ func TitleFull(chatID uint32, db *gorm.DB) (*reqStruct.ChatCompletionRequest, er
 			break
 		}
 		for _, v := range obj {
+			if collected >= titleWindowMessages {
+				windowReached = true
+				break
+			}
+			if v.Type == structs.MessagesRoleTool {
+				continue // 工具调用结果：不算一条，也不进标题上下文
+			}
 			if v.Delta == "" {
 				continue // 跳过无正文的占位消息（工具轮/被中断轮）
 			}
@@ -56,6 +70,10 @@ func TitleFull(chatID uint32, db *gorm.DB) (*reqStruct.ChatCompletionRequest, er
 				Role:    msgRole[v.Type],
 				Content: v.Delta,
 			})
+			collected++
+		}
+		if windowReached {
+			break
 		}
 	}
 	if responseDeltaList.Len() == 0 {

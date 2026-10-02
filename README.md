@@ -100,6 +100,9 @@ C:\ProgramData\alkaid0\config.json
                     "EnableTemperature": false,
                     "EnableUsage": true,
                     "EnableToolCallingCompat": false,
+                    "EnableTrailingUserMessage": false,
+                    "EnablePromptCacheKey": false,
+                    "EnablePromptCacheBreakpoints": false,
                     "Dimension": 0
                 }
             },
@@ -260,6 +263,16 @@ C:\ProgramData\alkaid0\config.json
 > `MaxCompletionTokens` 是**最大输出 token 数**，会作为请求里的 `max_completion_tokens` 发出，
 > 并夹到 4096–32768（未配置时用 16384）。
 
+> 转换代理兼容开关（默认关闭）：只在用 OpenAI→Anthropic 转换代理、且代理返回 400 校验错误时才按需开启。
+> `EnableToolCallingCompat` 把「一个 assistant 携带多个 tool_calls」的历史消息拆成逐条「单 tool_call + 结果」，
+> 适配会逐条转换 `role:"tool"` 消息的代理；`EnableTrailingUserMessage` 在请求以工具结果（`role:"tool"`）结尾时
+> 追加一条 user 收尾消息（仅存在于本次请求、不写入数据库），适配拒绝以 tool_result 结尾请求的代理。
+
+> 前缀缓存相关开关（默认关闭，按供应商选择）：`EnablePromptCacheKey` 在请求里带上 `prompt_cache_key`
+> （值 = 会话/子代理标识，不含任何对话内容），让 OpenAI 系网关把同一会话路由到同一缓存分片；
+> `EnablePromptCacheBreakpoints` 在 system 消息与最后一条历史回放消息上插入 Anthropic 的
+> `cache_control:{"type":"ephemeral"}` 断点，让网关显式缓存这段稳定前缀（需要网关支持该字段）。
+
 > 沙盒当前在所有平台被**强制禁用**（临时策略：沙盒存在 Linux 缺少 `/dev/shm` 等已知问题，修复前
 `run` 工具一律在沙盒外执行）。配置里的 `DisableSandbox` 与 `run` 的 `sandbox` 参数
 > 暂时不产生效果，后续版本恢复。
@@ -348,6 +361,7 @@ C:\ProgramData\alkaid0\config.json
 - `/reload`: 从磁盘重载配置（无参数）
 - `/s [short]`: 发送已配置短语，`/s <short>` 展开并发送，`/s`（无参数）列出所有短语
 - `/title [标题]`: 设置会话标题，无参数时回退到 AI 生成标题
+- `/usage [reset]`: 显示全局 token 用量（请求数、prompt / completion / cached token 与缓存命中率，并按模型分组）；`reset` 清零统计
 - `/version`: 显示版本信息（无参数）
 
 ## 反馈与遥测（Feedback & Telemetry）

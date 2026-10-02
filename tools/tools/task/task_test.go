@@ -7,6 +7,7 @@ import (
 	"github.com/cxykevin/alkaid0/storage"
 	"github.com/cxykevin/alkaid0/storage/structs"
 	"github.com/cxykevin/alkaid0/tools/tools/edit"
+	"github.com/cxykevin/alkaid0/tools/tools/trace"
 )
 
 func strPtr(s string) *any {
@@ -205,30 +206,51 @@ func TestWriteTask_ClearTask(t *testing.T) {
 	}
 }
 
-// TestBuildGlobalPrompt_Empty 测试空任务时返回提示而非空串
-func TestBuildGlobalPrompt_Empty(t *testing.T) {
-	session := &structs.Chats{}
-	out, err := buildGlobalPrompt(session)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+// TestTaskContent_Empty 测试空任务时返回提示而非空串（虚拟对象内容块恒非空）
+func TestTaskContent_Empty(t *testing.T) {
+	out, ok := TaskContent(&structs.Chats{})
+	if !ok {
+		t.Fatalf("expected ok=true for empty task")
 	}
 	if out == "" {
 		t.Fatalf("expected non-empty prompt for empty task")
 	}
 }
 
-// TestBuildGlobalPrompt_NonEmpty 测试非空任务时渲染 markdown
-func TestBuildGlobalPrompt_NonEmpty(t *testing.T) {
+// TestTaskContent_NonEmpty 测试非空任务时渲染 markdown
+func TestTaskContent_NonEmpty(t *testing.T) {
 	session := &structs.Chats{Task: "- [X] 任务: 详情"}
-	out, err := buildGlobalPrompt(session)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+	out, ok := TaskContent(session)
+	if !ok {
+		t.Fatalf("expected ok=true")
 	}
 	if out == "" {
 		t.Fatalf("expected non-empty output")
 	}
 	if !strings.Contains(out, "- [X] 任务: 详情") {
 		t.Fatalf("expected task content in output, got %q", out)
+	}
+}
+
+// TestTaskVirtualContentRegistered @task 已作为虚拟对象接入 trace：
+// RenderTraceBlocks 直接按提供者产出内容块，不再依赖全局 PreHook。
+func TestTaskVirtualContentRegistered(t *testing.T) {
+	session := newTestSession(t)
+	session.Task = "- [X] 任务: 详情"
+	_, blocks, err := trace.RenderTraceBlocks(session)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	fb, ok := blocks["@task"]
+	if !ok {
+		t.Fatalf("expected @task block from trace virtual content, got %v", blocks)
+	}
+	rendered, err := trace.RenderTraceBlock([]trace.FileBlock{fb})
+	if err != nil {
+		t.Fatalf("unexpected render error: %v", err)
+	}
+	if !strings.Contains(rendered, "- [X] 任务: 详情") {
+		t.Fatalf("expected task content in rendered block, got %q", rendered)
 	}
 }
 
@@ -252,31 +274,5 @@ func TestUpdateInfo(t *testing.T) {
 	}
 	if pi.From != "task" {
 		t.Fatalf("expected From=task, got %q", pi.From)
-	}
-}
-
-// TestBuildGlobalPrompt_WithTaskEvent @task 有最近 edit 事件时，顶部不放，事件块存 session。
-func TestBuildGlobalPrompt_WithTaskEvent(t *testing.T) {
-	session := &structs.Chats{
-		Task: "- [X] 任务: 详情",
-		TemporyDataOfSession: map[string]any{
-			structs.TempKeyTraceEvents: map[string]*structs.TraceEvent{
-				"@task": {MsgID: 1, ToolCallID: "call_1", IsEdit: true, IsTask: true, InRecent: true},
-			},
-		},
-	}
-	out, err := buildGlobalPrompt(session)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if out != "" {
-		t.Fatalf("expected empty top output when @task has event, got %q", out)
-	}
-	block, ok := session.TemporyDataOfSession[structs.TempKeyTaskEventBlock].(string)
-	if !ok || block == "" {
-		t.Fatalf("expected task event block in session")
-	}
-	if !strings.Contains(block, "- [X] 任务: 详情") {
-		t.Fatalf("expected task content in event block, got %q", block)
 	}
 }

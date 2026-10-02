@@ -21,6 +21,13 @@ type ProviderSpecificConfig struct {
 	Dimension                 int  `default:"0"`     // Embedding 模型维度, 嵌入模型必填
 	EnableToolCallingCompat   bool `default:"false"` // 历史回放兼容模式：把"一个 assistant 携带多个 tool_calls"的消息拆分为逐条"单 tool_call + 结果"，适配逐条转换 role:tool 消息的 OpenAI→Anthropic 代理（默认关闭）
 	EnableTrailingUserMessage bool `default:"false"` // 收尾消息兼容模式：请求以 role:"tool"（tool_result）结果消息结尾时追加一条 user 收尾消息，适配拒绝以 tool_result 结尾请求的 OpenAI→Anthropic 转换代理（默认关闭）
+	// EnablePromptCacheKey 请求级显式缓存路由键（prompt_cache_key = 会话/模型/子代理标识），
+	// 供 OpenAI 系网关把同一会话路由到同一缓存分片，提高前缀缓存命中（默认关闭）。
+	EnablePromptCacheKey bool `default:"false"`
+	// EnablePromptCacheBreakpoints 显式缓存断点（Anthropic 系）：在稳定前缀（system + 最后一条
+	// 历史回放消息）末尾插入 cache_control:{"type":"ephemeral"}，让网关自己打缓存标记
+	// （默认关闭；仅对识别该字段的 Anthropic 兼容端点有效）。
+	EnablePromptCacheBreakpoints bool `default:"false"`
 }
 
 // ModelConfig 单个模型配置结构

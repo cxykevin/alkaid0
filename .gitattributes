@@ -1,0 +1,6 @@
+# 统一行尾：仓库内文本文件一律以 LF 存储与检出。
+#
+# 理由：Go 工具链与 gofmt 的输出换行符就是 LF，CI 也在 Linux/macOS 上构建；
+# 统一之后 Windows 侧编辑不会再把 CR 带进 diff（README 曾出现过一处遗留 CR）。
+# text=auto 让 git 自行按内容判定二进制文件，无需在此逐条列举二进制后缀。
+* text=auto eol=lf

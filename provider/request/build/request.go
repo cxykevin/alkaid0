@@ -25,6 +25,19 @@ import (
 const readPageSize = 20
 const maxPage = 10
 
+// maxReplayPage 历史回放与事件窗口的页数上限（readPageSize*maxReplayPage 条）。
+//
+// 这两个窗口必须"只增不减"：DeepSeek 等供应商的前缀缓存按请求前缀逐字节匹配，
+// 窗口一旦向后滑动（丢掉最旧的消息），分歧点就落在历史第一条消息上——system 之后的
+// 整段历史全部按未命中计费。实测（205 条消息、再追加一条）窗口滑动后首个差异下标=1，
+// 可复用前缀只剩 system，命中率上限从 ~95% 跌到 ~20%。
+//
+// 上下文的真正上限是压缩阈值（CompressSize，由 usage 触发摘要），这里只需要一个
+// 防病态的兜底值，因此给得足够大，让常规长会话根本碰不到它。
+// 摘要与标题生成另有独立窗口（summaryWindowMessages 250 条 / titleWindowMessages 50 条）：
+// 它们按需截断即可，不参与前缀稳定性。
+const maxReplayPage = 100
+
 // max_completion_tokens（最大输出 token 数）的默认值与允许区间。
 // 下限来自网关对推理模型最小输出预算的要求，上限避免单次请求申请过大输出。
 const (
@@ -81,6 +94,10 @@ func RequestBody(chatID uint32, modelID int32, agentCode string, toolsList *[]*p
 	// 配置模型信息
 	response.Model = modelConfig.ModelID
 	response.Stream = true
+	// 显式缓存路由键：同一会话 × 同一模型（含子代理）恒定，供 OpenAI 系网关把请求路由到同一缓存分片
+	if modelConfig.ProviderSpecificConfig.EnablePromptCacheKey {
+		response.PromptCacheKey = promptCacheKeyValue(chatID, modelID, agentCode)
+	}
 	if toolsList != nil {
 		// 原生模式：工具定义通过 API tools 参数声明（而非注入提示词）
 		tools := make([]reqStruct.Tool, 0, len(*toolsList))
@@ -153,7 +170,7 @@ func RequestBody(chatID uint32, modelID int32, agentCode string, toolsList *[]*p
 	toolCallIDs = make(map[string]struct{})
 	resultIDs = make(map[string]struct{})
 scan:
-	for offsetPage := range maxPage {
+	for offsetPage := range maxReplayPage {
 		var obj []structs.Messages
 		if agentCode == "" {
 			if err := db.Where("`chat_id` = ? AND (`agent_id` = \"\" OR `agent_id` IS NULL)", chatID).Order("id DESC").Offset(offsetPage * readPageSize).Limit(readPageSize).Find(&obj).Error; err != nil {
@@ -202,7 +219,7 @@ scan:
 	// findEventAnchor 会从它走到其后最后一条 role:tool，正好是列表末尾。
 	var lastRenderedMsgID uint64
 	exitFlag := false
-	for offsetPage := range maxPage {
+	for offsetPage := range maxReplayPage {
 		var obj []structs.Messages
 		if agentCode == "" {
 			if err := db.Where("`chat_id` = ? AND (`agent_id` = \"\" OR `agent_id` IS NULL)", chatID).Order("id DESC").Offset(offsetPage * readPageSize).Limit(readPageSize).Find(&obj).Error; err != nil {
@@ -400,9 +417,17 @@ scan:
 	// 数据库行序不可回改（id 只增），因此在拼装请求体时把结果消息上移到调用之后。
 	hoistToolResultsAfterCalls(responseDeltaList)
 
+	// 显式缓存断点（Anthropic 系，EnablePromptCacheBreakpoints）：稳定前缀的末尾 =
+	// 此刻的最后一条历史回放消息。其后注入的事件内容块（事件跟随 / 末尾落位）、系统通知、
+	// 收尾消息每轮都可能变化，断点只能打在它们之前，前缀才真正稳定可命中。
+	var cacheStableEnd *list.Element
+	if modelConfig.ProviderSpecificConfig.EnablePromptCacheBreakpoints {
+		cacheStableEnd = responseDeltaList.Back()
+	}
+
 	// 放置全局信息
 	// 放置额外动态信息
-	// trace/@task 内容块按落位计划插入历史（事件锚点 / 差分双锚点 / 消息列表末尾）；
+	// trace 内容块按落位计划插入历史（事件锚点 / 差分双锚点 / 消息列表末尾）；
 	// 锚点不可渲染时回退末尾，不再回退到"历史之前的顶部聚合"（见 insertEventContentBlocks 注释）。
 	if chatLn.TemporyDataOfSession != nil {
 		em, _ := chatLn.TemporyDataOfSession[structs.TempKeyTraceEvents].(map[string]*structs.TraceEvent)
@@ -510,8 +535,15 @@ scan:
 
 	// list 转 slice
 	response.Messages = make([]reqStruct.Message, responseDeltaList.Len())
+	cacheStableIdx := -1
 	for i, j := 0, responseDeltaList.Front(); j != nil; i, j = i+1, j.Next() {
 		response.Messages[i] = j.Value.(reqStruct.Message)
+		if j == cacheStableEnd {
+			cacheStableIdx = i
+		}
+	}
+	if modelConfig.ProviderSpecificConfig.EnablePromptCacheBreakpoints {
+		applyPromptCacheBreakpoints(response, cacheStableIdx)
 	}
 	logCacheFingerprint(response)
 	return response, nil
@@ -611,6 +643,68 @@ func logCacheFingerprint(response *reqStruct.ChatCompletionRequest) {
 	logger.Info("[cache] n=%d tools=%s msgs=%s", len(response.Messages), hex.EncodeToString(toolsSum[:6]), builder.String())
 }
 
+// promptCacheKeyValue 生成显式缓存路由键（prompt_cache_key）：同一会话（同一 chatID）× 同一模型
+// 恒定，不同会话/不同模型不同，子代理再按 agentCode 细分。只含会话/模型/子代理标识，不含任何
+// 对话内容。网关据此把同一条会话的请求路由到同一缓存分片，避免会话间互相挤掉前缀缓存。
+//
+// 带模型维度是必要的：缓存本身按模型隔离，同一会话切换模型时若沿用同一个 key，
+// 网关会把两个模型的请求当作同一分片，路由不到各自已有的缓存。
+func promptCacheKeyValue(chatID uint32, modelID int32, agentCode string) string {
+	key := fmt.Sprintf("alkaid0-chat-%d-m%d", chatID, modelID)
+	if agentCode != "" {
+		key += "-" + agentCode
+	}
+	return key
+}
+
+// applyPromptCacheBreakpoints 给"稳定前缀"打显式缓存断点（Anthropic 系 cache_control，
+// 默认关闭）。断点挂在 content block 上（Message.MarshalJSON 负责转块），位置决定缓存前缀长度：
+//
+//	索引 0 的 system 消息 —— 缓存 tools + system（Gateway 按 tools → system → messages 组装前缀）；
+//	stableEndIdx 起向前的第一条纯文本 user/assistant 消息 —— 缓存整段历史。
+//
+// 两处断点分工：历史变化影响不到 system 断点，system 变化（如切换审批规则）影响不到已经
+// 命中过的历史分片。stableEndIdx < 0（本轮没有历史回放消息）或索引 0 不是 system（异常结构）
+// 时跳过对应断点。
+func applyPromptCacheBreakpoints(response *reqStruct.ChatCompletionRequest, stableEndIdx int) {
+	if response == nil || len(response.Messages) == 0 {
+		return
+	}
+	set := func(m *reqStruct.Message) {
+		if m == nil || m.CacheControl != nil {
+			return
+		}
+		m.CacheControl = &reqStruct.PromptCacheControl{Type: "ephemeral"}
+	}
+	// system 消息内容由 build 侧拼装，必为纯文本，直接挂第一处断点
+	if response.Messages[0].Role == reqStruct.RoleSystem && response.Messages[0].Content != "" {
+		set(&response.Messages[0])
+	}
+	for i := stableEndIdx; i > 0; i-- {
+		if cacheBreakpointEligible(response.Messages[i]) {
+			set(&response.Messages[i])
+			break
+		}
+	}
+}
+
+// cacheBreakpointEligible 判断历史消息能否承载显式缓存断点：只允许**纯文本 user/assistant**。
+//
+// 两类消息明确排除：
+//   - 带 tool_calls 的 assistant：Message.MarshalJSON 会把 content 转成块数组，与 tool_calls
+//     混排会被 OpenAI→Anthropic 代理拒绝；
+//   - role:"tool"（tool_result）：结果内容转块会与代理自己生成的 tool_result 块冲突
+//     （tool_result 的 content 必须是 tool_result 类型）。理想断点位在最后一个 tool_result 块上，
+//     但 OpenAI 报文表达不了，因此这里退回更早的纯文本消息——代价是该工具轮不进缓存前缀。
+//
+// 结果：请求以工具轮收尾时（agentic 循环的常见形态），断点落在本轮之前最后一条纯文本消息。
+func cacheBreakpointEligible(m reqStruct.Message) bool {
+	if m.Content == "" || len(m.ToolCalls) > 0 {
+		return false
+	}
+	return m.Role == reqStruct.RoleUser || m.Role == reqStruct.RoleAssistant
+}
+
 // storedToolCall 存储层工具调用项（tool_calling_json_string 内部格式 [{"name","id","parameters"}]）。
 // 存储层为标准 encoding/json 序列化（nativeAcc.Origin()），此处直接解析，避免依赖 request 包（循环依赖）。
 // id/name 用于回放调用结构；Parameters 保留真实参数并原样回放（见 replayToolArguments）。
@@ -686,7 +780,7 @@ func parseStoredToolResults(payload string) ([]storedToolResult, error) {
 // 从新到旧扫描，先扫到的即最近事件，天然满足"只留最新"。
 // CollectTracePathsAfter 收集 summary 边界之后仍发生过 read/edit 的 trace 路径。
 // afterMsgID 是已写入 Summary 的消息 ID；只扫描 ID 更大的消息，避免把已压缩历史
-// 中的工具调用重新带回当前上下文。@task 是虚拟任务对象，不属于 Traces 表。
+// 中的工具调用重新带回当前上下文。虚拟对象（@task/@memory 等）与普通文件同等对待。
 func CollectTracePathsAfter(db *gorm.DB, chatID uint32, agentID string, afterMsgID uint64) (map[string]struct{}, error) {
 	paths := make(map[string]struct{})
 	var messages []structs.Messages
@@ -712,7 +806,7 @@ func CollectTracePathsAfter(db *gorm.DB, chatID uint32, agentID string, afterMsg
 				continue
 			}
 			path := toolCallPath(call)
-			if path == "" || path == "@task" {
+			if path == "" {
 				continue
 			}
 			if toolCallUnread(call) {
@@ -733,13 +827,14 @@ func eventWindowQuery(db *gorm.DB, chatID uint32, agentCode string) *gorm.DB {
 	return db.Where("chat_id = ? AND agent_id = ?", chatID, agentCode)
 }
 
-// scanEventWindow 按 id 倒序分页读取事件窗口（最多 maxPage*readPageSize 条），
+// scanEventWindow 按 id 倒序分页读取事件窗口（最多 maxReplayPage*readPageSize 条），
 // 遇到 summary（压缩边界）即截断，返回按 id 正序排列的消息切片。
-// 与 RequestBody 的回放窗口同源，保证事件位置与回放内容一一对应。
+// 与 RequestBody 的回放窗口同源（同一个 maxReplayPage），保证事件位置与回放内容一一对应；
+// 窗口若与回放窗口不一致，事件会先于回放内容滑出，内容块被反复前移、前缀缓存每轮白丢。
 func scanEventWindow(db *gorm.DB, chatID uint32, agentCode string) ([]structs.Messages, error) {
-	desc := make([]structs.Messages, 0, readPageSize*maxPage)
+	desc := make([]structs.Messages, 0, readPageSize*maxReplayPage)
 scan:
-	for offsetPage := range maxPage {
+	for offsetPage := range maxReplayPage {
 		var obj []structs.Messages
 		if err := eventWindowQuery(db, chatID, agentCode).
 			Order("id DESC").Offset(offsetPage * readPageSize).Limit(readPageSize).Find(&obj).Error; err != nil {
@@ -791,7 +886,7 @@ func tempPathFromToolResult(returnJSON string) string {
 // 事件 MsgID 一律指向产生该结果的 assistant 消息：findEventAnchor 会走到该消息之后最后一条
 // 连续 role:tool，因此并行工具调用的内容块不会被插进 tool 结果序列中间。
 // 扫描遇到 summary（压缩边界）即停止——边界之前的历史不再回放，其 trace 也不该注入。
-// @task 是虚拟任务对象，不属于 Traces 表。
+// 虚拟对象（@tree/@task/@memory）走 read/edit 参数路径，与普通文件一样产生事件。
 func DetectTraceEvents(db *gorm.DB, session *structs.Chats, agentCode string) error {
 	window, err := scanEventWindow(db, session.ID, agentCode)
 	if err != nil {
@@ -930,18 +1025,14 @@ type eventInsertGroup struct {
 	paths  []string
 }
 
-// insertEventContentBlocks 按事件把 trace/@task 内容块插入历史（紧跟最近 read/edit 事件之后），
-// 返回不可锚定事件的顶部 fallback 内容（独立 user 消息，插在 addUserPrompt 之后）。
-// 内容块在 PreHook 阶段已渲染并暂存于 chatLn.TemporyDataOfSession，此处只做拼装插入，不重复读盘。
-//
-// 第二个返回值是「方案1 实际注入完整内容」的 read 事件（path → 事件）：调用方据此省略该文件
-// 在注入点之前的 edit 调用（见 omitSupersededEditCalls）。
-// insertEventContentBlocks 按落位计划把 trace/@task 内容块插入历史，返回"实际注入了完整内容"的
-// read 事件集合（供调用方省略被完整内容覆盖的历史 edit 调用）。
+// insertEventContentBlocks 按落位计划把 trace 内容块（含 @tree/@task/@memory 虚拟对象）插入历史，
+// 返回"实际注入了完整内容"的 read 事件集合（供调用方省略被完整内容覆盖的历史 edit 调用，
+// 见 omitSupersededEditCalls）。内容块已由 trace 层渲染并暂存于 chatLn.TemporyDataOfSession，
+// 此处只做落位插入，不重复读盘。
 //
 // 落位来源（docs/trace-cache-spec.md §4.2 / §4.4）：
 //   - trace.AnchorPlan（trace 层决策）：Full=完整块锚指定消息；Diff=旧块+diff 双锚点；Tail=消息列表末尾；
-//   - 无计划的 path（@task、未走 trace 层的调用路径）：差分计划优先，否则沿用"紧跟最新事件"的旧语义。
+//   - 无计划的 path（未走 trace 层的调用路径）：差分计划优先，否则沿用"紧跟最新事件"的旧语义。
 //
 // 锚点不可渲染时一律回退到消息列表末尾，不再回退到"历史之前的顶部聚合"：顶部 fallback 会把内容块
 // 放到整个对话之前，它一变，后续全部历史都失去前缀缓存（本次修复的核心）。
@@ -951,7 +1042,6 @@ func insertEventContentBlocks(l *list.List, dbIDToElement map[uint64]*list.Eleme
 	plans map[string]*trace.AnchorPlan, chatLn *structs.Chats) map[string]*structs.TraceEvent {
 
 	fileBlocks, _ := chatLn.TemporyDataOfSession[structs.TempKeyTraceFileBlocks].(map[string]trace.FileBlock)
-	taskBlock, _ := chatLn.TemporyDataOfSession[structs.TempKeyTaskEventBlock].(string)
 
 	// findAnchor 把"消息 id"解析为插入锚点：该消息之后最后一条连续 role:tool，否则该消息本身。
 	findAnchor := func(msgID uint64) *list.Element {
@@ -1071,15 +1161,7 @@ func insertEventContentBlocks(l *list.List, dbIDToElement map[uint64]*list.Eleme
 		sort.Strings(g.paths)
 		var frags []trace.FileBlock
 		var contributed []string
-		var extra strings.Builder
 		for _, p := range g.paths {
-			if p == "@task" {
-				if taskBlock != "" {
-					extra.WriteString(taskBlock)
-					extra.WriteString("\n\n")
-				}
-				continue
-			}
 			if fb, ok := fileBlocks[p]; ok {
 				frags = append(frags, fb)
 				contributed = append(contributed, p)
@@ -1090,10 +1172,6 @@ func insertEventContentBlocks(l *list.List, dbIDToElement map[uint64]*list.Eleme
 			logger.Error("render trace event block error: %v", err)
 			content = ""
 		}
-		if content != "" && extra.Len() > 0 {
-			content += "\n\n"
-		}
-		content += strings.TrimSpace(extra.String())
 		if content == "" {
 			continue
 		}
@@ -1107,9 +1185,7 @@ func insertEventContentBlocks(l *list.List, dbIDToElement map[uint64]*list.Eleme
 	sort.Strings(tailPaths)
 	for _, p := range tailPaths {
 		var content string
-		if p == "@task" {
-			content = strings.TrimSpace(taskBlock)
-		} else if fb, ok := fileBlocks[p]; ok {
+		if fb, ok := fileBlocks[p]; ok {
 			content = renderBlock(fb)
 		}
 		if content == "" {

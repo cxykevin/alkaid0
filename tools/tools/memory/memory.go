@@ -18,6 +18,7 @@ import (
 	"github.com/cxykevin/alkaid0/tools/index"
 	"github.com/cxykevin/alkaid0/tools/toolobj"
 	"github.com/cxykevin/alkaid0/tools/tools/edit"
+	"github.com/cxykevin/alkaid0/tools/tools/trace"
 )
 
 const toolName = "memory"
@@ -54,6 +55,10 @@ var userHomeDir = func() string {
 func init() {
 	memoryTemplate = prompts.Load("tools:memory:memory", memoryPrompt)
 	agentsTemplate = prompts.Load("tools:memory:agents", agentsPrompt)
+	// @memory 作为虚拟对象接入 trace 的落位/差分机制（memory → edit → trace 已有依赖，反向无环）
+	trace.RegisterVirtualContent("@memory", MemoryContent)
+	// @agents（AGENTS.md / CLAUDE.md）同样走 trace 的落位/差分注入
+	trace.RegisterVirtualContent("@agents", AgentsContent)
 }
 
 // resolveMemoryPath 把虚拟路径解析为真实文件路径。
@@ -95,8 +100,21 @@ func readExisting(path string) (string, bool, error) {
 	return string(data), true, nil
 }
 
-// buildMemoryPrompt 注入 @memory / @memory/global 内容到 AI 上下文（全局 PreHook，Priority 101）。
-// 两者皆空时返回引导语而非空串，避免 ToolPrehookTemplate 渲染出多余空行。
+// MemoryContent 返回 @memory 内容块，供 trace 层作为虚拟对象内容源使用。
+// 内容块与普通 traced 文件一样按"事件跟随 / 末尾前移 / 差分"注入，不再进"历史之前的
+// 全局注入块"：记忆每轮都可能变，放在历史之前会让后面全部历史失去前缀缓存
+// （docs/trace-cache-spec.md §10.1）。
+func MemoryContent(session *structs.Chats) (string, bool) {
+	content, err := buildMemoryPrompt(session)
+	if err != nil {
+		logger.Warn("memory render error: %v", err)
+		return "", false
+	}
+	return content, true
+}
+
+// buildMemoryPrompt 渲染 @memory / @memory/global 内容块（项目记忆 + 全局记忆）。
+// 两者皆空时返回引导语而非空串，避免渲染出多余空行。
 func buildMemoryPrompt(session *structs.Chats) (string, error) {
 	project, err := readFileIfExists(mustResolve(session, "@memory"))
 	if err != nil {
@@ -128,9 +146,9 @@ func mustResolve(session *structs.Chats, path string) string {
 	return p
 }
 
-// buildAgentsPrompt 注入工作目录的 AGENTS.md / CLAUDE.md 到 AI 上下文（全局 PreHook，Priority 100）。
+// buildAgentsPrompt 渲染工作目录的 AGENTS.md / CLAUDE.md 内容块（@agents 虚拟对象）。
 // 从 session.Root 向上最多 3 级、第一命中；不跨越文件系统边界和用户主目录边界。
-// 两者皆无时返回空串（代价仅是 tool_prehook 渲染出一个多余空行，可接受）。
+// 两者皆无时返回空串，此时 @agents 不注入。
 func buildAgentsPrompt(session *structs.Chats) (string, error) {
 	agentsPath := findUpward(session.Root, "AGENTS.md", 3)
 	claudePath := findUpward(session.Root, "CLAUDE.md", 3)
@@ -154,6 +172,17 @@ func buildAgentsPrompt(session *structs.Chats) (string, error) {
 		Agents string
 		Claude string
 	}{agents, claude})
+}
+
+// AgentsContent 返回 @agents（AGENTS.md / CLAUDE.md）内容块，供 trace 层作为虚拟对象内容源使用。
+// 与 @memory/@tree 一致，内容块按"事件跟随 / 末尾前移 / 差分"注入，不再进"历史之前的
+// 全局注入块"：指导文件一变，历史之前的整段内容都会失去前缀缓存（docs/trace-cache-spec.md §10.1）。
+func AgentsContent(session *structs.Chats) (string, bool) {
+	content, err := buildAgentsPrompt(session)
+	if err != nil || content == "" {
+		return "", false
+	}
+	return content, true
 }
 
 // findUpward 从 start 目录开始向上最多 maxLevels 级查找首个存在的普通文件 name。
@@ -283,26 +312,7 @@ func writeMemory(session *structs.Chats, mp map[string]*any, cross []*any) (bool
 }
 
 func load() string {
-	// 全局 PreHook：注入 memory 内容到 AI 上下文（不注册实际工具）
-	if err := actions.HookTool("", &toolobj.Hook{
-		Scope: "",
-		PreHook: toolobj.PreHookFunction{
-			Priority: 101,
-			Func:     buildMemoryPrompt,
-		},
-	}); err != nil {
-		panic(err)
-	}
-	// 全局 PreHook：注入 AGENTS.md / CLAUDE.md 到 AI 上下文
-	if err := actions.HookTool("", &toolobj.Hook{
-		Scope: "",
-		PreHook: toolobj.PreHookFunction{
-			Priority: 100,
-			Func:     buildAgentsPrompt,
-		},
-	}); err != nil {
-		panic(err)
-	}
+	// AGENTS.md / CLAUDE.md 不再走全局 PreHook：改由 @agents 虚拟对象经 trace 注入（见 init）
 	// edit 工具的 @memory / @memory/global 拦截
 	if err := actions.HookTool("edit", &toolobj.Hook{
 		Scope: "",

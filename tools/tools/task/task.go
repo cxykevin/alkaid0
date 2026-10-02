@@ -12,6 +12,7 @@ import (
 	"github.com/cxykevin/alkaid0/tools/index"
 	"github.com/cxykevin/alkaid0/tools/toolobj"
 	"github.com/cxykevin/alkaid0/tools/tools/edit"
+	"github.com/cxykevin/alkaid0/tools/tools/trace"
 )
 
 const toolName = "task"
@@ -28,21 +29,16 @@ var logger = log.New("tools:task")
 
 func init() {
 	taskTempate = prompts.Load("tools:task:task", taskPrompt)
+	// @task 作为虚拟对象接入 trace 的落位/差分机制（task → edit → trace 已有依赖，反向无环）
+	trace.RegisterVirtualContent("@task", TaskContent)
 }
 
-// buildGlobalPrompt 注入 @task 任务列表到 AI 上下文（全局 PreHook，Priority 100）。
-// @task 有最近 edit 事件时顶部不放，内容块改由 build 包按事件插入（见 TempKeyTaskEventBlock）；
-// 否则顶部聚合（现状）。
-func buildGlobalPrompt(session *structs.Chats) (string, error) {
-	if isTaskEvent(session) {
-		block := renderTaskBlock(session)
-		if session.TemporyDataOfSession == nil {
-			session.TemporyDataOfSession = make(map[string]any)
-		}
-		session.TemporyDataOfSession[structs.TempKeyTaskEventBlock] = block
-		return "", nil
-	}
-	return renderTaskBlock(session), nil
+// TaskContent 返回 @task 内容块，供 trace 层作为虚拟对象内容源使用。
+// 内容块与普通 traced 文件一样按"事件跟随 / 末尾前移 / 差分"注入，不再进"历史之前的
+// 全局注入块"：任务列表每轮都变，放在历史之前会让后面全部历史失去前缀缓存
+// （docs/trace-cache-spec.md §10.1）。
+func TaskContent(session *structs.Chats) (string, bool) {
+	return renderTaskBlock(session), true
 }
 
 // renderTaskBlock 渲染 @task 任务列表内容块；空任务返回引导语（避免 ToolPrehookTemplate 渲染多余空行）。
@@ -56,19 +52,6 @@ func renderTaskBlock(session *structs.Chats) string {
 		return ""
 	}
 	return rendered
-}
-
-// isTaskEvent 判断 @task 在本轮是否有最近 edit 事件。
-func isTaskEvent(session *structs.Chats) bool {
-	if session.TemporyDataOfSession == nil {
-		return false
-	}
-	m, ok := session.TemporyDataOfSession[structs.TempKeyTraceEvents].(map[string]*structs.TraceEvent)
-	if !ok {
-		return false
-	}
-	ev, ok := m["@task"]
-	return ok && ev.IsTask
 }
 
 // buildPrompt 注入 @task 操作规范到 edit 工具 Description（edit PreHook，Priority 90）
@@ -149,16 +132,6 @@ func writeTask(session *structs.Chats, mp map[string]*any, cross []*any) (bool, 
 }
 
 func load() string {
-	// 全局 PreHook：注入 @task 上下文（不注册实际工具）
-	if err := actions.HookTool("", &toolobj.Hook{
-		Scope: "",
-		PreHook: toolobj.PreHookFunction{
-			Priority: 100,
-			Func:     buildGlobalPrompt,
-		},
-	}); err != nil {
-		panic(err)
-	}
 	// edit 工具的 @task 拦截
 	if err := actions.HookTool("edit", &toolobj.Hook{
 		Scope: "",
