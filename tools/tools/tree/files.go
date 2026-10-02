@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/cxykevin/alkaid0/terminal/sandbox"
 	"github.com/cxykevin/alkaid0/tools/tools/tree/ios"
 	u "github.com/cxykevin/alkaid0/utils"
 	"regexp"
@@ -855,27 +856,33 @@ func solveDiffTask(path string, diff []Diff) error {
 	for _, d := range diff {
 		switch d.Type {
 		case DiffStatusCreateDir:
-			err := os.MkdirAll(filepath.Join(path, d.Target), permission)
+			// 新建目录的属主与终端任务的运行用户一致（配置 Agent.User / Agent.UserGroup）
+			err := sandbox.MkdirAllConfigured(filepath.Join(path, d.Target), permission)
 			if err != nil {
 				return err
 			}
 		case DiffStatusCreateFile:
 			// 写空文件
-			err := os.WriteFile(filepath.Join(path, d.Target), []byte{}, permission)
+			target := filepath.Join(path, d.Target)
+			err := os.WriteFile(target, []byte{}, permission)
 			if err != nil {
 				return err
 			}
+			sandbox.ApplyConfiguredFileOwner(target)
 		case DiffStatusCopy:
-			err := ios.Copy(filepath.Join(path, d.Origin), filepath.Join(path, d.Target))
+			target := filepath.Join(path, d.Target)
+			err := ios.Copy(filepath.Join(path, d.Origin), target)
 			if err != nil {
 				return err
 			}
+			sandbox.ApplyConfiguredFileOwner(target)
 		case DiffStatusDelete:
 			err := os.RemoveAll(filepath.Join(path, d.Target))
 			if err != nil {
 				return err
 			}
 		case DiffStatusMove:
+			// 移动只改路径、不改内容：源文件属主原样保留，不强制改属主
 			err := os.Rename(filepath.Join(path, d.Origin), filepath.Join(path, d.Target))
 			if err != nil {
 				return err

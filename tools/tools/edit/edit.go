@@ -16,6 +16,7 @@ import (
 	"github.com/cxykevin/alkaid0/log"
 	"github.com/cxykevin/alkaid0/provider/parser"
 	"github.com/cxykevin/alkaid0/storage/structs"
+	"github.com/cxykevin/alkaid0/terminal/sandbox"
 	"github.com/cxykevin/alkaid0/tools/actions"
 	"github.com/cxykevin/alkaid0/tools/index"
 	"github.com/cxykevin/alkaid0/tools/toolobj"
@@ -840,6 +841,10 @@ func writeFileAtomic(path string, data []byte, perm os.FileMode) error {
 	if err := tmp.Close(); err != nil {
 		return err
 	}
+	// 新文件的属主与终端任务的运行用户保持一致（配置 Agent.User / Agent.UserGroup）：
+	// rename 会把临时文件的 inode 顶到目标路径上，因此属主必须在 rename 之前设好，
+	// 否则文件会属于运行 agent 的账户（通常是 root），配置指定的用户改不动。
+	sandbox.ApplyConfiguredFileOwner(tmpName)
 	return os.Rename(tmpName, path)
 }
 

@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/cxykevin/alkaid0/terminal/sandbox"
 	u "github.com/cxykevin/alkaid0/utils"
 )
 
@@ -597,10 +598,10 @@ func FsWrite(req FsWriteRequest, _ func(string, any, *string) error, _ uint64) (
 			"content exceeds maximum size of 1MB (got %d bytes)", len(content))
 	}
 
-	// 确保父目录存在
+	// 确保父目录存在（新建目录的属主与终端任务的运行用户一致，见 sandbox.MkdirAllConfigured）
 	parentDir := filepath.Dir(fullPath)
 	err = fsOpVoidWithTimeout(fsIOTimeout, func(ctx context.Context) error {
-		return os.MkdirAll(parentDir, 0755)
+		return sandbox.MkdirAllConfigured(parentDir, 0755)
 	})
 	if err != nil {
 		return FsWriteResponse{}, fmt.Errorf("failed to create parent directory: %v", err)
@@ -630,6 +631,8 @@ func FsWrite(req FsWriteRequest, _ func(string, any, *string) error, _ uint64) (
 				return struct{}{}, err
 			}
 			bytesWritten = int64(n)
+			// 追加模式下文件可能刚被创建：属主与终端任务的运行用户保持一致
+			sandbox.ApplyConfiguredFileOwner(fullPath)
 			return struct{}{}, nil
 		}
 
@@ -687,6 +690,9 @@ func FsWrite(req FsWriteRequest, _ func(string, any, *string) error, _ uint64) (
 			_ = os.Remove(tmpName)
 			return struct{}{}, err
 		}
+		// 文件的属主与终端任务的运行用户一致（配置 Agent.User / Agent.UserGroup）：
+		// rename 前设好临时文件的属主，避免落盘后仍属于运行 agent 的账户。
+		sandbox.ApplyConfiguredFileOwner(tmpName)
 		if err := os.Rename(tmpName, target); err != nil {
 			_ = os.Remove(tmpName)
 			return struct{}{}, err
@@ -720,7 +726,8 @@ func FsMkdir(req FsCommonRequest, _ func(string, any, *string) error, _ uint64) 
 	}
 
 	err = fsOpVoidWithTimeout(fsIOTimeout, func(ctx context.Context) error {
-		return os.MkdirAll(fullPath, 0755)
+		// 新建目录的属主与终端任务的运行用户一致（配置 Agent.User / Agent.UserGroup）
+		return sandbox.MkdirAllConfigured(fullPath, 0755)
 	})
 	if err != nil {
 		return u.H{}, err

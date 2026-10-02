@@ -145,3 +145,51 @@ func TestOSIsolationRunsAsConfiguredUser(t *testing.T) {
 		t.Errorf("沙盒内 id -u = %q，期望 %q", lines[1], target.Uid)
 	}
 }
+
+// TestResolveGroupIDRoot 按组名与数字 gid 解析到同一个 root 组。
+func TestResolveGroupIDRoot(t *testing.T) {
+	name, gid, err := resolveGroupID("root")
+	if err != nil {
+		t.Skipf("系统中没有 root 组: %v", err)
+	}
+	byIDName, byIDGID, err := resolveGroupID(strconv.Itoa(gid))
+	if err != nil {
+		t.Fatalf("按数字 gid 解析失败: %v", err)
+	}
+	if name != byIDName || gid != byIDGID {
+		t.Fatalf("按名/按 gid 解析结果不一致: %q(%d) vs %q(%d)", name, gid, byIDName, byIDGID)
+	}
+}
+
+// TestResolveGroupIDUnknown 用户组不存在时返回错误（调用方回退主组并告警）。
+func TestResolveGroupIDUnknown(t *testing.T) {
+	if _, _, err := resolveGroupID("alkaid0-no-such-group-xyz"); err == nil {
+		t.Fatalf("未知用户组应返回错误")
+	}
+}
+
+// TestResolveRunAsUserWithGroup 指定用户组时 GID 取该组（而非用户主组）。
+func TestResolveRunAsUserWithGroup(t *testing.T) {
+	target, err := user.Lookup("nobody")
+	if err != nil {
+		t.Skipf("系统中没有 nobody 用户: %v", err)
+	}
+	groupName, groupGID, err := resolveGroupID("root")
+	if err != nil {
+		t.Skipf("系统中没有 root 组: %v", err)
+	}
+	ru, err := resolveRunAsUser(target.Username, groupName)
+	if err != nil {
+		t.Fatalf("resolveRunAsUser failed: %v", err)
+	}
+	uid, err := strconv.Atoi(target.Uid)
+	if err != nil {
+		t.Fatalf("nobody 的 uid 无效: %v", err)
+	}
+	if ru.UID != uid {
+		t.Errorf("UID = %d，期望 %d", ru.UID, uid)
+	}
+	if ru.Group != groupName || ru.GID != groupGID {
+		t.Errorf("Group/GID = %q/%d，期望 %q/%d", ru.Group, ru.GID, groupName, groupGID)
+	}
+}

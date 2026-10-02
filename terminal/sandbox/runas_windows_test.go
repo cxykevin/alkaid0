@@ -55,7 +55,7 @@ func TestWindowsRunAsResolution(t *testing.T) {
 	}
 
 	for _, name := range []string{cur.Username, strings.ToUpper(cur.Username), `.\` + local} {
-		ru, err := resolveRunAsUser(name)
+		ru, err := resolveRunAsUser(name, "")
 		if err != nil {
 			t.Fatalf("resolveRunAsUser(%q) 失败: %v", name, err)
 		}
@@ -65,23 +65,23 @@ func TestWindowsRunAsResolution(t *testing.T) {
 		if use, reason := prepareRunAs(ru); use || reason != "" {
 			t.Errorf("prepareRunAs(%q) = (%v, %q)，期望静默忽略", name, use, reason)
 		}
-		if got := resolveRunAsOrWarn(name); got != nil {
+		if got := resolveRunAsOrWarn(name, ""); got != nil {
 			t.Errorf("resolveRunAsOrWarn(%q) 应为 nil（静默忽略）", name)
 		}
 	}
 
-	ru, err := resolveRunAsUser("otheruser")
+	ru, err := resolveRunAsUser("otheruser", "")
 	if err != nil {
 		t.Fatalf("resolveRunAsUser(otheruser) 失败: %v", err)
 	}
 	if use, reason := prepareRunAs(ru); use || reason == "" {
 		t.Errorf("其它用户应回退当前用户并给出原因，得到 use=%v reason=%q", use, reason)
 	}
-	if resolveRunAsOrWarn("otheruser") != nil {
+	if resolveRunAsOrWarn("otheruser", "") != nil {
 		t.Error("resolveRunAsOrWarn(otheruser) 应为 nil（不阻断命令）")
 	}
 
-	ru, err = resolveRunAsUser(winSandbox.UserName)
+	ru, err = resolveRunAsUser(winSandbox.UserName, "")
 	if err != nil {
 		t.Fatalf("resolveRunAsUser(%q) 失败: %v", winSandbox.UserName, err)
 	}
@@ -89,10 +89,25 @@ func TestWindowsRunAsResolution(t *testing.T) {
 		t.Errorf("沙盒账户应命中专用提示，得到 %q", reason)
 	}
 
-	if _, err := resolveRunAsUser("   "); err == nil {
+	if _, err := resolveRunAsUser("   ", ""); err == nil {
 		t.Error("空白用户名应报错")
 	}
-	if resolveRunAsOrWarn("   ") != nil {
+	if resolveRunAsOrWarn("   ", "") != nil {
 		t.Error("空白用户名应静默返回 nil")
+	}
+
+	// 用户组仅 Linux 生效：Windows 上即使运行用户是当前用户也要给出提示（否则配置会被静默忽略）
+	ru, err = resolveRunAsUser(cur.Username, "admins")
+	if err != nil {
+		t.Fatalf("resolveRunAsUser(%q, admins) 失败: %v", cur.Username, err)
+	}
+	if ru.Group != "admins" {
+		t.Errorf("Group = %q，期望 admins", ru.Group)
+	}
+	if _, reason := prepareRunAs(ru); !strings.Contains(reason, "仅在 Linux 生效") {
+		t.Errorf("用户组配置应给出「仅在 Linux 生效」提示，得到 %q", reason)
+	}
+	if resolveRunAsOrWarn(cur.Username, "admins") != nil {
+		t.Error("用户组配置在 Windows 上应回退（返回 nil）")
 	}
 }

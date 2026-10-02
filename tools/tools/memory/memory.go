@@ -13,6 +13,7 @@ import (
 	"github.com/cxykevin/alkaid0/log"
 	"github.com/cxykevin/alkaid0/prompts"
 	"github.com/cxykevin/alkaid0/storage/structs"
+	"github.com/cxykevin/alkaid0/terminal/sandbox"
 	"github.com/cxykevin/alkaid0/tools/actions"
 	"github.com/cxykevin/alkaid0/tools/index"
 	"github.com/cxykevin/alkaid0/tools/toolobj"
@@ -262,7 +263,8 @@ func writeMemory(session *structs.Chats, mp map[string]*any, cross []*any) (bool
 		return failResult(cross, "memory write cancelled: "+session.GetContext().Err().Error())
 	}
 	// .alkaid0 / 配置文件同目录可能不存在，先确保目录存在
-	if err := os.MkdirAll(filepath.Dir(filePath), 0755); err != nil {
+	// （新建目录的属主：与终端任务的运行用户保持一致，见 sandbox.MkdirAllConfigured）
+	if err := sandbox.MkdirAllConfigured(filepath.Dir(filePath), 0755); err != nil {
 		logger.Warn("memory mkdir error: %v", err)
 		return failResult(cross, "failed to create memory dir: "+err.Error())
 	}
@@ -270,6 +272,8 @@ func writeMemory(session *structs.Chats, mp map[string]*any, cross []*any) (bool
 		logger.Warn("memory write error: %v", err)
 		return failResult(cross, "failed to write memory: "+err.Error())
 	}
+	// 记忆文件的属主与终端任务的运行用户一致（配置 Agent.User / Agent.UserGroup）
+	sandbox.ApplyConfiguredFileOwner(filePath)
 
 	boolx := true
 	success := any(boolx)

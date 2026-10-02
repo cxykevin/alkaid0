@@ -79,6 +79,9 @@ type Config struct {
 	// User 命令运行使用的 OS 用户（空为当前用户；Linux 沙盒内为工作目录属主）。
 	// 仅在当前进程有权限切换时生效（Linux 需 root），无法切换时记录警告并以当前用户运行。
 	User string
+	// UserGroup 命令运行使用的 OS 用户组（仅 Linux 生效；空为 User 的主组）。
+	// 组不存在或当前进程无权限时记录警告并使用默认组。
+	UserGroup string
 }
 
 // New 创建一个新的沙盒
@@ -112,8 +115,8 @@ func New(cfg Config) (*Sandbox, error) {
 		env = os.Environ()
 	}
 
-	// 配置指定的运行用户：无法切换时只记录警告并回退当前用户（不影响命令执行）
-	runAs := resolveRunAsOrWarn(cfg.User)
+	// 配置指定的运行用户/用户组：无法切换时只记录警告并回退当前用户（不影响命令执行）
+	runAs := resolveRunAsOrWarn(cfg.User, cfg.UserGroup)
 	if runAs != nil {
 		// HOME/USER/LOGNAME 改为目标用户，避免"以 A 身份运行却读 B 的配置/keyring"
 		env = applyRunAsEnv(env, runAs)

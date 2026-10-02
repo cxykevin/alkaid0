@@ -15,12 +15,13 @@ import (
 //
 // Windows 上以其它用户启动进程必须有该用户的凭据（LogonUser/CreateProcessWithLogonW）
 // 或 SYSTEM 权限的令牌，本项目暂不收集凭据，因此这里只做解析与提示。
-func resolveRunAsUser(name string) (*runAsUser, error) {
+// 用户组（Agent.UserGroup）仅 Linux 生效：这里只记录配置，由 prepareRunAs 给出提示。
+func resolveRunAsUser(name, group string) (*runAsUser, error) {
 	trimmed := strings.TrimSpace(name)
 	if trimmed == "" {
 		return nil, fmt.Errorf("用户名为空")
 	}
-	ru := &runAsUser{Name: trimmed}
+	ru := &runAsUser{Name: trimmed, Group: strings.TrimSpace(group)}
 	if cur, err := user.Current(); err == nil && sameWindowsAccount(cur.Username, trimmed) {
 		ru.Name = cur.Username
 		ru.sameAsCurrent = true
@@ -31,6 +32,13 @@ func resolveRunAsUser(name string) (*runAsUser, error) {
 // prepareRunAs Windows 上仅"配置与当前用户一致"可以静默忽略；
 // 其它用户一律回退当前用户并给出告警（沙盒内本就用沙盒账户运行）。
 func prepareRunAs(ru *runAsUser) (bool, string) {
+	if ru.Group != "" {
+		// 用户组仅 Linux 生效：即使运行用户就是当前用户也要提示，否则配置会被静默忽略
+		if ru.sameAsCurrent {
+			return false, "用户组（Agent.UserGroup）仅在 Linux 生效，已忽略"
+		}
+		return false, "用户组（Agent.UserGroup）仅在 Linux 生效；Windows 上以其它用户运行命令需要该用户的凭据（密码），暂不支持"
+	}
 	if ru.sameAsCurrent {
 		return false, ""
 	}

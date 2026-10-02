@@ -71,16 +71,23 @@ func TestApplyRunAsEnvWithoutHome(t *testing.T) {
 	}
 }
 
-// TestResolveRunAsOrWarnEmpty 未配置用户时不产生 runAs（也不告警）。
+// TestResolveRunAsOrWarnEmpty 未配置用户与用户组时不产生 runAs（也不告警）。
 func TestResolveRunAsOrWarnEmpty(t *testing.T) {
-	if ru := resolveRunAsOrWarn(""); ru != nil {
+	if ru := resolveRunAsOrWarn("", ""); ru != nil {
 		t.Fatalf("空用户名应返回 nil，得到 %+v", ru)
 	}
 }
 
 // TestResolveRunAsOrWarnUnknownUser 用户不存在时回退当前用户（返回 nil）。
 func TestResolveRunAsOrWarnUnknownUser(t *testing.T) {
-	if ru := resolveRunAsOrWarn("alkaid0-no-such-user-xyz"); ru != nil {
+	if ru := resolveRunAsOrWarn("alkaid0-no-such-user-xyz", ""); ru != nil {
 		t.Fatalf("未知用户应返回 nil，得到 %+v", ru)
+	}
+}
+
+// TestResolveRunAsOrWarnGroupWithoutUser 只配置用户组时忽略配置（用户组是运行用户的补充）。
+func TestResolveRunAsOrWarnGroupWithoutUser(t *testing.T) {
+	if ru := resolveRunAsOrWarn("", "root"); ru != nil {
+		t.Fatalf("未配置用户时不应产生 runAs，得到 %+v", ru)
 	}
 }

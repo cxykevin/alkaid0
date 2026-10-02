@@ -164,9 +164,11 @@ type Request struct {
 	Sandbox          bool
 	SandboxSpecified bool
 	WritableDirs     []string
-	// User 命令运行使用的操作系统用户（来自配置 Agents.User）。
+	// User 命令运行使用的操作系统用户（来自配置 Agent.User）。
 	// 为空表示当前用户（Linux 沙盒内为工作目录属主）。
 	User string
+	// UserGroup 终端任务与文件编辑操作使用的操作系统用户组（仅 Linux 生效；空为用户主组）。
+	UserGroup string
 	// RunID 该终端的 ID（@temp/run/<n>，与 run id 统一）：同时作为 wait/kill 的 run id
 	// 与终端内容持久化路径（内部路径为 run/<n>）。留空时由服务按 Workspace 分配。
 	RunID string
@@ -997,6 +999,7 @@ func (s *Service) runCommand(ctx context.Context, job *Job, req *Request) *Resul
 		IsolationMode: isolateMode,
 		WritableDirs:  req.WritableDirs,
 		User:          req.User,
+		UserGroup:     req.UserGroup,
 	})
 	if err != nil {
 		return &Result{CreateErr: err}
@@ -1115,6 +1118,7 @@ func (s *Service) runCommand(ctx context.Context, job *Job, req *Request) *Resul
 			IsolationMode: sandbox.IsolationNone,
 			WritableDirs:  req.WritableDirs,
 			User:          req.User,
+			UserGroup:     req.UserGroup,
 		})
 		if err2 != nil {
 			errString += fmt.Sprintf("[System] Command Execute Error: %v\n", err)

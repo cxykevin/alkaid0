@@ -10,8 +10,10 @@ import (
 	"strconv"
 )
 
-// resolveRunAsUser 解析配置指定的运行用户（Linux：查 /etc/passwd）。
-func resolveRunAsUser(name string) (*runAsUser, error) {
+// resolveRunAsUser 解析配置指定的运行用户与用户组（Linux：查 /etc/passwd 与 /etc/group）。
+//
+// group 为空时使用用户的主组；非空时按组名（或数字 gid）解析，因此 GID 可能与主组不同。
+func resolveRunAsUser(name, group string) (*runAsUser, error) {
 	u, err := user.Lookup(name)
 	if err != nil {
 		return nil, fmt.Errorf("查找用户 %q 失败: %w", name, err)
@@ -24,13 +26,41 @@ func resolveRunAsUser(name string) (*runAsUser, error) {
 	if err != nil {
 		return nil, fmt.Errorf("用户 %q 的 gid %q 无效: %w", name, u.Gid, err)
 	}
-	return &runAsUser{
-		Name:          u.Username,
-		UID:           uid,
-		GID:           gid,
-		Home:          u.HomeDir,
-		sameAsCurrent: uid == os.Geteuid(),
-	}, nil
+	ru := &runAsUser{
+		Name: u.Username,
+		UID:  uid,
+		GID:  gid,
+		Home: u.HomeDir,
+	}
+	if group != "" {
+		groupName, groupGID, err := resolveGroupID(group)
+		if err != nil {
+			return nil, err
+		}
+		ru.Group = groupName
+		ru.GID = groupGID
+	}
+	// 身份完全一致（uid + gid）才算"就是当前用户"：只换组同样需要切换权限
+	ru.sameAsCurrent = ru.UID == os.Geteuid() && ru.GID == os.Getegid()
+	return ru, nil
+}
+
+// resolveGroupID 解析用户组：先按组名查，失败再按数字 gid 查（与 user.Lookup 接受数字 uid 的行为对齐）。
+func resolveGroupID(group string) (string, int, error) {
+	g, err := user.LookupGroup(group)
+	if err != nil {
+		if byID, idErr := user.LookupGroupId(group); idErr == nil {
+			g, err = byID, nil
+		}
+	}
+	if err != nil {
+		return "", 0, fmt.Errorf("查找用户组 %q 失败: %w", group, err)
+	}
+	gid, err := strconv.Atoi(g.Gid)
+	if err != nil {
+		return "", 0, fmt.Errorf("用户组 %q 的 gid %q 无效: %w", group, g.Gid, err)
+	}
+	return g.Name, gid, nil
 }
 
 // prepareRunAs 判断当前进程是否有能力以指定用户运行命令。

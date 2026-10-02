@@ -317,7 +317,12 @@
                 },
                 "User": {
                     "type": "string",
-                    "description": "终端任务（run 工具执行的命令）运行使用的操作系统用户，空表示当前用户（Linux 沙盒内为工作目录属主）。切换用户需要 root（Linux）/管理员（Windows）权限，切换失败时记录警告并回退当前用户；macOS 暂不支持",
+                    "description": "终端任务（run 工具执行的命令）与文件编辑操作使用的操作系统用户，空表示当前用户（Linux 沙盒内为工作目录属主）。切换用户需要 root（Linux）/管理员（Windows）权限，切换失败时记录警告并回退当前用户；文件属主设置与用户组仅 Linux 生效，macOS 暂不支持",
+                    "default": ""
+                },
+                "UserGroup": {
+                    "type": "string",
+                    "description": "终端任务与文件编辑操作使用的操作系统用户组（仅 Linux 生效），空表示 User 的主组；未配置 User 时不生效。组不存在或当前进程无权限时记录警告并回退默认组",
                     "default": ""
                 },
                 "FetchProxy": {

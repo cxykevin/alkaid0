@@ -140,6 +140,7 @@ C:\ProgramData\alkaid0\config.json
         "DisablePromptPreprocess": false,
         "UseShell": "",
         "User": "",
+        "UserGroup": "",
         "TerminalEnvs": {
             "LANG": "zh_CN.UTF-8"
         },
