@@ -1132,6 +1132,11 @@ func insertEventContentBlocks(l *list.List, dbIDToElement map[uint64]*list.Eleme
 			trace.AdvanceTraceCache(chatLn, path)
 			if plan.Mode == trace.AnchorDiff {
 				plan = &trace.AnchorPlan{Mode: trace.AnchorFull, MsgID: plan.MsgID, Full: true}
+				// 注入锚点必须一起回写：方案2 落空时旧块并没有被插回 PrevMsgID，若 AnchorMsgID
+				// 仍留在旧位置，下一轮会以为"旧块还在那儿"而继续走方案2（把陈旧旧块塞进历史中段、
+				// 再追加一份相对陈旧基线的 diff）。回写到实际注入位置后，下一轮判定不成立、
+				// 直接走方案1（完整新块落在最新事件上），缓存与 token 都更省。
+				trace.SetTraceAnchor(chatLn, path, plan.MsgID)
 			} else {
 				// 差分尾巴落空：完整块落到末尾（MsgID=0 → 由末尾落位分支处理并回写锚点）
 				plan = &trace.AnchorPlan{Mode: trace.AnchorFull, Full: true}

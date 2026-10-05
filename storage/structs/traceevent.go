@@ -35,6 +35,12 @@ const (
 	TempKeyTraceConfirmedContent = "trace:confirmed_content"
 	// TempKeyTraceDocsSnapshots 保存 @docs 文档的会话级 immutable snapshot。
 	TempKeyTraceDocsSnapshots = "trace:docs_snapshots"
+	// TempKeyTraceVirtualSuppressed 被 read unread=true 主动移出上下文的虚拟对象
+	// （@tree/@task/@memory/@memory/global，map[string]bool）。
+	// 虚拟对象由 provider 自动注入、没有独立内容源，删 traces 行只会让下一轮重建合成行
+	// （LastContent/AnchorMsgID 归零），整块内容被搬到消息末尾重新注入、前缀缓存整段失效，
+	// 因此对虚拟对象的 unread 改为"保留行 + 抑制注入"，再次 read 即恢复。
+	TempKeyTraceVirtualSuppressed = "trace:virtual_suppressed"
 	// TempKeySystemNotices 内部运行期通知（后台任务结束、shell 停止等）。
 	// 它变化频繁且与对话无关，**不能**放进 system 消息——system 在 tools 之后，
 	// 一次通知就会把 tools 之后的整个前缀（含全部历史）打掉（实测命中掉到 tools 前缀大小）。

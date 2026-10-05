@@ -240,6 +240,23 @@ func Trace(session *structs.Chats, mp map[string]*any, push []*any) (bool, []*an
 		return false, push, map[string]*any{"success": &success, "message": &msgAny, "path": &pathAny}, nil
 	}
 
+	// 虚拟对象（@tree/@task/@memory）：内容由 provider 每轮重算，没有磁盘/ReferFiles 数据源。
+	// 不能走下面"删 traces 行"的 unread——行一删，下一轮会补合成行（基线/锚点归零），
+	// 整块内容被搬到消息末尾重新注入。这里改为会话级抑制（保留行），再次 read 即恢复注入。
+	if isVirtualContentPath(path) {
+		setVirtualContentSuppressed(session, path, unread)
+		logger.Info("%s virtual object \"%s\" in ID=%d,agentID=%s", u.Ternary(unread, "unread", "read"), path, session.ID, session.NowAgent)
+		boolx := true
+		success := any(boolx)
+		msg := "The file has been read and injected into the top of the context."
+		if unread {
+			msg = "The virtual object has been removed from this conversation's read context."
+		}
+		msgAny := any(msg)
+		pathAny := any(path)
+		return false, push, map[string]*any{"success": &success, "message": &msgAny, "path": &pathAny}, nil
+	}
+
 	traceStr := "trace"
 	if unread {
 		traceStr = "unread"
@@ -670,6 +687,7 @@ func InvalidateTraceCache(session *structs.Chats) {
 	delete(session.TemporyDataOfSession, structs.TempKeyTracePrevEvents)
 	delete(session.TemporyDataOfSession, structs.TempKeyTraceFileBlocks)
 	delete(session.TemporyDataOfSession, structs.TempKeyTraceDiffPlan)
+	delete(session.TemporyDataOfSession, structs.TempKeyTraceAnchorPlan)
 }
 
 // virtualContentProviders 虚拟对象（@tree 等）的内容来源。
@@ -691,6 +709,40 @@ func RegisterVirtualContent(path string, fn func(session *structs.Chats) (string
 func isVirtualContentPath(path string) bool {
 	_, ok := virtualContentProviders[path]
 	return ok
+}
+
+// setVirtualContentSuppressed 切换虚拟对象的注入抑制状态（会话级，与 @docs 快照同生命周期）。
+// 虚拟对象没有独立内容源（内容由 provider 每轮重算），因此 unread 不能删 traces 行：
+// 行一删，下一轮 RenderTraceBlocks 会补一条合成行（LastContent/AnchorMsgID 归零），
+// 内容块被判定为"首次注入"而整块落到消息列表末尾，旧锚点上的旧块凭空消失——
+// 该位置之后的前缀缓存整段失效。保留行、只抑制注入，恢复时才能原位（或按预算走 diff）恢复。
+func setVirtualContentSuppressed(session *structs.Chats, path string, suppressed bool) bool {
+	if session == nil || !isVirtualContentPath(path) {
+		return false
+	}
+	if session.TemporyDataOfSession == nil {
+		session.TemporyDataOfSession = make(map[string]any)
+	}
+	m, _ := session.TemporyDataOfSession[structs.TempKeyTraceVirtualSuppressed].(map[string]bool)
+	if m == nil {
+		m = make(map[string]bool)
+		session.TemporyDataOfSession[structs.TempKeyTraceVirtualSuppressed] = m
+	}
+	if suppressed {
+		m[path] = true
+	} else {
+		delete(m, path)
+	}
+	return true
+}
+
+// isVirtualContentSuppressed 判断虚拟对象是否已被 read unread=true 移出上下文。
+func isVirtualContentSuppressed(session *structs.Chats, path string) bool {
+	if session == nil || session.TemporyDataOfSession == nil {
+		return false
+	}
+	m, _ := session.TemporyDataOfSession[structs.TempKeyTraceVirtualSuppressed].(map[string]bool)
+	return m[path]
 }
 
 // readTraceFileContent 读取被追踪文件的原始内容
@@ -933,6 +985,11 @@ func RenderTraceBlocks(session *structs.Chats) (topBlock string, eventBlocks map
 		if events != nil && !hasEvent && !isDocsPath(path) && !isVirtualContentPath(path) {
 			continue
 		}
+		// 被 read unread=true 抑制的虚拟对象本轮不注入：traces 行与基线/锚点都保留，
+		// 恢复注入时能原位（或按预算走 diff）回归，而不是整块搬到消息列表末尾。
+		if isVirtualContentSuppressed(session, path) {
+			continue
+		}
 		newContent, ok := readTraceFileContent(session, nowpath, traceObj)
 		if !ok {
 			continue
@@ -1009,7 +1066,14 @@ func RenderTraceBlocks(session *structs.Chats) (topBlock string, eventBlocks map
 			}
 			// newEvent 决定本次变化是否由新消息承载：是 → 锚到最新事件；否 → 锚到列表末尾。
 			newEvent := eventMsgID != 0 && (traceObj.AnchorMsgID == 0 || eventMsgID > traceObj.AnchorMsgID)
-			if prevMsgID != 0 && canKeepEventDiff(session, path) {
+			// 方案2 要求"旧块的字节此刻确实还在 prevMsgID 位置上"：AnchorMsgID 正是
+			// 上次以完整块/旧块注入的位置。若它早于 prevMsgID（典型场景：read unread=true
+			// 删过行或整块被前移过，之后又重新 read），该位置上的块早已不在上下文里，
+			// 再插旧块等于把整段旧内容塞进历史中段、并追加一份相对陈旧基线的 diff——
+			// 该位置之后的前缀缓存全部失效。此时代价更低的方案1（完整新块落在最新事件上、
+			// 但不再回头改写历史）反而更省，并且不会制造"同一内容两份"的上下文。
+			// 若 AnchorMsgID 晚于 prevMsgID（两轮之间又发生过 read/前移），同理方案1更省。
+			if prevMsgID != 0 && prevMsgID == traceObj.AnchorMsgID && canKeepEventDiff(session, path) {
 				if plan, keep := decideDiffPlan(path, traceObj.LastContent, newContent, timeout, mult); keep {
 					// 方案2：旧块字节稳定地留在旧锚点，增量块锚到最新位置；
 					// 旧端存档与注入锚点都不推进，下一次 diff 的旧端仍然稳定（前缀缓存不被打断）。
