@@ -173,11 +173,15 @@ scan:
 	for offsetPage := range maxReplayPage {
 		var obj []structs.Messages
 		if agentCode == "" {
-			if err := db.Where("`chat_id` = ? AND (`agent_id` = \"\" OR `agent_id` IS NULL)", chatID).Order("id DESC").Offset(offsetPage * readPageSize).Limit(readPageSize).Find(&obj).Error; err != nil {
+			if err := structs.OnActiveBranch(db, chatID).
+				Where("`agent_id` = \"\" OR `agent_id` IS NULL").
+				Order("id DESC").Offset(offsetPage * readPageSize).Limit(readPageSize).Find(&obj).Error; err != nil {
 				return nil, err
 			}
 		} else {
-			if err := db.Where("`chat_id` = ? AND `agent_id` = ?", chatID, agentCode).Order("id DESC").Offset(offsetPage * readPageSize).Limit(readPageSize).Find(&obj).Error; err != nil {
+			if err := structs.OnActiveBranch(db, chatID).
+				Where("`agent_id` = ?", agentCode).
+				Order("id DESC").Offset(offsetPage * readPageSize).Limit(readPageSize).Find(&obj).Error; err != nil {
 				return nil, err
 			}
 		}
@@ -222,11 +226,15 @@ scan:
 	for offsetPage := range maxReplayPage {
 		var obj []structs.Messages
 		if agentCode == "" {
-			if err := db.Where("`chat_id` = ? AND (`agent_id` = \"\" OR `agent_id` IS NULL)", chatID).Order("id DESC").Offset(offsetPage * readPageSize).Limit(readPageSize).Find(&obj).Error; err != nil {
+			if err := structs.OnActiveBranch(db, chatID).
+				Where("`agent_id` = \"\" OR `agent_id` IS NULL").
+				Order("id DESC").Offset(offsetPage * readPageSize).Limit(readPageSize).Find(&obj).Error; err != nil {
 				return nil, err
 			}
 		} else {
-			if err := db.Where("`chat_id` = ? AND `agent_id` = ?", chatID, agentCode).Order("id DESC").Offset(offsetPage * readPageSize).Limit(readPageSize).Find(&obj).Error; err != nil {
+			if err := structs.OnActiveBranch(db, chatID).
+				Where("`agent_id` = ?", agentCode).
+				Order("id DESC").Offset(offsetPage * readPageSize).Limit(readPageSize).Find(&obj).Error; err != nil {
 				return nil, err
 			}
 		}
@@ -784,7 +792,7 @@ func parseStoredToolResults(payload string) ([]storedToolResult, error) {
 func CollectTracePathsAfter(db *gorm.DB, chatID uint32, agentID string, afterMsgID uint64) (map[string]struct{}, error) {
 	paths := make(map[string]struct{})
 	var messages []structs.Messages
-	query := db.Where("chat_id = ? AND id > ?", chatID, afterMsgID)
+	query := structs.OnActiveBranch(db, chatID).Where("id > ?", afterMsgID)
 	if agentID == "" {
 		query = query.Where("(agent_id = '' OR agent_id IS NULL)")
 	} else {
@@ -822,9 +830,9 @@ func CollectTracePathsAfter(db *gorm.DB, chatID uint32, agentID string, afterMsg
 // eventWindowQuery 构造回放窗口查询（按 id 倒序分页，遇到 summary 即截断）。
 func eventWindowQuery(db *gorm.DB, chatID uint32, agentCode string) *gorm.DB {
 	if agentCode == "" {
-		return db.Where(`chat_id = ? AND (agent_id = "" OR agent_id IS NULL)`, chatID)
+		return structs.OnActiveBranch(db, chatID).Where(`(agent_id = "" OR agent_id IS NULL)`)
 	}
-	return db.Where("chat_id = ? AND agent_id = ?", chatID, agentCode)
+	return structs.OnActiveBranch(db, chatID).Where("agent_id = ?", agentCode)
 }
 
 // scanEventWindow 按 id 倒序分页读取事件窗口（最多 maxReplayPage*readPageSize 条），

@@ -105,12 +105,12 @@ func (p *Solver) DoneToken() (bool, string, string, error) {
 		if err := encoder.Encode(p.toolResponses); err != nil {
 			return true, delta, reasoningDelta, err
 		}
-		if err := p.db.Create(&storageStructs.Messages{
+		if err := storageStructs.AppendMessage(p.db, &storageStructs.Messages{
 			ChatID:  p.chatID,
 			Delta:   buf.String(),
 			Type:    storageStructs.MessagesRoleTool,
 			AgentID: &p.session.CurrentAgentID,
-		}).Error; err != nil {
+		}); err != nil {
 			return true, delta, reasoningDelta, err
 		}
 		p.responsesSaved = true

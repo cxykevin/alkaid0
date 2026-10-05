@@ -60,11 +60,15 @@ func SummaryWithKeepNumber(chatID uint32, agentID string, db *gorm.DB, keepNum i
 	var lastMsgID uint64
 	var totalMsgCount int64
 	if agentID == "" {
-		if err := db.Model(&structs.Messages{}).Where("`chat_id` = ? AND (`agent_id` = \"\" OR `agent_id` IS NULL)", chatID).Count(&totalMsgCount).Error; err != nil {
+		if err := structs.OnActiveBranch(db.Model(&structs.Messages{}), chatID).
+			Where("`agent_id` = \"\" OR `agent_id` IS NULL").
+			Count(&totalMsgCount).Error; err != nil {
 			return 0, nil, err
 		}
 	} else {
-		if err := db.Model(&structs.Messages{}).Where("`chat_id` = ? AND `agent_id` = ?", chatID, agentID).Count(&totalMsgCount).Error; err != nil {
+		if err := structs.OnActiveBranch(db.Model(&structs.Messages{}), chatID).
+			Where("`agent_id` = ?", agentID).
+			Count(&totalMsgCount).Error; err != nil {
 			return 0, nil, err
 		}
 	}
@@ -74,11 +78,15 @@ func SummaryWithKeepNumber(chatID uint32, agentID string, db *gorm.DB, keepNum i
 	for offsetPage := range windowPages {
 		var obj []structs.Messages
 		if agentID == "" {
-			if err := db.Where("`chat_id` = ? AND (`agent_id` = \"\" OR `agent_id` IS NULL)", chatID).Order("id DESC").Offset(offsetPage * readPageSize).Limit(readPageSize).Find(&obj).Error; err != nil {
+			if err := structs.OnActiveBranch(db, chatID).
+				Where("`agent_id` = \"\" OR `agent_id` IS NULL").
+				Order("id DESC").Offset(offsetPage * readPageSize).Limit(readPageSize).Find(&obj).Error; err != nil {
 				return 0, nil, err
 			}
 		} else {
-			if err := db.Where("`chat_id` = ? AND `agent_id` = ?", chatID, agentID).Order("id DESC").Offset(offsetPage * readPageSize).Limit(readPageSize).Find(&obj).Error; err != nil {
+			if err := structs.OnActiveBranch(db, chatID).
+				Where("`agent_id` = ?", agentID).
+				Order("id DESC").Offset(offsetPage * readPageSize).Limit(readPageSize).Find(&obj).Error; err != nil {
 				return 0, nil, err
 			}
 		}

@@ -128,7 +128,7 @@ func PendingToolCall(session *structs.Chats) ([]ToolCall, *structs.Messages, uin
 		return nil, nil, 0, nil
 	}
 	var msg structs.Messages
-	err := session.DB.Where("chat_id = ? AND tool_calling_json_string != ''", session.ID).Order("id DESC").First(&msg).Error
+	err := structs.OnActiveBranch(session.DB, session.ID).Where("tool_calling_json_string != ''").Order("id DESC").First(&msg).Error
 	if err != nil {
 		if err == gorm.ErrRecordNotFound {
 			return nil, nil, msg.ID, nil
@@ -231,7 +231,7 @@ func ApproveToolCalls(session *structs.Chats) (uint64, error) {
 		return 0, nil
 	}
 	var msg structs.Messages
-	err := session.DB.Where("chat_id = ? AND tool_calling_json_string != ''", session.ID).Order("id DESC").First(&msg).Error
+	err := structs.OnActiveBranch(session.DB, session.ID).Where("tool_calling_json_string != ''").Order("id DESC").First(&msg).Error
 	if err != nil {
 		if err == gorm.ErrRecordNotFound {
 			return msg.ID, nil
@@ -298,7 +298,7 @@ func SummarySession(ctx context.Context, session *structs.Chats) (string, error)
 // GetHistory 获取历史消息
 func GetHistory(session *structs.Chats) ([]structs.Messages, error) {
 	chatMsgs := []structs.Messages{}
-	err := session.DB.Where("chat_id = ?", session.ID).Order("id ASC").Find(&chatMsgs).Error
+	err := structs.OnActiveBranch(session.DB, session.ID).Order("id ASC").Find(&chatMsgs).Error
 	return chatMsgs, err
 }
 

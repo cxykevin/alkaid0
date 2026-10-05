@@ -1158,7 +1158,7 @@ func indexChatHistory(session *structs.Chats, cwd string) func(timeout time.Dura
 	}
 
 	var messages []structs.Messages
-	if err := session.DB.Where("chat_id = ? AND type IN (0, 1)", session.ID).
+	if err := structs.OnActiveBranch(session.DB, session.ID).Where("type IN (0, 1)").
 		Order("id ASC").
 		Find(&messages).Error; err != nil {
 		logger.Warn("index chat history: query messages failed: %v", err)

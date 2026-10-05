@@ -56,12 +56,12 @@ func UserAddMsgWithID(session *storageStructs.Chats, msg string, refers *storage
 		if err != nil {
 			return 0, err
 		}
-		if err := db.Create(&storageStructs.Messages{
+		if err := storageStructs.AppendMessage(db, &storageStructs.Messages{
 			ChatID: chatID,
 			Delta:  reason,
 			Refers: refer,
 			Type:   storageStructs.MessagesRoleCommunicate,
-		}).Error; err != nil {
+		}); err != nil {
 			return 0, err
 		}
 		// 单列更新 state，避免整行 Save 覆盖标题 goroutine 刚写入的 ai_title
@@ -100,7 +100,7 @@ func UserAddMsgWithID(session *storageStructs.Chats, msg string, refers *storage
 		Refers: refer,
 		Type:   storageStructs.MessagesRoleUser,
 	}
-	if err := db.Create(&msgRecord).Error; err != nil {
+	if err := storageStructs.AppendMessage(db, &msgRecord); err != nil {
 		return 0, err
 	}
 
@@ -129,13 +129,13 @@ func SubAgentReject(session *storageStructs.Chats) error {
 
 	if session.GetState() == state.StateWaitApprove {
 		reason := "<| tool call automatically rejected due to lack of explicit approval |>"
-		if err := db.Create(&storageStructs.Messages{
+		if err := storageStructs.AppendMessage(db, &storageStructs.Messages{
 			ChatID:  chatID,
 			Delta:   reason,
 			Refers:  refer,
 			Type:    storageStructs.MessagesRoleCommunicate,
 			AgentID: &session.CurrentAgentID,
-		}).Error; err != nil {
+		}); err != nil {
 			return err
 		}
 		return session.SaveState(state.StateIdle)
@@ -656,12 +656,12 @@ func RejectToolCallsNoDeactivate(session *storageStructs.Chats, reason string, r
 	if err != nil {
 		return err
 	}
-	if err := session.DB.Create(&storageStructs.Messages{
+	if err := storageStructs.AppendMessage(session.DB, &storageStructs.Messages{
 		ChatID: session.ID,
 		Delta:  finalReason,
 		Refers: refer,
 		Type:   storageStructs.MessagesRoleCommunicate,
-	}).Error; err != nil {
+	}); err != nil {
 		return err
 	}
 	return session.SaveState(state.StateIdle)
@@ -679,7 +679,8 @@ func PendingToolCallMessageID(session *storageStructs.Chats) (uint64, error) {
 		return 0, errors.New("db not initialized")
 	}
 	var msg storageStructs.Messages
-	err := session.DB.Where("chat_id = ? AND tool_calling_json_string != ''", session.ID).
+	err := storageStructs.OnActiveBranch(session.DB, session.ID).
+		Where("tool_calling_json_string != ''").
 		Order("id DESC").First(&msg).Error
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return 0, nil
@@ -718,7 +719,8 @@ func ApproveToolCallsByID(session *storageStructs.Chats, msgID uint64) (uint64, 
 		return 0, nil
 	}
 	var msg storageStructs.Messages
-	if err := session.DB.Where("chat_id = ? AND id = ? AND tool_calling_json_string != ''", session.ID, latestID).
+	if err := storageStructs.OnActiveBranch(session.DB, session.ID).
+		Where("id = ? AND tool_calling_json_string != ''", latestID).
 		First(&msg).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return 0, nil
@@ -831,8 +833,8 @@ func detectToolCallLoop(session *storageStructs.Chats, toolCallingJSON string) [
 		return nil
 	}
 	var msgs []storageStructs.Messages
-	if err := session.DB.Where("chat_id = ? AND type = ? AND tool_calling_json_string != ''",
-		session.ID, storageStructs.MessagesRoleAgent).
+	if err := storageStructs.OnActiveBranch(session.DB, session.ID).
+		Where("type = ? AND tool_calling_json_string != ''", storageStructs.MessagesRoleAgent).
 		Order("id DESC").Limit(toolCallLoopMaxHistory).Find(&msgs).Error; err != nil {
 		return nil
 	}
@@ -874,12 +876,12 @@ func injectToolCallLoopWarning(session *storageStructs.Chats, calls []ToolCall) 
 	if err != nil {
 		return err
 	}
-	return session.DB.Create(&storageStructs.Messages{
+	return storageStructs.AppendMessage(session.DB, &storageStructs.Messages{
 		ChatID:  session.ID,
 		Delta:   string(buf),
 		Type:    storageStructs.MessagesRoleTool,
 		AgentID: &session.CurrentAgentID,
-	}).Error
+	})
 }
 
 // ExecuteToolCalls 执行工具调用并持久化结果。
@@ -1125,9 +1127,8 @@ func SendRequest(ctx context.Context, session *storageStructs.Chats, callback fu
 		ModelID:       modelID,
 		ModelName:     modelCfg.ModelName,
 	}
-	tx := db.Create(&reqObj)
-	if tx.Error != nil {
-		return true, tx.Error
+	if err := storageStructs.AppendMessage(db, &reqObj); err != nil {
+		return true, err
 	}
 
 	// session.CurrentMessageID 用于后续工具调用关联到本次消息
@@ -1269,7 +1270,7 @@ func SendRequest(ctx context.Context, session *storageStructs.Chats, callback fu
 	obj, err := build.Build(db, session)
 	if err != nil {
 		// 构建失败时删除占位消息，避免空 assistant 消息残留 DB 污染后续上下文
-		if delErr := db.Delete(&storageStructs.Messages{}, msgID).Error; delErr != nil {
+		if delErr := storageStructs.DeleteMessage(db, msgID); delErr != nil {
 			logger.Error("delete placeholder message %d: %v", msgID, delErr)
 		}
 		return true, err
@@ -1354,7 +1355,7 @@ func SendRequest(ctx context.Context, session *storageStructs.Chats, callback fu
 			if fd == "" && ftd == "" && toolCallingJSON == "" {
 				// 取消时一个字都没收到：删除空 assistant 占位行，
 				// 否则 summary/历史回放会带上一条空 assistant 消息。
-				if err := db.Delete(&storageStructs.Messages{}, msgID).Error; err != nil {
+				if err := storageStructs.DeleteMessage(db, msgID); err != nil {
 					logger.Error("cancel delete empty placeholder: %v", err)
 				}
 				return
@@ -1393,7 +1394,7 @@ func SendRequest(ctx context.Context, session *storageStructs.Chats, callback fu
 	// 处理响应：无内容且无工具调用时删除占位消息记录
 	if gDelta.String() == "" && gThinkingDelta.String() == "" && len(tools) == 0 {
 		// 空响应时删除占位消息，不保留无意义的记录
-		if err := db.Delete(&storageStructs.Messages{}, msgID).Error; err != nil {
+		if err := storageStructs.DeleteMessage(db, msgID); err != nil {
 			return true, err
 		}
 	} else {

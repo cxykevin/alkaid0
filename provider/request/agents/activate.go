@@ -40,12 +40,12 @@ func ActivateAgent(session *structs.Chats, agentCode string, prompt string) erro
 	// 	return err
 	// }
 	// 提示词写入
-	err = session.DB.Create(&structs.Messages{
+	err = structs.AppendMessage(session.DB, &structs.Messages{
 		ChatID:  session.ID,
 		Delta:   prompt,
 		AgentID: &agentCode,
 		Type:    structs.MessagesRoleCommunicate,
-	}).Error
+	})
 	if err != nil {
 		return err
 	}
@@ -101,12 +101,12 @@ func DeactivateAgent(session *structs.Chats, prompt string) error {
 	if prompt != "" {
 		// 提示词写入
 		defaultStr := ""
-		err = session.DB.Create(&structs.Messages{
+		err = structs.AppendMessage(session.DB, &structs.Messages{
 			ChatID:  session.ID,
 			Delta:   prompt,
 			AgentID: &defaultStr,
 			Type:    structs.MessagesRoleCommunicate,
-		}).Error
+		})
 		if err != nil {
 			return err
 		}
@@ -125,12 +125,12 @@ func DeactivateAgent(session *structs.Chats, prompt string) error {
 			logger.Warn("failed to summarize deactivated agent %q: %v", oldAgent, summaryErr)
 		} else if summary != "" {
 			mainAgentID := ""
-			if err := session.DB.Create(&structs.Messages{
+			if err := structs.AppendMessage(session.DB, &structs.Messages{
 				ChatID:  session.ID,
 				Delta:   summary,
 				AgentID: &mainAgentID,
 				Type:    structs.MessagesRoleCommunicate,
-			}).Error; err != nil {
+			}); err != nil {
 				logger.Warn("failed to persist deactivated agent %q summary: %v", oldAgent, err)
 			}
 		}

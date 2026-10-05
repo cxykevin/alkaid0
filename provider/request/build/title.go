@@ -22,12 +22,14 @@ const titleWindowMessages = 50
 func Title(chatID uint32, db *gorm.DB) (*reqStruct.ChatCompletionRequest, error) {
 	var userMsg, agentMsg structs.Messages
 	// 第一条用户请求：主线程消息（agent_id 为空或 NULL），排除空正文占位
-	if err := db.Where("`chat_id` = ? AND `type` = ? AND `delta` != '' AND (`agent_id` = '' OR `agent_id` IS NULL)", chatID, structs.MessagesRoleUser).
+	if err := structs.OnActiveBranch(db, chatID).
+		Where("`type` = ? AND `delta` != '' AND (`agent_id` = '' OR `agent_id` IS NULL)", structs.MessagesRoleUser).
 		Order("id ASC").Limit(1).Find(&userMsg).Error; err != nil {
 		return nil, err
 	}
 	// 第一条 AI 响应：不过滤 agent_id（首轮委托子代理时回复带子代理 ID，也属于第一条响应）
-	if err := db.Where("`chat_id` = ? AND `type` = ? AND `delta` != ''", chatID, structs.MessagesRoleAgent).
+	if err := structs.OnActiveBranch(db, chatID).
+		Where("`type` = ? AND `delta` != ''", structs.MessagesRoleAgent).
 		Order("id ASC").Limit(1).Find(&agentMsg).Error; err != nil {
 		return nil, err
 	}
@@ -49,7 +51,9 @@ func TitleFull(chatID uint32, db *gorm.DB) (*reqStruct.ChatCompletionRequest, er
 	windowReached := false
 	for offsetPage := range maxPage {
 		var obj []structs.Messages
-		if err := db.Where("`chat_id` = ? AND (`agent_id` = \"\" OR `agent_id` IS NULL)", chatID).Order("id DESC").Offset(offsetPage * readPageSize).Limit(readPageSize).Find(&obj).Error; err != nil {
+		if err := structs.OnActiveBranch(db, chatID).
+			Where("`agent_id` = \"\" OR `agent_id` IS NULL").
+			Order("id DESC").Offset(offsetPage * readPageSize).Limit(readPageSize).Find(&obj).Error; err != nil {
 			return nil, err
 		}
 		if len(obj) == 0 {

@@ -44,7 +44,7 @@ func indexTempfsAndChatHistory(cwd string) {
 	} else {
 		for ci := range chats {
 			var messages []structs.Messages
-			if err := db.Where("chat_id = ? AND type IN (0, 1)", chats[ci].ID).
+			if err := structs.OnActiveBranch(db, chats[ci].ID).Where("type IN (0, 1)").
 				Order("id DESC").Limit(16).Find(&messages).Error; err != nil {
 				logger.Warn("index extras: query messages for chat %d failed: %v", chats[ci].ID, err)
 				continue
