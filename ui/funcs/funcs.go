@@ -49,33 +49,18 @@ func QueryChat(db *gorm.DB, id uint32) (*structs.Chats, error) {
 	return chats, err
 }
 
-// DeleteChat 删除聊天
-// 在事务中先删除所有子记录：Messages/Terminals 等外键为 OnDelete:RESTRICT，
-// 直接删 Chats 会报外键约束错误，且不删子表会留下孤儿数据（含敏感对话内容）。
+// DeleteChat 删除聊天。
 //
-// 注意：这里必须覆盖 Chats 的**全部**外键子表，漏掉任何一张都会让最后的
-// tx.Delete(&Chats) 触发外键约束失败，从而导致整个事务回滚、一条记录都删不掉。
-// 目前 Chats 的外键子表为：Messages / Traces / Terminals / ReferFiles / Scopes
-// （见 storage/structs/*.go 中带 foreignKey:ChatID 的结构体）。
+// 设计语义：只删除会话表（chats）记录，不清理消息等子表数据——聊天记录保留在
+// 库中（消息树、终端历史、文件跟踪、工作流等行成为孤儿数据但保持完整），供
+// 恢复/审计。为支撑该语义，子表对 chats 的外键约束已在 storage/migrate 的
+// 一次性迁移（MigrateRemoveChatForeignKeys）中移除，全新库不再生成
+// （见 storage/structs/*.go 中的「设计注记」）。
+//
+// 该语义下删除是单条 DELETE、无需事务；删除失败（如迁移未执行、外键仍存在）
+// 会向上报错，由调用方决定如何处理。
 func DeleteChat(db *gorm.DB, chat *structs.Chats) error {
-	return db.Transaction(func(tx *gorm.DB) error {
-		if err := tx.Where("chat_id = ?", chat.ID).Delete(&structs.Messages{}).Error; err != nil {
-			return err
-		}
-		if err := tx.Where("chat_id = ?", chat.ID).Delete(&structs.Traces{}).Error; err != nil {
-			return err
-		}
-		if err := tx.Where("chat_id = ?", chat.ID).Delete(&structs.Terminals{}).Error; err != nil {
-			return err
-		}
-		if err := tx.Where("chat_id = ?", chat.ID).Delete(&structs.ReferFiles{}).Error; err != nil {
-			return err
-		}
-		if err := tx.Where("chat_id = ?", chat.ID).Delete(&structs.Scopes{}).Error; err != nil {
-			return err
-		}
-		return tx.Delete(&structs.Chats{}, chat.ID).Error
-	})
+	return db.Delete(&structs.Chats{}, chat.ID).Error
 }
 
 // CreateChat 创建聊天

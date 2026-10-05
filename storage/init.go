@@ -109,9 +109,10 @@ func InitDB(dbPath string) (*gorm.DB, error) {
 	sqlDB.SetConnMaxLifetime(time.Hour)
 
 	// 迁移期间显式关闭外键检查：
-	// DSN 里已经让每条新连接默认 foreign_keys=ON，而历史数据库可能存在孤儿行
-	// （旧版本删除会话时不清理子表），GORM 为已存在的表补建外键约束时会重建表
-	// 并整表拷贝，外键开启会让整个 AutoMigrate 直接失败。迁移完成后再恢复。
+	// DSN 里已经让每条新连接默认 foreign_keys=ON，而数据库中可能存在孤儿行
+	// （删除会话时子表数据按设计保留，与 chats 行没有外键关系；更早的版本同样
+	// 不清理子表），GORM 对已存在的表做重建类变更（补建约束、修改列类型）时
+	// 会整表拷贝，外键开启会让整个 AutoMigrate 直接失败。迁移完成后再恢复。
 	// 连接池此时已被限制为单连接，因此这两条 PRAGMA 与 AutoMigrate 走同一条连接。
 	if err := db.Exec("PRAGMA foreign_keys = OFF").Error; err != nil {
 		return nil, fmt.Errorf("failed to disable foreign keys before automigrate: %w", err)
@@ -144,7 +145,7 @@ func InitDB(dbPath string) (*gorm.DB, error) {
 // 因此旧库升级后 scopes.name 仍然是单列唯一键：不同会话无法保存同名 scope，
 // SetScopeEnabled 会直接拿到 "UNIQUE constraint failed: scopes.name"。
 // SQLite 不支持 ALTER TABLE ... ADD PRIMARY KEY，只能重建表：
-// 改名旧表 → AutoMigrate 建出带复合主键（和外键）的新表 → 回填数据 → 删除旧表。
+// 改名旧表 → AutoMigrate 建出带复合主键的新表 → 回填数据 → 删除旧表。
 func migrateScopesPrimaryKey(db *gorm.DB) error {
 	if !db.Migrator().HasTable(&structs.Scopes{}) {
 		return nil
@@ -173,14 +174,14 @@ func migrateScopesPrimaryKey(db *gorm.DB) error {
 		if err := tx.Exec("ALTER TABLE scopes RENAME TO " + scopesPKMigrationBackup).Error; err != nil {
 			return err
 		}
-		// 新表由模型定义创建，自动带上复合主键与外键
+		// 新表由模型定义创建，自动带上复合主键
 		if err := tx.AutoMigrate(&structs.Scopes{}); err != nil {
 			return err
 		}
-		// 只回填会话仍存在的行：历史孤儿行（会话已删）无法满足外键，保留没有意义
+		// 回填全部行（含会话已删的孤儿行）：scopes 不再有 chats 外键，
+		// 孤儿行是「只删会话表、保留子表数据」设计下被有意保留的数据，不在此丢弃。
 		if err := tx.Exec("INSERT OR REPLACE INTO scopes (chat_id, name, enabled) " +
-			"SELECT chat_id, name, enabled FROM " + scopesPKMigrationBackup + " " +
-			"WHERE chat_id IN (SELECT id FROM chats)").Error; err != nil {
+			"SELECT chat_id, name, enabled FROM " + scopesPKMigrationBackup).Error; err != nil {
 			return err
 		}
 		return tx.Exec("DROP TABLE " + scopesPKMigrationBackup).Error

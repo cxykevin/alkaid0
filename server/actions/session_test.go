@@ -1301,7 +1301,7 @@ func TestSessionDelete_ColdSession(t *testing.T) {
 	dir, db, ids := newSessionListDB(t, 1)
 	id := ids[0]
 
-	// 插入一条消息，验证子表级联删除
+	// 插入一条消息，验证删除会话时子表数据按设计保留（只删会话表）
 	msg := structs.Messages{ChatID: id}
 	if err := db.Create(&msg).Error; err != nil {
 		t.Fatalf("failed to create message: %v", err)
@@ -1317,13 +1317,13 @@ func TestSessionDelete_ColdSession(t *testing.T) {
 	if _, err := funcs.QueryChat(db, id); err == nil {
 		t.Error("chat should be deleted from DB")
 	}
-	// 子记录已级联删除
+	// 子记录（消息）按设计保留：deleteChat 只删会话表（见 funcs.DeleteChat）
 	var cnt int64
 	if err := db.Model(&structs.Messages{}).Where("chat_id = ?", id).Count(&cnt).Error; err != nil {
 		t.Fatalf("count messages failed: %v", err)
 	}
-	if cnt != 0 {
-		t.Errorf("messages should be cascade-deleted, got %d", cnt)
+	if cnt != 1 {
+		t.Errorf("messages should be kept after session delete, got %d", cnt)
 	}
 	// session/list 不再返回该会话
 	resp, err := SessionList(SessionListRequest{Cwd: dir}, nil, 1)

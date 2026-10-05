@@ -95,8 +95,12 @@ func TestInitStorageMigratesLegacyDatabase(t *testing.T) {
 	}
 	assertNullable(t, "messages[2].parent_id", readNullable(t, db, "SELECT parent_id FROM messages WHERE id = ?", 2), ptr(1))
 	assertNullable(t, "chats[1].active_leaf_id", readNullable(t, db, "SELECT active_leaf_id FROM chats WHERE id = ?", 1), ptr(4))
-	if n := countInt(t, db, "SELECT count(*) FROM metadata WHERE key = 'schema_version' AND value = '1'"); n != 1 {
-		t.Fatal("metadata.schema_version 未写入")
+	if n := countInt(t, db, "SELECT count(*) FROM metadata WHERE key = 'schema_version' AND value = '2'"); n != 1 {
+		t.Fatal("metadata.schema_version 未提升到 2")
+	}
+	// chat FK 迁移同步完成：旧库的 messages 外键被移除（此后删除会话不再被阻止）
+	if n := countInt(t, db, "SELECT count(*) FROM pragma_foreign_key_list('messages') WHERE \"table\" = 'chats'"); n != 0 {
+		t.Fatal("messages 仍带 chats 外键，MigrateRemoveChatForeignKeys 未生效")
 	}
 	closeDB(t, db)
 

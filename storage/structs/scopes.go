@@ -5,5 +5,8 @@ type Scopes struct {
 	ChatID  uint32 `gorm:"primaryKey;column:chat_id"`
 	Name    string `gorm:"primaryKey;column:name"`
 	Enabled bool   `gorm:"column:enabled"`
-	Chats   *Chats `gorm:"foreignKey:ChatID;references:ID"`
+	// 设计注记：本表与会话之间有意不建立外键/关联——deleteChat 只删会话表、保留聊天
+	// 记录（见 ui/funcs.DeleteChat），子表数据既不应阻止会话行删除、也不应被级联删除。
+	// 历史库遗留的 fk_scopes_chats 外键由 storage/migrate.MigrateRemoveChatForeignKeys
+	// 一次性移除；全新库不再生成。ChatID 是复合主键的一部分，不再是关系字段。
 }

@@ -10,8 +10,9 @@ type ClassifySegment struct {
 	Label     string `gorm:"type:text"`
 	Text      string `gorm:"type:text"`
 	TempPath  string `gorm:"type:text"`
-	// Chats 关联会话：此前该表既没有外键也没有任何删除路径，会话删掉后行永久残留
-	// （Text 里是整段用户输入的副本，无界增长）。OnDelete:CASCADE 让会话删除时
-	// 一并清掉它的分类段。没有外键的历史库由 AutoMigrate 补建约束。
-	Chats *Chats `gorm:"foreignKey:ChatID;references:ID;constraint:OnDelete:CASCADE"`
+	// 设计注记：本表与会话之间有意不建立外键/关联——deleteChat 只删会话表、保留聊天
+	// 记录（见 ui/funcs.DeleteChat），子表数据既不应阻止会话行删除、也不应被级联删除。
+	// 此前本表曾以 OnDelete:CASCADE 随会话删除做级联清理，该行为与「只删会话表」的
+	// 设计冲突、已废弃；历史库遗留的 fk_classify_segments_chats 外键由
+	// storage/migrate.MigrateRemoveChatForeignKeys 一次性移除；全新库不再生成。
 }

@@ -119,13 +119,18 @@ func TestInitDBSetsPragmasOnEveryNewConnection(t *testing.T) {
 		t.Fatalf("连接回收后 cache_size 应为 -512，实际 %d", cacheSize)
 	}
 
-	// 行为验证：外键约束在新连接上确实生效（仅 PRAGMA 读数为 1 不足以证明）
+	// 行为验证：外键约束在新连接上确实生效（仅 PRAGMA 读数为 1 不足以证明）。
+	// 应用自身的子表现已不声明 chats 外键（只删会话表的设计，见 structs 注记），
+	// 这里用一张探针表验证 foreign_keys=ON 在新连接上真实生效。
+	if err := db.Exec("CREATE TABLE fk_probe (id integer PRIMARY KEY, ref integer REFERENCES chats(id))").Error; err != nil {
+		t.Fatalf("create fk_probe: %v", err)
+	}
 	chat := structs.Chats{}
 	if err := db.Create(&chat).Error; err != nil {
 		t.Fatalf("create chat: %v", err)
 	}
-	if err := db.Exec("INSERT INTO scopes (chat_id, name, enabled) VALUES (?, ?, ?)", chat.ID+1000, "orphan", true).Error; err == nil {
-		t.Fatal("外键约束未生效：允许插入引用不存在会话的 scopes 行")
+	if err := db.Exec("INSERT INTO fk_probe (ref) VALUES (?)", chat.ID+1000).Error; err == nil {
+		t.Fatal("外键约束未生效：允许插入引用不存在会话的 fk_probe 行")
 	}
 }
 
@@ -304,18 +309,27 @@ func TestInitDBMigratesLegacyScopesPrimaryKey(t *testing.T) {
 		t.Fatalf("两个会话应各有一行 default scope，实际 %d 行", count)
 	}
 
-	// 4) 重建后的表仍须保留 chat_id 外键
-	if err := db.Exec("INSERT INTO scopes (name, enabled, chat_id) VALUES ('orphan', 1, 99999)").Error; err == nil {
-		t.Fatal("重建 scopes 表后外键约束丢失：允许插入引用不存在会话的行")
+	// 4) 重建后的表不再有 chats 外键：孤儿行（会话已删）是「只删会话表」设计下
+	// 被有意保留的数据，不再被拒绝，也不会阻止/级联会话行删除。
+	var fks int64
+	if err := db.Raw("SELECT count(*) FROM pragma_foreign_key_list('scopes')").Scan(&fks).Error; err != nil {
+		t.Fatalf("PRAGMA foreign_key_list: %v", err)
+	}
+	if fks != 0 {
+		t.Fatalf("scopes 不应再有外键，实际 %d 条", fks)
+	}
+	if err := db.Exec("INSERT INTO scopes (name, enabled, chat_id) VALUES ('orphan', 1, 99999)").Error; err != nil {
+		t.Fatalf("孤儿 scopes 行应被允许（设计：子表不阻止、不级联）: %v", err)
 	}
 }
 
-// TestChatDeleteCascadesClassifySegmentsAndWorkflows 回归测试：删除会话必须级联清掉
-// classify_segments / workflows / workflow_events。
+// TestChatDeleteKeepsSubtableData 设计测试：删除会话行必须成功，且
+// classify_segments / workflows / workflow_events 数据按设计保留（孤儿行）。
 //
-// 这三张表此前既没有外键、也没有任何删除路径：会话删除后行永久残留
-// （classify_segments.text 里是整段用户输入的副本，无界增长）。
-func TestChatDeleteCascadesClassifySegmentsAndWorkflows(t *testing.T) {
+// 设计语义：deleteChat 只删会话表、保留聊天记录与子表数据（见 ui/funcs.DeleteChat）；
+// 子表不再对 chats 声明外键，删除既不会被阻止、也不会级联清理任何数据。
+// （此前这三张表以 OnDelete:CASCADE 随会话删除做级联清理，该行为已废弃。）
+func TestChatDeleteKeepsSubtableData(t *testing.T) {
 	db, err := InitDB(filepath.Join(t.TempDir(), "db.sqlite"))
 	if err != nil {
 		t.Fatalf("InitDB: %v", err)
@@ -340,77 +354,82 @@ func TestChatDeleteCascadesClassifySegmentsAndWorkflows(t *testing.T) {
 		t.Fatalf("delete chat: %v", err)
 	}
 
-	if n := countByChat(t, db, &structs.ClassifySegment{}, chat.ID); n != 0 {
-		t.Fatalf("删除会话后 classify_segments 应被级联清理，实际残留 %d 行", n)
+	if n := countByChat(t, db, &structs.ClassifySegment{}, chat.ID); n != 1 {
+		t.Fatalf("删除会话后 classify_segments 数据应按设计保留，实际 %d 行", n)
 	}
-	if n := countByChat(t, db, &structs.Workflows{}, chat.ID); n != 0 {
-		t.Fatalf("删除会话后 workflows 应被级联清理，实际残留 %d 行", n)
+	if n := countByChat(t, db, &structs.Workflows{}, chat.ID); n != 1 {
+		t.Fatalf("删除会话后 workflows 数据应按设计保留，实际 %d 行", n)
 	}
-	if n := countByChat(t, db, &structs.WorkflowEvents{}, chat.ID); n != 0 {
-		t.Fatalf("删除会话后 workflow_events 应被级联清理，实际残留 %d 行", n)
+	if n := countByChat(t, db, &structs.WorkflowEvents{}, chat.ID); n != 1 {
+		t.Fatalf("删除会话后 workflow_events 数据应按设计保留，实际 %d 行", n)
 	}
 }
 
-// TestInitDBAddsCascadeForeignKeysToLegacyTables 回归测试：历史数据库（三张子表没有
-// 外键）升级后必须补上级联外键。
+// TestInitStorageRemovesLegacyCascadeForeignKeys 回归测试：历史库中带 ON DELETE
+// CASCADE 外键的子表（classify_segments）经 InitStorage 升级后，遗留外键被移除：
+// 删除会话行不再被阻止、也不级联清理数据。
 //
-// 用 DisableForeignKeyConstraintWhenMigrating 建出与修复前完全一致的"无外键" schema，
-// 再走 InitDB 的正常升级路径（AutoMigrate 为已存在的表补建约束时会重建表）。
-func TestInitDBAddsCascadeForeignKeysToLegacyTables(t *testing.T) {
-	dbPath := filepath.Join(t.TempDir(), "legacy.sqlite")
+// 历史背景：这几张子表曾以 OnDelete:CASCADE 随会话删除做级联清理。该行为与
+// 「只删会话表」的设计冲突、已废弃；历史遗留外键由 MigrateRemoveChatForeignKeys
+// 在打开数据库时重建表移除，全新库不再生成。
+func TestInitStorageRemovesLegacyCascadeForeignKeys(t *testing.T) {
+	root := t.TempDir()
+	dataDir := filepath.Join(root, ".alkaid0")
+	if err := os.MkdirAll(dataDir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	dbPath := filepath.Join(dataDir, "db.sqlite")
 
-	legacy, err := gorm.Open(sqlite.Open(dbPath), &gorm.Config{DisableForeignKeyConstraintWhenMigrating: true})
+	// 构造旧库：classify_segments 带指向 chats 的 ON DELETE CASCADE 外键
+	legacy, err := gorm.Open(sqlite.Open(dbPath), &gorm.Config{})
 	if err != nil {
 		t.Fatalf("open legacy db: %v", err)
 	}
-	if err := legacy.AutoMigrate(structs.Tables...); err != nil {
-		t.Fatalf("create legacy schema: %v", err)
-	}
-	var cascadeTables int64
-	if err := legacy.Raw("SELECT count(*) FROM sqlite_master WHERE type = 'table' AND sql LIKE '%ON DELETE CASCADE%'").Scan(&cascadeTables).Error; err != nil {
-		t.Fatalf("inspect legacy schema: %v", err)
-	}
-	if cascadeTables != 0 {
-		t.Fatalf("旧 schema 构造失败：不应存在级联外键，实际 %d 张表", cascadeTables)
+	for _, stmt := range []string{
+		"CREATE TABLE chats (id integer PRIMARY KEY AUTOINCREMENT, title text)",
+		"CREATE TABLE classify_segments (id integer PRIMARY KEY AUTOINCREMENT, chat_id integer, message_id integer, label text, text text, CONSTRAINT fk_classify_segments_chats FOREIGN KEY (chat_id) REFERENCES chats(id) ON DELETE CASCADE)",
+		"INSERT INTO chats (id, title) VALUES (1, 'legacy')",
+		"INSERT INTO classify_segments (chat_id, message_id, label, text) VALUES (1, 1, 'prompt', 'hello')",
+	} {
+		if err := legacy.Exec(stmt).Error; err != nil {
+			t.Fatalf("%s: %v", stmt, err)
+		}
 	}
 	closeGormDB(t, legacy)
 
-	db, err := InitDB(dbPath)
+	db, err := InitStorage(dataDir, "db.sqlite")
 	if err != nil {
-		t.Fatalf("upgrade legacy db: %v", err)
+		t.Fatalf("InitStorage: %v", err)
 	}
 	defer closeGormDB(t, db)
 
-	if err := db.Raw("SELECT count(*) FROM sqlite_master WHERE type = 'table' AND sql LIKE '%ON DELETE CASCADE%'").Scan(&cascadeTables).Error; err != nil {
-		t.Fatalf("inspect upgraded schema: %v", err)
+	// 1) 遗留外键已在打开数据库时被移除
+	var fks int64
+	if err := db.Raw("SELECT count(*) FROM pragma_foreign_key_list('classify_segments') WHERE \"table\" = 'chats'").Scan(&fks).Error; err != nil {
+		t.Fatalf("PRAGMA foreign_key_list: %v", err)
 	}
-	if cascadeTables < 3 {
-		t.Fatalf("升级后应至少有 3 张表带 ON DELETE CASCADE，实际 %d 张", cascadeTables)
+	if fks != 0 {
+		t.Fatalf("升级后 classify_segments 不应再有 chats 外键，实际 %d 条", fks)
 	}
 
-	chat := structs.Chats{}
-	if err := db.Create(&chat).Error; err != nil {
-		t.Fatalf("create chat: %v", err)
+	// 2) 旧数据保留
+	var text string
+	if err := db.Raw("SELECT text FROM classify_segments WHERE chat_id = 1").Scan(&text).Error; err != nil {
+		t.Fatalf("read legacy segment: %v", err)
 	}
-	if err := db.Create(&structs.ClassifySegment{ChatID: chat.ID, MessageID: 1, Label: "log", Text: "boom"}).Error; err != nil {
-		t.Fatalf("create classify segment: %v", err)
+	if text != "hello" {
+		t.Fatalf("classify_segments.text = %q, want \"hello\"", text)
 	}
-	if err := db.Create(&structs.Workflows{WorkflowID: "wf-2", ChatID: chat.ID, RunID: "run-2", Status: "running"}).Error; err != nil {
-		t.Fatalf("create workflow: %v", err)
-	}
-	if err := db.Create(&structs.WorkflowEvents{WorkflowID: "wf-2", ChatID: chat.ID, Sequence: 1, Type: "node"}).Error; err != nil {
-		t.Fatalf("create workflow event: %v", err)
-	}
-	if err := db.Delete(&structs.Chats{}, chat.ID).Error; err != nil {
+
+	// 3) 删除会话行成功；classify_segments 数据按设计保留（不级联、不阻止）
+	if err := db.Delete(&structs.Chats{}, 1).Error; err != nil {
 		t.Fatalf("delete chat: %v", err)
 	}
-	if n := countByChat(t, db, &structs.ClassifySegment{}, chat.ID); n != 0 {
-		t.Fatalf("升级后的旧库未级联清理 classify_segments，实际残留 %d 行", n)
+	var left int64
+	if err := db.Model(&structs.ClassifySegment{}).Where("chat_id = 1").Count(&left).Error; err != nil {
+		t.Fatalf("count classify segments: %v", err)
 	}
-	if n := countByChat(t, db, &structs.Workflows{}, chat.ID); n != 0 {
-		t.Fatalf("升级后的旧库未级联清理 workflows，实际残留 %d 行", n)
-	}
-	if n := countByChat(t, db, &structs.WorkflowEvents{}, chat.ID); n != 0 {
-		t.Fatalf("升级后的旧库未级联清理 workflow_events，实际残留 %d 行", n)
+	if left != 1 {
+		t.Fatalf("删除会话后 classify_segments 数据应保留，实际 %d 行", left)
 	}
 }

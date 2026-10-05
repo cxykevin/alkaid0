@@ -136,13 +136,14 @@ func TestDeleteChat(t *testing.T) {
 	}
 }
 
-// TestDeleteChat_WithScopesRow 回归测试：带 Scopes 子记录的会话必须能真正删除。
+// TestDeleteChat_KeepsSubtableData 设计测试：删除会话必须成功，且子表数据按设计
+// 保留（孤儿行）。
 //
-// 背景：Scopes 也对 Chats 声明了外键（storage/structs/scopes.go），而 DeleteChat
-// 只删了 Messages/Traces/Terminals/ReferFiles。于是最后的 tx.Delete(&Chats) 触发
-// 外键约束 → 整个事务回滚 → 一条记录都没删掉；调用方又丢弃了错误，
-// 客户端以为删除成功，敏感对话内容仍留在磁盘上。
-func TestDeleteChat_WithScopesRow(t *testing.T) {
+// 设计语义：DeleteChat 只删会话表、保留聊天记录供恢复/审计（见 DeleteChat 注释）。
+// 子表对 chats 的外键已由 storage/migrate.MigrateRemoveChatForeignKeys 一次性移除、
+// 全新库不再生成，因此删除不会被任何子表阻止、也不级联清理任何数据。
+// （此前 Scopes 等子表声明外键时，会阻止删除或随会话级联删除，该行为已废弃。）
+func TestDeleteChat_KeepsSubtableData(t *testing.T) {
 	db := setupTestDB(t)
 	defer u.Unwrap(db.DB()).Close()
 
@@ -167,8 +168,8 @@ func TestDeleteChat_WithScopesRow(t *testing.T) {
 
 	var left int64
 	db.Model(&structs.Scopes{}).Where("chat_id = ?", chat.ID).Count(&left)
-	if left != 0 {
-		t.Errorf("scopes rows must be deleted together with the chat, %d left", left)
+	if left != 1 {
+		t.Errorf("子表数据按设计保留：scopes 行应仍存在，实际 %d 行", left)
 	}
 }
 

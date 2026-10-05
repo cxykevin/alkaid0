@@ -2718,8 +2718,8 @@ func SessionDelete(req SessionDeleteRequest, call func(string, any, *string) err
 	defer closeDB(cwd)
 
 	// 执行删除。会话本就不存在（0 行受影响）时 GORM 不报错，符合"静默成功"的约定；
-	// 但真正删除失败（例如外键约束）必须上报，否则客户端以为已删除、
-	// 敏感对话内容却仍留在磁盘上。
+	// 但真正删除失败必须上报，否则客户端以为已删除、而会话行仍留在磁盘上。
+	// 删除只作用于会话表：消息等聊天记录按设计保留（见 funcs.DeleteChat）。
 	if err := funcs.DeleteChat(db, &structs.Chats{ID: id}); err != nil {
 		return u.H{}, fmt.Errorf("failed to delete session: %w", err)
 	}

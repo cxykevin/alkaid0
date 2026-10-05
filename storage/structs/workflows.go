@@ -22,9 +22,11 @@ type Workflows struct {
 	StartedAt      *time.Time
 	FinishedAt     *time.Time
 	UpdatedAt      time.Time
-	// Chats 关联会话：此前该表既没有外键也没有清理路径，会话删除后 workflow 行永久残留。
-	// OnDelete:CASCADE 让会话删除时一并清理（没有外键的历史库由 AutoMigrate 补建约束）。
-	Chats *Chats `gorm:"foreignKey:ChatID;references:ID;constraint:OnDelete:CASCADE"`
+	// 设计注记：本表与会话之间有意不建立外键/关联——deleteChat 只删会话表、保留聊天
+	// 记录（见 ui/funcs.DeleteChat），子表数据既不应阻止会话行删除、也不应被级联删除。
+	// 此前本表曾以 OnDelete:CASCADE 随会话删除做级联清理，该行为与「只删会话表」的
+	// 设计冲突、已废弃；历史库遗留的 fk_workflows_chats 外键由 storage/migrate.
+	// MigrateRemoveChatForeignKeys 一次性移除；全新库不再生成。
 }
 
 // WorkflowEvents stores ordered workflow events.
@@ -39,6 +41,7 @@ type WorkflowEvents struct {
 	PayloadJSON string `gorm:"type:text"`
 	RawJSON     string `gorm:"type:text"`
 	CreatedAt   time.Time
-	// Chats 关联会话：事件表按 workflow 逐个累积且从不清理，这里同样跟随会话级联删除
-	Chats *Chats `gorm:"foreignKey:ChatID;references:ID;constraint:OnDelete:CASCADE"`
+	// 设计注记：与 Workflows 相同——本表与会话之间有意不建立外键/关联，删除会话时
+	// 事件数据保留（deleteChat 只删会话表，见 ui/funcs.DeleteChat）；历史库遗留的
+	// fk_workflow_events_chats 外键由 storage/migrate.MigrateRemoveChatForeignKeys 移除。
 }

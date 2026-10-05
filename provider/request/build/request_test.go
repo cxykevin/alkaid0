@@ -24,8 +24,10 @@ func setupTestDB(t *testing.T) *gorm.DB {
 		t.Fatalf("Failed to connect to test database: %v", err)
 	}
 
-	// 自动迁移表结构
-	err = db.AutoMigrate(&structs.Messages{})
+	// 自动迁移表结构。chats 必须显式迁移：OnActiveBranch 的 SQL 会读取
+	// chats.active_leaf_id；子表模型已不再声明 Chats 关联，只迁移 messages
+	// 不会再顺带建出 chats 表。
+	err = db.AutoMigrate(&structs.Chats{}, &structs.Messages{})
 	if err != nil {
 		t.Fatalf("Failed to migrate database: %v", err)
 	}

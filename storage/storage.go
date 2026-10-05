@@ -79,6 +79,15 @@ func InitStorage(dataPath string, dbFile string) (*gorm.DB, error) {
 	if err := migrate.MigrateToTree(db); err != nil {
 		logger.Error("failed to migrate message history to tree, will retry on next open: %v", err)
 	}
+	// 一次性数据迁移（二）：解除全部子表对 chats 的外键绑定（含历史库中
+	// RESTRICT/NO ACTION 与 ON DELETE CASCADE 两类约束）。设计语义：deleteChat
+	// 只删会话表、保留消息等聊天记录（见 ui/funcs.DeleteChat），子表既不应阻止
+	// 会话行删除、也不应被级联删除；以 schema_version=2 驱动，幂等且可重试
+	// （见 storage/migrate.MigrateRemoveChatForeignKeys）。失败同样只记 ERROR、
+	// 不阻塞数据库打开，下次启动重试。
+	if err := migrate.MigrateRemoveChatForeignKeys(db); err != nil {
+		logger.Error("failed to remove chat foreign keys, will retry on next open: %v", err)
+	}
 
 	// per-connection 的 PRAGMA（foreign_keys 等）已经下沉到 DSN（见 init.go），
 	// 这里的语句只剩 VACUUM/ANALYZE：它们不是连接级设置，ANALYZE 会扫描整库索引写
