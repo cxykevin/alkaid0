@@ -83,8 +83,13 @@ func (m *MessagesReferList) Scan(src any) error {
 
 // Messages 消息列表
 type Messages struct {
-	ID            uint64 `gorm:"primaryKey;autoIncrement"`
-	ChatID        uint32
+	ID uint64 `gorm:"primaryKey;autoIncrement"`
+	// ParentID 树形消息的父节点 ID（NULL = 根节点）。
+	// 线性历史迁移时按「同会话内 id 小于当前行的最大 id」回填；fork/rewind 分支的
+	// 祖先指针，递归查询依赖 idx_parent_id 索引。
+	ParentID *uint64 `gorm:"index:idx_parent_id"`
+	// ChatID 所属会话。回填 SQL 与后续按会话查树的查询都依赖该索引。
+	ChatID        uint32 `gorm:"index:idx_chat_id"`
 	AgentID       *string
 	Delta         string `gorm:"type:text"`
 	Summary       string `gorm:"type:text"`

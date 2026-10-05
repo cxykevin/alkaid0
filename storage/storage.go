@@ -9,6 +9,7 @@ import (
 	"sync"
 
 	"github.com/cxykevin/alkaid0/log"
+	"github.com/cxykevin/alkaid0/storage/migrate"
 	"gorm.io/gorm"
 )
 
@@ -68,6 +69,15 @@ func InitStorage(dataPath string, dbFile string) (*gorm.DB, error) {
 	if db, err = InitDB(dbPath); err != nil {
 		logger.Error("failed to init db %s: %v", dataPath, err)
 		return nil, err
+	}
+
+	// 一次性数据迁移：线性消息历史 → 树形结构（fork/rewind 的基础设施，见 storage/migrate）。
+	// 以 metadata 表的存在与否作为「已迁移」标记，只在首次打开老库时真正执行；
+	// 迁移在单个事务内完成，失败时整体回滚（metadata 表随之消失），下次打开会重新尝试。
+	// 新列是纯增量且本次不接入业务逻辑，旧代码路径不读取它们，因此迁移失败只记录
+	// ERROR、不阻塞数据库打开——否则一个可重试的增量迁移会让整个应用无法启动。
+	if err := migrate.MigrateToTree(db); err != nil {
+		logger.Error("failed to migrate message history to tree, will retry on next open: %v", err)
 	}
 
 	// per-connection 的 PRAGMA（foreign_keys 等）已经下沉到 DSN（见 init.go），
