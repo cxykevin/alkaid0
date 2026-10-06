@@ -48,8 +48,9 @@ type Chats struct {
 	Task            string // 任务计划（markdown 列表，@task 虚拟对象编辑，持久化到 chats 表）
 	Hidden          bool   `gorm:"not null;default:false"`
 	// ActiveLeafID 当前活跃叶子的消息 ID（NULL = 空会话）。
-	// 线性历史迁移后指向会话最新消息；fork/rewind 后指向当前活跃分支的末端，
-	// 属于本次迁移预留列，由后续业务逻辑维护。
+	// 线性历史迁移后指向会话最新消息；fork/rewind 后指向当前活跃分支的末端。
+	// 由消息树维护逻辑更新：AppendMessage 推进、DeleteMessage 回退、
+	// RewindTo 显式移动到历史位置（见 storage/structs/branch.go）。
 	ActiveLeafID *uint64
 	// UpdatedAt 最后活动时间（GORM autoUpdateTime 约定自动维护）。
 	// 会话任何落库变更（消息写入、标题更新等）都会刷新它，用于 session/list 按活动时间倒序展示。
