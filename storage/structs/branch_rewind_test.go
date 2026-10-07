@@ -10,7 +10,7 @@ import (
 // 本文件覆盖消息树 rewind（RewindTo）的语义：
 // 会话头指针移动、非删除语义、旁支保留、rewind 后追加分叉、
 // 异常状态（有消息无叶子）补链修复、参数/目标校验与失败原子性、
-// 跨会话隔离、以及与 DeleteMessage 的衔接。
+// 跨会话隔离、会话身份不变（SessionID 稳定），以及与 DeleteMessage 的衔接。
 
 // rewindTestChain 在指定会话上追加 n 条线性消息（m1..mN），返回它们。
 func rewindTestChain(t *testing.T, db *gorm.DB, chatID uint32, n int) []*Messages {
@@ -291,4 +291,47 @@ func TestRewindThenDeleteHead(t *testing.T) {
 	// m3 上提到 m1
 	rewindTestAssertParent(t, db, ms[2].ID, &ms[0].ID)
 	branchTestAssertIDs(t, branchTestIDs(t, db, 1), []uint64{ms[0].ID})
+}
+
+// TestRewindKeepsSessionIdentity 验证 rewind 不改变会话身份：SessionID 形如
+// sess_<Chats.ID>:<cwd>（server/actions.cwd2SessionID），rewind 只移动
+// active_leaf_id——会话行不新增、不删除，ID / Root 等身份字段保持不变，
+// 客户端持有的 sessionId 与其上的连接绑定在 rewind 前后完全一致。
+func TestRewindKeepsSessionIdentity(t *testing.T) {
+	db := setupBranchTest(t)
+	chat := &Chats{ID: 1, LastModelID: 1, Root: "/tmp/rewind-session"}
+	if err := db.Create(chat).Error; err != nil {
+		t.Fatalf("创建会话失败: %v", err)
+	}
+	ms := rewindTestChain(t, db, 1, 3)
+
+	if err := RewindTo(db, 1, ms[0].ID); err != nil {
+		t.Fatalf("RewindTo 失败: %v", err)
+	}
+
+	// 会话行仍是同一条：按原 ID 读回，身份字段不变
+	var got Chats
+	if err := db.First(&got, chat.ID).Error; err != nil {
+		t.Fatalf("rewind 后按原 ID 应能读回同一会话: %v", err)
+	}
+	if got.ID != chat.ID || got.Root != chat.Root {
+		t.Fatalf("会话身份应保持不变（id=%d root=%q），得到 id=%d root=%q",
+			chat.ID, chat.Root, got.ID, got.Root)
+	}
+	// rewind 不新建也不删除会话行：会话数恒为 1（防「为 rewind 另开新会话」的实现）
+	var chats int64
+	if err := db.Model(&Chats{}).Count(&chats).Error; err != nil {
+		t.Fatalf("统计会话数失败: %v", err)
+	}
+	if chats != 1 {
+		t.Fatalf("rewind 前后会话数应恒为 1，得到 %d", chats)
+	}
+	// 消息仍全部归属同一会话（chat_id 不变），没有被移出或迁移
+	var msgs int64
+	if err := db.Model(&Messages{}).Where("chat_id = ?", chat.ID).Count(&msgs).Error; err != nil {
+		t.Fatalf("统计会话内消息失败: %v", err)
+	}
+	if msgs != 3 {
+		t.Fatalf("3 条消息都应保持在会话 %d 下，得到 %d", chat.ID, msgs)
+	}
 }

@@ -166,6 +166,10 @@ func DeleteMessage(db *gorm.DB, msgID uint64) error {
 // 校验：会话必须存在；目标消息必须存在且属于该会话。否则报错且不产生任何
 // 改动（整个操作位于单个事务内）。目标已是当前会话头时视为幂等成功。
 //
+// 会话身份不变：本操作不新建、不删除会话行，也不改变任何消息 id；SessionID
+// （server 侧由 Chats.ID 与工作目录派生，形如 sess_<id>:<cwd>）因此保持不变，
+// 客户端持有的 sessionId 与已知 messageId 在 rewind 前后继续有效。
+//
 // 一致性修复（与 AppendMessage 共用 localBackfillLeaf）：若会话已有历史消息
 // 但没有叶子（异常状态），先把未挂父节点的消息局部回填成链再移动会话头——
 // 保证早于目标的既有历史不会因 rewind 而从活跃分支上"消失"。
