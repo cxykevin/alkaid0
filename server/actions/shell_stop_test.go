@@ -36,14 +36,26 @@ func TestShellStopOnlyBroadcasts(t *testing.T) {
 	oldDbs := dbs
 	dbs = map[string]*dbObj{}
 	dbLock.Unlock()
-	defer func() {
+	// 恢复全局注册表必须用 t.Cleanup（而非 defer）注册，且注册早于下面的 closeSession：
+	// t.Cleanup 逆序执行，而 defer 在测试函数返回时就跑 —— 用 defer 会先恢复注册表，
+	// 随后 closeSession 在旧的 sessions 里查不到本会话，于是既不 cancel loop 也不
+	// closeDB，连接一直开着（Linux 删已打开文件不报错，Windows 上 TempDir 清理必失败）。
+	t.Cleanup(func() {
+		// 释放的会话必须把该目录的 DB 连接一并关掉：closeDB 只在引用计数归零时才
+		// Close 并从 dbs 摘除，残留条目意味着 TempDir 清理时文件仍被占用。
+		dbLock.Lock()
+		remaining := len(dbs)
+		dbLock.Unlock()
+		if remaining != 0 {
+			t.Errorf("会话释放后仍残留 %d 个 DB 连接未关闭（Windows 上会导致 TempDir 清理失败）", remaining)
+		}
 		sessLock.Lock()
 		sessions = oldSessions
 		sessLock.Unlock()
 		dbLock.Lock()
 		dbs = oldDbs
 		dbLock.Unlock()
-	}()
+	})
 
 	// loadSession 会构造模型列表，依赖 config.GlobalConfig
 	if config.GlobalConfig == nil {
