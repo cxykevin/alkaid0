@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"runtime"
 	"slices"
+	"strconv"
+
 	"strings"
 	"sync"
 	"time"
@@ -30,7 +32,10 @@ type cmdObj struct {
 	// NoCmdMessage 为 true 时，命令轮不广播命令文本 user_message（命令 Function 内部自行
 	// 以更有意义的内容广播 user_message，如 /s 把短语展开文本作为用户消息广播）。
 	NoCmdMessage bool
-	Function     func(*sessionObj, string) (bool, error)
+	// Hidden 为 true 时，命令不进入 available_commands_update 与 /help 列表
+	// （内部命令，仍可由客户端正常调用，如 /__alk_rewind）。
+	Hidden   bool
+	Function func(*sessionObj, string) (bool, error)
 }
 
 // broadcastCmdText 广播命令回复文本，携带独立 cmd_ messageId。
@@ -80,6 +85,45 @@ func endIndexRun(key string) {
 	indexRuns.mu.Unlock()
 }
 
+// parseRewindMsgID 解析 /__alk_rewind 的目标消息：接受协议 messageId（msg_<dbID>，
+// 见 docs/acp/extension.md §5.3）与裸 DB ID 两种写法。
+func parseRewindMsgID(arg string) (uint64, error) {
+	s := strings.TrimSpace(arg)
+	if s == "" {
+		return 0, fmt.Errorf("Usage: /__alk_rewind {msgid}")
+	}
+	id, err := strconv.ParseUint(strings.TrimPrefix(s, "msg_"), 10, 64)
+	if err != nil || id == 0 {
+		return 0, fmt.Errorf("invalid msgid %q: expected msg_<dbID>", s)
+	}
+	return id, nil
+}
+
+// availableCommandList 构造 available_commands_update 的命令列表。
+// 隐藏命令（cmdObj.Hidden，如 /__alk_rewind）不向前端列出。
+func availableCommandList() []any {
+	availableCommands := make([]any, 0, len(commandMaps))
+	for i, v := range commandMaps {
+		if v.Hidden {
+			continue
+		}
+		availableCommands = append(availableCommands, u.H{
+			"name":        strings.TrimLeft(i, "/"),
+			"description": v.Description,
+			"input": u.H{
+				"type": "text",
+				"hint": v.Hint,
+			},
+		})
+	}
+	slices.SortFunc(availableCommands, func(a, b any) int {
+		nameA := a.(u.H)["name"].(string)
+		nameB := b.(u.H)["name"].(string)
+		return strings.Compare(nameA, nameB)
+	})
+	return availableCommands
+}
+
 // commandMaps 存储所有聊天命令及其对应处理函数
 var commandMaps = map[string]*cmdObj{
 	"/compress": {
@@ -90,6 +134,25 @@ var commandMaps = map[string]*cmdObj{
 			if err != nil {
 				return false, err
 			}
+			return true, nil
+		},
+	},
+	// /__alk_rewind 内部隐藏命令：把会话头（活跃分支末端）移动到指定历史消息
+	// （rewind）。不删除任何消息、不改变会话身份；处理结果经私有协议
+	// alk.cxykevin.top/session/rewind 广播给会话的所有客户端（见 docs/acp/extension.md §2.7）。
+	"/__alk_rewind": {
+		Description: "Internal hidden command: rewind the session head to the given message",
+		Hidden:      true,
+		Hint:        "{msgid}",
+		Function: func(obj *sessionObj, arg string) (bool, error) {
+			msgID, err := parseRewindMsgID(arg)
+			if err != nil {
+				return false, err
+			}
+			if err := obj.loop.Rewind(msgID); err != nil {
+				return false, err
+			}
+			// 异步命令：实际 rewind 由 loop 处理，结果（含失败）由回调广播。
 			return true, nil
 		},
 	},
@@ -364,6 +427,9 @@ func init() {
 			}
 			entries := make([]cmdEntry, 0, len(commandMaps))
 			for name, cmd := range commandMaps {
+				if cmd.Hidden {
+					continue
+				}
 				entries = append(entries, cmdEntry{name, cmd.Hint, cmd.Description})
 			}
 			slices.SortFunc(entries, func(a, b cmdEntry) int { return cmp.Compare(a.name, b.name) })

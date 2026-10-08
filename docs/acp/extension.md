@@ -190,6 +190,27 @@ alkaid0 现在遵循 ACP v2 标准事件，且字段置于 update 对象**顶层
 
 - 挂在 `state_update` 等 update 对象顶层的错误信息扩展（v2 无轮次内错误通道）。`state_update idle` 时若存在非空 `alk.cxykevin.top/error_msg` 表示本轮出错（`stopReason` 为 `refusal`）。
 
+### 2.7. `alk.cxykevin.top/session/rewind`
+
+报告一次会话 rewind 操作的结果。rewind 把会话头（活跃分支末端）移动到指定历史消息：**不删除任何消息**、不改变会话与消息 ID（见 §5.1、§5.3），目标之后的消息保留为旁支，可再次 rewind 回原位置。该操作由内部隐藏命令 `__alk_rewind` 触发（不出现在 `available_commands_update` 与 `/help` 中），结果广播给会话的所有客户端（多客户端同步，见 §1.2）；成功与失败都会报告。
+
+- `messageId` ***string***：rewind 的目标消息 ID（`msg_<dbID>`，见 §5.3）；成功后会话头即指向该消息。
+- `success` ***boolean***：操作是否成功；失败时不产生任何数据改动。
+- `error` ***string?***：失败原因，仅失败时出现；随后还有一条 `idle` + `refusal` 的 `alk.cxykevin.top/error_msg` 命令轮收尾（见 §2.6）。
+
+示例：
+
+```json
+{
+  "sessionId": "sess_1:/workspace",
+  "update": {
+    "sessionUpdate": "alk.cxykevin.top/session/rewind",
+    "messageId": "msg_42",
+    "success": true
+  }
+}
+```
+
 ## 3. 方法扩展
 
 ### 3.1. `alk.cxykevin.top/session/terminal/list` / `status` / `stop` / `history`
@@ -613,4 +634,3 @@ modelId 遵从以下格式：
 - 服务端**校验前缀**：ID 必须是 `@temp/run/<n>`（序号非空、不含路径分隔符）。前缀不符时查询接口返回 `invalid terminalId "...": expected @temp/run/<n>`；提交侧（`run` 工具显式指定 run id 时）由 `Submit` 直接拒绝。
 - 该 ID 同时是终端内容的持久化位置：temp obj 的内部路径为 `run/<seq>`（数据库 `ReferFiles` 的 `ChatID` + `run/<seq>`，对外即 `@temp/run/<seq>`）。终端结束时 `run` 工具把输出写入该路径，因此服务端重启后仍可按该 ID 取回内容（见 §3.1 `terminal/history`）。内容随会话（ChatID）落库，跨会话只共享 ID 空间、不共享内容。
 - 出现位置：`terminal_update` 的 `terminalId`、`terminal/list` / `status` / `stop` / `history`、`tool_call_update` 的 `alk.cxykevin.top/run_id` 与 `alk.cxykevin.top/terminal_id`、`run` 工具结果的 `path` / `run_id`、`wait` / `kill` 的 `command` 参数、`shell_stop` 的 `runId` / `terminalId`。
-

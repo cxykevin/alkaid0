@@ -532,6 +532,29 @@ func broadcastStateUpdate(sessionID, state, stopReason, errMsg string) {
 	}
 }
 
+// broadcastRewindResult 广播 rewind 操作结果（alk.cxykevin.top/session/rewind，见
+// docs/acp/extension.md §2.7）。成功与失败都报告：失败时客户端以 error 字段获知原因，
+// 另有命令轮 idle + refusal 的 alk.cxykevin.top/error_msg 收尾（见 §2.6）。
+func broadcastRewindResult(sessionID string, result *loop.RewindResult) {
+	if result == nil {
+		return
+	}
+	content := u.H{
+		"sessionUpdate": "alk.cxykevin.top/session/rewind",
+		"messageId":     msgID(result.MsgID),
+		"success":       result.Err == nil,
+	}
+	if result.Err != nil {
+		content["error"] = result.Err.Error()
+	}
+	if err := broadcastSessionUpdate(sessionID, SessionUpdate{
+		SessionID: sessionID,
+		Update:    content,
+	}, 0); err != nil {
+		logger.Warn("failed to broadcast rewind update: %v", err)
+	}
+}
+
 // broadcastToolCallCancelled 拒绝时把待审批工具标记为 cancelled
 func broadcastToolCallCancelled(sessionID string, pending *[]funcs.ToolCall) {
 	if pending == nil {
@@ -982,6 +1005,11 @@ func loadSession(cwd string, id *uint32, knowID bool, hidden ...bool) (*structs.
 				if resp.SummaryText != "" && sess.Title == "" {
 					generateTitle(sess, sessID, true)
 				}
+			}
+
+			// rewind 操作结果（成功/失败）报告给会话所有客户端（见 docs/acp/extension.md §2.7）。
+			if resp.Rewind != nil {
+				broadcastRewindResult(sessID, resp.Rewind)
 			}
 
 			// 最终工具调用状态（ACP v2 tool_call_update）：streaming=false 标记的条目
@@ -1934,24 +1962,7 @@ func SessionNew(req SessionNewRequest, call func(string, any, *string) error, co
 	// 手动切换一遍模型，确保新会话的模型被正确初始化
 	err = funcs.SelectModel(sess, int32(currentModelID))
 
-	availableCommands := make([]any, len(commandMaps))
-	idx := 0
-	for i, v := range commandMaps {
-		availableCommands[idx] = u.H{
-			"name":        strings.TrimLeft(i, "/"),
-			"description": v.Description,
-			"input": u.H{
-				"type": "text",
-				"hint": v.Hint,
-			},
-		}
-		idx++
-	}
-	slices.SortFunc(availableCommands, func(a, b any) int {
-		nameA := a.(u.H)["name"].(string)
-		nameB := b.(u.H)["name"].(string)
-		return strings.Compare(nameA, nameB)
-	})
+	availableCommands := availableCommandList()
 
 	err = broadcastSessionUpdate(sessionID, u.H{
 		"sessionId": sessionID,
@@ -2289,25 +2300,7 @@ func SessionResume(req SessionResumeRequest, call func(string, any, *string) err
 	}
 	modelID := sess.LastModelID
 
-	availableCommands := make([]any, len(commandMaps))
-	idx := 0
-	for i, v := range commandMaps {
-		availableCommands[idx] = u.H{
-			"name":        strings.TrimLeft(i, "/"),
-			"description": v.Description,
-			"input": u.H{
-				"type": "text",
-				"hint": v.Hint,
-			},
-		}
-		idx++
-	}
-	slices.SortFunc(availableCommands, func(a, b any) int {
-		nameA := a.(u.H)["name"].(string)
-		nameB := b.(u.H)["name"].(string)
-		return strings.Compare(nameA, nameB)
-	})
-
+	availableCommands := availableCommandList()
 	err = broadcastSessionUpdate(req.SessionID, u.H{
 		"sessionId": req.SessionID,
 		"update": u.H{
