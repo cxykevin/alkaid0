@@ -374,6 +374,11 @@ func UserAddMsgWithID(session *structs.Chats, msg string, refers *structs.Messag
 	return request.UserAddMsgWithID(session, msg, refers)
 }
 
+// UserAddMsgWithIDRaw 同 UserAddMsgWithID，但跳过提示词预处理（消息原文入库）
+func UserAddMsgWithIDRaw(session *structs.Chats, msg string, refers *structs.MessagesReferList) (uint64, error) {
+	return request.UserAddMsgWithIDRaw(session, msg, refers)
+}
+
 // SubAgentReject 子代理拒绝
 func SubAgentReject(session *structs.Chats) error {
 	return request.SubAgentReject(session)

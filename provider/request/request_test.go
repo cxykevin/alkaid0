@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 
@@ -154,6 +155,75 @@ func TestUserAddMsgWithID_ReturnsID(t *testing.T) {
 	db.Model(&storageStructs.Messages{}).Where("chat_id = ?", 1).Count(&count)
 	if count != 2 {
 		t.Errorf("应有 2 条消息，got %d", count)
+	}
+}
+
+// TestUserAddMsgWithIDRawSkipsPreprocess 验证 Raw 变体跳过提示词预处理：
+// 含代码块的消息原文入库、不产生分类段与临时对象；
+// 对照组（UserAddMsgWithID，预处理开启）会被分类器改写，证明用例环境真实生效。
+func TestUserAddMsgWithIDRawSkipsPreprocess(t *testing.T) {
+	// 固定配置：零值配置中 DisablePromptPreprocess=false（预处理开启）
+	restoreCfg := config.GlobalConfigSwap(cfgStruct.Config{})
+	t.Cleanup(restoreCfg)
+
+	db := setupTestDB(t)
+	defer u.Unwrap(db.DB()).Close()
+	if err := db.AutoMigrate(&storageStructs.ClassifySegment{}); err != nil {
+		t.Fatalf("migrate ClassifySegment: %v", err)
+	}
+
+	chat := storageStructs.Chats{ID: 1, LastModelID: 1}
+	if err := db.Create(&chat).Error; err != nil {
+		t.Fatalf("Failed to create chat: %v", err)
+	}
+	session := &storageStructs.Chats{ID: 1, DB: db, CurrentAgentID: ""}
+
+	msg := "请解释这段代码：\n```go\nfunc main() {\n\tfmt.Println(\"hello\")\n}\n```"
+
+	// 对照组：默认路径经分类器转换——代码段保留并追加 [path:@temp/prompt/code-*]
+	normalID, err := UserAddMsgWithID(session, msg, nil)
+	if err != nil {
+		t.Fatalf("UserAddMsgWithID failed: %v", err)
+	}
+	var normal storageStructs.Messages
+	if err := db.First(&normal, normalID).Error; err != nil {
+		t.Fatalf("query control message: %v", err)
+	}
+	if normal.Delta == msg || !strings.Contains(normal.Delta, "[path:@temp/prompt/code-") {
+		t.Fatalf("对照组：预处理未生效（后续断言将失去意义），delta=%q", normal.Delta)
+	}
+	var normalSegCount int64
+	db.Model(&storageStructs.ClassifySegment{}).Where("message_id = ?", normalID).Count(&normalSegCount)
+	if normalSegCount == 0 {
+		t.Fatal("对照组：分类器应写入分类段")
+	}
+	var refCountAfterControl int64
+	db.Model(&storageStructs.ReferFiles{}).Where("chat_id = ?", session.ID).Count(&refCountAfterControl)
+	if refCountAfterControl == 0 {
+		t.Fatal("对照组：分类器应写入临时对象（ReferFiles）")
+	}
+
+	// Raw 路径：原文入库、无分类段、不写临时对象
+	rawID, err := UserAddMsgWithIDRaw(session, msg, nil)
+	if err != nil {
+		t.Fatalf("UserAddMsgWithIDRaw failed: %v", err)
+	}
+	var raw storageStructs.Messages
+	if err := db.First(&raw, rawID).Error; err != nil {
+		t.Fatalf("query raw message: %v", err)
+	}
+	if raw.Delta != msg {
+		t.Errorf("Raw 应原样入库:\ngot  %q\nwant %q", raw.Delta, msg)
+	}
+	var rawSegCount int64
+	db.Model(&storageStructs.ClassifySegment{}).Where("message_id = ?", rawID).Count(&rawSegCount)
+	if rawSegCount != 0 {
+		t.Errorf("Raw 不应写入分类段, got %d", rawSegCount)
+	}
+	var refCountAfterRaw int64
+	db.Model(&storageStructs.ReferFiles{}).Where("chat_id = ?", session.ID).Count(&refCountAfterRaw)
+	if refCountAfterRaw != refCountAfterControl {
+		t.Errorf("Raw 不应写入临时对象: control=%d raw=%d", refCountAfterControl, refCountAfterRaw)
 	}
 }
 

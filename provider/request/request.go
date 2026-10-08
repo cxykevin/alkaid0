@@ -39,6 +39,19 @@ func UserAddMsg(session *storageStructs.Chats, msg string, refers *storageStruct
 
 // UserAddMsgWithID 同 UserAddMsg，但返回持久化的用户消息 DB ID（用于 ACP v2 messageId）。
 func UserAddMsgWithID(session *storageStructs.Chats, msg string, refers *storageStructs.MessagesReferList) (uint64, error) {
+	return userAddMsgWithID(session, msg, refers, false)
+}
+
+// UserAddMsgWithIDRaw 同 UserAddMsgWithID，但跳过提示词预处理（prompt 分类器）：
+// 消息原文入库，不做 code/log 段抽取。用于 /s 短语等要求「入库和回显都是短语
+// 原始内容」的场景。
+func UserAddMsgWithIDRaw(session *storageStructs.Chats, msg string, refers *storageStructs.MessagesReferList) (uint64, error) {
+	return userAddMsgWithID(session, msg, refers, true)
+}
+
+// userAddMsgWithID 是 UserAddMsgWithID / UserAddMsgWithIDRaw 的共同实现；
+// skipPreprocess 为 true 时跳过提示词预处理，msg 原文入库。
+func userAddMsgWithID(session *storageStructs.Chats, msg string, refers *storageStructs.MessagesReferList, skipPreprocess bool) (uint64, error) {
 	logger.Info("UserAddMsg: chatID=%d, msgLen=%d", session.ID, len(msg))
 	db := session.DB
 	chatID := session.ID
@@ -79,10 +92,12 @@ func UserAddMsgWithID(session *storageStructs.Chats, msg string, refers *storage
 		}
 	}
 
-	// 分类并转换消息（prompt/code/log 三段分类）
+	// 分类并转换消息（prompt/code/log 三段分类；skipPreprocess 时保持原文）
 	var transformedMsg string
 	var segInfos []classifier.SegmentInfo
-	if !config.GlobalConfig.Agent.DisablePromptPreprocess {
+	if skipPreprocess {
+		transformedMsg = msg
+	} else if !config.GlobalConfig.Agent.DisablePromptPreprocess {
 		var err error
 		transformedMsg, segInfos, err = classifier.ClassifyAndTransform(session, msg)
 		if err != nil {

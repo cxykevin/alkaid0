@@ -358,10 +358,11 @@ var commandMaps = map[string]*cmdObj{
 				return false, fmt.Errorf("unknown phrase %q — use /s to list configured phrases", arg)
 			}
 			// 翻译为一条用户消息（user_message）+ 正常 AI 回复：
-			// 持久化获取 DB msgID（回放/直播一致），广播 user_message（短语展开文本），
+			// 短语原始内容原样入库（跳过提示词预处理，不做 code/log 段抽取），
+			// 保证入库、回显、模型输入都是短语原文；以真实 msgID 广播 user_message（短语原文），
 			// 再 ChatWithID 入队触发 AI（loop 据 MsgID 跳过重复插入）。
 			sessionID := cwd2SessionID(obj.cwd, obj.id)
-			userMsgID, err := funcs.UserAddMsgWithID(obj.session, p.Text, nil)
+			userMsgID, err := funcs.UserAddMsgWithIDRaw(obj.session, p.Text, nil)
 			if err != nil {
 				return false, fmt.Errorf("failed to add user message: %v", err)
 			}
