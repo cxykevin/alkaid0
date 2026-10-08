@@ -17,11 +17,9 @@ import (
 	"github.com/cxykevin/alkaid0/context/codebase"
 	"github.com/cxykevin/alkaid0/context/lsp"
 	"github.com/cxykevin/alkaid0/product"
-	"github.com/cxykevin/alkaid0/prompts"
 	"github.com/cxykevin/alkaid0/provider/mask"
 	"github.com/cxykevin/alkaid0/provider/phrase"
 	"github.com/cxykevin/alkaid0/stats"
-	storageStructs "github.com/cxykevin/alkaid0/storage/structs"
 	"github.com/cxykevin/alkaid0/ui/funcs"
 	u "github.com/cxykevin/alkaid0/utils"
 )
@@ -274,18 +272,10 @@ var commandMaps = map[string]*cmdObj{
 		// （回放/直播一致），再以该消息的真实 msg_ messageId 自行广播。
 		NoCmdMessage: true,
 		Function: func(obj *sessionObj, _ string) (bool, error) {
-			promptText, err := prompts.Render(prompts.InitTemplate, struct{}{})
-			if err != nil {
-				return false, err
-			}
-			// 历史记录命令字符串本身，而不是展开后的初始化指令：指令作为 text refer
-			// 附加在该用户消息上随请求送模型（模型可见；客户端直播/回放只见 "/init"）。
-			refers := storageStructs.MessagesReferList{{
-				FileType: storageStructs.MessagesReferTypeText,
-				Origin:   []byte(promptText),
-			}}
+			// 历史记录命令字符串本身，而不是展开后的初始化指令（客户端直播/回放看到的都是 "/init"）；
+			// 历史回放时由 build 层固定注入 init 提示词，见 provider/request/build replayUserContent。
 			sessionID := cwd2SessionID(obj.cwd, obj.id)
-			userMsgID, err := funcs.UserAddMsgWithID(obj.session, "/init", &refers)
+			userMsgID, err := funcs.UserAddMsgWithID(obj.session, "/init", nil)
 			if err != nil {
 				return false, fmt.Errorf("failed to add user message: %v", err)
 			}

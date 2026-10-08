@@ -48,8 +48,8 @@ func TestInitPromptRendered(t *testing.T) {
 }
 
 // TestInitCommandPersistsCommandString /init 的历史记录是命令字符串本身：
-// 持久化一条 delta="/init" 的用户消息并以真实 msg_ messageId 广播（回放/直播一致），
-// 展开的初始化指令作为 text refer 附加在该消息上随请求送模型，不再作为独立历史消息出现。
+// 持久化一条 delta="/init" 的用户消息并以真实 msg_ messageId 广播（回放/直播一致）；
+// 展开的初始化指令不落库，历史回放时由 build 层固定注入 init 提示词（见 replayUserContent）。
 func TestInitCommandPersistsCommandString(t *testing.T) {
 	// 本用例只关心消息构造；固定配置，避免受其他用例的全局配置影响。
 	restoreCfg := config.GlobalConfigSwap(cfgStructs.Config{})
@@ -102,19 +102,10 @@ func TestInitCommandPersistsCommandString(t *testing.T) {
 		t.Errorf("message delta = %q, want %q", msg.Delta, "/init")
 	}
 
-	// 初始化指令随该消息以 text refer 送模型（模型可见、客户端不可见）。
-	rendered, err := prompts.Render(prompts.InitTemplate, struct{}{})
-	if err != nil {
-		t.Fatalf("Render InitTemplate error = %v", err)
-	}
-	if len(msg.Refers) != 1 {
-		t.Fatalf("want 1 refer, got %d", len(msg.Refers))
-	}
-	if msg.Refers[0].FileType != structs.MessagesReferTypeText {
-		t.Errorf("refer file type = %d, want text", msg.Refers[0].FileType)
-	}
-	if string(msg.Refers[0].Origin) != rendered {
-		t.Error("refer origin 应为渲染后的初始化指令")
+	// 命令消息不携带引用：初始化指令不落库，历史回放时由 build 层固定注入
+	// （见 provider/request/build replayUserContent）。
+	if len(msg.Refers) != 0 {
+		t.Errorf("/init 消息不应携带引用, got %d", len(msg.Refers))
 	}
 
 	// 广播：真实 msg_ messageId + 内容为命令字符串。

@@ -128,12 +128,16 @@ func SummaryWithKeepNumber(chatID uint32, agentID string, db *gorm.DB, keepNum i
 					// 工具调用信息不进入总结：工具结果消息与带工具调用的 assistant 消息一律跳过。
 					skipMsg = true
 				} else if v.Type == structs.MessagesRoleUser {
+					prompt, refers, err := replayUserContent(v.Delta, v.Refers)
+					if err != nil {
+						return 0, nil, err
+					}
 					rendered, err := prompts.Render(prompts.UserWrapTemplate, struct {
 						Prompt string
 						Refers structs.MessagesReferList
 					}{
-						Prompt: v.Delta,
-						Refers: v.Refers,
+						Prompt: prompt,
+						Refers: refers,
 					})
 					if err != nil {
 						return 0, nil, err

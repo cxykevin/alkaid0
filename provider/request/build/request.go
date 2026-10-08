@@ -318,12 +318,16 @@ scan:
 						skipMsg = true
 					}
 				} else if v.Type == structs.MessagesRoleUser {
+					prompt, refers, err := replayUserContent(v.Delta, v.Refers)
+					if err != nil {
+						return nil, err
+					}
 					rendered, err := prompts.Render(prompts.UserWrapTemplate, struct {
 						Prompt string
 						Refers structs.MessagesReferList
 					}{
-						Prompt: v.Delta,
-						Refers: v.Refers,
+						Prompt: prompt,
+						Refers: refers,
 					})
 					if err != nil {
 						return nil, err
