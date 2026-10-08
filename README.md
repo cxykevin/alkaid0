@@ -103,6 +103,7 @@ C:\ProgramData\alkaid0\config.json
                     "EnableTrailingUserMessage": false,
                     "EnablePromptCacheKey": false,
                     "EnablePromptCacheBreakpoints": false,
+                    "EnablePhase": false,
                     "Dimension": 0
                 }
             },
@@ -272,6 +273,10 @@ C:\ProgramData\alkaid0\config.json
 > （值 = 会话/子代理标识，不含任何对话内容），让 OpenAI 系网关把同一会话路由到同一缓存分片；
 > `EnablePromptCacheBreakpoints` 在 system 消息与最后一条历史回放消息上插入 Anthropic 的
 > `cache_control:{"type":"ephemeral"}` 断点，让网关显式缓存这段稳定前缀（需要网关支持该字段）。
+
+> `phase` 相关开关（默认关闭，GPT/Codex 系模型按需开启）：响应里的 `phase`（`commentary` = 过程叙述、
+> `final_answer` = 最终答复）一律原样落库；开启 `EnablePhase` 后历史回放把该字段原样回传——模型据此
+> 判断自己上一轮是「还没干完」还是「已收尾」，丢字段会明显掉性能（容易干一半就停）。
 
 > 沙盒当前在所有平台被**强制禁用**（临时策略：沙盒存在 Linux 缺少 `/dev/shm` 等已知问题，修复前
 `run` 工具一律在沙盒外执行）。配置里的 `DisableSandbox` 与 `run` 的 `sandbox` 参数

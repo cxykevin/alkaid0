@@ -28,6 +28,11 @@ type ProviderSpecificConfig struct {
 	// 历史回放消息）末尾插入 cache_control:{"type":"ephemeral"}，让网关自己打缓存标记
 	// （默认关闭；仅对识别该字段的 Anthropic 兼容端点有效）。
 	EnablePromptCacheBreakpoints bool `default:"false"`
+	// EnablePhase 历史回放携带 phase 字段（GPT/Codex 系 API）：流式响应里的 phase 始终原样落库，
+	// 开启后回放时原样回传给模型。该字段区分"过程叙述（commentary）"与"最终答复（final_answer）"，
+	// 缺失会让模型看不出自己上一轮是否已收尾，容易干一半就停，明显掉性能（默认关闭，仅对下发
+	// 该字段的供应商有意义）。
+	EnablePhase bool `default:"false"`
 }
 
 // ModelConfig 单个模型配置结构

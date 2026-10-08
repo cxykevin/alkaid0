@@ -188,6 +188,11 @@
                                         "type": "boolean",
                                         "description": "显式缓存断点（Anthropic 系）：在 system 与最后一条历史回放消息上插入 cache_control:{\"type\":\"ephemeral\"}，让网关显式缓存稳定前缀（默认关闭）",
                                         "default": false
+                                    },
+                                    "EnablePhase": {
+                                        "type": "boolean",
+                                        "description": "历史回放携带 phase 字段（GPT/Codex 系 API）：流式响应里的 phase（commentary = 过程叙述 / final_answer = 最终答复）始终原样落库，开启后历史回放时原样回传，模型据此区分上一轮是否已收尾（默认关闭）",
+                                        "default": false
                                     }
                                 }
                             }

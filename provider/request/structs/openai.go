@@ -103,11 +103,16 @@ type promptCacheContentBlock struct {
 
 // Message 消息结构体
 type Message struct {
-	Role             string           `json:"role"` // RoleUser | RoleAssistant | RoleSystem | RoleTool
-	Content          string           `json:"content"`
-	ReasoningContent *string          `json:"reasoning_content,omitempty"`
-	ToolCalls        []StreamToolCall `json:"tool_calls"`             // assistant 消息的 tool_calls（含流式 delta 反序列化目标）
-	ToolCallID       string           `json:"tool_call_id,omitempty"` // tool 角色结果关联的调用 id
+	Role             string  `json:"role"` // RoleUser | RoleAssistant | RoleSystem | RoleTool
+	Content          string  `json:"content"`
+	ReasoningContent *string `json:"reasoning_content,omitempty"`
+	// Phase 消息阶段（GPT/Codex 系 API 的 phase 字段：commentary = 过程叙述，final_answer = 最终答复）。
+	// 该字段只做原样透传：流式响应里收到的值原样落库，历史回放时原样回传
+	// （模型据此判断自己上一轮是"还在干活"还是"已收尾"，丢字段会明显掉性能）。
+	// 是否回传由模型级 EnablePhase 控制；空值（供应商不下发）不参与序列化。
+	Phase      string           `json:"phase,omitempty"`
+	ToolCalls  []StreamToolCall `json:"tool_calls"`             // assistant 消息的 tool_calls（含流式 delta 反序列化目标）
+	ToolCallID string           `json:"tool_call_id,omitempty"` // tool 角色结果关联的调用 id
 	// CacheControl 显式缓存断点（仅出站设置，由 ProviderSpecificConfig.EnablePromptCacheBreakpoints 打开）：
 	// 序列化时把 content 转成带 cache_control 的块数组，字段本身不出现在报文里。
 	CacheControl *PromptCacheControl `json:"-"`
@@ -219,6 +224,8 @@ type StreamDelta struct {
 	Content          string           `json:"content,omitempty"`
 	ReasoningContent *string          `json:"reasoning_content,omitempty"`
 	ToolCalls        []StreamToolCall `json:"tool_calls,omitempty"`
+	// Phase 见 Message.Phase（commentary / final_answer），与 Message 保持同形便于两套 delta 结构互换。
+	Phase string `json:"phase,omitempty"`
 }
 
 // EmbeddingRequest 嵌入请求

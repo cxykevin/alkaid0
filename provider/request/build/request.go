@@ -270,6 +270,12 @@ scan:
 					// 工具调用解析 ToolCallingJSONString 为 msg.ToolCalls（tool_call_id + function.name/arguments），
 					// 与当前轮请求的 tools 参数/响应解析同一种格式。
 					msg.Role = reqStruct.RoleAssistant
+					// phase 原样回放（模型级 EnablePhase，GPT/Codex 系 API）：模型靠它区分
+					// "过程叙述（commentary）"与"最终答复（final_answer）"，缺失会明显掉性能
+					// （看不出上一轮是否已收尾，容易干一半就停）。落库时按收到的值原样保存，这里原样回传。
+					if modelConfig.ProviderSpecificConfig.EnablePhase && v.Phase != "" {
+						msg.Phase = v.Phase
+					}
 					thinkingWrap := ""
 					if modelConfig.EnableThinking {
 						// thinking 模式：历史中一旦出现工具调用，此后每条 assistant 消息都必须携带
@@ -511,7 +517,7 @@ scan:
 	autoRejectRules := getEffectiveAutoReject(agentCfg)
 	var approvalInfo string
 	if autoApproveRules != "" || autoRejectRules != "" {
-		approvalInfo += "\n[Auto Approval Rules]\n"
+		approvalInfo += "\n## Auto Approval Rules\n"
 		approvalInfo += "The following rules determine whether tool calls are automatically approved or rejected.\n"
 		approvalInfo += "Tools matching Auto-Approve rules will execute without waiting for user confirmation.\n"
 		approvalInfo += "Tools matching Auto-Reject rules are automatically blocked and will not execute.\n"
@@ -527,7 +533,7 @@ scan:
 
 	// 7. [path:@temp/...] marker explanation
 	if !config.GlobalConfig.Agent.DisablePromptPreprocess {
-		systemContent += "\n[Prompt Preprocessing]\n"
+		systemContent += "\n## Prompt Preprocessing\n"
 		systemContent += "When user input contains large code blocks or logs, they are extracted and saved to temporary files.\n"
 		systemContent += "The user message will show [path:@temp/prompt/code-...] (for code) or [path:@temp/prompt/log-...] (for log) instead.\n"
 		systemContent += "Use `read` tool with this path to read the full content if needed.\n"

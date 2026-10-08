@@ -94,6 +94,9 @@ type Messages struct {
 	Delta         string `gorm:"type:text"`
 	Summary       string `gorm:"type:text"`
 	ThinkingDelta string `gorm:"type:text"`
+	// Phase 消息阶段（commentary = 过程叙述 / final_answer = 最终答复）：供应商流式响应里的
+	// phase 字段原样落库（同一轮取最后一次非空值），仅用于历史回放时原样回传；空串 = 供应商不下发。
+	Phase string `gorm:"type:text"`
 	// 设计注记：本表与会话之间有意不建立外键/关联——deleteChat 只删会话表、保留聊天
 	// 记录（见 ui/funcs.DeleteChat），子表数据既不应阻止会话行删除、也不应被级联删除。
 	// 历史库遗留的 fk_messages_chats 外键由 storage/migrate.MigrateRemoveChatForeignKeys

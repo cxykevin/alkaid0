@@ -1,6 +1,6 @@
 {{/* 工具作用域 */}}
 {{if .Scopes}}
-#### Scopes
+## Scopes
 
 {{if gt (len .Scopes) 0}}
 <scopes>

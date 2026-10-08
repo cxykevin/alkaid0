@@ -1155,6 +1155,8 @@ func SendRequest(ctx context.Context, session *storageStructs.Chats, callback fu
 	var pendingThinkingDelta strings.Builder
 	var lastFlushLen int
 	var lastFlushThinkingLen int
+	// lastFlushPhase 记录最后一次刷写时已落库的 phase，用于判断尾部新到的 phase 是否还需补写。
+	var lastFlushPhase string
 	msgID := reqObj.ID
 	// tokenFlushThreshold 定义了向数据库刷新消息内容的阈值（256 字符）。
 	// 流式响应中每收到一个 token 就写数据库会造成严重 I/O 瓶颈。
@@ -1169,6 +1171,9 @@ func SendRequest(ctx context.Context, session *storageStructs.Chats, callback fu
 	var cachedUsage uint32
 
 	var finishReason string
+	// phase 本轮响应的消息阶段（GPT/Codex 系 API 的 phase 字段，如 commentary / final_answer）。
+	// 由流式增量捕获、原样落库；是否随历史回放由模型级 EnablePhase 控制（见 build 层）。
+	var phase string
 
 	// pushFinalUsage 向客户端推送当前累积的最终 usage（幂等，失败仅告警）。
 	// 流式过程每 chunk 已带 usage 推送，此函数供流结束后的最终兜底，
@@ -1228,6 +1233,12 @@ func SendRequest(ctx context.Context, session *storageStructs.Chats, callback fu
 		if len(body.Choices) == 0 {
 			return nil
 		}
+		// phase 捕获（GPT/Codex 系 API）：同一轮响应里取最后一次非空值——
+		// 先以 commentary 叙述过程、最后以 final_answer 收尾时记 final_answer；
+		// 只叙述就停下（提前收尾）时记 commentary。原样落库，回放时按模型开关回传。
+		if p := body.Choices[0].Delta.Phase; p != "" {
+			phase = p
+		}
 		// 原生 tool_calls 增量处理
 		if len(body.Choices[0].Delta.ToolCalls) > 0 {
 			if err := solver.AddNativeToolCallDelta(body.Choices[0].Delta.ToolCalls); err != nil {
@@ -1252,6 +1263,7 @@ func SendRequest(ctx context.Context, session *storageStructs.Chats, callback fu
 			if err := db.Model(&storageStructs.Messages{}).Where("id = ?", msgID).Updates(storageStructs.Messages{
 				Delta:            gstring,
 				ThinkingDelta:    gtstring,
+				Phase:            phase,
 				PromptTokens:     promptUsage,
 				CompletionTokens: completionUsage,
 				TotalTokens:      totalUsage,
@@ -1264,6 +1276,7 @@ func SendRequest(ctx context.Context, session *storageStructs.Chats, callback fu
 			// 记录最后一次刷写时的内容长度，用于后续判断是否需要额外更新
 			lastFlushLen = len(gstring)
 			lastFlushThinkingLen = len(gtstring)
+			lastFlushPhase = phase
 		}
 		// 回调函数将增量内容实时推送到 UI 界面（通过 Callback）
 		if err := callback(delta, thinkingDelta, msgID, structs.Usage{
@@ -1357,7 +1370,7 @@ func SendRequest(ctx context.Context, session *storageStructs.Chats, callback fu
 		wg.Add(1)
 		go func(msgID uint64, finalDelta, finalThinkingDelta, toolCallingJSON string,
 			promptUsage, completionUsage, totalUsage, cachedUsage uint32,
-			lastFlushLen, lastFlushThinkingLen int) {
+			lastFlushLen, lastFlushThinkingLen int, phase, lastFlushPhase string) {
 			defer wg.Done()
 			defer func() {
 				if r := recover(); r != nil {
@@ -1375,10 +1388,11 @@ func SendRequest(ctx context.Context, session *storageStructs.Chats, callback fu
 				}
 				return
 			}
-			if len(fd) != lastFlushLen || len(ftd) != lastFlushThinkingLen {
+			if len(fd) != lastFlushLen || len(ftd) != lastFlushThinkingLen || phase != lastFlushPhase {
 				if err := db.Model(&storageStructs.Messages{}).Where("id = ?", msgID).Updates(storageStructs.Messages{
 					Delta:            fd,
 					ThinkingDelta:    ftd,
+					Phase:            phase,
 					PromptTokens:     promptUsage,
 					CompletionTokens: completionUsage,
 					TotalTokens:      totalUsage,
@@ -1394,7 +1408,7 @@ func SendRequest(ctx context.Context, session *storageStructs.Chats, callback fu
 			}
 		}(msgID, gDelta.String(), gThinkingDelta.String(), solver.GetToolsOrigin(),
 			promptUsage, completionUsage, totalUsage, cachedUsage,
-			lastFlushLen, lastFlushThinkingLen)
+			lastFlushLen, lastFlushThinkingLen, phase, lastFlushPhase)
 		wg.Wait()
 		return true, requestErr
 	}
@@ -1416,10 +1430,11 @@ func SendRequest(ctx context.Context, session *storageStructs.Chats, callback fu
 		finalDelta := gDelta.String()
 		finalThinkingDelta := gThinkingDelta.String()
 		// 仅当最后一次刷写后有新内容时才执行数据库更新，避免冗余 I/O
-		if len(finalDelta) != lastFlushLen || len(finalThinkingDelta) != lastFlushThinkingLen {
+		if len(finalDelta) != lastFlushLen || len(finalThinkingDelta) != lastFlushThinkingLen || phase != lastFlushPhase {
 			if err := db.Model(&storageStructs.Messages{}).Where("id = ?", msgID).Updates(storageStructs.Messages{
 				Delta:            finalDelta,
 				ThinkingDelta:    finalThinkingDelta,
+				Phase:            phase,
 				PromptTokens:     promptUsage,
 				CompletionTokens: completionUsage,
 				TotalTokens:      totalUsage,
