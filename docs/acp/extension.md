@@ -398,7 +398,7 @@ workflow 终端的临时对象内容不是原始 stdout，而是按事件流渲�
 ### 3.3. `session/resume` 与 `replayFrom`
 
 - 省略或 `null`：仅重连，不重放历史。
-- `{ "type": "start" }`：重放整个对话历史（以 `user_message` / `agent_message` / `agent_thought` 整消息 upsert 形式，携带与直播一致的 `messageId`，客户端据此 upsert 而非重复）。
+- `{ "type": "start" }`：重放**当前活跃分支**的对话历史（从根到会话头，即活跃分支末端的消息路径），以 `user_message` / `agent_message` / `agent_thought` 整消息 upsert 形式，携带与直播一致的 `messageId`，客户端据此 upsert 而非重复。rewind 移动会话头后重放序列随之变化：旁支消息不属于活跃分支，不会出现在重放中（见 §2.7）。
 
 ### 3.4. `session/request_permission`（服务端 → 客户端）
 
@@ -619,7 +619,7 @@ modelId 遵从以下格式：
 ### 5.3 `messageId`
 
 - DB 消息（用户/Agent/Thought）：`msg_<dbID>`，`dbID` 为 `Messages` 表自增 ID。直播与 `session/resume` 回放使用同一推导，客户端据此 upsert。
-- 斜杠命令用户消息（不入库）：`cmd_<chatID>_<seq>`，`seq` 为服务端递增序号。
+- 斜杠命令消息：命令文本与命令回复默认使用合成 ID `cmd_<chatID>_<seq>`（`seq` 为服务端递增序号），**不入库**——仅在直播中作为独立消息出现，`session/resume` 回放不包含。例外：`/init` 与 `/s` 的命令消息会持久化为真实用户消息，直播与回放均使用 `msg_<dbID>`（`/init` 入库内容为命令字符串本身，`/s` 为展开后的短语原文）。
 
 ### 5.4 `terminalId` / run id（统一标识）
 
