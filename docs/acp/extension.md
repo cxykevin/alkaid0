@@ -150,7 +150,7 @@ alkaid0 现在遵循 ACP v2 标准事件，且字段置于 update 对象**顶层
 - `success` ***boolean***：命令是否成功结束。
 - `killed` ***boolean***：命令是否因停止/取消而结束。
 
-当会话处于 `idle` 或等待状态时，服务端会把 shell 停止信息作为内部运行时事件重新注入 loop，并触发新一轮模型请求；该通知不是用户消息，不会写入对话历史。若原 loop 已退出，服务端会创建新的 loop 后再注入通知，不复用已关闭的生命周期通道。loop 正在请求模型、执行工具或等待审批时不会并发打断当前轮次。
+该事件只做广播，**不会**触发模型：终端无论被终止（`killed=true`）还是自行结束（`killed=false`），服务端都不再把它作为内部运行时事件注入 loop、不自动发起新一轮模型请求。模型只在下一次用户输入、或主动查询终端结果时（`run` 的 `wait` / 读取 `@temp/run/<n>`，见 §5.4）才会看到命令输出。
 
 示例：
 
@@ -231,7 +231,7 @@ alkaid0 现在遵循 ACP v2 标准事件，且字段置于 update 对象**顶层
 
 #### `alk.cxykevin.top/session/terminal/stop`
 
-请求：`{ "sessionId": string, "terminalId": string }`（同一个统一 ID，前缀校验同上）。返回 `{ "terminalId": string, "status": "kill_requested" }`。终止是异步的，完成清理后通过 `alk.cxykevin.top/terminal_update` 发送 `status: "stop"`。
+请求：`{ "sessionId": string, "terminalId": string }`（同一个统一 ID，前缀校验同上）。返回 `{ "terminalId": string, "status": "kill_requested" }`。终止是异步的，完成清理后通过 `alk.cxykevin.top/terminal_update` 发送 `status: "stop"`，随后广播 `alk.cxykevin.top/shell_stop`（`killed: true`）；两者都不触发模型（见 §2.3）。
 
 #### `alk.cxykevin.top/session/terminal/history`
 

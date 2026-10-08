@@ -138,9 +138,7 @@ type sessionObj struct {
 	// goroutine 完成后 close 该 channel；测试等它完成后再清理 TempDir，
 	// 避免异步索引在目录清理期间重新打开 codebase.sqlite 导致 Windows 删除失败。
 	indexDone    chan struct{}
-	loopMu       sync.Mutex
 	loopCallback func(loop.AIResponse)
-	shellStops   map[string]struct{}
 	// workflowSnapMu 保护 workflowSnapSeq：workflow 快照通知的已推送事件序号
 	// （同一序号不重复广播，避免终端周期刷新重复推送未变化的 workflow 状态）。
 	workflowSnapMu  sync.Mutex
@@ -864,37 +862,10 @@ func loadSession(cwd string, id *uint32, knowID bool, hidden ...bool) (*structs.
 			}, 0); err != nil {
 				logger.Warn("failed to broadcast shell stop: %v", err)
 			}
-			obj.loopMu.Lock()
-			if _, seen := obj.shellStops[runID]; seen {
-				obj.loopMu.Unlock()
-				return
-			}
-			obj.shellStops[runID] = struct{}{}
-			lp := obj.loop
-			obj.loopMu.Unlock()
-			notice := fmt.Sprintf("Background shell %q stopped: success=%v killed=%v run_id=%s", command, r.Success, r.Killed, runID)
-			if sess.GetState() == state.StateIdle || sess.GetState() == state.StateWaiting {
-				if err := lp.NotifySystem(notice); err == nil {
-					return
-				}
-			} else {
-				// Do not start a concurrent model request while the current loop is active.
-				logger.Debug("shell stop notification deferred while loop is active")
-				return
-			}
-			// The old loop may have exited while the shell was running. Never reuse
-			// its closed channels; rebuild the loop before retrying the notice.
-			obj.loopMu.Lock()
-			if obj.loop == lp {
-				obj.loop = loop.New(sess)
-				obj.loop.SetCallback(obj.loopCallback)
-				obj.startSessionLoop(obj.loop)
-			}
-			newLoop := obj.loop
-			obj.loopMu.Unlock()
-			if err := newLoop.NotifySystem(notice); err != nil {
-				logger.Debug("shell stop notification deferred: %v", err)
-			}
+			// 终端停止（被终止或自行结束）只广播事件，不再作为内部运行时通知注入 loop：
+			// 不会自动触发新一轮模型请求。模型只在下一次用户输入、或主动查询
+			// （run 的 wait / 读取 @temp/run/<n>）时才会看到命令结果
+			// （见 docs/acp/extension.md §2.3）。
 		})
 		sess.SetPlanPushFn(func(entries []structs.PlanEntry) {
 			err := broadcastSessionUpdate(sessID, SessionUpdate{
@@ -930,7 +901,6 @@ func loadSession(cwd string, id *uint32, knowID bool, hidden ...bool) (*structs.
 		}()
 
 		obj.loop = loop.New(sess)
-		obj.shellStops = make(map[string]struct{})
 		obj.activeAgentMessages = make(map[uint64]*activeAgentMessage)
 		obj.permDone = make(chan struct{})
 		// 设置回调接收流式响应
