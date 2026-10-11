@@ -402,31 +402,32 @@ workflow 终端的临时对象内容不是原始 stdout，而是按事件流渲�
 
 #### 历史回放分页 `alk.cxykevin.top/session/cursor`
 
-一次 `session/resume` 最多回放 **200 条**消息（活跃分支按 `id` 升序，含 user 消息、agent 消息与工具结果）。还有未回放的消息时，响应携带扩展字段 `alk.cxykevin.top/session/cursor`；把它**原样**作为下一次 `session/resume` 请求的参数（同名扩展字段，位于 `params` 顶层）传入即可继续回放下一页。响应不含该字段表示历史已回放完毕。
+一次 `session/resume` 最多回放 **200 条**消息（活跃分支按 `id` 升序，含 user 消息、agent 消息与工具结果）。回放**从最新（活跃分支末端）往更早的方向翻页**：首屏拿到的是最近 200 条，继续翻页才是更早的历史，与 `session/list` 的「新的在前」一致。还有更早的消息未回放时，响应携带扩展字段 `alk.cxykevin.top/session/cursor`；把它**原样**作为下一次 `session/resume` 请求的参数（同名扩展字段，位于 `params` 顶层）传入即可继续回放更早的一页。响应不含该字段表示已回放到活跃分支最早一条消息。
 
 ```jsonc
-// 第一页：省略游标，从会话头开始
+// 首页：省略游标，取活跃分支最新的 200 条
 { "jsonrpc": "2.0", "id": 1, "method": "session/resume",
   "params": { "sessionId": "sess_1:/path", "cwd": "/path", "replayFrom": { "type": "start" } } }
 
-// 响应：本页 200 条，其后仍有消息 → 返回下一页游标
+// 响应：本页 200 条（最后一条即会话头），还有更早的消息 → 返回下一页游标
 { "jsonrpc": "2.0", "id": 1, "result": {
     "configOptions": [ /* … */ ],
-    "alk.cxykevin.top/session/cursor": "eyJtIjo0MjB9" } }
+    "alk.cxykevin.top/session/cursor": "eyJtIjoyMjF9" } }
 
-// 下一页：原样回传游标
+// 下一页：原样回传游标，取更早的 200 条
 { "jsonrpc": "2.0", "id": 2, "method": "session/resume",
   "params": { "sessionId": "sess_1:/path", "cwd": "/path",
               "replayFrom": { "type": "start" },
-              "alk.cxykevin.top/session/cursor": "eyJtIjo0MjB9" } }
+              "alk.cxykevin.top/session/cursor": "eyJtIjoyMjF9" } }
 ```
 
 规则：
 
-- 游标**对客户端不透明**，只能原样回传；不是本服务端生成（格式非法）时返回 `invalid cursor` 错误，而不是静默从头回放。
-- 游标以本页最后一条消息的**数据库消息 ID** 定位，与分页大小、会话此后新增的消息都无关。
+- **页内仍按 `id` 升序**：每一页都是连续的时间序片段（首屏那页以会话头结尾），客户端把后续页接到时间线前端即可；与不分页相比只多了「先拿到最新一页」这一点。
+- 游标**对客户端不透明**，只能原样回传；不是本服务端生成（格式非法）时返回 `invalid cursor` 错误，而不是静默回到最新一页重放。
+- 游标指向本页**最早**一条消息，以它的**数据库消息 ID** 定位：下一页取严格早于该消息的一页，与分页大小、会话此后新增的消息都无关（新增消息只会出现在更新的一端，不会造成重复）。
 - 页边界可能落在「agent 消息 → 它的工具结果」之间：该 agent 消息的工具调用在**工具结果所在的那一页**回放（整消息不重复回放），渲染出的 `toolCallId` 中的 messageId 仍是该 agent 消息，与不分页时逐条一致。
-- 游标指向的消息被删除、或 `rewind` 后不再属于活跃分支时，仍从该 ID 之后继续回放：不重复、不倒退、不报错。
+- 游标指向的消息被删除、或 `rewind` 后不再属于活跃分支时，仍按 ID 稳定地取更早的一页：不重复、不遗漏、不报错。
 - 分页只作用于回放本身；`configOptions`、终端快照、plan、`available_commands_update` 等仍在每次 `session/resume` 时照常返回。
 
 ### 3.4. `session/request_permission`（服务端 → 客户端）
