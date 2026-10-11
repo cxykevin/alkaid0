@@ -388,37 +388,37 @@
             "type": "object",
             "description": "服务器配置",
             "required": [
-                "Key"
+                "key"
             ],
             "properties": {
-                "Key": {
+                "key": {
                     "type": "string",
                     "description": "WebSocket 通信密钥"
                 },
-                "Path": {
+                "path": {
                     "type": "string",
                     "description": "WebSocket 路径",
                     "pattern": "^/",
                     "default": "/acp"
                 },
-                "Host": {
+                "host": {
                     "type": "string",
                     "description": "监听地址",
                     "default": "127.0.0.1"
                 },
-                "Port": {
+                "port": {
                     "type": "integer",
                     "description": "监听端口",
                     "minimum": 1,
                     "maximum": 65535,
                     "default": 7433
                 },
-                "DisableStdioServer": {
+                "disableStdioServer": {
                     "type": "boolean",
                     "description": "是否禁用 Stdio 服务器模式",
                     "default": false
                 },
-                "SessionTimeout": {
+                "sessionTimeout": {
                     "type": "integer",
                     "description": "连接断开后等待客户端重连的超时时间（秒）",
                     "minimum": 1,
@@ -491,6 +491,11 @@
                     "type": "integer",
                     "description": "嵌入模型在 Models 映射中的 key",
                     "default": 1
+                },
+                "SearchSummaryModel": {
+                    "type": "integer",
+                    "description": "search/fetch 工具抓取内容总结所用模型在 Models 映射中的 key，0 表示不启用摘要",
+                    "default": 0
                 },
                 "OnlineSearch": {
                     "type": "object",
@@ -1028,7 +1033,7 @@
             "description": "为 true 时忽略 SIGTERM/SIGINT/SIGQUIT 信号，进程不会因这些信号退出",
             "default": false
         },
-        "dataMask": {
+        "DataMask": {
             "type": "object",
             "description": "安全 key 上下文：请求出站前将敏感数据替换为同格式假值，流式响应中还原",
             "default": {
@@ -1078,22 +1083,22 @@
                     "description": "是否脱敏 JWT",
                     "default": true
                 }
-            },
-            "Feedback": {
-                "type": "object",
-                "description": "反馈上报配置",
-                "properties": {
-                    "URL": {
-                        "type": "string",
-                        "description": "反馈服务端地址，为空时使用内置 product.FeedbackServer",
-                        "format": "uri",
-                        "default": ""
-                    },
-                    "DisableAutoTelemetry": {
-                        "type": "boolean",
-                        "description": "是否禁用自动 Telemetry 上报（每月一次）",
-                        "default": false
-                    }
+            }
+        },
+        "Feedback": {
+            "type": "object",
+            "description": "反馈上报配置",
+            "properties": {
+                "URL": {
+                    "type": "string",
+                    "description": "反馈服务端地址，为空时使用内置 product.FeedbackServer",
+                    "format": "uri",
+                    "default": ""
+                },
+                "DisableAutoTelemetry": {
+                    "type": "boolean",
+                    "description": "是否禁用自动 Telemetry 上报（每月一次）",
+                    "default": false
                 }
             }
         }

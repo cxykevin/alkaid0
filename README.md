@@ -247,12 +247,12 @@ C:\ProgramData\alkaid0\config.json
         }
     },
     "Server": {
-        "Key": "<你的 websocket key>",
-        "Path": "/acp",
-        "Host": "127.0.0.1",
-        "Port": 7433,
-        "DisableStdioServer": false,
-        "SessionTimeout": 60
+        "key": "<你的 websocket key>",
+        "path": "/acp",
+        "host": "127.0.0.1",
+        "port": 7433,
+        "disableStdioServer": false,
+        "sessionTimeout": 60
     },
     "Feedback": {
         "DisableAutoTelemetry": false
@@ -310,9 +310,9 @@ C:\ProgramData\alkaid0\config.json
 - `-path` 服务器的 path
 - `-key` 服务器配置的 websocket key
 
-> 如果你无法链接请检查是否在服务端和客户端都设置了 `Key`。服务端不允许空 `key` 启动（stdio 服务器正常工作）。
+> 如果你无法链接请检查是否在服务端和客户端都设置了 `key`。服务端不允许空 `key` 启动（stdio 服务器正常工作）。
 >
-> 如果内置的 stdio 导致服务器自动退出或其它问题，则可在 `config.json` 中设置 `DisableStdioServer` 为 `true` 以禁用。
+> 如果内置的 stdio 导致服务器自动退出或其它问题，则可在 `config.json` 中设置 `disableStdioServer` 为 `true` 以禁用。
 
 ---
 

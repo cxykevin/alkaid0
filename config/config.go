@@ -203,8 +203,12 @@ func Load() {
 		return
 	}
 
-	// JSON 反序列化到临时变量，避免解析失败时污染 GlobalConfig
-	tempConfig := &structs.Config{}
+	// JSON 反序列化到临时变量，避免解析失败时污染 GlobalConfig。
+	// 基底必须是**默认配置**而不是零值结构体：json.Unmarshal 对 struct 字段是
+	// 就地更新，文件中未出现的字段因此保留 default tag 默认值；用零值基底会让
+	// 缺失字段（如 Server.Port）降成 Go 零值，直接把服务端启动搞挂。
+	tempConfig := structs.BuildDefault(&structs.Config{})
+	tempConfig.Version = product.VersionID
 	if err := json.Unmarshal(data, tempConfig); err != nil {
 		// 解析失败时备份原文件，GlobalConfig 保持前面设置的默认值
 		backupPath := expandedPath + ".bak"
@@ -220,6 +224,10 @@ func Load() {
 	// 与正在遍历其 map 的读者并发时 Go 运行时会 fatal 终止进程（写时复制不变量）。
 	EnsureOnlineSearchDefaults(tempConfig, json.RawMessage(data))
 	EnsureCacheDefaults(tempConfig, json.RawMessage(data))
+	// map 字段的元素会被 encoding/json 整体替换（而不是像 struct 字段那样就地更新），
+	// 元素内未写出的字段需要单独补默认值：否则 Models 里只写 ModelName/ModelID 时
+	// TokenLimit/TopP/ProviderSpecificConfig 等会统统变成零值。
+	EnsureElementDefaults(tempConfig, json.RawMessage(data))
 	globalConfigMu.Lock()
 	GlobalConfig = tempConfig
 	globalConfigMu.Unlock()
