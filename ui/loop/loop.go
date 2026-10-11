@@ -65,7 +65,7 @@ type AIResponse struct {
 
 // RewindResult 一条 rewind 指令的处理结果。
 type RewindResult struct {
-	// MsgID 目标消息 DB ID（rewind 成功后会话头即指向该消息）。
+	// MsgID 目标消息 DB ID（rewind 成功后会话头指向该消息的前一条——目标本身不保留）。
 	MsgID uint64
 	// Err 失败原因；nil 表示成功。失败时不产生任何数据改动。
 	Err error
@@ -81,7 +81,7 @@ const (
 	msgActionSummary
 	msgActionApprove
 	msgActionSystem
-	// msgActionRewind 把会话头（活跃分支末端）移动到指定历史消息（不删除任何消息）
+	// msgActionRewind 把会话头（活跃分支末端）移动到指定历史消息的前一条（不删除任何消息）
 	msgActionRewind
 )
 
@@ -488,7 +488,7 @@ func (p *Object) Start(ctx context.Context) {
 			// 显示 AI 响应
 			runResponseLoop()
 		case msgActionRewind:
-			// rewind 会话头到指定历史消息：仅移动指针，不删除数据（见 structs.RewindTo）。
+			// rewind 会话头到指定历史消息之前（目标消息本身不保留）：仅移动指针，不删除数据（见 structs.RewindTo）。
 			// 结果（成功/失败）经回调 Rewind 字段报告，由 server 层广播私有协议
 			// alk.cxykevin.top/session/rewind（见 docs/acp/extension.md §2.7）。
 			logger.Info("rewind to message %d in session=%d", callObj.MsgID, session.ID)
@@ -783,10 +783,10 @@ func (p *Object) Summary() error {
 	}
 }
 
-// Rewind 请求把会话头（活跃分支末端）移动到指定历史消息，发送 msgActionRewind
-// 指令到处理队列。rewind 不删除任何消息：目标之后的消息保留为旁支，可再次
-// rewind 回原位置（见 structs.RewindTo）。处理结果（含失败原因）经回调的
-// Rewind 字段报告，由 server 层广播给会话的所有客户端。
+// Rewind 请求把会话头（活跃分支末端）移动到指定历史消息的前一条，发送
+// msgActionRewind 指令到处理队列。rewind 不删除任何消息：目标消息本身及其之后
+// 的消息保留为旁支，可再次 rewind 移回（见 structs.RewindTo）。处理结果（含失败
+// 原因）经回调的 Rewind 字段报告，由 server 层广播给会话的所有客户端。
 func (p *Object) Rewind(msgID uint64) error {
 	obj := msgObj{
 		Command: msgActionRewind,

@@ -98,8 +98,8 @@ func rewindTestWait(t *testing.T, ch <-chan AIResponse) (AIResponse, AIResponse)
 	return *rewindResp, *stopResp
 }
 
-// TestRewindLoopSuccess Start 处理 rewind 指令：会话头移到目标消息，
-// 回调报告成功，随后按命令轮以 StopReasonUser 收尾；消息全部保留。
+// TestRewindLoopSuccess Start 处理 rewind 指令：会话头移到目标消息的前一条
+// （目标本身不保留），回调报告成功，随后按命令轮以 StopReasonUser 收尾；消息全部保留。
 func TestRewindLoopSuccess(t *testing.T) {
 	setupConfigForTest()
 	db := setupTestDB(t)
@@ -143,8 +143,9 @@ func TestRewindLoopSuccess(t *testing.T) {
 	if err := db.First(&fresh, chat.ID).Error; err != nil {
 		t.Fatalf("reload chat: %v", err)
 	}
-	if fresh.ActiveLeafID == nil || *fresh.ActiveLeafID != target {
-		t.Fatalf("ActiveLeafID = %v, want %d", fresh.ActiveLeafID, target)
+	// 目标 msgs[1] 本身不保留：会话头落在它的前一条 msgs[0] 上
+	if fresh.ActiveLeafID == nil || *fresh.ActiveLeafID != msgs[0].ID {
+		t.Fatalf("ActiveLeafID = %v, want %d", fresh.ActiveLeafID, msgs[0].ID)
 	}
 
 	// rewind 不删除任何消息：三条消息仍在。

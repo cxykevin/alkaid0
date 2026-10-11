@@ -8,9 +8,10 @@ import (
 )
 
 // 本文件覆盖消息树 rewind（RewindTo）的语义：
-// 会话头指针移动、非删除语义、旁支保留、rewind 后追加分叉、
-// 异常状态（有消息无叶子）补链修复、参数/目标校验与失败原子性、
-// 跨会话隔离、会话身份不变（SessionID 稳定），以及与 DeleteMessage 的衔接。
+// 目标消息本身不保留的会话头移动（目标的前一条成为新会话头）、非删除语义、
+// 旁支保留、rewind 后追加分叉、异常状态（有消息无叶子）补链修复、
+// 参数/目标校验与失败原子性、跨会话隔离、会话身份不变（SessionID 稳定），
+// 以及与 DeleteMessage 的衔接。
 
 // rewindTestChain 在指定会话上追加 n 条线性消息（m1..mN），返回它们。
 func rewindTestChain(t *testing.T, db *gorm.DB, chatID uint32, n int) []*Messages {
@@ -47,7 +48,8 @@ func rewindTestCount(t *testing.T, db *gorm.DB, chatID uint32) int64 {
 	return total
 }
 
-// TestRewindToMiddleMessage 验证常规链上回退：叶子移动、活跃分支收窄、消息全部保留。
+// TestRewindToMiddleMessage 验证常规链上回退：目标消息本身不保留，会话头移动到
+// 它的前一条，目标及之后的消息成为旁支（消息全部保留）。
 func TestRewindToMiddleMessage(t *testing.T) {
 	db := setupBranchTest(t)
 	branchTestChat(t, db, 1)
@@ -56,49 +58,59 @@ func TestRewindToMiddleMessage(t *testing.T) {
 	if err := RewindTo(db, 1, ms[1].ID); err != nil {
 		t.Fatalf("RewindTo 失败: %v", err)
 	}
-	if leaf := branchTestLeaf(t, db, 1); leaf == nil || *leaf != ms[1].ID {
-		t.Fatalf("叶子应移动到 %d，得到 %v", ms[1].ID, leaf)
+	if leaf := branchTestLeaf(t, db, 1); leaf == nil || *leaf != ms[0].ID {
+		t.Fatalf("会话头应移动到 %d（目标的前一条），得到 %v", ms[0].ID, leaf)
 	}
-	// 活跃分支 = m1 → m2；m3/m4 成为旁支
-	branchTestAssertIDs(t, branchTestIDs(t, db, 1), []uint64{ms[0].ID, ms[1].ID})
+	// 活跃分支 = m1；m2~m4 成为旁支
+	branchTestAssertIDs(t, branchTestIDs(t, db, 1), []uint64{ms[0].ID})
 	// rewind 不删除任何消息：总数不变
 	if total := rewindTestCount(t, db, 1); total != 4 {
 		t.Fatalf("rewind 不应删除消息，总数应为 4，得到 %d", total)
 	}
 }
 
-// TestRewindToRootMessage 验证回退到根消息（会话头移动到最早位置）。
+// TestRewindToRootMessage 验证回退到会话第一条消息（没有前一条）会报错且不产生
+// 任何状态改动——目标本身不保留，但第一条消息之前没有可回退的位置。
 func TestRewindToRootMessage(t *testing.T) {
 	db := setupBranchTest(t)
 	branchTestChat(t, db, 1)
 	ms := rewindTestChain(t, db, 1, 3)
 
-	if err := RewindTo(db, 1, ms[0].ID); err != nil {
-		t.Fatalf("RewindTo 失败: %v", err)
+	if err := RewindTo(db, 1, ms[0].ID); err == nil {
+		t.Fatal("回退到第一条消息之前应报错")
 	}
-	if leaf := branchTestLeaf(t, db, 1); leaf == nil || *leaf != ms[0].ID {
-		t.Fatalf("叶子应移动到根 %d，得到 %v", ms[0].ID, leaf)
+	if leaf := branchTestLeaf(t, db, 1); leaf == nil || *leaf != ms[2].ID {
+		t.Fatalf("失败的 rewind 不应改动会话头，期望 %d，得到 %v", ms[2].ID, leaf)
 	}
-	branchTestAssertIDs(t, branchTestIDs(t, db, 1), []uint64{ms[0].ID})
+	branchTestAssertIDs(t, branchTestIDs(t, db, 1), []uint64{ms[0].ID, ms[1].ID, ms[2].ID})
 }
 
-// TestRewindToCurrentHead 验证目标即当前会话头时幂等成功、状态不变。
+// TestRewindToCurrentHead 验证目标即当前会话头（最后一条消息）时，会话头前移到
+// 它的前一条——最后一条从活跃分支上移除（不删除）；重复回退同一目标是幂等的。
 func TestRewindToCurrentHead(t *testing.T) {
 	db := setupBranchTest(t)
 	branchTestChat(t, db, 1)
 	ms := rewindTestChain(t, db, 1, 2)
 
 	if err := RewindTo(db, 1, ms[1].ID); err != nil {
-		t.Fatalf("回退到当前叶子应幂等成功: %v", err)
+		t.Fatalf("RewindTo 失败: %v", err)
 	}
-	if leaf := branchTestLeaf(t, db, 1); leaf == nil || *leaf != ms[1].ID {
-		t.Fatalf("叶子应保持 %d，得到 %v", ms[1].ID, leaf)
+	if leaf := branchTestLeaf(t, db, 1); leaf == nil || *leaf != ms[0].ID {
+		t.Fatalf("会话头应前移到 %d，得到 %v", ms[0].ID, leaf)
 	}
-	branchTestAssertIDs(t, branchTestIDs(t, db, 1), []uint64{ms[0].ID, ms[1].ID})
+	branchTestAssertIDs(t, branchTestIDs(t, db, 1), []uint64{ms[0].ID})
+
+	// 目标的前一条已是会话头：重复回退幂等成功、状态不变
+	if err := RewindTo(db, 1, ms[1].ID); err != nil {
+		t.Fatalf("重复回退同一目标应幂等成功: %v", err)
+	}
+	if leaf := branchTestLeaf(t, db, 1); leaf == nil || *leaf != ms[0].ID {
+		t.Fatalf("幂等回退后会话头应保持 %d，得到 %v", ms[0].ID, leaf)
+	}
 }
 
-// TestRewindBackToOldBranch 验证分叉后可以把会话头移动回原来的位置（旧分支），
-// 并且两条分支之间可以来回切换。
+// TestRewindBackToOldBranch 验证分叉后可以在两条分支之间来回移动会话头；
+// 目标消息本身不保留，会话头落在它的前一条上。
 func TestRewindBackToOldBranch(t *testing.T) {
 	db := setupBranchTest(t)
 	branchTestChat(t, db, 1)
@@ -114,24 +126,27 @@ func TestRewindBackToOldBranch(t *testing.T) {
 	}
 	branchTestAssertIDs(t, branchTestIDs(t, db, 1), []uint64{ms[0].ID, ms[1].ID, fork.ID})
 
-	// 会话头移动回旧分支末端 m4
+	// 以旧分支末端 m4 为目标：m4 不保留，会话头落在它的前一条 m3 上
 	if err := RewindTo(db, 1, ms[3].ID); err != nil {
 		t.Fatalf("RewindTo 回旧分支失败: %v", err)
 	}
-	if leaf := branchTestLeaf(t, db, 1); leaf == nil || *leaf != ms[3].ID {
-		t.Fatalf("叶子应回到 %d，得到 %v", ms[3].ID, leaf)
+	if leaf := branchTestLeaf(t, db, 1); leaf == nil || *leaf != ms[2].ID {
+		t.Fatalf("叶子应为 %d，得到 %v", ms[2].ID, leaf)
 	}
-	branchTestAssertIDs(t, branchTestIDs(t, db, 1), []uint64{ms[0].ID, ms[1].ID, ms[2].ID, ms[3].ID})
+	branchTestAssertIDs(t, branchTestIDs(t, db, 1), []uint64{ms[0].ID, ms[1].ID, ms[2].ID})
 
-	// 再切回分叉分支，验证可往复
+	// 再以分叉消息为目标切回：fork 不保留，会话头落在 m2 上
 	if err := RewindTo(db, 1, fork.ID); err != nil {
 		t.Fatalf("RewindTo 回分叉失败: %v", err)
 	}
-	branchTestAssertIDs(t, branchTestIDs(t, db, 1), []uint64{ms[0].ID, ms[1].ID, fork.ID})
+	if leaf := branchTestLeaf(t, db, 1); leaf == nil || *leaf != ms[1].ID {
+		t.Fatalf("叶子应为 %d，得到 %v", ms[1].ID, leaf)
+	}
+	branchTestAssertIDs(t, branchTestIDs(t, db, 1), []uint64{ms[0].ID, ms[1].ID})
 }
 
 // TestRewindThenAppendFork 验证 rewind 后继续追加会从新的会话头处分叉，
-// 旧分支消息不被触碰、仍可回退。
+// 旧分支消息不被触碰、仍可回退过去。
 func TestRewindThenAppendFork(t *testing.T) {
 	db := setupBranchTest(t)
 	branchTestChat(t, db, 1)
@@ -141,23 +156,24 @@ func TestRewindThenAppendFork(t *testing.T) {
 		t.Fatalf("RewindTo 失败: %v", err)
 	}
 	added := branchTestAppend(t, db, 1, "m5")
-	if added.ParentID == nil || *added.ParentID != ms[1].ID {
-		t.Fatalf("分叉消息父节点应为 %d，得到 %v", ms[1].ID, added.ParentID)
+	if added.ParentID == nil || *added.ParentID != ms[0].ID {
+		t.Fatalf("分叉消息父节点应为新的会话头 %d，得到 %v", ms[0].ID, added.ParentID)
 	}
 	if leaf := branchTestLeaf(t, db, 1); leaf == nil || *leaf != added.ID {
 		t.Fatalf("叶子应为 %d，得到 %v", added.ID, leaf)
 	}
-	branchTestAssertIDs(t, branchTestIDs(t, db, 1), []uint64{ms[0].ID, ms[1].ID, added.ID})
+	branchTestAssertIDs(t, branchTestIDs(t, db, 1), []uint64{ms[0].ID, added.ID})
 
-	// 旧分支 m3/m4 完好，可再回退过去
+	// 旧分支 m2~m4 完好，可再回退过去（m4 同样不保留）
 	if err := RewindTo(db, 1, ms[3].ID); err != nil {
 		t.Fatalf("回退到旧分支失败: %v", err)
 	}
-	branchTestAssertIDs(t, branchTestIDs(t, db, 1), []uint64{ms[0].ID, ms[1].ID, ms[2].ID, ms[3].ID})
+	branchTestAssertIDs(t, branchTestIDs(t, db, 1), []uint64{ms[0].ID, ms[1].ID, ms[2].ID})
 }
 
 // TestRewindRepairsUnmanagedState 验证「有历史消息但没有叶子」的异常状态下
-// rewind 会先补链再移动会话头，早于目标的既有历史不会消失。
+// rewind 会先补链再移动会话头，早于目标的既有历史不会消失（目标本身不保留，
+// 会话头落在补链后目标的前一条上）。
 func TestRewindRepairsUnmanagedState(t *testing.T) {
 	db := setupBranchTest(t)
 	branchTestChat(t, db, 1)
@@ -179,18 +195,19 @@ func TestRewindRepairsUnmanagedState(t *testing.T) {
 	rewindTestAssertParent(t, db, old1.ID, nil)
 	rewindTestAssertParent(t, db, old2.ID, &old1.ID)
 	rewindTestAssertParent(t, db, old3.ID, &old2.ID)
-	if leaf := branchTestLeaf(t, db, 1); leaf == nil || *leaf != old2.ID {
-		t.Fatalf("叶子应为 %d，得到 %v", old2.ID, leaf)
+	// old2 不保留：会话头落在它的前一条 old1 上
+	if leaf := branchTestLeaf(t, db, 1); leaf == nil || *leaf != old1.ID {
+		t.Fatalf("叶子应为 %d，得到 %v", old1.ID, leaf)
 	}
-	// 活跃分支 = old1 → old2，早于目标的历史没有消失
-	branchTestAssertIDs(t, branchTestIDs(t, db, 1), []uint64{old1.ID, old2.ID})
+	// 活跃分支 = old1，早于目标的历史没有消失
+	branchTestAssertIDs(t, branchTestIDs(t, db, 1), []uint64{old1.ID})
 	if total := rewindTestCount(t, db, 1); total != 3 {
 		t.Fatalf("rewind 不应删除消息，总数应为 3，得到 %d", total)
 	}
 }
 
-// TestRewindValidation 验证参数与目标校验：会话不存在、消息不存在、消息跨会话
-// 等情况均报错，且失败不产生任何状态改动。
+// TestRewindValidation 验证参数与目标校验：会话不存在、消息不存在、消息跨会话、
+// 目标是第一条消息等情况均报错，且失败不产生任何状态改动。
 func TestRewindValidation(t *testing.T) {
 	db := setupBranchTest(t)
 	branchTestChat(t, db, 1)
@@ -213,6 +230,7 @@ func TestRewindValidation(t *testing.T) {
 		{"会话不存在", db, 999, ms[0].ID},
 		{"目标消息不存在", db, 1, 999999},
 		{"目标消息属于其它会话", db, 1, other.ID},
+		{"目标是会话第一条消息（没有前一条）", db, 1, ms[0].ID},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -253,6 +271,31 @@ func TestRewindFailureLeavesStateUntouched(t *testing.T) {
 	rewindTestAssertParent(t, db, old2.ID, nil)
 }
 
+// TestRewindFirstMessageRollsBackRepair 验证异常状态下回退到第一条消息（没有
+// 前一条）报错时事务整体回滚：补链修复不会残留。
+func TestRewindFirstMessageRollsBackRepair(t *testing.T) {
+	db := setupBranchTest(t)
+	branchTestChat(t, db, 1)
+
+	old1 := &Messages{ChatID: 1, Delta: "old1", Type: MessagesRoleUser}
+	old2 := &Messages{ChatID: 1, Delta: "old2", Type: MessagesRoleAgent}
+	for _, m := range []*Messages{old1, old2} {
+		if err := db.Create(m).Error; err != nil {
+			t.Fatalf("创建旧消息失败: %v", err)
+		}
+	}
+
+	if err := RewindTo(db, 1, old1.ID); err == nil {
+		t.Fatal("回退到第一条消息之前应报错")
+	}
+	if leaf := branchTestLeaf(t, db, 1); leaf != nil {
+		t.Fatalf("失败后叶子应保持 NULL，得到 %v", *leaf)
+	}
+	// 补链被整体回滚：parent 仍为空
+	rewindTestAssertParent(t, db, old1.ID, nil)
+	rewindTestAssertParent(t, db, old2.ID, nil)
+}
+
 // TestRewindOnlyTouchesTargetChat 验证 rewind 只影响目标会话。
 func TestRewindOnlyTouchesTargetChat(t *testing.T) {
 	db := setupBranchTest(t)
@@ -261,7 +304,8 @@ func TestRewindOnlyTouchesTargetChat(t *testing.T) {
 	ms1 := rewindTestChain(t, db, 1, 3)
 	ms2 := rewindTestChain(t, db, 2, 3)
 
-	if err := RewindTo(db, 1, ms1[0].ID); err != nil {
+	// 以 m2 为目标：目标不保留，会话头落在它的前一条 m1 上
+	if err := RewindTo(db, 1, ms1[1].ID); err != nil {
 		t.Fatalf("RewindTo 失败: %v", err)
 	}
 	branchTestAssertIDs(t, branchTestIDs(t, db, 1), []uint64{ms1[0].ID})
@@ -279,8 +323,12 @@ func TestRewindThenDeleteHead(t *testing.T) {
 	branchTestChat(t, db, 1)
 	ms := rewindTestChain(t, db, 1, 3)
 
-	if err := RewindTo(db, 1, ms[1].ID); err != nil {
+	// 回退到 m3 之前：m3 不保留，会话头落在 m2 上
+	if err := RewindTo(db, 1, ms[2].ID); err != nil {
 		t.Fatalf("RewindTo 失败: %v", err)
+	}
+	if leaf := branchTestLeaf(t, db, 1); leaf == nil || *leaf != ms[1].ID {
+		t.Fatalf("会话头应为 %d，得到 %v", ms[1].ID, leaf)
 	}
 	if err := DeleteMessage(db, ms[1].ID); err != nil {
 		t.Fatalf("删除新的叶子失败: %v", err)
@@ -305,7 +353,7 @@ func TestRewindKeepsSessionIdentity(t *testing.T) {
 	}
 	ms := rewindTestChain(t, db, 1, 3)
 
-	if err := RewindTo(db, 1, ms[0].ID); err != nil {
+	if err := RewindTo(db, 1, ms[1].ID); err != nil {
 		t.Fatalf("RewindTo 失败: %v", err)
 	}
 

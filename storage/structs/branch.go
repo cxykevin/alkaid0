@@ -156,15 +156,17 @@ func DeleteMessage(db *gorm.DB, msgID uint64) error {
 	})
 }
 
-// RewindTo 把会话头（chats.active_leaf_id）移动到同一会话内指定的历史消息，
-// 即把「活跃分支」收窄到该消息的祖先链。rewind 不删除任何数据：
-//   - 目标消息之后的原分支消息保留在库中成为旁支，之后可再次 RewindTo 回到
-//     原来的位置；
+// RewindTo 把会话头（chats.active_leaf_id）移动到同一会话内指定历史消息的
+// 前一条，即把「活跃分支」收窄到「该消息之前」。rewind 不删除任何数据：
+//   - 目标消息本身不保留：它与之后的消息一起成为旁支，仍保留在库中；以旁支
+//     中消息的后继为目标再次 RewindTo，即可把会话头移回、让它重新成为活跃
+//     分支的一部分；
 //   - 目标可以是本会话的任意一条消息（含旁支消息）；后续 AppendMessage 会以
 //     新的会话头为父节点继续追加，从而形成分叉。
 //
-// 校验：会话必须存在；目标消息必须存在且属于该会话。否则报错且不产生任何
-// 改动（整个操作位于单个事务内）。目标已是当前会话头时视为幂等成功。
+// 校验：会话必须存在；目标消息必须存在且属于该会话；目标消息必须不是会话的
+// 第一条消息（没有前一条，无法回退到它之前）。否则报错且不产生任何改动
+// （整个操作位于单个事务内）。目标的前一条已是当前会话头时视为幂等成功。
 //
 // 会话身份不变：本操作不新建、不删除会话行，也不改变任何消息 id；SessionID
 // （server 侧由 Chats.ID 与工作目录派生，形如 sess_<id>:<cwd>）因此保持不变，
@@ -186,7 +188,7 @@ func RewindTo(db *gorm.DB, chatID uint32, msgID uint64) error {
 			return err
 		}
 		var msg Messages
-		if err := tx.Select("id", "chat_id").First(&msg, msgID).Error; err != nil {
+		if err := tx.Select("id", "chat_id", "parent_id").First(&msg, msgID).Error; err != nil {
 			if errors.Is(err, gorm.ErrRecordNotFound) {
 				return fmt.Errorf("structs: RewindTo: message %d not found", msgID)
 			}
@@ -195,18 +197,26 @@ func RewindTo(db *gorm.DB, chatID uint32, msgID uint64) error {
 		if msg.ChatID != chatID {
 			return fmt.Errorf("structs: RewindTo: message %d does not belong to chat %d", msgID, chatID)
 		}
-		if chat.ActiveLeafID != nil && *chat.ActiveLeafID == msgID {
-			// 已在目标位置：幂等成功
-			return nil
-		}
 		if chat.ActiveLeafID == nil {
-			// 异常状态（有消息、无叶子）：先补链再移动，保证既有历史不消失
+			// 异常状态（有消息、无叶子）：先补链再移动，保证既有历史不消失。
+			// 补链会写入 parent_id，目标消息需要重新读取。
 			if _, err := localBackfillLeaf(tx, chatID); err != nil {
 				return err
 			}
+			if err := tx.Select("id", "chat_id", "parent_id").First(&msg, msgID).Error; err != nil {
+				return err
+			}
+		}
+		if msg.ParentID == nil {
+			// 目标没有前一条（会话第一条消息）：无法回退到它之前
+			return fmt.Errorf("structs: RewindTo: message %d is the first message, cannot rewind before it", msgID)
+		}
+		if chat.ActiveLeafID != nil && *chat.ActiveLeafID == *msg.ParentID {
+			// 目标的前一条已是当前会话头：幂等成功
+			return nil
 		}
 		return tx.Model(&Chats{}).Where("id = ?", chatID).
-			Update("active_leaf_id", msgID).Error
+			Update("active_leaf_id", *msg.ParentID).Error
 	})
 }
 

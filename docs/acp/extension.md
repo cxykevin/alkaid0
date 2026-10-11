@@ -192,9 +192,9 @@ alkaid0 现在遵循 ACP v2 标准事件，且字段置于 update 对象**顶层
 
 ### 2.7. `alk.cxykevin.top/session/rewind`
 
-报告一次会话 rewind 操作的结果。rewind 把会话头（活跃分支末端）移动到指定历史消息：**不删除任何消息**、不改变会话与消息 ID（见 §5.1、§5.3），目标之后的消息保留为旁支，可再次 rewind 回原位置。该操作由内部隐藏命令 `__alk_rewind` 触发（不出现在 `available_commands_update` 与 `/help` 中），结果广播给会话的所有客户端（多客户端同步，见 §1.2）；成功与失败都会报告。
+报告一次会话 rewind 操作的结果。rewind 把会话头（活跃分支末端）移动到指定历史消息的**前一条**：**目标消息本身不保留**，与它之后的消息一起成为旁支，**不删除任何消息**、不改变会话与消息 ID（见 §5.1、§5.3）。旁支消息仍保留在库中；以某条消息的后继消息为 rewind 目标，即可把会话头移回该消息。会话的第一条消息没有前一条，不能作为 rewind 目标（返回错误）。该操作由内部隐藏命令 `__alk_rewind` 触发（不出现在 `available_commands_update` 与 `/help` 中），结果广播给会话的所有客户端（多客户端同步，见 §1.2）；成功与失败都会报告。
 
-- `messageId` ***string***：rewind 的目标消息 ID（`msg_<dbID>`，见 §5.3）；成功后会话头即指向该消息。
+- `messageId` ***string***：rewind 的目标消息 ID（`msg_<dbID>`，见 §5.3）；成功后会话头为**该消息的前一条**（目标消息本身不保留）。
 - `success` ***boolean***：操作是否成功；失败时不产生任何数据改动。
 - `error` ***string?***：失败原因，仅失败时出现；随后还有一条 `idle` + `refusal` 的 `alk.cxykevin.top/error_msg` 命令轮收尾（见 §2.6）。
 

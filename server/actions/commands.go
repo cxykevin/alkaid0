@@ -136,11 +136,11 @@ var commandMaps = map[string]*cmdObj{
 			return true, nil
 		},
 	},
-	// /__alk_rewind 内部隐藏命令：把会话头（活跃分支末端）移动到指定历史消息
-	// （rewind）。不删除任何消息、不改变会话身份；处理结果经私有协议
-	// alk.cxykevin.top/session/rewind 广播给会话的所有客户端（见 docs/acp/extension.md §2.7）。
+	// /__alk_rewind 内部隐藏命令：把会话头（活跃分支末端）移动到指定历史消息的
+	// 前一条（rewind；目标消息本身不保留）。不删除任何消息、不改变会话身份；处理
+	// 结果经私有协议 alk.cxykevin.top/session/rewind 广播给会话的所有客户端（见 docs/acp/extension.md §2.7）。
 	"/__alk_rewind": {
-		Description: "Internal hidden command: rewind the session head to the given message",
+		Description: "Internal hidden command: rewind the session head to just before the given message",
 		Hidden:      true,
 		Hint:        "{msgid}",
 		Function: func(obj *sessionObj, arg string) (bool, error) {
