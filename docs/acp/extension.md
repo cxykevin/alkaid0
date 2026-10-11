@@ -400,6 +400,35 @@ workflow 终端的临时对象内容不是原始 stdout，而是按事件流渲�
 - 省略或 `null`：仅重连，不重放历史。
 - `{ "type": "start" }`：重放**当前活跃分支**的对话历史（从根到会话头，即活跃分支末端的消息路径），以 `user_message` / `agent_message` / `agent_thought` 整消息 upsert 形式，携带与直播一致的 `messageId`，客户端据此 upsert 而非重复。rewind 移动会话头后重放序列随之变化：旁支消息不属于活跃分支，不会出现在重放中（见 §2.7）。
 
+#### 历史回放分页 `alk.cxykevin.top/session/cursor`
+
+一次 `session/resume` 最多回放 **200 条**消息（活跃分支按 `id` 升序，含 user 消息、agent 消息与工具结果）。还有未回放的消息时，响应携带扩展字段 `alk.cxykevin.top/session/cursor`；把它**原样**作为下一次 `session/resume` 请求的参数（同名扩展字段，位于 `params` 顶层）传入即可继续回放下一页。响应不含该字段表示历史已回放完毕。
+
+```jsonc
+// 第一页：省略游标，从会话头开始
+{ "jsonrpc": "2.0", "id": 1, "method": "session/resume",
+  "params": { "sessionId": "sess_1:/path", "cwd": "/path", "replayFrom": { "type": "start" } } }
+
+// 响应：本页 200 条，其后仍有消息 → 返回下一页游标
+{ "jsonrpc": "2.0", "id": 1, "result": {
+    "configOptions": [ /* … */ ],
+    "alk.cxykevin.top/session/cursor": "eyJtIjo0MjB9" } }
+
+// 下一页：原样回传游标
+{ "jsonrpc": "2.0", "id": 2, "method": "session/resume",
+  "params": { "sessionId": "sess_1:/path", "cwd": "/path",
+              "replayFrom": { "type": "start" },
+              "alk.cxykevin.top/session/cursor": "eyJtIjo0MjB9" } }
+```
+
+规则：
+
+- 游标**对客户端不透明**，只能原样回传；不是本服务端生成（格式非法）时返回 `invalid cursor` 错误，而不是静默从头回放。
+- 游标以本页最后一条消息的**数据库消息 ID** 定位，与分页大小、会话此后新增的消息都无关。
+- 页边界可能落在「agent 消息 → 它的工具结果」之间：该 agent 消息的工具调用在**工具结果所在的那一页**回放（整消息不重复回放），渲染出的 `toolCallId` 中的 messageId 仍是该 agent 消息，与不分页时逐条一致。
+- 游标指向的消息被删除、或 `rewind` 后不再属于活跃分支时，仍从该 ID 之后继续回放：不重复、不倒退、不报错。
+- 分页只作用于回放本身；`configOptions`、终端快照、plan、`available_commands_update` 等仍在每次 `session/resume` 时照常返回。
+
 ### 3.4. `session/request_permission`（服务端 → 客户端）
 
 工具待审批（自动审批规则未命中）时，alkaid0 按 [ACP v2 权限](https://agentclientprotocol.com/protocol/v2/tool-calls#requesting-permission) 发起 `session/request_permission` 请求：

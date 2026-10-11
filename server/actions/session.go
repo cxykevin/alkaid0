@@ -92,11 +92,19 @@ type SessionResumeRequest struct {
 	SessionID  string      `json:"sessionId"`
 	Cwd        string      `json:"cwd"`
 	ReplayFrom *ReplayFrom `json:"replayFrom,omitempty"`
+	// Cursor 历史回放分页游标（扩展字段，按 alk.cxykevin.top/ 扩展约定置于 params 顶层，
+	// 见 docs/acp/extension.md §3.3）：把上一页响应返回的游标原样传入即可继续回放下一页；
+	// 省略时从活跃分支最早的未回放消息开始。仅在 replayFrom={type:"start"} 时有意义。
+	Cursor string `json:"alk.cxykevin.top/session/cursor,omitempty"`
 }
 
 // SessionResumeResponse 恢复会话的响应（ACP v2：无 models）
 type SessionResumeResponse struct {
 	ConfigOptions []ConfigOption `json:"configOptions"`
+	// Cursor 下一页历史回放游标（扩展字段，见 docs/acp/extension.md §3.3）：
+	// 仅当请求了回放（replayFrom={type:"start"}）且本页之后仍有未回放的消息时返回；
+	// 省略表示历史已回放完毕。
+	Cursor string `json:"alk.cxykevin.top/session/cursor,omitempty"`
 }
 
 // sessionObj 会话对象，包含会话的核心信息和生命周期管理
@@ -2041,6 +2049,58 @@ type SessionRequestPermission struct {
 	Update    any    `json:"update"`
 }
 
+// sessionReplayPageSize 历史回放单页最大消息条数（session/resume 分页）。
+const sessionReplayPageSize = 200
+
+// sessionReplayCursor 历史回放分页游标（对客户端不透明）。
+// 以本页最后一条已回放消息的数据库 ID 定位：回放序列按 id 升序（GetHistory 的
+// Order("id ASC")），下一页从该 ID 之后的第一条开始，因此游标只依赖这个位置锚点，
+// 与分页大小、会话后续新增的消息都无关。
+type sessionReplayCursor struct {
+	ID uint64 `json:"m"`
+}
+
+// encodeReplayCursor 将游标编码为不透明字符串（指向本页最后一条消息）。
+func encodeReplayCursor(msg *structs.Messages) (string, error) {
+	if msg == nil || msg.ID == 0 {
+		return "", fmt.Errorf("invalid cursor target")
+	}
+	b, err := json.Marshal(sessionReplayCursor{ID: msg.ID})
+	if err != nil {
+		return "", err
+	}
+	return base64.RawURLEncoding.EncodeToString(b), nil
+}
+
+// decodeReplayCursor 解码不透明游标。格式非法（不是本服务端生成）时报错，
+// 与 session/list 的 cursor 一致：无效 cursor 应返回错误而非静默从头回放。
+func decodeReplayCursor(s string) (sessionReplayCursor, error) {
+	var cur sessionReplayCursor
+	b, err := base64.RawURLEncoding.DecodeString(s)
+	if err != nil {
+		return cur, err
+	}
+	if err := json.Unmarshal(b, &cur); err != nil {
+		return cur, err
+	}
+	if cur.ID == 0 {
+		return cur, fmt.Errorf("invalid cursor")
+	}
+	return cur, nil
+}
+
+// findReplayPageStart 在按 id 升序排列的回放序列中，返回第一条 id 严格大于游标的消息下标。
+// 只按 id 比较即可定位：游标指向的消息被删除、或 rewind 后不再属于活跃分支时，
+// 仍能从它之后的第一个位置继续（不重复、不倒退、不报错），找不到则返回末尾。
+func findReplayPageStart(msgs []structs.Messages, cur sessionReplayCursor) int {
+	for i := range msgs {
+		if msgs[i].ID > cur.ID {
+			return i
+		}
+	}
+	return len(msgs)
+}
+
 // SessionResume 恢复会话（ACP v2：replayFrom={type:"start"} 回放历史；省略则不回放）
 func SessionResume(req SessionResumeRequest, call func(string, any, *string) error, connID uint64) (SessionResumeResponse, error) {
 	cwd, sid, err := sessionID2Cwd(req.SessionID)
@@ -2120,12 +2180,45 @@ func SessionResume(req SessionResumeRequest, call func(string, any, *string) err
 		}
 	}
 	msgs, err := funcs.GetHistory(sess)
+	if err != nil {
+		// 回放依赖完整历史：失败时不能返回"空页 + 无游标"，否则客户端会把读取
+		// 失败误判成"历史已回放完毕"。
+		return SessionResumeResponse{}, fmt.Errorf("load history failed: %v", err)
+	}
 	previousToolJSON := ""
 	previousToolContent := ""
 	prevMsgID := uint64(0)
+	// nextCursor 本页之后仍有未回放消息时返回的下一页游标（编码本页最后一条消息）。
+	nextCursor := ""
 	if req.ReplayFrom != nil && req.ReplayFrom.Type == "start" {
 		logger.Info("replay session: %s", req.SessionID)
-		for _, val := range msgs {
+		// 分页：一次最多回放 sessionReplayPageSize 条消息（按活跃分支的 id 升序）。
+		start := 0
+		if req.Cursor != "" {
+			cur, cerr := decodeReplayCursor(req.Cursor)
+			if cerr != nil {
+				return SessionResumeResponse{}, fmt.Errorf("invalid cursor")
+			}
+			start = findReplayPageStart(msgs, cur)
+		}
+		end := min(start+sessionReplayPageSize, len(msgs))
+		page := msgs[start:end]
+		// 页边界可能落在"agent 消息 → 它的工具结果"之间：本页以工具结果开头时，
+		// 用页前最近一条 agent 消息初始化工具渲染上下文——只用于渲染本页的工具调用，
+		// 该 agent 消息本身不重复回放（它在上一页已回放），toolCallId 中的 messageId
+		// 也因此与不分页时逐条一致。
+		if len(page) > 0 && page[0].Type == structs.MessagesRoleTool {
+			for i := start - 1; i >= 0; i-- {
+				if msgs[i].Type != structs.MessagesRoleAgent {
+					continue
+				}
+				previousToolJSON = msgs[i].ToolCallingJSONString
+				previousToolContent = msgs[i].ToolCallingContent
+				prevMsgID = msgs[i].ID
+				break
+			}
+		}
+		for _, val := range page {
 			switch val.Type {
 			case structs.MessagesRoleUser:
 				err := call("session/update", SessionUpdate{
@@ -2243,6 +2336,15 @@ func SessionResume(req SessionResumeRequest, call func(string, any, *string) err
 				}
 			}
 		}
+		// 本页之后仍有未回放的消息时返回下一页游标（编码本页最后一条消息）。
+		if end < len(msgs) && len(page) > 0 {
+			cur, cerr := encodeReplayCursor(&page[len(page)-1])
+			if cerr != nil {
+				logger.Warn("failed to encode replay cursor for session %s: %v", req.SessionID, cerr)
+			} else {
+				nextCursor = cur
+			}
+		}
 		latestCtx, latestTyp := sess.SnapshotLatest()
 		if len(latestCtx) != 0 {
 			for id, val := range latestCtx {
@@ -2291,6 +2393,7 @@ func SessionResume(req SessionResumeRequest, call func(string, any, *string) err
 
 	return SessionResumeResponse{
 		ConfigOptions: buildConfigOptions(modelID, sess.ReasoningEffort),
+		Cursor:        nextCursor,
 	}, nil
 }
 
