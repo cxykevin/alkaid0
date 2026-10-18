@@ -20,4 +20,5 @@ var Tables = []any{
 	&CustomMask{},
 	&Workflows{},
 	&WorkflowEvents{},
+	&MsgQueueItems{},
 }

@@ -147,6 +147,9 @@ type sessionObj struct {
 	// 避免异步索引在目录清理期间重新打开 codebase.sqlite 导致 Windows 删除失败。
 	indexDone    chan struct{}
 	loopCallback func(loop.AIResponse)
+	// msgQueue 会话级消息队列（待处理 prompt 与参与 loop 的命令）。
+	// 入队只写 MsgQueueItems，出队时才写入 Messages 并交给 loop。
+	msgQueue *msgQueue
 	// workflowSnapMu 保护 workflowSnapSeq：workflow 快照通知的已推送事件序号
 	// （同一序号不重复广播，避免终端周期刷新重复推送未变化的 workflow 状态）。
 	workflowSnapMu  sync.Mutex
@@ -1094,6 +1097,10 @@ func loadSession(cwd string, id *uint32, knowID bool, hidden ...bool) (*structs.
 					logger.Warn("callback respose error in Session=%d, ID=%d error=%s", sess.ID, resp.MsgID, errMsg)
 				}
 				broadcastStateUpdate(sessID, "idle", ReasonMap[resp.StopReason], errMsg)
+				// 本轮结束：唤醒消息队列，空闲时派发下一条排队输入。
+				if obj.msgQueue != nil {
+					obj.msgQueue.wakeup()
+				}
 				// 自动标题：首次正常请求 end_turn 且无错误（原 SessionPrompt 触发逻辑迁到此处）
 				if resp.StopReason == loop.StopReasonModel && resp.Error == nil &&
 					sess.Title == "" && sess.AITitle == "" {
@@ -1144,6 +1151,21 @@ func loadSession(cwd string, id *uint32, knowID bool, hidden ...bool) (*structs.
 		sess.ReferCount = 1
 		sessions[sessID] = obj
 		agentCallList[sessID] = make(map[string]func())
+
+		// 会话级消息队列：从 MsgQueueItems 恢复未处理项，启动 dispatcher。
+		// 队列项不写入 Messages，只有出队时才落主消息库。
+		obj.msgQueue = newMsgQueue(
+			sess.ID,
+			sess.DB,
+			func() bool { return sess.GetState() == state.StateIdle },
+			obj.dispatchMsgQueueItem,
+			func(ev msgQueueEvent) { broadcastMsgQueueEvent(sessID, ev) },
+		)
+		if err := obj.msgQueue.load(); err != nil {
+			logger.Warn("load message queue for session %s: %v", sessID, err)
+		}
+		obj.msgQueue.start()
+		obj.msgQueue.wakeup()
 		return sess, nil
 	}
 	// 会话已存在，递增引用计数（在锁保护下）
@@ -1219,6 +1241,15 @@ func (obj *sessionObj) closePermDone() {
 		return
 	}
 	obj.permDoneOnce.Do(func() { close(obj.permDone) })
+}
+
+// stopMsgQueue 停止会话的消息队列 dispatcher；必须在 closeDB 之前调用，
+// 避免 worker 在数据库关闭后仍在写队列表或主消息表。
+func (obj *sessionObj) stopMsgQueue() {
+	if obj == nil || obj.msgQueue == nil {
+		return
+	}
+	obj.msgQueue.stop()
 }
 
 // loopJoinTimeout 释放会话时等待 loop goroutine 退出的上限；超时只告警，不阻塞释放。
@@ -1299,6 +1330,8 @@ func closeSession(sessionID string) {
 		released.loop.Cancel()
 	}
 	released.closePermDone()
+	// 先停消息队列 worker，再 join loop / 关 DB：worker 可能仍在写主消息库。
+	released.stopMsgQueue()
 	// join loop 后再关 DB：否则 loop 仍可能在使用 sess.DB（use-after-close）。
 	released.releaseSessionLoop()
 	// SetCallback 的回调 goroutine 不属于 loop 主 goroutine，releaseSessionLoop
@@ -1887,6 +1920,8 @@ func scheduleSessionRelease(sessionID string) {
 			obj2.loop.Cancel()
 		}
 		obj2.closePermDone()
+		// 先停消息队列 worker，再 join loop / 关 DB。
+		obj2.stopMsgQueue()
 		// join loop 后再关 DB：否则 loop 仍可能在使用 sess.DB（use-after-close）。
 		obj2.releaseSessionLoop()
 		// SetCallback 的回调 goroutine 不属于 loop 主 goroutine，releaseSessionLoop
@@ -1931,6 +1966,8 @@ func SessionNew(req SessionNewRequest, call func(string, any, *string) error, co
 	bindedSessionOnConnMu.Unlock()
 	// 注册连接的call函数用于后续广播
 	registerConnCall(connID, sessionID, call)
+	// 声明了 msgqueue 能力的连接补推当前队列快照。
+	pushMsgQueueSnapshotToConn(connID, sessionID, call)
 
 	// 获取当前模型ID（新会话使用默认模型）。
 	// 若 LastModelID / 默认模型被 Hide 或不存在，回退到第一个可见模型，避免选中隐藏模型。
@@ -2127,6 +2164,8 @@ func SessionResume(req SessionResumeRequest, call func(string, any, *string) err
 	bindedSessionOnConnMu.Unlock()
 	// 注册连接的call函数用于后续广播
 	registerConnCall(connID, req.SessionID, call)
+	// 声明了 msgqueue 能力的连接补推当前队列快照。
+	pushMsgQueueSnapshotToConn(connID, req.SessionID, call)
 	// 先补发正在进行的流式消息。此快照与后续 chunk 共用 streamMu，避免加入连接错过内容。
 	activeMessageIDs := make(map[uint64]struct{})
 	if obj, ok := lookupSession(req.SessionID); ok {
@@ -2791,6 +2830,10 @@ func SessionDelete(req SessionDeleteRequest, call func(string, any, *string) err
 	// 删除只作用于会话表：消息等聊天记录按设计保留（见 funcs.DeleteChat）。
 	if err := funcs.DeleteChat(db, &structs.Chats{ID: id}); err != nil {
 		return u.H{}, fmt.Errorf("failed to delete session: %w", err)
+	}
+	// 队列是运行态数据（不是聊天历史），删除会话时一并清理。
+	if err := db.Where("chat_id = ?", id).Delete(&structs.MsgQueueItems{}).Error; err != nil {
+		logger.Warn("delete message queue for session %d: %v", id, err)
 	}
 
 	return u.H{}, nil

@@ -51,6 +51,12 @@ func InitFuncs(srv *jsonrpc.Server) {
 		jsonrpc.Set(srv, "alk.cxykevin.top/list_subagent", SubAgentList)
 
 		jsonrpc.Set(srv, "alk.cxykevin.top/phrases/list", PhraseList)
+
+		// 会话消息队列（仅向声明了 alk.cxykevin.top/msgqueue 能力的连接推送）
+		jsonrpc.Set(srv, "alk.cxykevin.top/session/msgqueue/list", MsgQueueList)
+		jsonrpc.Set(srv, "alk.cxykevin.top/session/msgqueue/cancel", MsgQueueCancel)
+		jsonrpc.Set(srv, "alk.cxykevin.top/session/msgqueue/update", MsgQueueUpdate)
+		jsonrpc.Set(srv, "alk.cxykevin.top/session/msgqueue/clear", MsgQueueClear)
 	}
 
 	{ // 文件系统

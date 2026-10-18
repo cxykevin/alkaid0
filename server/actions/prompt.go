@@ -5,8 +5,6 @@ import (
 	"strings"
 	"sync/atomic"
 
-	"github.com/cxykevin/alkaid0/provider/request"
-	"github.com/cxykevin/alkaid0/ui/funcs"
 	"github.com/cxykevin/alkaid0/ui/state"
 	u "github.com/cxykevin/alkaid0/utils"
 )
@@ -100,6 +98,31 @@ func SessionPrompt(req SessionPromptRequest, call func(string, any, *string) err
 		}
 		broadcastStateUpdate(sessionID, "running", "", "")
 
+		// 参与 loop 的命令与普通 prompt 走同一队列，空闲时由 dispatcher 执行；
+		// 立即返回的命令（/help、/index 等）保持原同步语义。
+		if obj.Queueable != nil && obj.Queueable(cmdArgs) {
+			extra := msgQueueItem{
+				Kind:    msgQueueKindCommand,
+				Command: cmds[0],
+				Args:    cmdArgs,
+				Text:    text,
+			}
+			if connHasMsgQueueCapability(connID) {
+				if _, err := sessObj.msgQueue.enqueue(extra.Kind, extra.Command, extra.Args, extra.Text); err != nil {
+					broadcastStateUpdate(sessionID, "idle", "refusal", err.Error())
+					return SessionPromptResponse{}, err
+				}
+				sessObj.msgQueue.wakeup()
+				return SessionPromptResponse{}, nil
+			}
+			// 非 msgqueue 客户端：终止当前生成，把队列内容与本次命令一起冲刷。
+			if err := sessObj.flushQueueMerged(extra); err != nil {
+				broadcastStateUpdate(sessionID, "idle", "refusal", err.Error())
+				return SessionPromptResponse{}, err
+			}
+			return SessionPromptResponse{}, nil
+		}
+
 		wait, err := obj.Function(sessObj, cmdArgs)
 		if wait && err == nil {
 			return SessionPromptResponse{}, nil // 异步命令：callback 负责发 idle
@@ -115,30 +138,28 @@ func SessionPrompt(req SessionPromptRequest, call func(string, any, *string) err
 		return SessionPromptResponse{}, err
 	}
 
-	// 正常 prompt：持久化用户消息获取 DB ID（作为 messageId 基础，与回放一致）
-	userMsgID, err := funcs.UserAddMsgWithID(sessObj.session, text, nil)
-	if err != nil {
-		broadcastStateUpdate(sessionID, "idle", "refusal", err.Error())
-		return SessionPromptResponse{}, fmt.Errorf("failed to add user message: %v", err)
+	// 正常 prompt：入队（或非能力客户端降级合并）。真正写入 Messages、广播
+	// user_message/running 与送入 loop 都在 dispatcher 中完成。
+	extra := msgQueueItem{Kind: msgQueueKindPrompt, Text: text}
+	if connHasMsgQueueCapability(connID) {
+		// 等待审批时收到新消息：与旧行为一致——先拒绝待审批工具，再把新消息入队。
+		// 否则队列会一直等不到 idle（loop 停在审批等待上）。
+		if sessObj.session.GetState() == state.StateWaitApprove {
+			cancelCurrentTurn(sessObj, "rejected by new message")
+		}
+		if _, err := sessObj.msgQueue.enqueue(extra.Kind, "", "", extra.Text); err != nil {
+			broadcastStateUpdate(sessionID, "idle", "refusal", err.Error())
+			return SessionPromptResponse{}, err
+		}
+		sessObj.msgQueue.wakeup()
+		return SessionPromptResponse{}, nil
 	}
-
-	// 广播 user_message（发送方也要收到——ACP v2 以 agent 的 user_message 为 messageId 真相来源）+ running
-	broadcastSessionUpdate(sessionID, SessionUpdate{
-		SessionID: sessionID,
-		Update: SessionUpdateUpdate{
-			SessionUpdate: "user_message",
-			MessageID:     msgID(userMsgID),
-			Content:       []u.H{{"type": "text", "text": text}},
-		},
-	}, 0)
-	broadcastStateUpdate(sessionID, "running", "", "")
-
-	err = sessObj.loop.ChatWithID(text, userMsgID, nil)
-	if err != nil {
+	// 非 msgqueue 客户端：终止当前生成，把已有队列与本次输入合并成一条发送。
+	if err := sessObj.flushQueueMerged(extra); err != nil {
 		broadcastStateUpdate(sessionID, "idle", "refusal", err.Error())
 		return SessionPromptResponse{}, err
 	}
-	return SessionPromptResponse{}, nil // 立即 ack
+	return SessionPromptResponse{}, nil
 }
 
 // // mapStopReason 将loop.StopReason映射到ACP协议中的stopReason字符串
@@ -181,14 +202,9 @@ func SessionCancel(req SessionCancelRequest, call func(string, any, *string) err
 		return nil, fmt.Errorf("session not found")
 	}
 
-	sess.loop.Stop() // 触发 StopReasonUser 回调 → callback 广播 idle+cancelled
-
-	// WaitApprove 时 loop 停在 sendQueue 上，Stop() 不产生回调，需手动拒绝并唤醒权限 goroutine。
-	// 权限 goroutine 发现 State != WaitApprove 后直接退出，不做任何事。
-	if sess.session.GetState() == state.StateWaitApprove {
-		_ = request.RejectToolCallsNoDeactivate(sess.session, "cancelled by user", nil)
-		signalPermission(sess, false)
-	}
+	// 触发 StopReasonUser 回调 → callback 广播 idle+cancelled；WaitApprove 时
+	// loop 停在 sendQueue 上，Stop() 不产生回调，需手动拒绝并唤醒权限 goroutine。
+	cancelCurrentTurn(sess, "cancelled by user")
 
 	return nil, nil
 }

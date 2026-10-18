@@ -33,8 +33,12 @@ type cmdObj struct {
 	NoCmdMessage bool
 	// Hidden 为 true 时，命令不进入 available_commands_update 与 /help 列表
 	// （内部命令，仍可由客户端正常调用，如 /__alk_rewind）。
-	Hidden   bool
-	Function func(*sessionObj, string) (bool, error)
+	Hidden bool
+	// Queueable 返回 true 时，该命令进入会话消息队列（与普通 prompt 同队列），
+	// 由 dispatcher 在会话空闲时执行；nil 表示命令立即返回、不入队。
+	// 目前只有参与 loop 的命令需要入队：/compress、/__alk_rewind、/init、/s <phrase>。
+	Queueable func(arg string) bool
+	Function  func(*sessionObj, string) (bool, error)
 }
 
 // broadcastCmdText 广播命令回复文本，携带独立 cmd_ messageId。
@@ -128,6 +132,7 @@ var commandMaps = map[string]*cmdObj{
 	"/compress": {
 		Description: "Compress the history",
 		Hint:        "(no args)",
+		Queueable:   func(string) bool { return true },
 		Function: func(obj *sessionObj, _ string) (bool, error) {
 			err := obj.loop.Summary()
 			if err != nil {
@@ -142,6 +147,7 @@ var commandMaps = map[string]*cmdObj{
 	"/__alk_rewind": {
 		Description: "Internal hidden command: rewind the session head to just before the given message",
 		Hidden:      true,
+		Queueable:   func(string) bool { return true },
 		Hint:        "{msgid}",
 		Function: func(obj *sessionObj, arg string) (bool, error) {
 			msgID, err := parseRewindMsgID(arg)
@@ -271,6 +277,7 @@ var commandMaps = map[string]*cmdObj{
 		// 命令文本不广播原始 user_message：Function 内先持久化 "/init" 用户消息
 		// （回放/直播一致），再以该消息的真实 msg_ messageId 自行广播。
 		NoCmdMessage: true,
+		Queueable:    func(string) bool { return true },
 		Function: func(obj *sessionObj, _ string) (bool, error) {
 			// 历史记录命令字符串本身，而不是展开后的初始化指令（客户端直播/回放看到的都是 "/init"）；
 			// 历史回放时由 build 层固定注入 init 提示词，见 provider/request/build replayUserContent。
@@ -346,6 +353,8 @@ var commandMaps = map[string]*cmdObj{
 		Description:  "Send a configured phrase — /s <short> expands the phrase to its full text and sends it to the model; /s with no args lists all configured phrases",
 		Hint:         "[short]",
 		NoCmdMessage: true, // 命令文本不广播 user_message，Function 内部广播短语展开内容
+		// /s 无参数时只是列出短语（立即返回），只有带短语参数才参与 loop。
+		Queueable: func(arg string) bool { return strings.TrimSpace(arg) != "" },
 		Function: func(obj *sessionObj, arg string) (bool, error) {
 			arg = strings.TrimSpace(arg)
 			if arg == "" {

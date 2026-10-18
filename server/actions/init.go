@@ -39,6 +39,8 @@ var AgentCapabilities = u.H{
 	"alk.cxykevin.top/alkaid0/v0.4": u.H{},
 	"alk.cxykevin.top/alkaid0/v0.5": u.H{},
 	"alk.cxykevin.top/alkaid0/v0.6": u.H{},
+	// 会话消息队列：客户端需在自己的 capabilities 中显式声明同名能力才会收到推送。
+	"alk.cxykevin.top/msgqueue": u.H{},
 }
 
 // AgentInfo 服务端信息常量
@@ -61,6 +63,10 @@ func Initialize(req InitializeRequest, call func(string, any, *string) error, co
 	clientConnCapsMu.Lock()
 	clientConnCaps[connID] = req.Capabilities
 	clientConnCapsMu.Unlock()
+	// 客户端可能晚于 session/new 才 initialize：声明能力后补推已绑定会话的队列快照。
+	if connDeclaresMsgQueue(req.Capabilities) {
+		go notifyMsgQueueForConn(connID)
+	}
 	return InitializeResponse{
 		ProtocolVersion: protoVersion,
 		Capabilities:    AgentCapabilities,

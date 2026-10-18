@@ -44,9 +44,12 @@ alkaid0 对于客户端并 **不强制** 要求客户端初始化，这与 [ACP 
   },
   "alk.cxykevin.top/alkaid0/v0.4": {},
   "alk.cxykevin.top/alkaid0/v0.5": {},
-  "alk.cxykevin.top/alkaid0/v0.6": {}
+  "alk.cxykevin.top/alkaid0/v0.6": {},
+  "alk.cxykevin.top/msgqueue": {}
 }
 ```
+
+`alk.cxykevin.top/msgqueue` 表示服务端支持会话消息队列。**客户端必须在自己的 `initialize` 请求 `capabilities` 顶层显式声明同名键**（值为 `{}` 或 `true`；缺失、`false` 或 `null` 均视为不支持），服务端才会向该连接推送队列事件（见 §2.8）。未声明的客户端不会收到任何 `msgqueue` 推送，但其 `session/prompt` 仍然可用：提交时服务端会走「终止当前生成 + 合并发送」的降级路径（见 §2.8 末尾）。
 
 其中 `alk.cxykevin.top/alkaid0/v0.4`、`alk.cxykevin.top/alkaid0/v0.5` 与 `alk.cxykevin.top/alkaid0/v0.6` 为 alkaid0 扩展协议版本能力标记。v0.6 包含已结束终端会话内容查询（`alk.cxykevin.top/session/terminal/history`）、`tool_call_update` 顶层的 `alk.cxykevin.top/terminal_id`（终端 ID 与 run id 统一为 `@temp/run/<n>`，终端内容持久化于该路径，见 §5.4）；v0.5 包含 dynworkflow stdout 握手、workflow stdio 控制、workflow 状态持久化、workflow/update_xxx 实时广播与 workflow 快照通知。**v0.5 不提供 workflow 列表方法**——workflow 的枚举统一走 `alk.cxykevin.top/session/terminal/list`（活动）与 `.../terminal/history`（已结束）的 `workflow` 标记（见 §3.1/§3.2）。v0.4 能力保持兼容。
 
@@ -210,6 +213,40 @@ alkaid0 现在遵循 ACP v2 标准事件，且字段置于 update 对象**顶层
   }
 }
 ```
+
+### 2.8. `alk.cxykevin.top/msgqueue_update`
+
+会话消息队列变化通知。**仅向 `initialize` 时显式声明 `alk.cxykevin.top/msgqueue` 能力的连接推送**。字段位于 `update` 顶层：
+
+- `sessionUpdate` ***string***：固定为 `alk.cxykevin.top/msgqueue_update`。
+- `revision` ***number(uint64)***：队列版本号，单调递增；客户端可据此丢弃乱序/过期快照。
+- `reason` ***string***：`enqueued` / `started` / `updated` / `removed` / `cleared` / `flushed` / `snapshot`。
+- `items` ***object[]***：本次变化后的**全量**剩余队列（FIFO 顺序）。
+- `item` ***object?***：本次变化的那一项；`cleared` / `flushed` 时不带。`started` 的 `item.messageId` 为该条消息出队落库后得到的真实 `msg_<dbID>`。
+
+队列项字段：
+
+```json
+{
+  "id": "mq_12_5",
+  "kind": "prompt",              // prompt | command
+  "command": "/compress",        // 仅 command
+  "args": "",                    // 仅 command
+  "text": "跑一下测试",           // prompt 文本 / 命令原文
+  "createdAt": "2026-10-18T09:00:00Z",
+  "messageId": "msg_45"          // 仅 started 事件可能带
+}
+```
+
+语义：
+
+- 入队只写独立的队列表（`MsgQueueItems`），**不写主消息库、不进入历史回放**；出队时才写入 `Messages` 并广播 `user_message`，随后交给 loop。
+- 每会话队列上限 **32** 项；队满时 `session/prompt` 返回错误并广播 `state_update idle`（`stopReason: refusal`）。
+- dispatcher 仅在会话 `state_update idle` 后出队，**一次只派发一条**；派发失败（落库/loop 入队失败）会放回队首，等下一次 idle 重试。
+- 参与 loop 的命令（`/compress`、`/__alk_rewind`、`/init`、`/s <phrase>`）与普通 prompt 共用同一队列；`/help`、`/index` 等立即返回的命令不入队。
+- 队列持久化在会话数据库中，服务端重启/会话重连后按 `seq` 恢复并继续消费；`session/delete` 会清理该会话的队列行。
+- `session/new`、`session/resume` 以及晚到的 `initialize` 都会向已声明能力的连接补推一次 `reason: "snapshot"` 的全量快照。
+- **不支持该能力的客户端**：提交普通 prompt 或可入队命令时，服务端会先终止当前正在生成的 assistant 内容（`loop.Stop()`，必要时拒绝待审批工具），把队列中的内容与本次输入一起按 FIFO 冲刷：连续 `prompt` 项用 `\n\n` 合并为**一条**用户消息发送，`command` 项各自执行并作为合并批次的分界。
 
 ## 3. 方法扩展
 
@@ -582,6 +619,19 @@ ACP v2 中 `session/update` 是服务端 → 客户端的通知（含 `session_i
 - **会话无需预先 `session/new` / `session/resume`**：`sessionId` 未在内存注册表时，服务端按字符串解析 `cwd`+`id` 并经数据库校验会话真实存在后落库。
 - 变更单列写入 `Chats.title`（`updated_at` 随之刷新），并向该会话所有已连接客户端广播标准 `session_info_update` 通知（含发起者）。
 - 成功返回 `{}`。
+
+### 3.10. `alk.cxykevin.top/session/msgqueue/*`
+
+四个方法均要求 `sessionId` 已由当前连接通过 `session/new` / `session/resume` 绑定，返回当前队列快照 `{ revision, items }`（字段同 §2.8）。
+
+| 方法 | 请求 | 说明 |
+|---|---|---|
+| `.../msgqueue/list` | `{ sessionId }` | 拉取全量队列 |
+| `.../msgqueue/cancel` | `{ sessionId, itemId }` | 取消（删除）一条排队项 |
+| `.../msgqueue/update` | `{ sessionId, itemId, text?, args? }` | 修改排队项：`prompt` 项改 `text`；`command` 项改 `args` 并据此重建 `text` |
+| `.../msgqueue/clear` | `{ sessionId }` | 清空全部排队项 |
+
+修改/取消都会向所有声明了 `alk.cxykevin.top/msgqueue` 能力的连接广播对应的 `msgqueue_update`（`reason` 为 `updated` / `removed` / `cleared`）。已经出队、正在派发的项不能再修改或取消（返回 `queue item ... not found`）。
 
 ## 4. 字段扩展
 
