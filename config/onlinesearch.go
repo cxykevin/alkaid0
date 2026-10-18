@@ -15,9 +15,9 @@ import (
 // 或配置缺失时 config/get 返回全零（Bing.Enable=false 等），且 search.Search 仅在
 // cfg==nil 时套用 secconfig.DefaultConfig()，非 nil 的全零配置同样一个搜索源都不
 // 启用（在线搜索直接报 "no search sources enabled"）。因此这里定义产品期望的默认
-// 值：Bing 默认启用（无需密钥），其余 provider（GitHub/arXiv/Tavily 及 v0.0.3 新增的
-// Context7/Zread/Brave/Test/GrepApp/Sourcegraph/StackOverflow/HackerNews/Devto/LibrariesIO）
-// 默认关闭，仅补齐与库 DefaultConfig 对齐的非零默认字段。
+// 值：Bing 默认启用（无需密钥），其余 provider（GitHub/arXiv/Tavily、v0.0.3 新增的
+// Context7/Zread/Brave/Test/GrepApp/Sourcegraph/StackOverflow/HackerNews/Devto/LibrariesIO
+// 以及后续新增的 DeepSeek）默认关闭，仅补齐与库 DefaultConfig 对齐的非零默认字段。
 func defaultOnlineSearch() secconfig.Config {
 	return secconfig.Config{
 		Timeout:    30,
@@ -40,6 +40,11 @@ func defaultOnlineSearch() secconfig.Config {
 			Enable:      false,
 			SearchDepth: "basic",
 			MaxResults:  10,
+		},
+		DeepSeek: secconfig.DeepSeekConfig{
+			Enable:      false,
+			MaxResults:  10,
+			NeedContent: false,
 		},
 		Zread: secconfig.ZreadConfig{
 			Locale:    "zh",
@@ -96,6 +101,7 @@ func EnsureOnlineSearchDefaults(cfg *structs.Config, raw json.RawMessage) {
 	fillGithub(&on.Github, d.Github, seen["github"])
 	fillArxiv(&on.Arxiv, d.Arxiv, seen["arxiv"])
 	fillTavily(&on.Tavily, d.Tavily, seen["tavily"])
+	fillDeepSeek(&on.DeepSeek, d.DeepSeek, seen["deepseek"])
 	fillContext7(&on.Context7, d.Context7, seen["context7"])
 	fillZread(&on.Zread, d.Zread, seen["zread"])
 	fillBrave(&on.Brave, d.Brave, seen["brave"])
@@ -210,6 +216,20 @@ func fillTavily(dst *secconfig.TavilyConfig, d secconfig.TavilyConfig, seen map[
 	}
 	if !seen["max_results"] {
 		dst.MaxResults = d.MaxResults
+	}
+}
+
+// fillDeepSeek 填充 DeepSeek 缺失字段（默认 Enable=false，补 MaxResults 与 NeedContent）。
+func fillDeepSeek(dst *secconfig.DeepSeekConfig, d secconfig.DeepSeekConfig, seen map[string]bool) {
+	if len(seen) == 0 {
+		*dst = d
+		return
+	}
+	if !seen["max_results"] {
+		dst.MaxResults = d.MaxResults
+	}
+	if !seen["need_content"] {
+		dst.NeedContent = d.NeedContent
 	}
 }
 

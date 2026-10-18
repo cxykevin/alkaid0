@@ -37,10 +37,11 @@ func TestEnsureOnlineSearchDefaultsAllZero(t *testing.T) {
 		t.Errorf("Tavily defaults wrong: depth=%q results=%d, want basic/10",
 			on.Tavily.SearchDepth, on.Tavily.MaxResults)
 	}
-	// v0.0.3 新增 provider 默认全部关闭。
+	// v0.0.3 及后续新增 provider 默认全部关闭。
 	newEnabled := []bool{on.Context7.Enable, on.Zread.Enable, on.Brave.Enable,
 		on.Test.Enable, on.GrepApp.Enable, on.Sourcegraph.Enable,
-		on.StackOverflow.Enable, on.HackerNews.Enable, on.Devto.Enable, on.LibrariesIO.Enable}
+		on.StackOverflow.Enable, on.HackerNews.Enable, on.Devto.Enable, on.LibrariesIO.Enable,
+		on.DeepSeek.Enable}
 	for _, en := range newEnabled {
 		if en {
 			t.Error("new providers should be disabled by default")
@@ -58,7 +59,7 @@ func TestEnsureOnlineSearchDefaultsAllZero(t *testing.T) {
 			on.Brave.Country, on.Brave.SearchLang, on.Brave.UILang, on.Brave.Safesearch, on.Brave.MaxResults)
 	}
 	newMaxResults := []int{on.StackOverflow.MaxResults, on.HackerNews.MaxResults,
-		on.Devto.MaxResults, on.LibrariesIO.MaxResults}
+		on.Devto.MaxResults, on.LibrariesIO.MaxResults, on.DeepSeek.MaxResults}
 	for _, mr := range newMaxResults {
 		if mr != 10 {
 			t.Errorf("new provider MaxResults = %d, want 10", mr)
@@ -146,5 +147,34 @@ func TestEnsureOnlineSearchDefaultsNewProvidersKeepsExplicit(t *testing.T) {
 	}
 	if on.StackOverflow.MaxResults != 10 {
 		t.Errorf("absent StackOverflow.MaxResults = %d, want 10", on.StackOverflow.MaxResults)
+	}
+}
+
+// TestEnsureOnlineSearchDefaultsDeepSeekKeepsExplicit 显式配置 DeepSeek 时保留用户
+// 值，未写字段填充默认值。
+func TestEnsureOnlineSearchDefaultsDeepSeekKeepsExplicit(t *testing.T) {
+	raw := json.RawMessage(`{
+		"Context":{"OnlineSearch":{
+			"deepseek":{"enable":true,"api_key":"sk-xxx","max_results":5}
+		}}
+	}`)
+	cfg := &structs.Config{}
+	if err := json.Unmarshal(raw, cfg); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	EnsureOnlineSearchDefaults(cfg, raw)
+
+	on := cfg.Context.OnlineSearch
+	if !on.DeepSeek.Enable {
+		t.Error("explicit DeepSeek.Enable=true should be preserved")
+	}
+	if on.DeepSeek.APIKey != "sk-xxx" {
+		t.Errorf("explicit DeepSeek.APIKey lost, got %q", on.DeepSeek.APIKey)
+	}
+	if on.DeepSeek.MaxResults != 5 {
+		t.Errorf("explicit DeepSeek.MaxResults=5 lost, got %d", on.DeepSeek.MaxResults)
+	}
+	if on.DeepSeek.NeedContent {
+		t.Error("DeepSeek.NeedContent should default to false")
 	}
 }

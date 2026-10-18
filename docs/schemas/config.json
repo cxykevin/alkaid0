@@ -499,7 +499,7 @@
                 },
                 "OnlineSearch": {
                     "type": "object",
-                    "description": "在线搜索配置项（alkaid0-search-engine）。全部 provider 默认关闭，仅 Bing 默认启用（无需密钥）。search 工具 online=true 时可通过 path 参数用 provider id（bing/github/arxiv/tavily/context7/zread/brave/grepapp/sourcegraph/stackoverflow/hackernews/devto/librariesio）限定搜索源",
+                    "description": "在线搜索配置项（alkaid0-search-engine）。全部 provider 默认关闭，仅 Bing 默认启用（无需密钥）。search 工具 online=true 时可通过 path 参数用 provider id（bing/github/arxiv/tavily/deepseek/context7/zread/brave/grepapp/sourcegraph/stackoverflow/hackernews/devto/librariesio）限定搜索源",
                     "properties": {
                         "timeout": {
                             "type": "integer",
@@ -662,6 +662,41 @@
                                     "type": "boolean",
                                     "description": "是否包含原始内容",
                                     "default": false
+                                }
+                            }
+                        },
+                        "deepseek": {
+                            "type": "object",
+                            "description": "DeepSeek Search API（需 API Key，原生支持 site:/after:/before: 操作符），默认关闭",
+                            "properties": {
+                                "enable": {
+                                    "type": "boolean",
+                                    "description": "是否启用该搜索源",
+                                    "default": false
+                                },
+                                "api_key": {
+                                    "type": "string",
+                                    "description": "DeepSeek API key"
+                                },
+                                "proxy_url": {
+                                    "type": "string",
+                                    "description": "代理地址，为空时降级到全局 proxy_url"
+                                },
+                                "max_results": {
+                                    "type": "integer",
+                                    "description": "最大结果数（1-50，0 表示使用 API 默认值 10）",
+                                    "minimum": 0,
+                                    "maximum": 50,
+                                    "default": 10
+                                },
+                                "need_content": {
+                                    "type": "boolean",
+                                    "description": "是否在 content 中返回页面正文",
+                                    "default": false
+                                },
+                                "localization": {
+                                    "type": "string",
+                                    "description": "用于本地化搜索结果的 IP 地址（可选）"
                                 }
                             }
                         },

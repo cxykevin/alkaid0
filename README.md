@@ -198,6 +198,11 @@ C:\ProgramData\alkaid0\config.json
                 "include_raw_content": false,
                 "max_results": 10
             },
+            "deepseek": {
+                "enable": false,
+                "api_key": "sk-xxx",
+                "max_results": 10
+            },
             "context7": {
                 "enable": false,
                 "api_key": "",

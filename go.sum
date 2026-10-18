@@ -10,6 +10,10 @@ github.com/cxykevin/alkaid0-prompt-splitter v0.0.5 h1:2K+BEw3Eei3VQhjzIRxFfjnOPz
 github.com/cxykevin/alkaid0-prompt-splitter v0.0.5/go.mod h1:BY1f5IxrorB6ynj2GWXNVH9+g9LbPI50+AR8qEwb70A=
 github.com/cxykevin/alkaid0-search-engine v0.0.3 h1:gsuGKwXoEl7e48/liximB2J844WX6yTre2HtYFhfSpo=
 github.com/cxykevin/alkaid0-search-engine v0.0.3/go.mod h1:lyVARKl2hIh721c/ZTRvP7AiCP0p/bLI/3cxsvlXbyk=
+github.com/cxykevin/alkaid0-search-engine v0.0.4-0.20261017094846-a69964734f5a h1:Rw1EKNQ7gq3oLeYJyhzWEhFQQvbN4fq9j2A+mFy+dIk=
+github.com/cxykevin/alkaid0-search-engine v0.0.4-0.20261017094846-a69964734f5a/go.mod h1:lyVARKl2hIh721c/ZTRvP7AiCP0p/bLI/3cxsvlXbyk=
+github.com/cxykevin/alkaid0-search-engine v0.0.4 h1:8cQd/tapmCdEiVfs8G0FavFgoqPkgC2k3GQQoP/+/FE=
+github.com/cxykevin/alkaid0-search-engine v0.0.4/go.mod h1:lyVARKl2hIh721c/ZTRvP7AiCP0p/bLI/3cxsvlXbyk=
 github.com/cxykevin/feederback v0.0.0-20260804093139-1b929c4bcce5 h1:DMS0bshNkaPz8ixwf/VIF2DYXD8uO8v0ADNhv47pV30=
 github.com/cxykevin/feederback v0.0.0-20260804093139-1b929c4bcce5/go.mod h1:7cWAW5ApKDnpC4Lyd/q11mp7+8vVqAndmGluUhW4FIM=
 github.com/davecgh/go-spew v1.1.1 h1:vj9j/u1bqnvCEfJOwUhtlOARqs3+rkHYY13jYWTU97c=
