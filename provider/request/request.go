@@ -6,6 +6,7 @@ import (
 	stdjson "encoding/json"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"sync"
@@ -313,6 +314,24 @@ type ApprovalResult struct {
 	Reason   string
 }
 
+// approvalWorkdir 返回自动审批/拒绝规则中 Workdir 变量的值：会话根目录
+// （客户端 cwd）叠加当前激活子代理的绑定路径。与 edit/tree 等工具解析相对路径
+// 的方式保持一致（session.Root + session.CurrentActivatePath），使规则可以按
+// 真实工作目录（如 regex('^/tmp', Workdir)）做判断。
+func approvalWorkdir(session *storageStructs.Chats) string {
+	if session == nil {
+		return ""
+	}
+	workdir := session.Root
+	if session.CurrentActivatePath != "" {
+		workdir = filepath.Join(workdir, session.CurrentActivatePath)
+	}
+	if workdir == "" {
+		return ""
+	}
+	return filepath.Clean(workdir)
+}
+
 // EvaluateApprovalRules 评估配置的自动审批/拒绝规则，返回明确决策。
 // 评估顺序（安全优先）：
 //  1. 编译用户+内置合并规则
@@ -405,6 +424,8 @@ func EvaluateApprovalRules(session *storageStructs.Chats, toolCalls []ToolCall) 
 	for i, c := range ruleToolCalls {
 		callsMap[i] = c.AsMap()
 	}
+	// Workdir 是规则可用的当前工作目录（会话根目录 + 当前子代理绑定路径）。
+	workdir := approvalWorkdir(session)
 
 	// 第 1 层：拒绝检查（安全优先）
 	if rejectProgram != nil {
@@ -413,6 +434,7 @@ func EvaluateApprovalRules(session *storageStructs.Chats, toolCalls []ToolCall) 
 				"ToolCalls": callsMap,
 				"ToolCall":  call.AsMap(),
 				"Agent":     session.CurrentAgentConfig,
+				"Workdir":   workdir,
 			})
 			if runErr != nil {
 				logger.Error("EvaluateRules: run reject expr error: %v", runErr)
@@ -438,6 +460,7 @@ func EvaluateApprovalRules(session *storageStructs.Chats, toolCalls []ToolCall) 
 			"ToolCalls": callsMap,
 			"ToolCall":  call.AsMap(),
 			"Agent":     session.CurrentAgentConfig,
+			"Workdir":   workdir,
 		})
 		if runErr != nil {
 			logger.Error("EvaluateRules: run approve expr error: %v", runErr)
@@ -492,12 +515,14 @@ func CanAutoApprove(session *storageStructs.Chats, toolCalls []ToolCall, msg *st
 //	param(call, key)     - 获取工具调用的指定参数值，支持链式调用
 //
 // ToolCalls 是全集（所有待审批工具），ToolCall 是当前待评估的工具，
-// Agent 包含当前 Agent 的上下文配置。这些作为表达式求值环境变量注入。
+// Agent 包含当前 Agent 的上下文配置，Workdir 是当前工作目录
+// （会话根目录 + 当前子代理绑定路径）。这些作为表达式求值环境变量注入。
 func compileExpr(program string) (*vm.Program, error) {
 	return expr.Compile(program, expr.Env(map[string]any{
 		"ToolCalls": []map[string]any{},
 		"ToolCall":  map[string]any{},
 		"Agent":     cfgStructs.AgentConfig{},
+		"Workdir":   "",
 	}), expr.Function("truthy", func(params ...any) (any, error) {
 		if len(params) == 0 {
 			return false, nil

@@ -1,6 +1,8 @@
 package request
 
 import (
+	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/cxykevin/alkaid0/config"
@@ -97,4 +99,90 @@ func TestUserExpr(t *testing.T) {
 	})
 
 	t.Log("All user expression tests passed!")
+}
+
+// TestEvaluateApprovalRulesWorkdir 验证规则表达式中的 Workdir 变量：
+// 值为会话根目录 + 当前子代理绑定路径，并且审批/拒绝规则都能读到。
+func TestEvaluateApprovalRulesWorkdir(t *testing.T) {
+	oldIgnore := config.GlobalConfig.Agent.IgnoreDefaultRules
+	config.GlobalConfig.Agent.IgnoreDefaultRules = true
+	defer func() { config.GlobalConfig.Agent.IgnoreDefaultRules = oldIgnore }()
+
+	root := filepath.Join(string(filepath.Separator), "workspace", "proj")
+	bind := filepath.Join("packages", "api")
+	session := &storageStructs.Chats{
+		Root:                root,
+		CurrentActivatePath: bind,
+		CurrentAgentID:      "test-agent",
+		NowAgent:            "test-agent",
+	}
+
+	wantWorkdir := filepath.Join(root, bind)
+	if got := approvalWorkdir(session); got != wantWorkdir {
+		t.Fatalf("approvalWorkdir = %q, want %q", got, wantWorkdir)
+	}
+
+	t.Run("approve_rule_sees_workdir", func(t *testing.T) {
+		session.CurrentAgentConfig = cfgStruct.AgentConfig{
+			AutoApprove: "regex('proj', Workdir) && regex('packages', Workdir)",
+			AutoReject:  "false",
+		}
+		result, err := EvaluateApprovalRules(session, []ToolCall{{Name: "run", ID: "1"}})
+		if err != nil {
+			t.Fatalf("Unexpected error: %v", err)
+		}
+		if result.Decision != DecisionApproved {
+			t.Errorf("run should be approved by Workdir rule, got %v", result.Decision)
+		}
+	})
+
+	t.Run("reject_rule_sees_workdir", func(t *testing.T) {
+		session.CurrentAgentConfig = cfgStruct.AgentConfig{
+			AutoApprove: "true",
+			AutoReject:  "regex('workspace', Workdir)",
+		}
+		result, err := EvaluateApprovalRules(session, []ToolCall{{Name: "run", ID: "2"}})
+		if err != nil {
+			t.Fatalf("Unexpected error: %v", err)
+		}
+		if result.Decision != DecisionRejected {
+			t.Errorf("run should be rejected by Workdir rule, got %v", result.Decision)
+		}
+	})
+
+	t.Run("workdir_ignores_empty_bind_path", func(t *testing.T) {
+		session.CurrentAgentConfig = cfgStruct.AgentConfig{
+			AutoApprove: "Workdir == '" + strings.ReplaceAll(root, `\`, `\\`) + "'",
+			AutoReject:  "false",
+		}
+		session.CurrentActivatePath = ""
+		defer func() { session.CurrentActivatePath = bind }()
+		result, err := EvaluateApprovalRules(session, []ToolCall{{Name: "run", ID: "3"}})
+		if err != nil {
+			t.Fatalf("Unexpected error: %v", err)
+		}
+		if result.Decision != DecisionApproved {
+			t.Errorf("run should be approved when bind path is empty, got %v", result.Decision)
+		}
+	})
+
+	t.Run("empty_workdir_for_empty_root", func(t *testing.T) {
+		session.CurrentAgentConfig = cfgStruct.AgentConfig{
+			AutoApprove: "Workdir == ''",
+			AutoReject:  "false",
+		}
+		session.Root = ""
+		session.CurrentActivatePath = ""
+		defer func() {
+			session.Root = root
+			session.CurrentActivatePath = bind
+		}()
+		result, err := EvaluateApprovalRules(session, []ToolCall{{Name: "run", ID: "4"}})
+		if err != nil {
+			t.Fatalf("Unexpected error: %v", err)
+		}
+		if result.Decision != DecisionApproved {
+			t.Errorf("empty root should yield empty Workdir, got %v", result.Decision)
+		}
+	})
 }

@@ -432,6 +432,7 @@ alkaid0 实现 [ACP v2](https://agentclientprotocol.com/protocol/v2/migration.md
 - `ToolCalls`：完整的 `[]ToolCall` Array
 - `ToolCall`：当前工具调用（单个）
 - `Agent`：当前 Agent 配置
+- `Workdir`：当前工作目录（会话工作区根目录 + 当前子代理绑定路径）
 
 `ToolCall` 结构：
 - `ToolCall.Name`
