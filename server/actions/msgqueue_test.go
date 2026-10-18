@@ -340,7 +340,14 @@ func TestMsgQueuePromptWithCapability(t *testing.T) {
 		clientConnCapsMu.Unlock()
 	})
 
-	tmpDir := t.TempDir()
+	// 与既有集成测试一致：用 os.MkdirTemp + 忽略 RemoveAll 错误。
+	// Windows 上 codebase 后台索引可能仍持有 codebase.sqlite，t.TempDir 的清理
+	// 会把这种“文件被占用”当成测试失败（Linux/macOS 不会）。
+	tmpDir, err := os.MkdirTemp("", "alkaid0_msgqueue_test_")
+	if err != nil {
+		t.Fatalf("create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
 	calls := make(chan ReceivedCall, 500)
 	call := func(name string, data any, _ *string) error {
 		calls <- ReceivedCall{Name: name, Data: data}
