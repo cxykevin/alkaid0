@@ -140,6 +140,10 @@ type sessionObj struct {
 	// 为 true 时，断连后若 loop 正在活跃处理则保持运行，空闲时才释放
 	// 通过 /background on 启用，重启 loop 后自动重置为 false
 	background bool
+	// cronHold cron 触发回合的保活标记（见 server/actions/cronjob.go）。
+	// cron 投递提示词时置位，回合结束（loop 回调 idle）时清除；期间延迟释放
+	// 不会回收会话，因此无人连接的 cron 回合（包括停在等待审批上）不会被中途打断。
+	cronHold bool
 	// lastToolStreamTime 工具调用增量流式广播的上次推送时间（限流用）
 	lastToolStreamTime time.Time
 	// indexDone 异步索引 goroutine（loadSession 启动）的完成信号。
@@ -1091,6 +1095,10 @@ func loadSession(cwd string, id *uint32, knowID bool, hidden ...bool) (*structs.
 				obj.streamMu.Lock()
 				clear(obj.activeAgentMessages)
 				obj.streamMu.Unlock()
+				// cron 触发回合结束：解除保活标记，延迟释放随后按空闲语义回收会话。
+				sessLock.Lock()
+				obj.cronHold = false
+				sessLock.Unlock()
 				var errMsg string
 				if resp.Error != nil {
 					errMsg = resp.Error.Error()
@@ -1896,18 +1904,25 @@ func scheduleSessionRelease(sessionID string) {
 		}
 		obj2.releaseTimer = nil
 
-		// 后台模式开启且 loop 正在活跃处理时，重新调度，不释放
-		if obj2.background && obj2.session != nil {
-			switch obj2.session.GetState() {
-			case state.StateRequesting, state.StateReciving, state.StateToolCalling:
-				logger.Debug("session %s background mode: still processing (state=%d), reschedule release",
-					sessionID, obj2.session.GetState())
+		// 后台模式或 cron 触发的回合仍在进行时，重新调度，不释放：
+		//   - background：活跃处理中保持运行（/background on 的既有语义）；
+		//   - cronHold：无人连接的 cron 回合可能在等人工审批，必须活到回合结束
+		//     （标记由 loop 回调在回合结束时清除，见 loadSession 的 idle 分支）。
+		if (obj2.background || obj2.cronHold) && obj2.session != nil {
+			stateNow := obj2.session.GetState()
+			hold := stateNow == state.StateRequesting ||
+				stateNow == state.StateReciving ||
+				stateNow == state.StateToolCalling ||
+				(obj2.cronHold && stateNow == state.StateWaitApprove)
+			if hold {
+				logger.Debug("session %s hold release (background=%t cron=%t state=%d), reschedule",
+					sessionID, obj2.background, obj2.cronHold, stateNow)
 				obj2.releaseTimer = time.AfterFunc(
 					time.Duration(timeout)*time.Second, releaseFunc)
 				sessLock.Unlock()
 				return
 			}
-			// 其他状态（Idle、WaitApprove、Waiting、GeneratingPrompt）→ 执行释放
+			// 其他状态（Idle、Waiting、GeneratingPrompt；非 cron 的 WaitApprove）→ 执行释放
 		}
 		// 先在锁内摘除注册表，随后在锁外 cancel/join/关库：等待 loop 退出可能
 		// 耗时，不能持 sessLock 阻塞其他会话。

@@ -12,6 +12,10 @@ import (
 func Start() {
 	srv := jsonrpc.New()
 	actions.InitFuncs(srv)
+	// cron 调度器：打开配置目录下的 cron.sqlite 并常驻运行。
+	// 必须在 InitFuncs 之后启动（rpcSrv 已就绪），且放在 StartWs 之前，
+	// 保证服务开始接受连接时 cron 状态已经加载完成。
+	actions.StartCron()
 
 	srv.StartWs()
 	srv.Start()

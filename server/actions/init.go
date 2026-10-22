@@ -41,6 +41,8 @@ var AgentCapabilities = u.H{
 	"alk.cxykevin.top/alkaid0/v0.6": u.H{},
 	// 会话消息队列：客户端需在自己的 capabilities 中显式声明同名能力才会收到推送。
 	"alk.cxykevin.top/msgqueue": u.H{},
+	// 定时任务查询/删除（alk.cxykevin.top/session/cron/list | delete），纯请求-响应，无推送。
+	"alk.cxykevin.top/cron": u.H{},
 }
 
 // AgentInfo 服务端信息常量

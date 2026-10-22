@@ -52,6 +52,10 @@ func InitFuncs(srv *jsonrpc.Server) {
 
 		jsonrpc.Set(srv, "alk.cxykevin.top/phrases/list", PhraseList)
 
+		// 定时任务（只给前端做展示与删除；新增/修改仍走 AI 的 cron 工具）
+		jsonrpc.Set(srv, "alk.cxykevin.top/session/cron/list", CronList)
+		jsonrpc.Set(srv, "alk.cxykevin.top/session/cron/delete", CronDelete)
+
 		// 会话消息队列（仅向声明了 alk.cxykevin.top/msgqueue 能力的连接推送）
 		jsonrpc.Set(srv, "alk.cxykevin.top/session/msgqueue/list", MsgQueueList)
 		jsonrpc.Set(srv, "alk.cxykevin.top/session/msgqueue/cancel", MsgQueueCancel)

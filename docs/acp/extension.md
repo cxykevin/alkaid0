@@ -45,7 +45,8 @@ alkaid0 对于客户端并 **不强制** 要求客户端初始化，这与 [ACP 
   "alk.cxykevin.top/alkaid0/v0.4": {},
   "alk.cxykevin.top/alkaid0/v0.5": {},
   "alk.cxykevin.top/alkaid0/v0.6": {},
-  "alk.cxykevin.top/msgqueue": {}
+  "alk.cxykevin.top/msgqueue": {},
+  "alk.cxykevin.top/cron": {}
 }
 ```
 
@@ -632,6 +633,50 @@ ACP v2 中 `session/update` 是服务端 → 客户端的通知（含 `session_i
 | `.../msgqueue/clear` | `{ sessionId }` | 清空全部排队项 |
 
 修改/取消都会向所有声明了 `alk.cxykevin.top/msgqueue` 能力的连接广播对应的 `msgqueue_update`（`reason` 为 `updated` / `removed` / `cleared`）。已经出队、正在派发的项不能再修改或取消（返回 `queue item ... not found`）。
+
+### 3.11. `alk.cxykevin.top/session/cron/*`
+
+查询与删除当前会话的定时任务（`cron` 工具创建、`@cron` 虚拟对象展示的那些）。能力标记 `alk.cxykevin.top/cron` 表示服务端支持本组方法（纯请求-响应，无推送）。
+
+两个方法都要求 `sessionId` 已由当前连接通过 `session/new` / `session/resume` 绑定，且任务归属该校验后的「工作目录 + 会话」；跨会话/跨目录的 `id` 一律返回 `cron <id> not found in this session`（不区分"无权限"，避免探测）。
+
+| 方法 | 请求 | 响应 |
+|---|---|---|
+| `.../cron/list` | `{ sessionId }` | `{ jobs: CronJob[] }` |
+| `.../cron/delete` | `{ sessionId, id }` | `{ id }` |
+
+`CronJob`：
+
+- `id` ***number(uint32)***：任务 id，与 `@cron` 行首的数字、`cron` 工具的 `id` 参数一致。
+- `cron` ***string***：标准 5 段 cron 表达式。`@daily` 等预定义简写也是合法输入，但**入库时已展开**，因此这里永远是 5 段写法。
+- `prompt` ***string***：到点后投递到会话的提示词，**不含**投递时的 `[cronjob] ` 前缀。
+- `runOnce` ***boolean***：`true` = 投递一次后自动删除；`false` = 周期任务（每会话最多 4 条）。
+- `workdir` ***string***：任务所属工作目录（绝对路径）。
+- `nextRuns` ***string[]***：接下来 4 次（`runOnce` 为 1 次）触发时间，`YYYY-MM-DD HH:MM:SS GMT±H[:MM]` 本地时区，与 `time` 工具同格式；表达式异常时为空数组。
+
+```json
+{
+  "jobs": [
+    {
+      "id": 3,
+      "cron": "0 9 * * *",
+      "prompt": "Summarize yesterday's commits",
+      "runOnce": false,
+      "workdir": "/path/to/project",
+      "nextRuns": ["2026-10-23 09:00:00 GMT+8", "2026-10-24 09:00:00 GMT+8"]
+    }
+  ]
+}
+```
+
+语义：
+
+- 只列该会话自己的任务，按 `id` 升序；空会话返回 `{ "jobs": [] }`。
+- `delete` 成功返回 `{ "id": 3 }`；`id` 缺失或为 0 返回 `id must be a positive integer`。
+- 删除不打断正在运行的回合。调度器通过数据库变更通知即时重载（跨进程写入由 10s 兜底重读覆盖），此后不再触发该任务。
+- 任务列表不主动推送，客户端在进入会话、打开定时任务面板或删除成功后重新调用 `cron/list` 即可。
+- 新增/修改任务不在本组方法中：仍由 AI 通过 `cron` 工具完成（避免前端与模型各自维护一套校验规则）。
+- `cron` 存储不可用（例如本进程没有启动调度器）时返回 `cron is not available in this process`。
 
 ## 4. 字段扩展
 

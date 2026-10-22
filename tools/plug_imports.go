@@ -3,6 +3,7 @@ package tools
 
 import (
 	_ "github.com/cxykevin/alkaid0/tools/tools/agent"
+	_ "github.com/cxykevin/alkaid0/tools/tools/cron"
 	_ "github.com/cxykevin/alkaid0/tools/tools/date"
 	_ "github.com/cxykevin/alkaid0/tools/tools/edit"
 	_ "github.com/cxykevin/alkaid0/tools/tools/fetch"

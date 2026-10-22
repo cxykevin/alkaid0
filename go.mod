@@ -12,6 +12,7 @@ require (
 	github.com/glebarez/sqlite v1.11.0
 	github.com/gorilla/websocket v1.5.3
 	github.com/refraction-networking/utls v1.8.2
+	github.com/robfig/cron/v3 v3.0.1
 	github.com/shirou/gopsutil/v4 v4.26.6
 	github.com/titanous/json5 v1.0.0
 	golang.org/x/net v0.57.0
