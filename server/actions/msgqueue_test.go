@@ -8,8 +8,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/cxykevin/alkaid0/config"
 	"github.com/cxykevin/alkaid0/mock/openai"
 	"github.com/cxykevin/alkaid0/storage/structs"
+	"github.com/cxykevin/alkaid0/ui/state"
 	u "github.com/cxykevin/alkaid0/utils"
 	"github.com/glebarez/sqlite"
 	"gorm.io/gorm"
@@ -293,6 +295,121 @@ func TestPlanMsgQueueFlush(t *testing.T) {
 	}
 	if actions[2].Command != nil || actions[2].Text != "c" {
 		t.Fatalf("third action = %+v", actions[2])
+	}
+}
+
+// TestMsgQueueResumesAfterAbnormalStop 复现「服务端异常停止后重启会话，消息队列卡死、
+// 不再自动投递下一条」：会话状态是持久化列，异常退出时可能停在 ToolCalling /
+// WaitApprove；重启后冷加载若沿用这个陈旧状态，msgQueue 的 worker 永远等不到 Idle，
+// 队列里的消息再也不会被投递。
+//
+// 场景构造：排队一条消息（此时状态非空闲，worker 不会出队）→ 释放会话（等价于进程
+// 消失：不改持久化状态、不清队列）→ 冷加载（等价于重启后 resume）。冷加载必须把陈旧
+// 状态复位为 Idle，并自动把队列里的消息投递出去。
+func TestMsgQueueResumesAfterAbnormalStop(t *testing.T) {
+	if os.Getenv("ALKAID0_DEBUG_MOCKSERVER") != "true" {
+		t.Skip("ALKAID0_DEBUG_MOCKSERVER not set, skipping test")
+	}
+	openai.StartServerTask()
+	setupConfigForTest()
+	// 队列投递走 UserAddMsgWithID 的预处理/分类器路径；关闭预处理便于按原文断言。
+	config.GlobalConfig.Agent.DisablePromptPreprocess = true
+
+	// 清理全局状态，避免与其他测试互相影响
+	sessions = map[string]*sessionObj{}
+	sessLock = &sync.Mutex{}
+	connCallMap = map[uint64]func(string, any, *string) error{}
+	connCallLock = &sync.Mutex{}
+	sessionConnMap = map[string][]uint64{}
+	sessionConnLock = &sync.Mutex{}
+	bindedSessionOnConn = map[uint64][]string{}
+	bindedSessionOnConnMu = &sync.Mutex{}
+
+	const connID = uint64(9301)
+	clientConnCapsMu.Lock()
+	clientConnCaps[connID] = u.H{msgQueueCapability: map[string]any{}}
+	clientConnCapsMu.Unlock()
+	t.Cleanup(func() {
+		clientConnCapsMu.Lock()
+		delete(clientConnCaps, connID)
+		clientConnCapsMu.Unlock()
+	})
+
+	tmpDir, err := os.MkdirTemp("", "alkaid0_msgqueue_restart_test_")
+	if err != nil {
+		t.Fatalf("create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	call := func(string, any, *string) error { return nil }
+	resp, err := SessionNew(SessionNewRequest{Cwd: tmpDir}, call, connID)
+	if err != nil {
+		t.Fatalf("SessionNew: %v", err)
+	}
+	sessionID := resp.SessionID
+	cwd, chatID, err := sessionID2Cwd(sessionID)
+	if err != nil {
+		t.Fatalf("sessionID2Cwd: %v", err)
+	}
+	obj, ok := lookupSession(sessionID)
+	if !ok {
+		t.Fatal("session should be registered after SessionNew")
+	}
+
+	// 崩溃前：回合停在工具执行中（该状态会落库），队列里还有一条待投递消息。
+	if err := obj.session.SaveState(state.StateToolCalling); err != nil {
+		t.Fatalf("simulate stale state: %v", err)
+	}
+	queued := "queued message after abnormal stop"
+	if _, err := obj.msgQueue.enqueue(msgQueueKindPrompt, "", "", queued); err != nil {
+		t.Fatalf("enqueue: %v", err)
+	}
+
+	// 模拟进程消失：正常释放会停掉 loop 与队列 worker，但不会改写持久化的会话状态，
+	// 也不会清空队列表，因此冷加载看到的就是崩溃现场。
+	closeSession(sessionID)
+	if _, ok := lookupSession(sessionID); ok {
+		t.Fatal("session should be released to simulate a restarted process")
+	}
+
+	// 冷加载（服务端重启后客户端 resume）。
+	if _, err := SessionResume(SessionResumeRequest{Cwd: cwd, SessionID: sessionID}, call, connID); err != nil {
+		t.Fatalf("SessionResume: %v", err)
+	}
+	reloaded, ok := lookupSession(sessionID)
+	if !ok {
+		t.Fatal("session should be registered after cold restore")
+	}
+	defer closeSession(sessionID)
+
+	if got := reloaded.session.GetState(); got != state.StateIdle {
+		t.Fatalf("cold loaded state = %d, want Idle (stale state must be reset)", got)
+	}
+
+	// 队列应自动投递：消息写入主消息库，队列表里的行被删除。
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		var n int64
+		if err := reloaded.session.DB.Model(&structs.Messages{}).
+			Where("chat_id = ? AND type = ? AND delta = ?", chatID, structs.MessagesRoleUser, queued).
+			Count(&n).Error; err != nil {
+			t.Fatalf("query messages: %v", err)
+		}
+		if n > 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("queued message was not dispatched after cold load (message queue stuck)")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	var left int64
+	if err := reloaded.session.DB.Model(&structs.MsgQueueItems{}).
+		Where("chat_id = ?", chatID).Count(&left).Error; err != nil {
+		t.Fatalf("query queue rows: %v", err)
+	}
+	if left != 0 {
+		t.Fatalf("queue rows left after dispatch = %d, want 0", left)
 	}
 }
 

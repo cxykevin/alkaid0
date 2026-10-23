@@ -841,6 +841,24 @@ func loadSession(cwd string, id *uint32, knowID bool, hidden ...bool) (*structs.
 		}
 		sess.Root = cwd
 
+		// 会话状态 ch.state 是持久化列，但进程内的在途回合（loop goroutine、
+		// 审批等待 channel）不会跨进程存活：服务端异常退出（崩溃/被 kill）或会话
+		// 在 WaitApprove/ToolCalling 期间被延迟释放后重新加载时，读到的非空闲状态
+		// 都是上一个会话实例的残留。这个状态不会再有任何回调把它改回 Idle，而
+		// msgQueue 的 worker 只在该状态为 Idle 时出队（见 newMsgQueue 的 isIdle），
+		// 于是一旦冷加载拿到这种陈旧状态，队列里的消息与新入队的消息都会永久卡住
+		// （服务端异常停止后重启会话、消息队列不再自动投递即此问题）。
+		// 冷加载 = 本进程第一次见到该会话，不存在活着的回合，因此一律复位为 Idle；
+		// 与 cronjob.dispatchCronPrompt 对冷加载会话的处理保持一致。
+		if stale := sess.GetState(); stale != state.StateIdle {
+			logger.Info("session %s: reset stale state %d to idle on cold load", sessID, stale)
+			if err := sess.SaveState(state.StateIdle); err != nil {
+				logger.Warn("session %s: persist reset state: %v", sessID, err)
+				// 落库失败也要复位内存态：否则整个会话的消息队列会一直卡死。
+				sess.SetState(state.StateIdle)
+			}
+		}
+
 		// 注册 ACP plan 推送回调：task 工具修改 @task 后触发，向会话所有客户端广播完整 plan。
 		sess.SetTerminalPushFn(func(terminalID, status, content string) {
 			if err := broadcastTerminalUpdate(sessID, terminalID, status, content, "incremental", sess); err != nil {
