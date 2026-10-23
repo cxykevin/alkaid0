@@ -31,11 +31,24 @@ func requireShell(t *testing.T) {
 	}
 }
 
+// tempDir 返回解析过符号链接的临时目录。
+// macOS 上 t.TempDir() 位于 /var/...（/var 指向 /private/var），
+// 而子进程的 $PWD 是内核给出的物理路径 /private/var/...，不解析就会比较不等。
+func tempDir(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	resolved, err := filepath.EvalSymlinks(dir)
+	if err != nil {
+		t.Fatalf("解析临时目录符号链接失败: %v", err)
+	}
+	return resolved
+}
+
 // TestRunInjectsSessionEnvAndWorkdir 验证命令拿到 SESSION_ID / SESSION_PATH，
 // 工作目录为 sessionPath，并且 Run 在命令写完文件之后才返回（阻塞语义）。
 func TestRunInjectsSessionEnvAndWorkdir(t *testing.T) {
 	requireShell(t)
-	dir := t.TempDir()
+	dir := tempDir(t)
 	useHooks(t, cfgStructs.HooksConfig{
 		OnUserMessage: []string{
 			`printf '%s|%s|%s' "$SESSION_ID" "$SESSION_PATH" "$PWD" > hook.out`,
@@ -58,7 +71,7 @@ func TestRunInjectsSessionEnvAndWorkdir(t *testing.T) {
 // 且某条命令失败（非零退出码）不会中断后续命令。
 func TestRunExecutesCommandsInOrderAndContinuesOnFailure(t *testing.T) {
 	requireShell(t)
-	dir := t.TempDir()
+	dir := tempDir(t)
 	useHooks(t, cfgStructs.HooksConfig{
 		OnTaskFinish: []string{
 			`echo first >> order.txt`,
@@ -81,7 +94,7 @@ func TestRunExecutesCommandsInOrderAndContinuesOnFailure(t *testing.T) {
 // TestRunOnlyExecutesConfiguredEvent 验证事件之间互不串扰。
 func TestRunOnlyExecutesConfiguredEvent(t *testing.T) {
 	requireShell(t)
-	dir := t.TempDir()
+	dir := tempDir(t)
 	useHooks(t, cfgStructs.HooksConfig{
 		OnCronjobWakeup: []string{`touch cron.out`},
 	})
@@ -108,7 +121,7 @@ func TestRunWithoutConfigIsNoop(t *testing.T) {
 // 且 SESSION_ID / SESSION_PATH 不被其中同名键覆盖。
 func TestRunInjectsTerminalEnvs(t *testing.T) {
 	requireShell(t)
-	dir := t.TempDir()
+	dir := tempDir(t)
 	useConfig(t, cfgStructs.Config{
 		Agent: cfgStructs.AgentsConfig{TerminalEnvs: map[string]string{
 			"ALK_HOOK_TEST": "from-terminal-envs",
@@ -134,7 +147,7 @@ func TestRunInjectsTerminalEnvs(t *testing.T) {
 // （与 run 工具同一套选择与参数约定）。
 func TestRunUsesConfiguredShell(t *testing.T) {
 	requireShell(t)
-	dir := t.TempDir()
+	dir := tempDir(t)
 	argsFile := filepath.Join(dir, "shell-args.txt")
 	wrapper := filepath.Join(dir, "my-shell")
 	script := "#!/bin/sh\nprintf '%s|%s' \"$1\" \"$2\" > \"" + argsFile + "\"\nexec /bin/sh \"$@\"\n"
@@ -168,7 +181,7 @@ func TestRunUsesConfiguredShell(t *testing.T) {
 // 命令仍能执行（环境变量 SESSION_PATH 照常注入）。
 func TestRunFallsBackWhenWorkdirMissing(t *testing.T) {
 	requireShell(t)
-	dir := t.TempDir()
+	dir := tempDir(t)
 	useHooks(t, cfgStructs.HooksConfig{
 		OnUserMessage: []string{`[ -n "$SESSION_PATH" ]`},
 	})
