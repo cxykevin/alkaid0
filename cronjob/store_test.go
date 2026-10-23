@@ -63,8 +63,9 @@ func TestStoreCRUD(t *testing.T) {
 	if job.Cron != "*/5 * * * *" {
 		t.Fatalf("cron not trimmed: %q", job.Cron)
 	}
-	if job.Workdir != "/tmp/work" {
-		t.Fatalf("workdir not cleaned: %q", job.Workdir)
+	// 用 filepath.Clean 现算期望值：Windows 会把 /tmp/../tmp/work 规范化成 \tmp\work。
+	if want := filepath.Clean("/tmp/../tmp/work"); job.Workdir != want {
+		t.Fatalf("workdir not cleaned: %q, want %q", job.Workdir, want)
 	}
 
 	jobs, err := s.List()
