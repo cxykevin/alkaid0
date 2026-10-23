@@ -382,8 +382,11 @@ func TestMsgQueueResumesAfterAbnormalStop(t *testing.T) {
 	}
 	defer closeSession(sessionID)
 
-	if got := reloaded.session.GetState(); got != state.StateIdle {
-		t.Fatalf("cold loaded state = %d, want Idle (stale state must be reset)", got)
+	// 冷加载复位后队列会立刻开始投递，状态可能已经推进到 Waiting 等，因此不能断言
+	// 此刻仍是 Idle。判别标准是「不再是崩溃前落库的 ToolCalling」：复位失败时 worker
+	// 永远等不到 Idle，队列不会出队（下面的断言会失败）。
+	if got := reloaded.session.GetState(); got == state.StateToolCalling {
+		t.Fatalf("cold loaded state = %d: stale state was not reset", got)
 	}
 
 	// 队列应自动投递：消息写入主消息库，队列表里的行被删除。
