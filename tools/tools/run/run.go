@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/cxykevin/alkaid0/config"
+	"github.com/cxykevin/alkaid0/internal/shellutil"
 	"github.com/cxykevin/alkaid0/library/json"
 	"github.com/cxykevin/alkaid0/log"
 	"github.com/cxykevin/alkaid0/prompts"
@@ -802,20 +803,10 @@ func runCmdPipes(ctx context.Context, c *sandbox.Command, out io.Writer, command
 	return c.Wait()
 }
 
+// getShell 返回实际使用的 shell：配置为空时按平台默认。
+// 规则与事件钩子共用 internal/shellutil（默认 shell 与执行参数保持一致）。
 func getShell(shell string) string {
-	if shell == "" {
-		switch runtime.GOOS {
-		case "linux":
-			return "bash"
-		case "darwin":
-			return "zsh"
-		case "windows":
-			return "powershell.exe"
-		default:
-			return "bash"
-		}
-	}
-	return shell
+	return shellutil.Default(shell)
 }
 
 func genOSInfo(session *structs.Chats) (string, error) {

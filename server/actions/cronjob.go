@@ -10,6 +10,7 @@ import (
 
 	"github.com/cxykevin/alkaid0/config"
 	"github.com/cxykevin/alkaid0/cronjob"
+	"github.com/cxykevin/alkaid0/hooks"
 	"github.com/cxykevin/alkaid0/internal/configutil"
 	"github.com/cxykevin/alkaid0/storage/structs"
 	"github.com/cxykevin/alkaid0/ui/state"
@@ -162,6 +163,9 @@ func dispatchCronPrompt(workdir string, chatID uint32, prompt string) error {
 		return fmt.Errorf("cronjob: enqueue prompt: %w", err)
 	}
 	obj.msgQueue.wakeup()
+	// 会话已被 cron 唤醒：同步执行 OnCronjobWakeup 钩子（阻塞到命令退出），
+	// 钩子拿到 SESSION_ID / SESSION_PATH，可用于外部通知或拉起配套服务。
+	hooks.Run(hooks.EventCronjobWakeup, id, cwd)
 	scheduleSessionRelease(sessionID)
 	return nil
 }

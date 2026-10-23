@@ -261,6 +261,11 @@ C:\ProgramData\alkaid0\config.json
     },
     "Feedback": {
         "DisableAutoTelemetry": false
+    },
+    "Hooks": {
+        "OnCronjobWakeup": [],
+        "OnUserMessage": [],
+        "OnTaskFinish": []
     }
 }
 ```
@@ -286,6 +291,34 @@ C:\ProgramData\alkaid0\config.json
 > 沙盒当前在所有平台被**强制禁用**（临时策略：沙盒存在 Linux 缺少 `/dev/shm` 等已知问题，修复前
 `run` 工具一律在沙盒外执行）。配置里的 `DisableSandbox` 与 `run` 的 `sandbox` 参数
 > 暂时不产生效果，后续版本恢复。
+
+### 事件钩子（Hooks）
+
+配置中的 `Hooks` 可以在会话的关键时刻执行外部命令。命令在事件发生时**同步执行**（阻塞到命令退出后才继续会话流程），适合做桌面通知、日志归档、外部系统联动等。
+
+| 事件 | 触发时机 |
+|---|---|
+| `OnCronjobWakeup` | cron 定时任务唤醒会话时 |
+| `OnUserMessage` | 用户发送普通消息（非斜杠命令）时 |
+| `OnTaskFinish` | 一轮 AI 回合结束时（含正常结束、用户取消与出错） |
+
+- 每个事件是一个命令数组，按配置顺序逐条执行；某条命令失败只记录日志，后续命令照常执行，也不影响会话本身。
+- 命令经 `Agent.UseShell` 配置的 shell 执行，与 AI 的 `run` 工具使用完全相同的选择：未配置时按平台默认（Linux `bash`、macOS `zsh`、Windows `powershell.exe`），参数约定也一致（powershell `-NoProfile -Command`、cmd `/C`、其它 `-c`）。
+- 命令的工作目录为会话的工作目录；环境变量为进程环境 + 配置的 `Agent.TerminalEnvs`（与终端任务一致，但不注入 `SANDBOX` 等 `run` 工具专用变量），另注入：
+  - `SESSION_ID`：会话 ID（数字）
+  - `SESSION_PATH`：会话工作目录的绝对路径
+
+  这两个会话变量的优先级高于 `Agent.TerminalEnvs` 中的同名键。
+
+```json
+{
+    "Hooks": {
+        "OnCronjobWakeup": ["echo \"cron woke session $SESSION_ID\" >> \"$SESSION_PATH/.alkaid0/hooks.log\""],
+        "OnUserMessage": ["notify-send 'alkaid0' \"会话 $SESSION_ID 收到新消息\""],
+        "OnTaskFinish": []
+    }
+}
+```
 
 ### 远程配置 RPC
 

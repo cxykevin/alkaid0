@@ -5,6 +5,7 @@ import (
 	"strings"
 	"sync/atomic"
 
+	"github.com/cxykevin/alkaid0/hooks"
 	"github.com/cxykevin/alkaid0/ui/state"
 	u "github.com/cxykevin/alkaid0/utils"
 )
@@ -140,6 +141,11 @@ func SessionPrompt(req SessionPromptRequest, call func(string, any, *string) err
 
 	// 正常 prompt：入队（或非能力客户端降级合并）。真正写入 Messages、广播
 	// user_message/running 与送入 loop 都在 dispatcher 中完成。
+	//
+	// 配置了 Hooks.OnUserMessage 时先同步执行钩子命令（阻塞），再入队：
+	// 钩子拿到 SESSION_ID / SESSION_PATH，可用于外部通知或预处理。
+	hooks.Run(hooks.EventUserMessage, sessObj.id, sessObj.session.Root)
+
 	extra := msgQueueItem{Kind: msgQueueKindPrompt, Text: text}
 	if connHasMsgQueueCapability(connID) {
 		// 等待审批时收到新消息：与旧行为一致——先拒绝待审批工具，再把新消息入队。

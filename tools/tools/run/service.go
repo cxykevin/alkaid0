@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/cxykevin/alkaid0/internal/shellutil"
 	"github.com/cxykevin/alkaid0/storage/structs"
 	"github.com/cxykevin/alkaid0/terminal/sandbox"
 )
@@ -1023,15 +1024,7 @@ func (s *Service) runCommand(ctx context.Context, job *Job, req *Request) *Resul
 		}
 	} else {
 		displayCmd = req.Command
-		startCmd := []string{}
-		switch req.Shell {
-		case "powershell", "powershell.exe", "pwsh", "pwsh.exe":
-			startCmd = []string{"-Command", req.Command}
-		case "cmd", "cmd.exe":
-			startCmd = []string{"/C", req.Command}
-		default:
-			startCmd = []string{"-c", req.Command}
-		}
+		startCmd := shellutil.Args(req.Shell, req.Command)
 
 		c, err = sand.Execute(req.Shell, startCmd...)
 		if err != nil {
@@ -1132,15 +1125,7 @@ func (s *Service) runCommand(ctx context.Context, job *Job, req *Request) *Resul
 				c2.SetStdin(strings.NewReader(req.Stdin))
 			}
 		} else {
-			startCmd := []string{}
-			switch req.Shell {
-			case "powershell", "powershell.exe", "pwsh", "pwsh.exe":
-				startCmd = []string{"-Command", req.Command}
-			case "cmd", "cmd.exe":
-				startCmd = []string{"/C", req.Command}
-			default:
-				startCmd = []string{"-c", req.Command}
-			}
+			startCmd := shellutil.Args(req.Shell, req.Command)
 			c2, err2 = sand2.Execute(req.Shell, startCmd...)
 		}
 

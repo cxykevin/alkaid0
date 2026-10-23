@@ -17,6 +17,7 @@ import (
 	"github.com/cxykevin/alkaid0/config"
 	cfgStructs "github.com/cxykevin/alkaid0/config/structs"
 	"github.com/cxykevin/alkaid0/context/codebase"
+	"github.com/cxykevin/alkaid0/hooks"
 	"github.com/cxykevin/alkaid0/provider/request"
 	"github.com/cxykevin/alkaid0/storage"
 	"github.com/cxykevin/alkaid0/storage/structs"
@@ -1132,6 +1133,9 @@ func loadSession(cwd string, id *uint32, knowID bool, hidden ...bool) (*structs.
 					sess.Title == "" && sess.AITitle == "" {
 					generateTitle(sess, sessID, false)
 				}
+				// 回合结束（end_turn / cancelled / refusal）：同步执行 OnTaskFinish 钩子
+				// （阻塞到命令退出），钩子拿到 SESSION_ID / SESSION_PATH。
+				hooks.Run(hooks.EventTaskFinish, sess.ID, sess.Root)
 				return
 			}
 

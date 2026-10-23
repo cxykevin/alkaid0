@@ -1136,6 +1136,36 @@
                     "default": false
                 }
             }
+        },
+        "Hooks": {
+            "type": "object",
+            "description": "事件钩子：在会话的关键时刻同步执行外部命令（阻塞到命令退出）。命令经 Agent.UseShell 配置的 shell 执行（与 run 工具一致，未配置时平台默认 linux=bash/darwin=zsh/windows=powershell.exe），工作目录为会话工作目录；环境变量为进程环境 + Agent.TerminalEnvs（不注入 SANDBOX 等 run 专用变量），并注入 SESSION_ID（会话 ID）与 SESSION_PATH（会话工作目录，优先于 TerminalEnvs 同名键）。命令失败只记录日志，不影响会话。",
+            "properties": {
+                "OnCronjobWakeup": {
+                    "type": "array",
+                    "description": "cron 定时任务唤醒会话时按顺序执行的命令",
+                    "items": {
+                        "type": "string"
+                    },
+                    "default": []
+                },
+                "OnUserMessage": {
+                    "type": "array",
+                    "description": "用户发送普通消息（非斜杠命令）时按顺序执行的命令",
+                    "items": {
+                        "type": "string"
+                    },
+                    "default": []
+                },
+                "OnTaskFinish": {
+                    "type": "array",
+                    "description": "一轮 AI 回合结束时按顺序执行的命令（含正常结束、用户取消与出错）",
+                    "items": {
+                        "type": "string"
+                    },
+                    "default": []
+                }
+            }
         }
     }
 }

@@ -17,4 +17,6 @@ type Config struct {
 	Feedback FeedbackConfig
 	// Python 全局 IPython 虚拟环境配置
 	Python PythonConfig
+	// Hooks 事件钩子：在会话的关键时刻执行外部命令（阻塞等待命令退出）
+	Hooks HooksConfig
 }
