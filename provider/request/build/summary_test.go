@@ -753,7 +753,7 @@ func TestSummary_ExcludesToolCalls(t *testing.T) {
 }
 
 // TestSummary_WindowLimit 断言总结窗口上限：只纳入最近 summaryWindowMessages 条消息
-//（工具轮计入窗口条数，只是不进正文），更旧的消息不被扫描、也不进总结上下文。
+// （工具轮计入窗口条数，只是不进正文），更旧的消息不被扫描、也不进总结上下文。
 func TestSummary_WindowLimit(t *testing.T) {
 	setupTestConfig()
 	config.GlobalConfig.Agent.SummaryModel = 1

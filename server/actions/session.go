@@ -531,6 +531,44 @@ func broadcastSessionUpdate(sessionID string, update any, excludeConnID uint64) 
 	return lastErr
 }
 
+// acpStateOf 把会话内部状态映射为 ACP v2 state_update 的 state 值。
+// 客户端用该值判断"当前是否有一轮在工作"（如 alcoh 的 Esc 只在 state 为
+// running/requires_action 时才发送 session/cancel）。
+func acpStateOf(st state.State) string {
+	switch st {
+	case state.StateIdle:
+		return "idle"
+	case state.StateWaitApprove:
+		return "requires_action"
+	default:
+		return "running"
+	}
+}
+
+// syncSessionStateToConn 把会话当前状态单独推送给刚绑定会话的连接
+// （session/new、session/resume）。
+//
+// state_update 是纯事件，不会随重连或 resume 重放：一轮由旧连接发起时广播的
+// running 只有当时的连接收得到，之后 resume 的新连接只会看到默认的空闲状态。
+// 若此时服务端仍在跑（旧连接断了但回合继续、/background、cron 回合等），
+// 客户端就会显示"已结束"，停止键（Esc → session/cancel）也发不出去。
+// 因此建连后必须补发一次当前状态，让两端对齐。
+func syncSessionStateToConn(sessionID string, call func(string, any, *string) error, sess *structs.Chats) {
+	if call == nil || sess == nil {
+		return
+	}
+	stateName := acpStateOf(sess.GetState())
+	if err := call("session/update", SessionUpdate{
+		SessionID: sessionID,
+		Update: SessionUpdateUpdate{
+			SessionUpdate: "state_update",
+			State:         stateName,
+		},
+	}, nil); err != nil {
+		logger.Warn("failed to sync state %q for session %s: %v", stateName, sessionID, err)
+	}
+}
+
 // broadcastStateUpdate 广播 ACP v2 state_update（state/stopReason 置于 update 顶层）
 func broadcastStateUpdate(sessionID, state, stopReason, errMsg string) {
 	if err := broadcastSessionUpdate(sessionID, SessionUpdate{
@@ -1195,7 +1233,12 @@ func loadSession(cwd string, id *uint32, knowID bool, hidden ...bool) (*structs.
 			logger.Warn("load message queue for session %s: %v", sessID, err)
 		}
 		obj.msgQueue.start()
-		obj.msgQueue.wakeup()
+		// 不在这里 wakeup：冷加载时本会话还没有连接绑定（conn 注册发生在
+		// loadSession 之后），此刻 wakeup 会让 worker 立刻派发队列项并广播
+		// user_message/running，但那些广播没有任何接收者；随后 resume 的客户端
+		// 只看到默认空闲状态，而服务端已经跑起来了，停止键因此失效（实测于 alcoh）。
+		// 改由调用方在连接注册后唤醒：SessionNew / SessionResume 见各自函数，
+		// cron 投递见 dispatchCronPrompt。worker 本身仍在此启动，保持队列可用。
 		return sess, nil
 	}
 	// 会话已存在，递增引用计数（在锁保护下）
@@ -2005,6 +2048,12 @@ func SessionNew(req SessionNewRequest, call func(string, any, *string) error, co
 	registerConnCall(connID, sessionID, call)
 	// 声明了 msgqueue 能力的连接补推当前队列快照。
 	pushMsgQueueSnapshotToConn(connID, sessionID, call)
+	// 新会话通常空闲，但仍补发一次状态，保证客户端状态与 worker 随后可能派发
+	// 的队列项一致（与 SessionResume 相同，见 syncSessionStateToConn）。
+	syncSessionStateToConn(sessionID, call, sess)
+	if obj, ok := lookupSession(sessionID); ok && obj.msgQueue != nil {
+		obj.msgQueue.wakeup()
+	}
 
 	// 获取当前模型ID（新会话使用默认模型）。
 	// 若 LastModelID / 默认模型被 Hide 或不存在，回退到第一个可见模型，避免选中隐藏模型。
@@ -2203,6 +2252,18 @@ func SessionResume(req SessionResumeRequest, call func(string, any, *string) err
 	registerConnCall(connID, req.SessionID, call)
 	// 声明了 msgqueue 能力的连接补推当前队列快照。
 	pushMsgQueueSnapshotToConn(connID, req.SessionID, call)
+	// 建连后补发会话当前状态。state_update 是纯事件、不会随 resume 重放：
+	// 一轮在旧连接上开始时广播的 running 新连接永远收不到——若服务端仍在跑
+	// （断连后回合继续、/background、cron 回合等），客户端会一直显示空闲，
+	// 停止键（Esc → session/cancel）也就发不出去。补发一次让两端对齐。
+	syncSessionStateToConn(req.SessionID, call, sess)
+	// 冷加载会遗留上次未派发的排队消息（见 loadSession 的说明）：在连接注册
+	// 之后再唤醒 worker，保证派发时的 user_message/running 广播能送达本连接。
+	// 先补状态再唤醒：即使此刻仍是空闲，随后的 running 广播会覆盖它。
+	if obj, ok := lookupSession(req.SessionID); ok && obj.msgQueue != nil {
+		obj.msgQueue.wakeup()
+	}
+
 	// 先补发正在进行的流式消息。此快照与后续 chunk 共用 streamMu，避免加入连接错过内容。
 	activeMessageIDs := make(map[uint64]struct{})
 	if obj, ok := lookupSession(req.SessionID); ok {

@@ -73,7 +73,7 @@ alkaid0 支持 **同一会话被多个客户端链接**。对于多客户端的�
 alkaid0 现在遵循 ACP v2 标准事件，且字段置于 update 对象**顶层**（非 `content` 包装）：
 
 - **消息**：`user_message` / `agent_message` / `agent_thought`（整消息 upsert，携带 `messageId` 与完整 `content` 数组）；`user_message_chunk` / `agent_message_chunk` / `agent_thought_chunk`（流式 chunk，携带 `messageId` 与单个 content 块）。
-- **`state_update`**：`state` 为 `running` / `idle` / `requires_action`；`idle` 时携带 `stopReason`（`end_turn` / `max_tokens` / `max_turn_requests` / `refusal` / `cancelled`）。`session/prompt` 返回 `{}` 后按此驱动轮次状态。
+- **`state_update`**：`state` 为 `running` / `idle` / `requires_action`；`idle` 时携带 `stopReason`（`end_turn` / `max_tokens` / `max_turn_requests` / `refusal` / `cancelled`）。`session/prompt` 返回 `{}` 后按此驱动轮次状态。建连（`session/new`、`session/resume`）后服务端会先向该连接补发一条当前状态的 `state_update`：`state_update` 是事件而非快照，一轮由旧连接发起时广播的 `running` 不会随 resume 重放，不补发的话重连/恢复一个仍在运行的会话时客户端会一直显示空闲，停止（`session/cancel`）也不会发出。
 - **`tool_call_update`**：首次出现某 `toolCallId` 创建调用，后续按 omit/`null`/value patch。`status` 取值 `pending` / `streaming` / `completed` / `cancelled`（`streaming` 为 alkaid0 的流式增量预览，0.1s 限流推送完整快照）。
 - **`rawInput` / `rawOutput` 不发送**：标准 ACP 的这两个字段 alkaid0 **一律不填**（`tool_call_update` 与 `session/request_permission` 的 `subject.toolCall` 都不带）。工具入参统一由 `content` 给出——文本块（完整参数的 `Key: value` 渲染）与 `alk.cxykevin.top/calling_info.args`（见 §4.1），两者内容相同且**参数不省略**；客户端按 `content` 渲染即可，不需要也不再期望 `rawInput`。
 - **`plan_update`**：`plan` 字段形如 `{ "type": "items", "planId": "plan_<chatID>", "entries": [...] }`。
