@@ -406,13 +406,23 @@ func TestMsgQueueResumesAfterAbnormalStop(t *testing.T) {
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
-	var left int64
-	if err := reloaded.session.DB.Model(&structs.MsgQueueItems{}).
-		Where("chat_id = ?", chatID).Count(&left).Error; err != nil {
-		t.Fatalf("query queue rows: %v", err)
-	}
-	if left != 0 {
-		t.Fatalf("queue rows left after dispatch = %d, want 0", left)
+	// 队列行在派发成功后才删除（先落库、再删行，避免丢消息），所以「消息已入库」
+	// 与「行已删除」之间存在一个窗口：Windows/macOS（尤其 -race）上足以让一次性
+	// 断言偶发失败，这里同样轮询等待。
+	queueDeadline := time.Now().Add(5 * time.Second)
+	for {
+		var left int64
+		if err := reloaded.session.DB.Model(&structs.MsgQueueItems{}).
+			Where("chat_id = ?", chatID).Count(&left).Error; err != nil {
+			t.Fatalf("query queue rows: %v", err)
+		}
+		if left == 0 {
+			break
+		}
+		if time.Now().After(queueDeadline) {
+			t.Fatalf("queue rows left after dispatch = %d, want 0", left)
+		}
+		time.Sleep(20 * time.Millisecond)
 	}
 }
 
