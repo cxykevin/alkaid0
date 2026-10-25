@@ -130,6 +130,11 @@ type AnchorPlan struct {
 // @temp/* 临时对象与普通文件同等对待（自 2026-09-26 起，见 docs/trace-cache-spec.md）：
 // 它的 oldContent 同样来自 traces.last_content，只是内容源在 ReferFiles 而非磁盘。
 func decideDiffPlan(path, oldContent, newContent string, timeout bool, mult float32) (DiffPlan, bool) {
+	// 历史会话（@history/{session_id}）的滚动窗口：增量只保留新增消息，
+	// 滚出窗口的旧消息不写成删除行。
+	if structs.IsHistoryPath(path) {
+		return decideHistoryDiffPlan(path, oldContent, newContent, timeout, mult)
+	}
 	if timeout || strings.HasPrefix(path, "@docs/") || oldContent == "" || oldContent == newContent {
 		return DiffPlan{}, false
 	}

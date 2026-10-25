@@ -6,7 +6,7 @@ import (
 )
 
 // TestProvidersParameterInternal 验证 providers 功能已正确挂载到工具定义中。
-// providers 参数由 path 参数承载：path 在 online=true 时作为逗号分隔的 providers 列表，
+// providers 参数由 path 参数承载：path 在 type=online 时作为逗号分隔的 providers 列表，
 // 其描述在 load/UpdateToolPathDesp 时被替换为 pathDesp + 可用 providers 列表。
 func TestProvidersParameterInternal(t *testing.T) {
 	// 验证 path 参数存在（providers 功能由其承载）

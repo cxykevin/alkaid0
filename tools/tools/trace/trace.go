@@ -54,7 +54,7 @@ var paras = map[string]parser.ToolParameters{
 	"path": {
 		Type:        parser.ToolTypeString,
 		Required:    true,
-		Description: "The relative path of the file to read or remove from the read context. '..' is not allowed.",
+		Description: "The relative path of the file to read or remove from the read context, or `@history/{session_id}` for the recent messages of another session in this workspace. '..' is not allowed.",
 	},
 }
 
@@ -193,6 +193,16 @@ func Trace(session *structs.Chats, mp map[string]*any, push []*any) (bool, []*an
 		}, nil
 	}
 
+	if strings.HasPrefix(path, structs.HistoryPathPrefix) && !structs.IsHistoryPath(path) {
+		boolx := false
+		success := any(boolx)
+		errMsg := any("invalid @history path: expected @history/{session_id}")
+		return false, push, map[string]*any{
+			"success": &success,
+			"error":   &errMsg,
+		}, nil
+	}
+
 	if strings.HasPrefix(path, "@docs") {
 		if !isDocsPath(path) {
 			boolx := false
@@ -294,6 +304,7 @@ func Trace(session *structs.Chats, mp map[string]*any, push []*any) (bool, []*an
 	} else {
 		var str string
 		var err error
+		isHistory := structs.IsHistoryPath(path)
 		if vpath, ok := strings.CutPrefix(path, "@temp/"); ok {
 			// 查db：记录不存在时必须报错。旧实现忽略 First 的错误，把空内容当成
 			// 读取成功，还写脏 Traces 行并递增 TraceID（模型看到"空文件"却无任何提示）。
@@ -309,6 +320,19 @@ func Trace(session *structs.Chats, mp map[string]*any, push []*any) (bool, []*an
 				}, nil
 			}
 			str = fileObj.Content
+		} else if isHistory {
+			// @history/{session_id}：同工作目录另一个会话的最近消息（实时内容）。
+			historyContent, herr := historySessionContent(session, path)
+			if herr != nil {
+				boolx := false
+				success := any(boolx)
+				errMsg := any(herr.Error())
+				return false, push, map[string]*any{
+					"success": &success,
+					"error":   &errMsg,
+				}, nil
+			}
+			str = historyContent
 		} else {
 			path2 := filepath.Join(nowpath, path)
 			path2 = filepath.Clean(path2)
@@ -462,16 +486,19 @@ func Trace(session *structs.Chats, mp map[string]*any, push []*any) (bool, []*an
 					"error":   &errMsg,
 				}, nil
 			}
-			// 后台静默索引（打 tempfs 标签）
-			go func() {
-				idxPath := path
-				if vpath, ok := strings.CutPrefix(idxPath, "@temp/"); ok {
-					idxPath = vpath
-				}
-				if indexTaskFn != nil {
-					indexTaskFn(session.Root, idxPath, str, str, []string{"tempfs"})
-				}
-			}()
+			// 后台静默索引（打 tempfs 标签）。历史会话内容来自其它会话的消息表，
+			// 不是文件产物，不进工作区索引；history 模式的 search 直接查消息表。
+			if !isHistory {
+				go func() {
+					idxPath := path
+					if vpath, ok := strings.CutPrefix(idxPath, "@temp/"); ok {
+						idxPath = vpath
+					}
+					if indexTaskFn != nil {
+						indexTaskFn(session.Root, idxPath, str, str, []string{"tempfs"})
+					}
+				}()
+			}
 		} else {
 			// 已跟踪：本轮的读取模式（首次受限 / 再次 read 升级全量）写回行，
 			// 下一轮构建上下文时据此决定注入大纲、截断还是全文。
@@ -512,6 +539,9 @@ func Trace(session *structs.Chats, mp map[string]*any, push []*any) (bool, []*an
 	boolx := true
 	success := any(boolx)
 	msg := "The file has been read and injected into the top of the context."
+	if structs.IsHistoryPath(path) {
+		msg = fmt.Sprintf("The history session has been read and injected into the top of the context (last %d user/assistant messages, refreshed every round; messages that rolled out of the window are not repeated in incremental updates).", HistoryMessageLimit)
+	}
 	if readMode == ReadModeLight {
 		// 大文件首读只给受限视图：返回文案是引导模型"先用 search 定位、必要时再 read 全文"的主要入口。
 		msg = "The file is large, so a structural outline (or only the beginning of the file) was injected instead of the full content. " +
@@ -774,6 +804,13 @@ func isVirtualContentPath(path string) bool {
 	return ok
 }
 
+// isProviderContentPath 判断 path 是否由内容提供者实时提供内容：
+// 静态虚拟对象（@tree/@task/@memory/@cron 等）或历史会话（@history/{session_id}）。
+// 这类内容不是磁盘文件：渲染时不加行号、不参与"事件裁剪"，但落位与差分规则一致。
+func isProviderContentPath(path string) bool {
+	return isVirtualContentPath(path) || structs.IsHistoryPath(path)
+}
+
 // setVirtualContentSuppressed 切换虚拟对象的注入抑制状态（会话级，与 @docs 快照同生命周期）。
 // 虚拟对象没有独立内容源（内容由 provider 每轮重算），因此 unread 不能删 traces 行：
 // 行一删，下一轮 RenderTraceBlocks 会补一条合成行（LastContent/AnchorMsgID 归零），
@@ -815,6 +852,14 @@ func readTraceFileContent(session *structs.Chats, nowpath string, traceObj struc
 	if fn, ok := virtualContentProviders[traceObj.Path]; ok {
 		content, ok := fn(session)
 		if !ok || content == "" {
+			return "", false
+		}
+		return content, true
+	}
+	if structs.IsHistoryPath(traceObj.Path) {
+		// @history/{session_id}：内容每轮从消息表重算（实时），失败时本轮不注入。
+		content, herr := historySessionContent(session, traceObj.Path)
+		if herr != nil || content == "" {
 			return "", false
 		}
 		return content, true
@@ -863,7 +908,7 @@ func readTraceFileContent(session *structs.Chats, nowpath string, traceObj struc
 // 虚拟对象（@tree）的提供者输出的已是带行号与格式的最终文本，直接作为块文本，
 // 不再走 renderContentBlock 的逐行编号（否则双重行号）。
 func renderTraceFileFragment(path, content string) (FileBlock, bool) {
-	if isVirtualContentPath(path) {
+	if isProviderContentPath(path) {
 		if content == "" || len(content) > MaxFileSize {
 			return FileBlock{}, false
 		}
@@ -1057,7 +1102,7 @@ func RenderTraceBlocks(session *structs.Chats) (topBlock string, eventBlocks map
 		// 拼接期活跃裁剪（docs/trace-cache-spec.md §4.5）：events 已按 summary 边界截断，
 		// 不在其中即"边界之前 / 无事件"的 trace——本轮不注入，但数据库行保留（审计不丢数据）。
 		// @docs 快照与虚拟对象（@tree）的内容不来自消息事件，不参与该裁剪。
-		if events != nil && !hasEvent && !isDocsPath(path) && !isVirtualContentPath(path) {
+		if events != nil && !hasEvent && !isDocsPath(path) && !isProviderContentPath(path) {
 			continue
 		}
 		// 被 read unread=true 抑制的虚拟对象本轮不注入：traces 行与基线/锚点都保留，
@@ -1079,7 +1124,7 @@ func RenderTraceBlocks(session *structs.Chats) (topBlock string, eventBlocks map
 		confirmTraceContent(session, path, realContent)
 		confirmInjectedContent(session, path, newContent)
 
-		if ev == nil && !isVirtualContentPath(path) {
+		if ev == nil && !isProviderContentPath(path) {
 			// 无事件信息（@docs 快照 / 未走事件检测的调用路径，如直接调用或测试）：维持旧语义。
 			// 生产链路由 Build → DetectTraceEvents 保证事件表恒被写入（即使是空表），不会走到这里。
 			legacyPlan, keep := decideDiffPlan(path, traceObj.LastContent, newContent, timeout, mult)
@@ -1150,7 +1195,10 @@ func RenderTraceBlocks(session *structs.Chats) (topBlock string, eventBlocks map
 			newEvent := eventMsgID != 0 && (traceObj.AnchorMsgID == 0 || eventMsgID > traceObj.AnchorMsgID)
 			// prevMsgID == eventMsgID：旧块与增量块会落在同一个插入点（两者顺序不可控），
 			// 没有可用的稳定旧端，交回方案1。
-			if prevMsgID != 0 && prevMsgID != eventMsgID {
+			// 历史会话是例外：它的 read 事件固定停在原注入位置、不会产生新事件，
+			// 此时固定走 AnchorDiffTail（旧块留原锚点、增量追加列表末尾），
+			// 两个块的位置仍然可控。
+			if prevMsgID != 0 && (prevMsgID != eventMsgID || structs.IsHistoryPath(path)) {
 				if plan, keep := decideDiffPlan(path, traceObj.LastContent, newContent, timeout, mult); keep {
 					// 方案2：旧块字节稳定地留在旧锚点，增量块锚到最新位置；
 					// 旧端存档与注入锚点都不推进，下一次 diff 的旧端仍然稳定（前缀缓存不被打断）。

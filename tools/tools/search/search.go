@@ -35,7 +35,10 @@ var SummaryPrompt string
 
 var logger = log.New("tools:search")
 
-const pathDesp = "Search path (directory) when online=false Defaults to workspace root if empty. It will be used as set providers when online=true(Comma-separated list of search providers to use for online search (e.g., 'bing,tavily,github')). If not specified, all providers will be used. Available providers: "
+const pathDesp = "Search path. Defaults to workspace root if empty. " +
+	"type=local: a relative directory under the workspace (absolute paths and '..' are rejected). " +
+	"type=online: a comma-separated provider list (e.g., 'bing,tavily,github'); empty uses all providers. " +
+	"type=history: use `@history/{session_id}` to search only inside that session. Available providers: "
 
 var paras = map[string]parser.ToolParameters{
 	"query": {
@@ -43,10 +46,11 @@ var paras = map[string]parser.ToolParameters{
 		Required:    true,
 		Description: "The search query. Must Be First Parameter",
 	},
-	"online": {
-		Type:        parser.ToolTypeBoolean,
-		Required:    true,
-		Description: "Whether to search online. If true, searches the internet via configured search engines (Bing/GitHub/arXiv/Tavily/...) and summarizes results via LLM. Must Be Second Parameter",
+	"type": {
+		Type:     parser.ToolTypeString,
+		Required: true,
+		Description: "Search mode: `local` (workspace files + code index), `online` (configured web search engines, results summarized by LLM), " +
+			"or `history` (other sessions in the same workspace, matched by title / message content / session id). Must Be Second Parameter",
 	},
 	"path": {
 		Type:        parser.ToolTypeString,
@@ -56,12 +60,12 @@ var paras = map[string]parser.ToolParameters{
 	"recursive": {
 		Type:        parser.ToolTypeBoolean,
 		Required:    false,
-		Description: "Whether to search recursively into subdirectories. Default is true. Only when online=false",
+		Description: "Whether to search recursively into subdirectories. Default is true. Only when type=local",
 	},
 	"include_ignored": {
 		Type:        parser.ToolTypeBoolean,
 		Required:    false,
-		Description: "Whether to also search files matching .gitignore patterns. Default is false. Only when online=false",
+		Description: "Whether to also search files matching .gitignore patterns. Default is false. Only when type=local",
 	},
 	"max_results": {
 		Type:        parser.ToolTypeNumber,
@@ -357,9 +361,9 @@ func updateInfo(session *structs.Chats, mp map[string]*any, cross []*any, toolID
 			respString += "Query: " + query + "\n"
 		}
 	}
-	if onlinePtr, ok := mp["online"]; ok && onlinePtr != nil {
-		if online, ok := (*onlinePtr).(bool); ok {
-			respString += "Online: " + u.Ternary(online, "true", "false") + "\n"
+	if typePtr, ok := mp["type"]; ok && typePtr != nil {
+		if searchType, ok := (*typePtr).(string); ok {
+			respString += "Type: " + searchType + "\n"
 		}
 	}
 	if pathPtr, ok := mp["path"]; ok && pathPtr != nil {
@@ -383,8 +387,8 @@ func updateInfo(session *structs.Chats, mp map[string]*any, cross []*any, toolID
 		"name":      toolName,
 		"messageID": session.CurrentMessageID,
 		"args": u.H{
-			"query":  mp["query"],
-			"online": mp["online"],
+			"query": mp["query"],
+			"type":  mp["type"],
 		},
 	}}
 	session.SetToolCalling(toolCallID, respObj, toolName)
@@ -402,12 +406,15 @@ func runSearch(session *structs.Chats, mp map[string]*any, cross []*any) (bool, 
 		return errResult(err.Error(), cross)
 	}
 
-	online, err := getBoolParam(mp, "online")
+	searchType, err := getSearchType(mp)
 	if err != nil {
 		return errResult(err.Error(), cross)
 	}
-	if online {
+	switch searchType {
+	case searchModeOnline:
 		return runOnlineSearch(session, mp, cross)
+	case searchModeHistory:
+		return runHistorySearch(session, mp, cross, query)
 	}
 
 	includeGitignored, _ := getBoolParamDefault(mp, "include_ignored", false)
@@ -941,7 +948,7 @@ func errResult(msg string, cross []*any) (bool, []*any, map[string]*any, error) 
 }
 
 // ---------------------------------------------------------------------------
-// Online Search — runOnlineSearch (online=true)
+// Online Search — runOnlineSearch (type=online)
 // ---------------------------------------------------------------------------
 
 // SummarizeFn 搜索结果总结函数类型，由 SetSummarizeFn 注入以避免循环导入
