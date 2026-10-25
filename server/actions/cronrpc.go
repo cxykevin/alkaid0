@@ -22,15 +22,21 @@ import (
 // cronRPCNextRuns 前端列表里展示的「接下来几次触发」条数。
 const cronRPCNextRuns = 4
 
-// CronListRequest 列出某个会话的定时任务。
+// CronListRequest 列出定时任务。
 type CronListRequest struct {
 	SessionID string `json:"sessionId"`
+	// All true = 列出本机 cron.sqlite 里的全部任务（跨会话、跨工作目录），用于
+	// 前端「本机定时任务」总览。sessionId 仍须由当前连接绑定（鉴权口径不变），
+	// 只是不再参与结果过滤。
+	All bool `json:"all,omitempty"`
 }
 
 // CronJobView 一条定时任务的前端视图。
 type CronJobView struct {
 	// ID 任务 id（与 @cron 行首的数字、cron 工具的 id 一致）
 	ID uint32 `json:"id"`
+	// SessionID 任务所属会话（all=true 总览时用于区分不同会话的任务）
+	SessionID string `json:"sessionId"`
 	// Cron 标准 5 段表达式（简写在入库时已展开）
 	Cron string `json:"cron"`
 	// Prompt 到点后投递到会话的提示词（不含 "[cronjob] " 前缀）
@@ -83,13 +89,21 @@ func cronStoreForConn(sessionID string, connID uint64) (*cronjob.Store, string, 
 	return store, cwd, chatID, nil
 }
 
-// CronList 列出当前会话的定时任务（含接下来几次触发时间）。
+// CronList 列出定时任务（含接下来几次触发时间）。
+//
+// all=false（默认）只列当前会话的任务；all=true 列本机 cron.sqlite 中的全部任务
+// （跨会话、跨工作目录）。两种模式都要求 sessionId 已绑定到本连接，用于鉴权。
 func CronList(req CronListRequest, _ func(string, any, *string) error, connID uint64) (CronListResponse, error) {
 	store, cwd, chatID, err := cronStoreForConn(req.SessionID, connID)
 	if err != nil {
 		return CronListResponse{}, err
 	}
-	jobs, err := store.ListBySession(cwd, chatID)
+	var jobs []cronjob.Job
+	if req.All {
+		jobs, err = store.List()
+	} else {
+		jobs, err = store.ListBySession(cwd, chatID)
+	}
 	if err != nil {
 		return CronListResponse{}, err
 	}
@@ -105,12 +119,13 @@ func CronList(req CronListRequest, _ func(string, any, *string) error, connID ui
 			runs = append(runs, date.FormatLocal(t))
 		}
 		views = append(views, CronJobView{
-			ID:       j.ID,
-			Cron:     j.Cron,
-			Prompt:   j.Prompt,
-			RunOnce:  j.RunOnce,
-			Workdir:  j.Workdir,
-			NextRuns: runs,
+			ID:        j.ID,
+			SessionID: cwd2SessionID(j.Workdir, j.SessionID),
+			Cron:      j.Cron,
+			Prompt:    j.Prompt,
+			RunOnce:   j.RunOnce,
+			Workdir:   j.Workdir,
+			NextRuns:  runs,
 		})
 	}
 	return CronListResponse{Jobs: views}, nil

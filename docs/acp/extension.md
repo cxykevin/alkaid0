@@ -636,18 +636,19 @@ ACP v2 中 `session/update` 是服务端 → 客户端的通知（含 `session_i
 
 ### 3.11. `alk.cxykevin.top/session/cron/*`
 
-查询与删除当前会话的定时任务（`cron` 工具创建、`@cron` 虚拟对象展示的那些）。能力标记 `alk.cxykevin.top/cron` 表示服务端支持本组方法（纯请求-响应，无推送）。
+查询与删除定时任务（`cron` 工具创建、`@cron` 虚拟对象展示的那些）。能力标记 `alk.cxykevin.top/cron` 表示服务端支持本组方法（纯请求-响应，无推送）。
 
-两个方法都要求 `sessionId` 已由当前连接通过 `session/new` / `session/resume` 绑定，且任务归属该校验后的「工作目录 + 会话」；跨会话/跨目录的 `id` 一律返回 `cron <id> not found in this session`（不区分"无权限"，避免探测）。
+两个方法都要求 `sessionId` 已由当前连接通过 `session/new` / `session/resume` 绑定。默认只返回该校验后的「工作目录 + 会话」下的任务；`cron/list` 传 `all: true` 时返回本机 `cron.sqlite` 中的全部任务（跨会话、跨工作目录，用于前端总览），此时 `sessionId` 仍用于连接绑定鉴权，但不再参与结果过滤。`delete` 只允许删除当前会话自己的任务；跨会话/跨目录的 `id` 一律返回 `cron <id> not found in this session`（不区分"无权限"，避免探测）。
 
 | 方法 | 请求 | 响应 |
 |---|---|---|
-| `.../cron/list` | `{ sessionId }` | `{ jobs: CronJob[] }` |
+| `.../cron/list` | `{ sessionId, all? }` | `{ jobs: CronJob[] }` |
 | `.../cron/delete` | `{ sessionId, id }` | `{ id }` |
 
 `CronJob`：
 
 - `id` ***number(uint32)***：任务 id，与 `@cron` 行首的数字、`cron` 工具的 `id` 参数一致。
+- `sessionId` ***string***：任务所属会话（格式同 §5.1）。`all: true` 总览时用于区分不同会话下的任务。
 - `cron` ***string***：标准 5 段 cron 表达式。`@daily` 等预定义简写也是合法输入，但**入库时已展开**，因此这里永远是 5 段写法。
 - `prompt` ***string***：到点后投递到会话的提示词，**不含**投递时的 `[cronjob] ` 前缀。
 - `runOnce` ***boolean***：`true` = 投递一次后自动删除；`false` = 周期任务（每会话最多 4 条）。
@@ -659,6 +660,7 @@ ACP v2 中 `session/update` 是服务端 → 客户端的通知（含 `session_i
   "jobs": [
     {
       "id": 3,
+      "sessionId": "sess_7:/path/to/project",
       "cron": "0 9 * * *",
       "prompt": "Summarize yesterday's commits",
       "runOnce": false,
@@ -671,7 +673,8 @@ ACP v2 中 `session/update` 是服务端 → 客户端的通知（含 `session_i
 
 语义：
 
-- 只列该会话自己的任务，按 `id` 升序；空会话返回 `{ "jobs": [] }`。
+- 默认只列该会话自己的任务，按 `id` 升序；空会话返回 `{ "jobs": [] }`。
+- `all: true` 时列出本机全部任务（同样按 `id` 升序，含其它会话与工作目录的任务），每项可用 `sessionId` / `workdir` 定位归属；`sessionId` 仍需是当前连接绑定过的会话。
 - `delete` 成功返回 `{ "id": 3 }`；`id` 缺失或为 0 返回 `id must be a positive integer`。
 - 删除不打断正在运行的回合。调度器通过数据库变更通知即时重载（跨进程写入由 10s 兜底重读覆盖），此后不再触发该任务。
 - 任务列表不主动推送，客户端在进入会话、打开定时任务面板或删除成功后重新调用 `cron/list` 即可。

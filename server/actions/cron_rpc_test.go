@@ -137,6 +137,69 @@ func TestCronRPCListEmptyAndUnbound(t *testing.T) {
 	}
 }
 
+func TestCronRPCListAll(t *testing.T) {
+	dir, sessionID, chatID := setupCronRPC(t)
+	mine := addCronJobForTest(t, dir, chatID, "0 9 * * *", "mine", false)
+	otherSession := addCronJobForTest(t, dir, chatID+1, "0 10 * * *", "other session", false)
+	otherDir := t.TempDir()
+	otherWorkdir := addCronJobForTest(t, otherDir, chatID, "@daily", "other workdir", true)
+
+	resp, err := CronList(CronListRequest{SessionID: sessionID, All: true}, nil, cronTestConn)
+	if err != nil {
+		t.Fatalf("CronList all: %v", err)
+	}
+	wantIDs := []uint32{mine.ID, otherSession.ID, otherWorkdir.ID}
+	if len(resp.Jobs) != len(wantIDs) {
+		t.Fatalf("jobs = %#v, want %d entries", resp.Jobs, len(wantIDs))
+	}
+	for i, id := range wantIDs {
+		if resp.Jobs[i].ID != id {
+			t.Fatalf("job[%d].id = %d, want %d", i, resp.Jobs[i].ID, id)
+		}
+	}
+	// 跨会话 / 跨工作目录的任务都能列出，并用 sessionId 标明归属。
+	if got, want := resp.Jobs[1].SessionID, cwd2SessionID(dir, chatID+1); got != want {
+		t.Fatalf("foreign session id = %q, want %q", got, want)
+	}
+	if got, want := resp.Jobs[2].SessionID, cwd2SessionID(otherDir, chatID); got != want {
+		t.Fatalf("other workdir session id = %q, want %q", got, want)
+	}
+	if !resp.Jobs[2].RunOnce || resp.Jobs[2].Cron != "0 0 * * *" {
+		t.Fatalf("last job = %#v", resp.Jobs[2])
+	}
+
+	// all 不影响默认的会话内过滤。
+	scoped, err := CronList(CronListRequest{SessionID: sessionID}, nil, cronTestConn)
+	if err != nil {
+		t.Fatalf("CronList scoped: %v", err)
+	}
+	if len(scoped.Jobs) != 1 || scoped.Jobs[0].ID != mine.ID {
+		t.Fatalf("scoped jobs = %#v, want only %d", scoped.Jobs, mine.ID)
+	}
+}
+
+func TestCronRPCListAllRequiresBinding(t *testing.T) {
+	_, sessionID, _ := setupCronRPC(t)
+
+	// all=true 只是放开结果过滤，sessionId 仍须绑定到本连接。
+	if _, err := CronList(CronListRequest{SessionID: sessionID, All: true}, nil, cronTestConn+1); err == nil ||
+		!strings.Contains(err.Error(), "not bound to this connection") {
+		t.Fatalf("unbound all CronList err = %v", err)
+	}
+	if _, err := CronList(CronListRequest{All: true}, nil, cronTestConn); err == nil ||
+		!strings.Contains(err.Error(), "sessionId is empty") {
+		t.Fatalf("empty sessionId all err = %v", err)
+	}
+
+	resp, err := CronList(CronListRequest{SessionID: sessionID, All: true}, nil, cronTestConn)
+	if err != nil {
+		t.Fatalf("CronList all empty: %v", err)
+	}
+	if len(resp.Jobs) != 0 || resp.Jobs == nil {
+		t.Fatalf("empty all list = %#v, want empty non-nil slice", resp.Jobs)
+	}
+}
+
 func TestCronRPCDelete(t *testing.T) {
 	dir, sessionID, chatID := setupCronRPC(t)
 	job := addCronJobForTest(t, dir, chatID, "0 9 * * *", "to delete", false)
