@@ -22,8 +22,10 @@ func TestCacheTimeout(t *testing.T) {
 	if cacheTimeout(time.Now().Add(-time.Minute), 180) {
 		t.Error("一分钟前不应判超时")
 	}
-	if !cacheTimeout(time.Now().Add(-3*time.Hour), 180) {
-		t.Error("三小时前应判超时")
+	// 用 4 小时：与 180 分钟保留期保持 1 小时间隔，避开"恰好等于边界"的时钟粒度问题
+	// （Windows 的单调时钟粒度约 15ms，边界值可能被算成刚好 3 小时而判不超时）
+	if !cacheTimeout(time.Now().Add(-4*time.Hour), 180) {
+		t.Error("四小时前应判超时")
 	}
 }
 
@@ -32,9 +34,6 @@ func TestCacheTimeout(t *testing.T) {
 func TestLastRequestTime(t *testing.T) {
 	db := setupTestDB(t)
 	defer u.Unwrap(db.DB()).Close()
-	if err := db.AutoMigrate(&structs.Messages{}); err != nil {
-		t.Fatalf("migrate messages: %v", err)
-	}
 
 	if got := lastRequestTime(&structs.Chats{ID: 1, DB: db}); !got.IsZero() {
 		t.Errorf("无消息时应返回零值: %v", got)
@@ -80,14 +79,11 @@ func TestRenderTraceBlocks_ExpiredCacheForcesFull(t *testing.T) {
 		wantMode AnchorMode
 	}{
 		{"缓存仍有效", time.Minute, AnchorDiff},
-		{"缓存已过期", 3 * time.Hour, AnchorFull},
+		{"缓存已过期", 4 * time.Hour, AnchorFull},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			db := setupTestDB(t)
 			defer u.Unwrap(db.DB()).Close()
-			if err := db.AutoMigrate(&structs.Messages{}); err != nil {
-				t.Fatalf("migrate messages: %v", err)
-			}
 
 			var oldContent strings.Builder
 			for i := range 40 {
