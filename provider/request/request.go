@@ -795,12 +795,15 @@ func ApplyToolOnHooks(session *storageStructs.Chats, toolCallingJSON string) err
 
 // toolCallLoopThreshold 相同工具调用循环触发阈值：连续 N 次完全一致
 // （name + 参数）的工具调用判定为循环，注入纠正消息打断而非继续执行。
-// AI 在命令已成功执行且结果已返回后仍反复重试同一调用（如 go test 返回
-// cached 结果后仍坚持重试）时，此机制在第二次重复后即截断。
-const toolCallLoopThreshold = 3
+//
+// 阈值 16（用户 2026-10-25 定）：同样的 read 可能因为「首次给大纲、再次给全文」
+// 而需要连续调用；工具参数微调（分页、行号、tail 行数）也常常是正常试探。
+// 3 次过于激进，会在模型合理重读时误判。
+const toolCallLoopThreshold = 16
 
 // toolCallLoopMaxHistory 循环检测回溯的带工具调用 assistant 消息条数上限。
-const toolCallLoopMaxHistory = 8
+// 必须 >= toolCallLoopThreshold-1，否则永远凑不够连续次数、检测形同虚设。
+const toolCallLoopMaxHistory = 20
 
 // shellNumRe 归一化命令中的数字 token，覆盖改 tail -n 行数 / 超时秒数等微调重试。
 var shellNumRe = regexp.MustCompile(`\d+`)

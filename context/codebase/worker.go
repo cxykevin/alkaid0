@@ -106,6 +106,17 @@ func (cdb *DB) worker(ctx context.Context, done chan struct{}) {
 func (cdb *DB) processTask(ctx context.Context, task *EmbedTask) {
 	defer cdb.queue.FinishTask()
 
+	// 刷新代次校验：单文件刷新入队的任务带 Seq；若之后又发生刷新（代次前进），
+	// 本任务的内容已过期——继续处理会把已删除/已改写的符号重新写回索引，
+	// 让 BM25 与磁盘不一致。
+	if !cdb.seqStillCurrent(task) {
+		cdb.logger.Debug("drop stale embed task %s:%s (seq %d)", task.FilePath, task.Symbol, task.Seq)
+		if task.Done != nil {
+			close(task.Done)
+		}
+		return
+	}
+
 	if err := cdb.embedAndStore(ctx, task); err != nil {
 		cdb.queue.RecordFailure()
 		cdb.logger.Error("embed %s:%s: %v", task.FilePath, task.Symbol, err)
@@ -114,6 +125,12 @@ func (cdb *DB) processTask(ctx context.Context, task *EmbedTask) {
 	if task.Done != nil {
 		close(task.Done)
 	}
+}
+
+// seqStillCurrent 判断任务代次是否仍是最新：普通索引任务（Seq=0）恒为 true；
+// 刷新任务在之后又发生刷新时返回 false，调用方应丢弃任务。
+func (cdb *DB) seqStillCurrent(task *EmbedTask) bool {
+	return task.Seq == 0 || task.Seq == fileRefreshSeq(fileKey(cdb.directory, task.FilePath))
 }
 
 // embedAndStore 执行嵌入计算并存储结果到数据库
@@ -163,6 +180,12 @@ func (cdb *DB) embedAndStore(ctx context.Context, task *EmbedTask) error {
 		return cdb.storeContentOnly(task, fmt.Errorf(
 			"embedding dimension mismatch: got %d, want %d (model=%s)；请检查 embedding 模型的 ProviderSpecificConfig.Dimension",
 			len(embeddings[0]), wantDim, cdb.modelID))
+	}
+
+	// API 调用可能耗时数秒；期间文件可能又被刷新（代次前进），落库前再校验一次，
+	// 避免用旧内容覆盖新索引——旧任务丢弃后，新刷新自己的任务会写入最新内容。
+	if !cdb.seqStillCurrent(task) {
+		return nil
 	}
 
 	// 存入数据库

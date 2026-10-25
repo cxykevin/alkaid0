@@ -33,6 +33,15 @@ const (
 	// TempKeyTraceConfirmedContent 保存当前会话中 Agent 最近一次确认/写入的内容，
 	// 用于 edit 在写盘前区分 Agent 自身后续编辑与外部修改。
 	TempKeyTraceConfirmedContent = "trace:confirmed_content"
+	// TempKeyTraceInjected 本轮**实际注入上下文**的字节（map[string]string，key 同 confirmed）。
+	// 大文件首读注入的是大纲/截断视图，与真实文件内容不同：diff 基线（LastContent）必须
+	// 跟着注入字节走，否则方案2 的旧块会与上一轮注入的字节不一致、前缀缓存断裂；
+	// edit 的"外部修改"校验则继续用 confirmed（真实内容）。
+	TempKeyTraceInjected = "trace:injected_content"
+	// TempKeyTraceOutline 大文件受限视图的会话级缓存
+	// （map[string]lightViewEntry：size/mtime + 大纲或截断文本）。
+	// GetSymbols 会对每个符号发 hover，不缓存会在每轮构建上下文时重复请求 LSP。
+	TempKeyTraceOutline = "trace:outline_cache"
 	// TempKeyTraceDocsSnapshots 保存 @docs 文档的会话级 immutable snapshot。
 	TempKeyTraceDocsSnapshots = "trace:docs_snapshots"
 	// TempKeyTraceVirtualSuppressed 被 read unread=true 主动移出上下文的虚拟对象

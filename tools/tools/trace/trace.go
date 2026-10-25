@@ -261,6 +261,9 @@ func Trace(session *structs.Chats, mp map[string]*any, push []*any) (bool, []*an
 	if unread {
 		traceStr = "unread"
 	}
+	// readMode 本轮注入模式：空 = 全量；ReadModeLight = 大文件受限视图（大纲/截断）。
+	// 用于给模型的工具返回文案里加上"用 search 定位 / 再 read 取全文"的引导。
+	var readMode string
 	logger.Info("%s file \"%s\" in ID=%d,agentID=%s", traceStr, path, session.ID, session.NowAgent)
 
 	if unread {
@@ -396,6 +399,21 @@ func Trace(session *structs.Chats, mp map[string]*any, push []*any) (bool, []*an
 			}, nil
 		}
 
+		// 大文件首读只注入受限视图（大纲优先，提不出则截断），同一文件再次 read 升级为全量；
+		// 小文件始终全量。虚拟对象与 @temp/* 的内容源/大小特性不同，不参与该策略。
+		readMode = ""
+		if !strings.HasPrefix(path, "@") && isLargeFileContent(str) {
+			// Find（不是 First）：没有历史行是正常情况，First 会打一条 not-found 错误日志。
+			var existing []structs.Traces
+			if qerr := session.DB.
+				Where("chat_id = ? AND path = ? AND agent_id = ?", session.ID, path, session.NowAgent).
+				Limit(1).Find(&existing).Error; qerr == nil && len(existing) > 0 && existing[0].ReadMode == ReadModeLight {
+				readMode = "" // 已经给过受限视图：本次升级为全量
+			} else {
+				readMode = ReadModeLight
+			}
+		}
+
 		// 若文件已在当前会话的跟踪列表中，静默成功（避免复合主键唯一约束冲突）
 		var tracedCount int64
 		if err := session.DB.Model(&structs.Traces{}).
@@ -420,6 +438,7 @@ func Trace(session *structs.Chats, mp map[string]*any, push []*any) (bool, []*an
 				TraceID:     session.TraceID,
 				AgentID:     session.NowAgent,
 				LastContent: str,
+				ReadMode:    readMode,
 			}
 			err = session.DB.Save(&trace).Error
 			if err != nil {
@@ -453,6 +472,14 @@ func Trace(session *structs.Chats, mp map[string]*any, push []*any) (bool, []*an
 					indexTaskFn(session.Root, idxPath, str, str, []string{"tempfs"})
 				}
 			}()
+		} else {
+			// 已跟踪：本轮的读取模式（首次受限 / 再次 read 升级全量）写回行，
+			// 下一轮构建上下文时据此决定注入大纲、截断还是全文。
+			if uerr := session.DB.Model(&structs.Traces{}).
+				Where("chat_id = ? AND path = ? AND agent_id = ?", session.ID, path, session.NowAgent).
+				Update("read_mode", readMode).Error; uerr != nil {
+				logger.Warn("update read mode failed: %v", uerr)
+			}
 		}
 	}
 
@@ -485,6 +512,12 @@ func Trace(session *structs.Chats, mp map[string]*any, push []*any) (bool, []*an
 	boolx := true
 	success := any(boolx)
 	msg := "The file has been read and injected into the top of the context."
+	if readMode == ReadModeLight {
+		// 大文件首读只给受限视图：返回文案是引导模型"先用 search 定位、必要时再 read 全文"的主要入口。
+		msg = "The file is large, so a structural outline (or only the beginning of the file) was injected instead of the full content. " +
+			"Use the \"search\" tool (query = symbol name or keyword) to locate the exact code, " +
+			"or call read on the same path again to inject the complete file."
+	}
 	msgAny := any(msg)
 	pathAny := any(path)
 	return false, push, map[string]*any{
@@ -580,6 +613,12 @@ func normalizeTraceContentKey(path string) string {
 // @temp/* 同样适用：last_content 是"上次以完整块注入的字节"，也是判定"内容变了但没有新事件"的依据。
 func AdvanceTraceCache(session *structs.Chats, path string) {
 	if session == nil || session.DB == nil || isDocsPath(path) {
+		return
+	}
+	// 大文件首读注入的是大纲/截断视图：基线必须推进为**注入字节**，而不是真实文件内容，
+	// 否则下一轮会认为"内容变了"而反复整块搬家。
+	if text, ok := injectedContent(session, path); ok {
+		AdvanceTraceLastContent(session, path, text)
 		return
 	}
 	confirmed, _ := session.TemporyDataOfSession[structs.TempKeyTraceConfirmedContent].(traceExpectedContent)
@@ -710,6 +749,8 @@ func InvalidateTraceCache(session *structs.Chats) {
 	delete(session.TemporyDataOfSession, structs.TempKeyTraceFileBlocks)
 	delete(session.TemporyDataOfSession, structs.TempKeyTraceDiffPlan)
 	delete(session.TemporyDataOfSession, structs.TempKeyTraceAnchorPlan)
+	delete(session.TemporyDataOfSession, structs.TempKeyTraceInjected)
+	delete(session.TemporyDataOfSession, structs.TempKeyTraceOutline)
 }
 
 // virtualContentProviders 虚拟对象（@tree 等）的内容来源。
@@ -831,6 +872,17 @@ func renderTraceFileFragment(path, content string) (FileBlock, bool) {
 			Size:   strconv.Itoa(len(content)),
 			Length: uint32(len(content)),
 			Text:   content,
+		}, true
+	}
+	// 大文件受限视图（大纲/截断摘要）自带格式与行号标记，不能再用 renderContentBlock
+	// 逐行编号——大纲里的 L123 是真实文件行号，二次编号会把它变成假行号。
+	if kind := lightViewKind(content); kind != "" {
+		return FileBlock{
+			Name:   path,
+			Size:   strconv.Itoa(len(content)),
+			Length: uint32(len(content)),
+			Text:   content,
+			Type:   kind,
 		}, true
 	}
 	return renderContentBlock(path, content)
@@ -1013,15 +1065,19 @@ func RenderTraceBlocks(session *structs.Chats) (topBlock string, eventBlocks map
 		if isVirtualContentSuppressed(session, path) {
 			continue
 		}
-		newContent, ok := readTraceFileContent(session, nowpath, traceObj)
+		realContent, ok := readTraceFileContent(session, nowpath, traceObj)
 		if !ok {
 			continue
 		}
+		// 大文件首读注入的是大纲/截断视图（ReadMode=light）：diff 基线、落位决策、
+		// 增量判断一律基于**实际注入的字节**；edit 的外部修改校验仍用真实文件内容。
+		newContent := injectReadView(session, nowpath, path, traceObj.ReadMode, realContent)
 		frag, ok := renderTraceFileFragment(path, newContent)
 		if !ok {
 			continue
 		}
-		confirmTraceContent(session, path, newContent)
+		confirmTraceContent(session, path, realContent)
+		confirmInjectedContent(session, path, newContent)
 
 		if ev == nil && !isVirtualContentPath(path) {
 			// 无事件信息（@docs 快照 / 未走事件检测的调用路径，如直接调用或测试）：维持旧语义。

@@ -11,6 +11,9 @@ type Traces struct {
 	// 旧块字节与上次注入一致，前缀缓存不被连续编辑破坏。
 	// 对 @temp/* 临时对象同样维护：它同时是"上次注入的字节"，用于判定"内容变了但没有新事件"。
 	LastContent string
+	// ReadMode 上一次注入该 path 时使用的受限视图（"light" = 大纲/截断摘要）。
+	// 空串 = 全量。大文件首读注入受限视图；模型再次 read 同一 path 时升级为全量并清空本列。
+	ReadMode string `gorm:"type:text"`
 	// AnchorMsgID 上次注入该 path 内容块时，块所紧跟的可渲染消息 id（0 = 未注入）。
 	// 用途：
 	//  1. 内容未变化时让块留在原位（前缀命中缓存），而不是每轮按事件重新落位；

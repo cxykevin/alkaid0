@@ -88,17 +88,17 @@ func TestDetectToolCallLoop_TailVariation(t *testing.T) {
 	if err := db.Create(&chat).Error; err != nil {
 		t.Fatalf("create chat: %v", err)
 	}
-	// 历史两条：同一测试命令，仅 tail -n 行数不同、reason 文案不同
+	// 历史 toolCallLoopThreshold-1 条：同一测试命令，仅 tail -n 行数不同、reason 文案不同
 	hist := []string{
 		`[{"name":"run","id":"call_a","parameters":{"type":"shell","reason":"run test v1","command":"go test ./tools/tools/fetch/... ./config/structs/... 2>&1 | tail -n 40"}}]`,
 		`[{"name":"run","id":"call_b","parameters":{"type":"shell","reason":"check result","command":"go test ./tools/tools/fetch/... ./config/structs/... 2>&1 | tail -n 30"}}]`,
 	}
-	for _, j := range hist {
+	for i := range toolCallLoopThreshold - 1 {
 		if err := db.Create(&storageStructs.Messages{
 			ChatID:                7011,
 			Type:                  storageStructs.MessagesRoleAgent,
 			Delta:                 "ok",
-			ToolCallingJSONString: j,
+			ToolCallingJSONString: hist[i%len(hist)],
 		}).Error; err != nil {
 			t.Fatalf("seed msg: %v", err)
 		}

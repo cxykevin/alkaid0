@@ -13,6 +13,7 @@ import (
 	"strings"
 
 	"github.com/cxykevin/alkaid0/context/lsp"
+	"github.com/cxykevin/alkaid0/context/outline"
 	"github.com/cxykevin/alkaid0/log"
 	"github.com/cxykevin/alkaid0/provider/parser"
 	"github.com/cxykevin/alkaid0/storage/structs"
@@ -782,6 +783,14 @@ func writeFile(session *structs.Chats, mp map[string]*any, cross []*any) (bool, 
 			finalContent = string(fb)
 		}
 	}
+	// 结构大纲 + 代码索引即时刷新（BM25 同步、向量后台）：edit 已改动文件，
+	// 等下一次 /index 会留下旧数据。放在格式化之后，与磁盘最终内容一致；
+	// 刷新期间 RunIndex 会跳过该文件（codebase 文件级锁）。
+	outlineKey := origRelPath
+	if session.CurrentActivatePath != "" {
+		outlineKey = filepath.Join(session.CurrentActivatePath, origRelPath)
+	}
+	refreshFileIndex(session.Root, outlineKey, writePath, finalContent)
 	trace.ConfirmEditContent(session, origRelPath, finalContent)
 	respObj := buildRespObj(session, mp)
 	if diffObj := buildDiffContent(path, oldContentRaw, strings.ReplaceAll(finalContent, "\r\n", "\n"), !fileExists); diffObj != nil {
@@ -816,6 +825,43 @@ func writeFile(session *structs.Chats, mp map[string]*any, cross []*any) (bool, 
 
 func normalizeTrailingNewline(s string) string {
 	return strings.TrimRight(s, "\n") + "\n"
+}
+
+// refreshFileIndex 重建单文件的结构大纲，并触发代码索引刷新：
+// BM25 同步更新、向量交给后台 worker（实现由 startup 注入，避免包依赖环）。
+//
+// 一次 LSP 提取同时产出大纲与索引分块，索引刷新直接复用这份符号，
+// 不再触发第二次 documentSymbol（大文件编辑的开销主要在这里）。
+//
+// LSP 不可用或无符号时删除旧大纲：宁可回退截断视图，也不把过期大纲当有效缓存；
+// 索引仍会刷新整文件条目，保证 BM25 不落后于磁盘。
+func refreshFileIndex(workdir, relPath, absPath, content string) {
+	symbols, err := lsp.GetSymbols(workdir, absPath)
+	if err != nil || len(symbols) == 0 {
+		_ = outline.Drop(workdir, relPath)
+	} else {
+		syms := make([]outline.Symbol, 0, len(symbols))
+		for _, sym := range symbols {
+			syms = append(syms, outline.Symbol{
+				Name:      sym.Name,
+				Kind:      sym.KindName,
+				Signature: sym.Signature,
+				Line:      sym.Line + 1, // LSP 行号 0-based，大纲展示 1-based
+			})
+		}
+		_, _ = outline.Put(workdir, relPath, syms)
+	}
+
+	idxSymbols := make([]trace.FileIndexSymbol, 0, len(symbols))
+	for _, sym := range symbols {
+		idxSymbols = append(idxSymbols, trace.FileIndexSymbol{
+			Name:      sym.Name,
+			Kind:      sym.KindName,
+			Signature: sym.Signature,
+			Code:      sym.Code,
+		})
+	}
+	trace.RefreshFileIndexWithSymbols(workdir, relPath, content, idxSymbols)
 }
 
 // writeFileAtomic 以"同目录临时文件 + rename"写入：写临时文件期间原文件保持完整，

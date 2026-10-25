@@ -22,6 +22,9 @@ type EmbedTask struct {
 	Tags []string
 	// Priority true=插队到队头，false=加入队尾
 	Priority bool
+	// Seq 来源文件在入队时的刷新代次（仅 RefreshFile 设置；0 = 索引任务，不校验）。
+	// worker 处理前比对当前代次：不一致说明之后又发生了刷新，该任务内容已过期。
+	Seq uint64
 	// Done 可选通道，任务完成时关闭
 	Done chan<- struct{}
 }

@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/cxykevin/alkaid0/context/lsp"
+	"github.com/cxykevin/alkaid0/context/outline"
 )
 
 // ---------------------------------------------------------------------------
@@ -806,6 +807,9 @@ func RunIndex(ctx context.Context, cwd string, broadcastFn func(IndexStatus)) er
 		path    string
 		relPath string
 		content []byte
+		// seq 第一遍扫描时该文件的刷新代次：处理前若已变化，说明扫描后文件被
+		// 单文件刷新（edit/read）改写过，索引必须跳过，不能用旧内容覆盖新索引。
+		seq uint64
 	}
 	var files []fileInfo
 
@@ -895,6 +899,7 @@ func RunIndex(ctx context.Context, cwd string, broadcastFn func(IndexStatus)) er
 			path:    path,
 			relPath: relPath,
 			content: content,
+			seq:     fileRefreshSeq(fileKey(cwd, relPath)),
 		})
 		return nil
 	})
@@ -931,19 +936,82 @@ func RunIndex(ctx context.Context, cwd string, broadcastFn func(IndexStatus)) er
 			Status:      "indexing",
 		})
 
-		// 文件级 hash 比对：文件内容未变则跳过整个文件（不跑 LSP、不入队）。
-		// 自动索引多为增量场景（大部分文件未变），提前比对可省去这些文件的
-		// LSP 提取与 gopls CPU 占用。文件内容不变则符号级内容也不变，
-		// 符号级 hash 比对可安全跳过。
-		content := string(f.content)
-		if same, _ := CheckContentHash(cwd, f.relPath, "", content); same {
+		// 文件级锁：单文件刷新（edit/read 触发）正在写该文件时跳过——索引手里是
+		// 第一遍扫描的旧内容，继续处理会把刚写入的新 BM25/大纲覆盖回去。
+		key := fileKey(cwd, f.relPath)
+		unlock, locked := tryLockFileForIndex(key)
+		if !locked {
 			continue
 		}
+		// 锁内再比对刷新代次：覆盖"扫描之后、加锁之前"刚被刷新的情况
+		// （此时锁已释放，TryRLock 会成功，只能靠代次识别）。
+		if fileRefreshSeq(key) != f.seq {
+			unlock()
+			continue
+		}
+		func() {
+			defer unlock()
 
-		// 尝试 LSP 提取符号
-		symbols, lspErr := lsp.GetSymbols(cwd, f.path)
-		if lspErr != nil || len(symbols) == 0 {
-			// LSP 不可用或文件无符号：索引整个文件（文件级 hash 已在上方比对）
+			// 文件级 hash 比对：文件内容未变则跳过整个文件（不跑 LSP、不入队）。
+			// 自动索引多为增量场景（大部分文件未变），提前比对可省去这些文件的
+			// LSP 提取与 gopls CPU 占用。文件内容不变则符号级内容也不变，
+			// 符号级 hash 比对可安全跳过。
+			content := string(f.content)
+			// 内容未变且已有未过期大纲时整文件跳过；大纲缺失（首次启用该能力、
+			// 或 .alkaid0/outline.sqlite 被删）仍然走一遍 LSP 补建大纲，
+			// 嵌入入队随后仍会被符号级 hash 比对挡掉。
+			if same, _ := CheckContentHash(cwd, f.relPath, "", content); same && outline.Cached(cwd, f.relPath) {
+				return
+			}
+
+			// 尝试 LSP 提取符号
+			symbols, lspErr := lsp.GetSymbols(cwd, f.path)
+			if lspErr != nil || len(symbols) == 0 {
+				// LSP 不可用或文件无符号：删除可能残留的大纲（它已不能代表当前文件）
+				_ = outline.Drop(cwd, f.relPath)
+				// 索引整个文件（文件级 hash 已在上方比对）
+				_ = AddToQueue(cwd, EmbedTask{
+					EmbedText:   content,
+					FullContent: content,
+					FilePath:    f.relPath,
+					Symbol:      "",
+					Tags:        []string{"file"},
+				})
+				return
+			}
+
+			// 提取活跃符号名列表
+			activeSymbols := make([]string, 0, len(symbols))
+			for _, sym := range symbols {
+				activeSymbols = append(activeSymbols, sym.Name)
+			}
+
+			// 清理已删除的符号
+			_ = CleanSymbols(cwd, f.relPath, activeSymbols)
+
+			// 预生成结构大纲并落库（记录文件 mtime/size）：大文件 read 时直接命中，
+			// 不必再现场跑一次 LSP；文件被外部修改后 mtime 不匹配，自动视为过期。
+			_, _ = outline.Put(cwd, f.relPath, toOutlineSymbols(symbols))
+
+			// 对每个符号创建嵌入任务（先查 hash，未变更则跳过）
+			for _, sym := range symbols {
+				embedText := sym.Signature
+				if embedText == "" {
+					embedText = sym.Code
+				}
+				if same, _ := CheckContentHash(cwd, f.relPath, sym.Name, embedText); !same {
+					_ = AddToQueue(cwd, EmbedTask{
+						EmbedText:   embedText,
+						FullContent: sym.Code,
+						FilePath:    f.relPath,
+						Symbol:      sym.Name,
+						Tags:        []string{sym.KindName},
+					})
+				}
+			}
+
+			// 同时索引整个文件（全局语义搜索兜底）。
+			// 文件已确认变化（上方文件级比对通过），整文件记录需更新，直接入队。
 			_ = AddToQueue(cwd, EmbedTask{
 				EmbedText:   content,
 				FullContent: content,
@@ -951,44 +1019,7 @@ func RunIndex(ctx context.Context, cwd string, broadcastFn func(IndexStatus)) er
 				Symbol:      "",
 				Tags:        []string{"file"},
 			})
-			continue
-		}
-
-		// 提取活跃符号名列表
-		activeSymbols := make([]string, 0, len(symbols))
-		for _, sym := range symbols {
-			activeSymbols = append(activeSymbols, sym.Name)
-		}
-
-		// 清理已删除的符号
-		_ = CleanSymbols(cwd, f.relPath, activeSymbols)
-
-		// 对每个符号创建嵌入任务（先查 hash，未变更则跳过）
-		for _, sym := range symbols {
-			embedText := sym.Signature
-			if embedText == "" {
-				embedText = sym.Code
-			}
-			if same, _ := CheckContentHash(cwd, f.relPath, sym.Name, embedText); !same {
-				_ = AddToQueue(cwd, EmbedTask{
-					EmbedText:   embedText,
-					FullContent: sym.Code,
-					FilePath:    f.relPath,
-					Symbol:      sym.Name,
-					Tags:        []string{sym.KindName},
-				})
-			}
-		}
-
-		// 同时索引整个文件（全局语义搜索兜底）。
-		// 文件已确认变化（上方文件级比对通过），整文件记录需更新，直接入队。
-		_ = AddToQueue(cwd, EmbedTask{
-			EmbedText:   content,
-			FullContent: content,
-			FilePath:    f.relPath,
-			Symbol:      "",
-			Tags:        []string{"file"},
-		})
+		}()
 	}
 
 	// 删除已被移除的文件对应的索引条目。
@@ -999,6 +1030,7 @@ func RunIndex(ctx context.Context, cwd string, broadcastFn func(IndexStatus)) er
 			continue
 		}
 		_ = RemoveFile(cwd, p)
+		_ = outline.Drop(cwd, p)
 	}
 
 	// 检查队列剩余与在途任务，广播 embedding 进度。

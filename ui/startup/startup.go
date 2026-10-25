@@ -265,6 +265,48 @@ func Startup() {
 		logger.Warn("LSP init: %v (continuing without LSP)", err)
 	}
 
+	// read 工具的大文件大纲：复用 LSP 的 documentSymbol（GetSymbols 附带 hover 签名）。
+	// 未启用 LSP / 语言不支持时 provider 返回错误，read 自动退化为截断摘要。
+	trace.SetOutlineProvider(func(workdir, absPath string) ([]trace.OutlineSymbol, error) {
+		syms, err := lsp.GetSymbols(workdir, absPath)
+		if err != nil {
+			return nil, err
+		}
+		out := make([]trace.OutlineSymbol, 0, len(syms))
+		for _, s := range syms {
+			kind := s.KindName
+			if kind == "" {
+				kind = "symbol"
+			}
+			out = append(out, trace.OutlineSymbol{
+				Name:      s.Name,
+				Kind:      kind,
+				Signature: s.Signature,
+				Line:      s.Line + 1, // LSP 行号 0-based，展示时转 1-based
+			})
+		}
+		return out, nil
+	})
+
+	// 单文件索引刷新：BM25 同步更新（阻塞）、向量交给后台 worker；
+	// 刷新期间 RunIndex 会跳过该文件（codebase 文件级锁）。
+	//
+	// 带符号版本供 edit 复用已提取的符号（避免同一文件第二次 LSP documentSymbol）；
+	// 从磁盘版本供 read 现场重建大纲时使用。
+	trace.SetFileIndexRefresher(func(workdir, relPath, content string, symbols []trace.FileIndexSymbol) error {
+		fileSymbols := make([]codebase.FileSymbol, 0, len(symbols))
+		for _, s := range symbols {
+			fileSymbols = append(fileSymbols, codebase.FileSymbol{
+				Name:      s.Name,
+				Kind:      s.Kind,
+				Signature: s.Signature,
+				Code:      s.Code,
+			})
+		}
+		return codebase.RefreshFile(workdir, relPath, content, fileSymbols)
+	})
+	trace.SetFileIndexRefresherFromDisk(codebase.RefreshFileFromDisk)
+
 	// 设置信号处理：SIGTERM/SIGINT/SIGQUIT 触发优雅关闭
 	// 30 秒超时后强制退出
 	// 当 config.IgnoreSignals 为 true 时跳过信号处理注册，忽略所有信号
