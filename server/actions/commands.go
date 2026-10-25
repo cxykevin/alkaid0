@@ -31,6 +31,11 @@ type cmdObj struct {
 	// NoCmdMessage 为 true 时，命令轮不广播命令文本 user_message（命令 Function 内部自行
 	// 以更有意义的内容广播 user_message：/s 广播短语展开文本，/init 广播命令字符串本身）。
 	NoCmdMessage bool
+	// Silent 为 true 时，命令轮不产生任何会话可见的副作用：既不广播命令文本
+	// user_message，也不广播 running/idle 状态更新。用于只修改服务端本地状态、
+	// 不参与对话的命令（如 /background）：既不在会话时间线里留下命令痕迹，
+	// 也不会打断正在进行的回合的客户端状态。命令错误仍经 RPC 返回给调用方。
+	Silent bool
 	// Hidden 为 true 时，命令不进入 available_commands_update 与 /help 列表
 	// （内部命令，仍可由客户端正常调用，如 /__alk_rewind）。
 	Hidden bool
@@ -185,6 +190,7 @@ var commandMaps = map[string]*cmdObj{
 	"/background": {
 		Description: "Set background mode on/off — keep session alive after all clients disconnect",
 		Hint:        "on|off",
+		Silent:      true,
 		Function: func(obj *sessionObj, arg string) (bool, error) {
 			arg = strings.TrimSpace(strings.ToLower(arg))
 			switch arg {

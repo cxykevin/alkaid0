@@ -597,7 +597,11 @@ func (obj *sessionObj) dispatchMsgQueueItem(item *msgQueueItem) error {
 			return nil
 		}
 		if !wait {
-			broadcastStateUpdate(sessionID, "idle", "end_turn", "")
+			// 静默命令（如 /background）不广播收尾状态，只需唤醒队列继续处理；
+			// 错误路径仍广播 refusal：队列执行没有 RPC 返回值，错误必须有可见出口。
+			if !cmd.Silent {
+				broadcastStateUpdate(sessionID, "idle", "end_turn", "")
+			}
 			// 立即返回的命令不会产生 loop 回调，主动唤醒以继续处理后续队列。
 			obj.msgQueue.wakeup()
 		}

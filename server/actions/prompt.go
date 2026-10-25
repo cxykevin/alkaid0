@@ -87,7 +87,9 @@ func SessionPrompt(req SessionPromptRequest, call func(string, any, *string) err
 			broadcastStateUpdate(sessionID, "idle", "refusal", "invalid command")
 			return SessionPromptResponse{}, fmt.Errorf("invalid command")
 		}
-		if !obj.NoCmdMessage {
+		// 静默命令（如 /background）既不回显命令文本，也不广播 running/idle：
+		// 它只修改服务端本地状态，不应在会话时间线上留下任何痕迹。
+		if !obj.NoCmdMessage && !obj.Silent {
 			broadcastSessionUpdate(sessionID, SessionUpdate{
 				SessionID: sessionID,
 				Update: SessionUpdateUpdate{
@@ -97,7 +99,9 @@ func SessionPrompt(req SessionPromptRequest, call func(string, any, *string) err
 				},
 			}, 0)
 		}
-		broadcastStateUpdate(sessionID, "running", "", "")
+		if !obj.Silent {
+			broadcastStateUpdate(sessionID, "running", "", "")
+		}
 
 		// 参与 loop 的命令与普通 prompt 走同一队列，空闲时由 dispatcher 执行；
 		// 立即返回的命令（/help、/index 等）保持原同步语义。
@@ -127,6 +131,10 @@ func SessionPrompt(req SessionPromptRequest, call func(string, any, *string) err
 		wait, err := obj.Function(sessObj, cmdArgs)
 		if wait && err == nil {
 			return SessionPromptResponse{}, nil // 异步命令：callback 负责发 idle
+		}
+		if obj.Silent {
+			// 静默命令不广播收尾状态（与不广播 running 对应），错误仍经 RPC 返回。
+			return SessionPromptResponse{}, err
 		}
 		// wait=true 但 err != nil（如 sendQueue 满）时消息未入队，loop 不会回调 idle，需手动广播
 		errMsg := ""

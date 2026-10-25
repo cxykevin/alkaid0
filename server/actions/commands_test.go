@@ -264,3 +264,81 @@ func TestFeedbackCommandRegistered(t *testing.T) {
 		t.Error("/feedback command has nil Function")
 	}
 }
+
+// TestBackgroundCommandIsSilent /background 是静默命令：只修改服务端本地的
+// 后台模式开关，不回显命令文本，也不广播 running/idle 状态更新
+// （否则会在会话时间线上留下命令痕迹，并错误地把正在进行的回合标记为结束）。
+func TestBackgroundCommandIsSilent(t *testing.T) {
+	cmd, ok := commandMaps["/background"]
+	if !ok {
+		t.Fatal("/background command not registered")
+	}
+	if !cmd.Silent {
+		t.Fatal("/background 应设置 Silent（不回显命令文本、不广播状态更新）")
+	}
+
+	const connID = uint64(8801)
+	_, _, sessionID := newResumedSession(t, connID)
+	defer closeSession(sessionID)
+
+	obj, ok := lookupSession(sessionID)
+	if !ok {
+		t.Fatal("session not found")
+	}
+
+	var mu sync.Mutex
+	var updates []SessionUpdate
+	registerConnCall(connID, sessionID, func(method string, update any, _ *string) error {
+		if method != "session/update" {
+			return nil
+		}
+		if su, ok := update.(SessionUpdate); ok {
+			mu.Lock()
+			updates = append(updates, su)
+			mu.Unlock()
+		}
+		return nil
+	})
+
+	prompt := func(text string) error {
+		mu.Lock()
+		updates = nil
+		mu.Unlock()
+		_, err := SessionPrompt(SessionPromptRequest{
+			SessionID: sessionID,
+			Prompt:    []u.H{{"type": "text", "text": text}},
+		}, nil, connID)
+		return err
+	}
+
+	if err := prompt("/background on"); err != nil {
+		t.Fatalf("SessionPrompt(/background on): %v", err)
+	}
+	if !obj.background {
+		t.Error("/background on 应打开后台模式")
+	}
+
+	mu.Lock()
+	got := append([]SessionUpdate(nil), updates...)
+	mu.Unlock()
+	for _, su := range got {
+		upd, ok := su.Update.(SessionUpdateUpdate)
+		if !ok {
+			continue
+		}
+		if upd.SessionUpdate == "user_message" || upd.SessionUpdate == "state_update" {
+			t.Errorf("静默命令不应广播 %s：%+v", upd.SessionUpdate, upd)
+		}
+	}
+
+	// 用法错误仍经 RPC 返回，且同样不广播任何状态。
+	if err := prompt("/background bogus"); err == nil {
+		t.Error("/background bogus 应返回用法错误")
+	}
+	mu.Lock()
+	remaining := len(updates)
+	mu.Unlock()
+	if remaining != 0 {
+		t.Errorf("静默命令的错误路径不应广播 session/update，实际 %d 条", remaining)
+	}
+}
