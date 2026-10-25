@@ -40,7 +40,7 @@ func setupBM25Only(t *testing.T) string {
 		t.Fatalf("getOrCreateDB failed: %v", err)
 	}
 	t.Cleanup(func() {
-		closeDirectory(tmpDir)
+		closeTestDir(tmpDir)
 		restore()
 	})
 	return tmpDir
@@ -90,9 +90,8 @@ func waitTaskDone(t *testing.T, done <-chan struct{}, timeout time.Duration, wha
 // 必须拒绝写入向量、保留条目（降级 BM25）并把 embed_hash 留空以便后续重试，
 // 而不是把错误维度的数据写入 vec0 或直接丢弃条目。
 func TestEmbeddingDimensionMismatchRejected(t *testing.T) {
-	oldDim := openai.EmbeddingDim
-	openai.EmbeddingDim = 8 // 模型实际返回 8 维，索引配置为 4 维
-	defer func() { openai.EmbeddingDim = oldDim }()
+	oldDim := openai.EmbeddingDim.Swap(8) // 模型实际返回 8 维，索引配置为 4 维
+	defer openai.EmbeddingDim.Store(oldDim)
 
 	dir, restore := setupCodebase(t, 4)
 	defer restore()
@@ -143,9 +142,8 @@ func TestEmbeddingDimensionMismatchRejected(t *testing.T) {
 // TestVectorSearchDimensionMismatchDefense P1-26：查询嵌入维度与索引不一致时，
 // 向量检索必须给出明确的维度错误，而不是返回随机/错误结果。
 func TestVectorSearchDimensionMismatchDefense(t *testing.T) {
-	oldDim := openai.EmbeddingDim
-	openai.EmbeddingDim = 4
-	defer func() { openai.EmbeddingDim = oldDim }()
+	oldDim := openai.EmbeddingDim.Swap(4)
+	defer openai.EmbeddingDim.Store(oldDim)
 
 	dir, restore := setupCodebase(t, 4)
 	defer restore()
@@ -163,7 +161,7 @@ func TestVectorSearchDimensionMismatchDefense(t *testing.T) {
 	waitTaskDone(t, done, 30*time.Second, "vector seed task")
 
 	// 之后查询模型返回 8 维，与索引的 4 维不一致
-	openai.EmbeddingDim = 8
+	openai.EmbeddingDim.Store(8)
 
 	cdb := VecDBs[dir]
 	_, err := cdb.VectorSearch(context.Background(), "func Vec", 5)
@@ -178,9 +176,8 @@ func TestVectorSearchDimensionMismatchDefense(t *testing.T) {
 // TestRunIndexReportsEmbeddingFailure P2：嵌入失败的条目不能被丢弃、索引状态
 // 不能仍报 completed（要与真实结果一致）。
 func TestRunIndexReportsEmbeddingFailure(t *testing.T) {
-	oldDim := openai.EmbeddingDim
-	openai.EmbeddingDim = 8
-	defer func() { openai.EmbeddingDim = oldDim }()
+	oldDim := openai.EmbeddingDim.Swap(8)
+	defer openai.EmbeddingDim.Store(oldDim)
 
 	dir, restore := setupCodebase(t, 4)
 	defer restore()

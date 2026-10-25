@@ -11,6 +11,7 @@ import (
 
 	"github.com/cxykevin/alkaid0/config"
 	"github.com/cxykevin/alkaid0/config/structs"
+	"github.com/cxykevin/alkaid0/context/outline"
 	"github.com/cxykevin/alkaid0/mock/openai"
 )
 
@@ -59,11 +60,19 @@ func setupCodebase(t *testing.T, dim int) (string, func()) {
 
 	// 注册清理
 	t.Cleanup(func() {
-		closeDirectory(tmpDir)
+		closeTestDir(tmpDir)
 		restore()
 	})
 
 	return tmpDir, restore
+}
+
+// closeTestDir 关闭测试目录的 codebase 与大纲数据库连接。
+// Windows 上 TempDir 清理时被连接占用的 sqlite 文件无法删除（unlinkat 报
+// "being used by another process"），索引会写 .alkaid0/outline.sqlite，必须一并关闭。
+func closeTestDir(dir string) {
+	closeDirectory(dir)
+	outline.CloseWorkdir(dir)
 }
 
 // ---------------------------------------------------------------------------
@@ -228,7 +237,7 @@ func TestStopDirectoryClearsAll(t *testing.T) {
 	if _, err := getOrCreateDB(tmpDir); err != nil {
 		t.Fatalf("getOrCreateDB failed: %v", err)
 	}
-	t.Cleanup(func() { closeDirectory(tmpDir) })
+	t.Cleanup(func() { closeTestDir(tmpDir) })
 
 	// 入队若干任务（可能已被 worker 消费一部分，无妨）
 	for i := range 5 {
@@ -276,7 +285,7 @@ func TestAddToQueueRestartsWorker(t *testing.T) {
 	if _, err := getOrCreateDB(tmpDir); err != nil {
 		t.Fatalf("getOrCreateDB failed: %v", err)
 	}
-	t.Cleanup(func() { closeDirectory(tmpDir) })
+	t.Cleanup(func() { closeTestDir(tmpDir) })
 
 	// 停止 worker（模拟 /index cancel）
 	if err := StopDirectory(tmpDir); err != nil {
@@ -419,9 +428,8 @@ func TestSchemaMigrationDimChange(t *testing.T) {
 	closeDirectory(dir)
 
 	// 修改配置为 dim=8
-	oldDim := openai.EmbeddingDim
-	openai.EmbeddingDim = 8
-	defer func() { openai.EmbeddingDim = oldDim }()
+	oldDim := openai.EmbeddingDim.Swap(8)
+	defer openai.EmbeddingDim.Store(oldDim)
 
 	config.GlobalConfigSwap(structs.Config{
 		Model: structs.ModelsConfig{
@@ -514,9 +522,8 @@ func TestSchemaMigrationModelNameChange(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestEmbedPipeline(t *testing.T) {
-	oldDim := openai.EmbeddingDim
-	openai.EmbeddingDim = 4
-	defer func() { openai.EmbeddingDim = oldDim }()
+	oldDim := openai.EmbeddingDim.Swap(4)
+	defer openai.EmbeddingDim.Store(oldDim)
 
 	dir, restore := setupCodebase(t, 4)
 	defer restore()
@@ -586,9 +593,8 @@ func TestEmbedPipeline(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestHashDedup(t *testing.T) {
-	oldDim := openai.EmbeddingDim
-	openai.EmbeddingDim = 4
-	defer func() { openai.EmbeddingDim = oldDim }()
+	oldDim := openai.EmbeddingDim.Swap(4)
+	defer openai.EmbeddingDim.Store(oldDim)
 
 	dir, restore := setupCodebase(t, 4)
 	defer restore()
@@ -645,9 +651,8 @@ func TestHashDedup(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestCleanSymbols(t *testing.T) {
-	oldDim := openai.EmbeddingDim
-	openai.EmbeddingDim = 4
-	defer func() { openai.EmbeddingDim = oldDim }()
+	oldDim := openai.EmbeddingDim.Swap(4)
+	defer openai.EmbeddingDim.Store(oldDim)
 
 	dir, restore := setupCodebase(t, 4)
 	defer restore()
@@ -840,7 +845,7 @@ func TestDBPath(t *testing.T) {
 
 	// 关闭后检查文件是否存在
 	cdb.stopWorker()
-	closeDirectory(tmpDir)
+	closeTestDir(tmpDir)
 
 	if _, err := os.Stat(expected); os.IsNotExist(err) {
 		t.Fatalf("db file not created at %s", expected)
@@ -1165,9 +1170,8 @@ func TestFTS5Migration(t *testing.T) {
 
 // TestBM25AfterEmbedPipeline 验证嵌入管道输出的 BM25 搜索
 func TestBM25AfterEmbedPipeline(t *testing.T) {
-	oldDim := openai.EmbeddingDim
-	openai.EmbeddingDim = 4
-	defer func() { openai.EmbeddingDim = oldDim }()
+	oldDim := openai.EmbeddingDim.Swap(4)
+	defer openai.EmbeddingDim.Store(oldDim)
 
 	dir, restore := setupCodebase(t, 4)
 	defer restore()
@@ -1214,9 +1218,8 @@ func TestBM25AfterEmbedPipeline(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestVectorSearchAfterEmbedPipeline(t *testing.T) {
-	oldDim := openai.EmbeddingDim
-	openai.EmbeddingDim = 4
-	defer func() { openai.EmbeddingDim = oldDim }()
+	oldDim := openai.EmbeddingDim.Swap(4)
+	defer openai.EmbeddingDim.Store(oldDim)
 
 	dir, restore := setupCodebase(t, 4)
 	defer restore()
@@ -1269,9 +1272,8 @@ func TestVectorSearchAfterEmbedPipeline(t *testing.T) {
 }
 
 func TestVectorSearchContextCancel(t *testing.T) {
-	oldDim := openai.EmbeddingDim
-	openai.EmbeddingDim = 4
-	defer func() { openai.EmbeddingDim = oldDim }()
+	oldDim := openai.EmbeddingDim.Swap(4)
+	defer openai.EmbeddingDim.Store(oldDim)
 
 	dir, restore := setupCodebase(t, 4)
 	defer restore()
@@ -1350,9 +1352,8 @@ func TestSearchBM25Only(t *testing.T) {
 }
 
 func TestSearchVectorOnly(t *testing.T) {
-	oldDim := openai.EmbeddingDim
-	openai.EmbeddingDim = 4
-	defer func() { openai.EmbeddingDim = oldDim }()
+	oldDim := openai.EmbeddingDim.Swap(4)
+	defer openai.EmbeddingDim.Store(oldDim)
 
 	dir, restore := setupCodebase(t, 4)
 	defer restore()
@@ -1506,9 +1507,8 @@ func TestSearchDefaultLimit(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestPackageLevelSearch(t *testing.T) {
-	oldDim := openai.EmbeddingDim
-	openai.EmbeddingDim = 4
-	defer func() { openai.EmbeddingDim = oldDim }()
+	oldDim := openai.EmbeddingDim.Swap(4)
+	defer openai.EmbeddingDim.Store(oldDim)
 
 	dir, restore := setupCodebase(t, 4)
 	defer restore()
@@ -1605,7 +1605,7 @@ func TestBM25OnlyNoEmbeddingModel(t *testing.T) {
 	if err != nil {
 		t.Fatalf("getOrCreateDB should succeed in BM25-only mode, got: %v", err)
 	}
-	t.Cleanup(func() { closeDirectory(tmpDir) })
+	t.Cleanup(func() { closeTestDir(tmpDir) })
 
 	if cdb.modelID != "" {
 		t.Fatalf("expected empty modelID in BM25-only mode, got %q", cdb.modelID)
@@ -1635,7 +1635,7 @@ func TestBM25OnlyWorkerStoresContent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("getOrCreateDB failed: %v", err)
 	}
-	t.Cleanup(func() { closeDirectory(tmpDir) })
+	t.Cleanup(func() { closeTestDir(tmpDir) })
 
 	done := make(chan struct{})
 	if err := AddToQueue(tmpDir, EmbedTask{
@@ -1710,7 +1710,7 @@ func TestRunIndexIncrementalSkipsUnchanged(t *testing.T) {
 		[]byte("hello world incremental"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { closeDirectory(tmpDir) })
+	t.Cleanup(func() { closeTestDir(tmpDir) })
 
 	countItems := func() int {
 		cdb := VecDBs[tmpDir]
@@ -1790,7 +1790,7 @@ func TestRunIndexBM25Only(t *testing.T) {
 		[]byte("hello world test file content"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { closeDirectory(tmpDir) })
+	t.Cleanup(func() { closeTestDir(tmpDir) })
 
 	if err := RunIndex(context.Background(), tmpDir, nil); err != nil {
 		t.Fatalf("RunIndex should succeed in BM25-only mode, got: %v", err)

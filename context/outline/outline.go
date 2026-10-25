@@ -101,6 +101,19 @@ func CloseAll() {
 	}
 }
 
+// CloseWorkdir 关闭指定目录的大纲连接（测试清理临时目录前调用）。
+// Windows 上被占用的 sqlite 文件无法删除，TempDir 清理会失败；
+// 只关本目录的连接，避免影响其它仍在使用的目录。
+func CloseWorkdir(workdir string) {
+	path := filepath.Join(workdir, ".alkaid0", "outline.sqlite")
+	dbMu.Lock()
+	defer dbMu.Unlock()
+	if d, ok := dbs[path]; ok {
+		_ = d.Close()
+		delete(dbs, path)
+	}
+}
+
 // Normalize 归一化相对路径，保证索引/read/edit 三个入口写读同一个 key。
 func Normalize(relPath string) string {
 	p := filepath.ToSlash(filepath.Clean(strings.TrimSpace(relPath)))

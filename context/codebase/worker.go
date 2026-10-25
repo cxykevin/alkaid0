@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"math"
 	"runtime"
@@ -101,6 +102,10 @@ func (cdb *DB) worker(ctx context.Context, done chan struct{}) {
 	}
 }
 
+// errStaleEmbedTask 任务代次已过期：await 期间文件被重新刷新，内容已被新任务覆盖，
+// 本次写入必须放弃（否则会把已清理的符号重新插回 BM25）。
+var errStaleEmbedTask = errors.New("stale embed task")
+
 // processTask 处理单个嵌入任务：无论成功与否都结束 in-flight 计数并关闭 Done；
 // 失败时记录失败数，供索引终态如实报告（不再"条目被丢弃但状态仍写 completed"）。
 func (cdb *DB) processTask(ctx context.Context, task *EmbedTask) {
@@ -118,8 +123,13 @@ func (cdb *DB) processTask(ctx context.Context, task *EmbedTask) {
 	}
 
 	if err := cdb.embedAndStore(ctx, task); err != nil {
-		cdb.queue.RecordFailure()
-		cdb.logger.Error("embed %s:%s: %v", task.FilePath, task.Symbol, err)
+		if errors.Is(err, errStaleEmbedTask) {
+			// 等待 API 期间文件又被刷新：内容已由刷新路径同步写入，这里丢弃即可。
+			cdb.logger.Debug("drop stale embed task %s:%s (superseded while embedding)", task.FilePath, task.Symbol)
+		} else {
+			cdb.queue.RecordFailure()
+			cdb.logger.Error("embed %s:%s: %v", task.FilePath, task.Symbol, err)
+		}
 	}
 
 	if task.Done != nil {
@@ -182,15 +192,16 @@ func (cdb *DB) embedAndStore(ctx context.Context, task *EmbedTask) error {
 			len(embeddings[0]), wantDim, cdb.modelID))
 	}
 
-	// API 调用可能耗时数秒；期间文件可能又被刷新（代次前进），落库前再校验一次，
-	// 避免用旧内容覆盖新索引——旧任务丢弃后，新刷新自己的任务会写入最新内容。
-	if !cdb.seqStillCurrent(task) {
-		return nil
-	}
-
 	// 存入数据库
 	cdb.mu.Lock()
 	defer cdb.mu.Unlock()
+
+	// API 调用可能耗时数秒；期间文件可能又被刷新（代次前进），落库前再校验一次。
+	// 校验必须与写入同处 cdb.mu 之下：CleanSymbols/RefreshFile 也在该锁内写库，
+	// 否则会出现"校验通过 → 刷新删除旧符号 → 旧任务把符号写回"的窗口。
+	if !cdb.seqStillCurrent(task) {
+		return errStaleEmbedTask
+	}
 
 	if err := cdb.ensureDBOpen(); err != nil {
 		return err
@@ -249,6 +260,11 @@ func (cdb *DB) embedAndStore(ctx context.Context, task *EmbedTask) error {
 // 跳过重试，也不会留下与内容错配的旧向量。
 func (cdb *DB) storeContentOnly(task *EmbedTask, cause error) error {
 	itemID, err := cdb.upsertItem(task, "")
+	if errors.Is(err, errStaleEmbedTask) {
+		// 旧代次任务的内容已由 RefreshFile 同步写入 BM25；兜底写入只会把已被
+		// 清理的符号复活，按丢弃处理（不算嵌入失败）。
+		return nil
+	}
 	if err != nil {
 		cdb.logger.Error("store content-only %s:%s failed: %v", task.FilePath, task.Symbol, err)
 		return fmt.Errorf("%w（兜底写入内容也失败: %v）", cause, err)
@@ -282,6 +298,13 @@ func (cdb *DB) expectedDim() int {
 func (cdb *DB) upsertItem(task *EmbedTask, hash string) (int64, error) {
 	cdb.mu.Lock()
 	defer cdb.mu.Unlock()
+
+	// 代次校验放在锁内：CleanSymbols/RefreshFile 也持有 cdb.mu 写库，锁内校验
+	// 才能保证"过期任务不会在清理之后把符号写回"。RefreshFile 自己的同步写入
+	// 刚取得代次，恒为最新，不受影响。
+	if !cdb.seqStillCurrent(task) {
+		return 0, errStaleEmbedTask
+	}
 
 	if err := cdb.ensureDBOpen(); err != nil {
 		return 0, err

@@ -84,6 +84,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -258,8 +259,14 @@ type Model struct {
 	OwnedBy string `json:"owned_by"`
 }
 
-// EmbeddingDim 嵌入向量的维度，默认为 512；测试可修改此值以匹配测试配置
-var EmbeddingDim = 512
+// EmbeddingDim 嵌入向量的维度，默认为 512；测试可调整以匹配测试配置。
+// 必须用原子读写：handler 在 HTTP goroutine 中读取，测试 goroutine 写入，
+// 普通变量会被 `go test -race` 判定为数据竞争。
+var EmbeddingDim atomic.Int64
+
+func init() {
+	EmbeddingDim.Store(512)
+}
 
 // generateID 生成带前缀的唯一 ID
 func generateID(prefix string) string {
@@ -550,7 +557,7 @@ func handleEmbedding(w http.ResponseWriter, r *http.Request) {
 	for i, text := range req.Input {
 		embeddings[i] = Embedding{
 			Object:    "embedding",
-			Embedding: generateEmbedding(EmbeddingDim),
+			Embedding: generateEmbedding(int(EmbeddingDim.Load())),
 			Index:     i,
 		}
 		totalTokens += calculateTokens(text)

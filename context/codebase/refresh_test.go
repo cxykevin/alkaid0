@@ -6,6 +6,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/cxykevin/alkaid0/mock/openai"
 )
 
 // ftsMatchCount 返回 FTS5 全文索引中匹配 term 的行数（BM25 是否已更新）。
@@ -20,6 +22,9 @@ func ftsMatchCount(t *testing.T, db *sql.DB, term string) int {
 
 // TestRefreshFileUpdatesBM25 刷新后 BM25 立即可查新内容；旧符号被清理。
 func TestRefreshFileUpdatesBM25(t *testing.T) {
+	oldDim := openai.EmbeddingDim.Swap(8) // 与 setupCodebase 的维度一致，走真实嵌入路径
+	defer openai.EmbeddingDim.Store(oldDim)
+
 	dir, _ := setupCodebase(t, 8)
 	rel := "pkg/a.go"
 	abs := filepath.Join(dir, rel)
