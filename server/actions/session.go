@@ -2919,6 +2919,11 @@ func SessionList(req SessionListRequest, call func(string, any, *string) error, 
 	if err != nil {
 		return SessionListResponse{}, err
 	}
+	// 跳过空会话：active_leaf_id 为 NULL 表示会话还没有任何消息（新建后从未发言，
+	// 或消息被全部删除）。这类会话不展示，也不占用分页容量（必须在分页之前过滤）。
+	chats = slices.DeleteFunc(chats, func(c *structs.Chats) bool {
+		return c.ActiveLeafID == nil
+	})
 
 	// cursor 分页：定位到上一页游标之后，取一页会话
 	start := 0

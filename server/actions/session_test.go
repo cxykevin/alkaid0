@@ -364,9 +364,19 @@ func TestSessionListValidation(t *testing.T) {
 	}
 }
 
-// newSessionListDB 创建带 .alkaid0 的临时目录并创建 n 个会话。
+// newSessionListDB 创建带 .alkaid0 的临时目录并创建 n 个空会话（没有任何消息）。
 // 返回 (目录, db 句柄, 会话 ID 列表)。db 句柄引用计数由 t.Cleanup 平衡。
 func newSessionListDB(t *testing.T, n int) (string, *gorm.DB, []uint32) {
+	return newSessionListDBOpt(t, n, false)
+}
+
+// newVisibleSessionListDB 创建 n 个"有内容"的会话（每个写入一条消息）。
+// session/list 会跳过空会话（active_leaf_id 为 NULL），列表相关用例应使用本函数。
+func newVisibleSessionListDB(t *testing.T, n int) (string, *gorm.DB, []uint32) {
+	return newSessionListDBOpt(t, n, true)
+}
+
+func newSessionListDBOpt(t *testing.T, n int, withMessage bool) (string, *gorm.DB, []uint32) {
 	t.Helper()
 	tmpDir := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(tmpDir, ".alkaid0"), 0o755); err != nil {
@@ -381,6 +391,12 @@ func newSessionListDB(t *testing.T, n int) (string, *gorm.DB, []uint32) {
 		chat := structs.Chats{Title: fmt.Sprintf("Chat %d", i)}
 		if err := db.Create(&chat).Error; err != nil {
 			t.Fatalf("failed to create chat %d: %v", i, err)
+		}
+		if withMessage {
+			msg := structs.Messages{ChatID: chat.ID, Delta: "hi"}
+			if err := structs.AppendMessage(db, &msg); err != nil {
+				t.Fatalf("failed to append message for chat %d: %v", i, err)
+			}
 		}
 		ids[i] = chat.ID
 	}
@@ -402,7 +418,7 @@ func setChatUpdatedAt(t *testing.T, db *gorm.DB, id uint32, at time.Time) {
 
 // TestSessionList_OrderAndUpdatedAt 验证 session/list 按最后活动时间倒序并返回 updatedAt
 func TestSessionList_OrderAndUpdatedAt(t *testing.T) {
-	dir, db, ids := newSessionListDB(t, 3)
+	dir, db, ids := newVisibleSessionListDB(t, 3)
 	// 设置递增的最后活动时间：id 越大越新
 	base := time.Date(2026, 8, 1, 10, 0, 0, 0, time.UTC)
 	for i, id := range ids {
@@ -440,7 +456,7 @@ func TestSessionList_OrderAndUpdatedAt(t *testing.T) {
 
 // TestSessionList_HiddenChats 验证隐藏会话不出现在列表，且不占用分页容量。
 func TestSessionList_HiddenChats(t *testing.T) {
-	dir, db, ids := newSessionListDB(t, 3)
+	dir, db, ids := newVisibleSessionListDB(t, 3)
 	base := time.Date(2026, 8, 1, 10, 0, 0, 0, time.UTC)
 	for i, id := range ids {
 		setChatUpdatedAt(t, db, id, base.Add(time.Duration(i)*time.Hour))
@@ -477,7 +493,7 @@ func TestSessionList_HiddenChats(t *testing.T) {
 
 // TestSessionList_AllHidden 验证全部会话隐藏时列表为空且没有游标。
 func TestSessionList_AllHidden(t *testing.T) {
-	dir, db, ids := newSessionListDB(t, 3)
+	dir, db, ids := newVisibleSessionListDB(t, 3)
 	if err := db.Model(&structs.Chats{}).Where("id IN ?", ids).Update("hidden", true).Error; err != nil {
 		t.Fatalf("failed to hide chats: %v", err)
 	}
@@ -494,10 +510,67 @@ func TestSessionList_AllHidden(t *testing.T) {
 	}
 }
 
+// TestSessionList_SkipsEmptyChats 验证空会话（active_leaf_id 为 NULL）不出现在列表，
+// 且不占用分页容量：32 个会话中 2 个为空 → 一页正好返回 30 条可见会话且没有游标。
+func TestSessionList_SkipsEmptyChats(t *testing.T) {
+	const total = 32
+	dir, db, ids := newVisibleSessionListDB(t, total)
+	base := time.Date(2026, 8, 1, 10, 0, 0, 0, time.UTC)
+	for i, id := range ids {
+		setChatUpdatedAt(t, db, id, base.Add(time.Duration(i)*time.Minute))
+	}
+	// 让列表最前面（最新）与会话中间各有一个空会话，模拟"新建后从未发言"的会话
+	empty := map[uint32]bool{ids[total-1]: true, ids[total/2]: true}
+	for id := range empty {
+		if err := db.Exec("UPDATE chats SET active_leaf_id = NULL WHERE id = ?", id).Error; err != nil {
+			t.Fatalf("failed to clear active_leaf_id for chat %d: %v", id, err)
+		}
+	}
+
+	resp, err := SessionList(SessionListRequest{Cwd: dir}, nil, 1)
+	if err != nil {
+		t.Fatalf("SessionList failed: %v", err)
+	}
+	want := make([]uint32, 0, total-len(empty))
+	for i := total - 1; i >= 0; i-- {
+		if empty[ids[i]] {
+			continue
+		}
+		want = append(want, ids[i])
+	}
+	if len(resp.Sessions) != len(want) {
+		t.Fatalf("expected %d visible sessions, got %d", len(want), len(resp.Sessions))
+	}
+	for i, id := range want {
+		if got := resp.Sessions[i].SessionID; got != cwd2SessionID(dir, id) {
+			t.Errorf("session[%d] = %s, want id %d", i, got, id)
+		}
+	}
+	// 空会话不占分页容量：30 条可见会话恰好一页，不应再返回游标
+	if resp.NextCursor != "" {
+		t.Errorf("expected no nextCursor, got %q", resp.NextCursor)
+	}
+
+	// 全部为空时列表为空且没有游标
+	if err := db.Exec("UPDATE chats SET active_leaf_id = NULL").Error; err != nil {
+		t.Fatalf("failed to clear all active_leaf_id: %v", err)
+	}
+	all, err := SessionList(SessionListRequest{Cwd: dir}, nil, 1)
+	if err != nil {
+		t.Fatalf("SessionList failed: %v", err)
+	}
+	if len(all.Sessions) != 0 {
+		t.Fatalf("expected no visible sessions, got %d", len(all.Sessions))
+	}
+	if all.NextCursor != "" {
+		t.Errorf("expected no nextCursor, got %q", all.NextCursor)
+	}
+}
+
 // TestSessionList_Pagination 验证 cursor 分页：每页最多 30 条、跨页不重不漏、顺序全局倒序。
 func TestSessionList_Pagination(t *testing.T) {
 	const total = 75 // 30 + 30 + 15
-	dir, db, ids := newSessionListDB(t, total)
+	dir, db, ids := newVisibleSessionListDB(t, total)
 	base := time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)
 	for i, id := range ids {
 		setChatUpdatedAt(t, db, id, base.Add(time.Duration(i)*time.Minute))
@@ -557,7 +630,7 @@ func TestSessionList_InvalidCursor(t *testing.T) {
 
 // TestSessionList_LegacyZeroUpdatedAt 历史数据（updated_at 为零值）应排序垫底且 updatedAt 显示为 Unix 纪元
 func TestSessionList_LegacyZeroUpdatedAt(t *testing.T) {
-	dir, db, ids := newSessionListDB(t, 3)
+	dir, db, ids := newVisibleSessionListDB(t, 3)
 	base := time.Date(2026, 8, 1, 12, 0, 0, 0, time.UTC)
 	setChatUpdatedAt(t, db, ids[1], base.Add(time.Hour))
 	setChatUpdatedAt(t, db, ids[2], base)
@@ -1298,14 +1371,10 @@ func TestRegisterConnCallCancelsReleaseTimer(t *testing.T) {
 
 // TestSessionDelete_ColdSession 冷会话（未 new/resume）按字符串解析直接删除
 func TestSessionDelete_ColdSession(t *testing.T) {
-	dir, db, ids := newSessionListDB(t, 1)
+	dir, db, ids := newVisibleSessionListDB(t, 1)
 	id := ids[0]
 
-	// 插入一条消息，验证删除会话时子表数据按设计保留（只删会话表）
-	msg := structs.Messages{ChatID: id}
-	if err := db.Create(&msg).Error; err != nil {
-		t.Fatalf("failed to create message: %v", err)
-	}
+	// newSessionListDB 已为会话写入一条消息；删除会话时子表数据按设计保留（只删会话表）
 
 	// 不经过 SessionNew/SessionResume，直接以字符串形式构造 sessionId 删除
 	sessionID := cwd2SessionID(dir, id)

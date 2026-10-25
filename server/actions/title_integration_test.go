@@ -355,6 +355,11 @@ func TestSessionList_Fallback(t *testing.T) {
 		if err := db.Create(&chats[i]).Error; err != nil {
 			t.Fatalf("failed to create chat %d: %v", i, err)
 		}
+		// session/list 跳过空会话（active_leaf_id 为 NULL），写入一条消息让会话可见。
+		msg := structs.Messages{ChatID: chats[i].ID, Delta: "hi"}
+		if err := structs.AppendMessage(db, &msg); err != nil {
+			t.Fatalf("failed to append message for chat %d: %v", i, err)
+		}
 	}
 	// 设置递增的最后活动时间，保证排序确定：id 越大越新 → 列表按 id 倒序。
 	// 直接改库绕开 GORM autoUpdateTime 回调。
