@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+
+	"github.com/cxykevin/alkaid0/storage/structs"
 )
 
 func TestDecideDiffPlan(t *testing.T) {
@@ -71,17 +73,43 @@ func TestDecideDiffPlan(t *testing.T) {
 }
 
 func TestKeepDiffPlan(t *testing.T) {
-	// betweenTok=0、mult=0.6、dTok 接近 oTok：cost2=0.6*100+95=155 > 1.5*100=150 → 方案1
-	plan := DiffPlan{Keep: true, oTok: 100, nTok: 100, dTok: 95, mult: 0.6}
+	// 后缀为 0、diff 比整个新块还贵：搬家只付新块，明显更便宜 → 方案1
+	plan := DiffPlan{Keep: true, oTok: 100, nTok: 100, dTok: 400, mult: 0.6}
 	if KeepDiffPlan(plan, 0) {
-		t.Error("betweenTok=0 with high mult should degrade to 方案1")
+		t.Error("diff 比新块还贵时应退化为方案1")
 	}
-	// betweenTok 很大：方案1 连锁重算成本暴涨，方案2 更划算
-	if !KeepDiffPlan(plan, 1000) {
-		t.Error("large betweenTok should favor 方案2")
+	// 同一份 diff，但旧锚点之后还有很长的历史：搬家要把整段后缀全价重算 → 保留
+	if !KeepDiffPlan(plan, 5000) {
+		t.Error("长后缀下应保留方案2（搬家的连锁重算成本远大于 diff）")
+	}
+	// 本项目实际缓存价（CachePriceMultiplier=0.02）：小后缀也倾向保留
+	if !KeepDiffPlan(DiffPlan{Keep: true, nTok: 100, dTok: 120, mult: 0.02}, 300) {
+		t.Error("缓存价很低时应保留方案2")
 	}
 	// Keep=false 直接返回 false
 	if KeepDiffPlan(DiffPlan{Keep: false}, 1000) {
 		t.Error("Keep=false should stay 方案1")
+	}
+}
+
+func TestCountInjectedTokensFrom(t *testing.T) {
+	session := &structs.Chats{TemporyDataOfSession: map[string]any{
+		"tools:trace": traceCache{"": {
+			{ChatID: 1, Path: "a.txt", AnchorMsgID: 10, LastContent: strings.Repeat("x", 400)},
+			{ChatID: 1, Path: "b.txt", AnchorMsgID: 30, LastContent: strings.Repeat("y", 400)},
+			{ChatID: 1, Path: "c.txt", AnchorMsgID: 40},
+		}},
+	}}
+	// 两个有内容的块都在 from 之后
+	if got := CountInjectedTokensFrom(session, 5); got < 200 {
+		t.Errorf("应统计 from 之后的全部内容块: got %d", got)
+	}
+	// 只算 b.txt
+	got := CountInjectedTokensFrom(session, 20)
+	if got < 100 || got >= 200 {
+		t.Errorf("只应统计锚点晚于 from 的块: got %d", got)
+	}
+	if got := CountInjectedTokensFrom(nil, 0); got != 0 {
+		t.Errorf("nil session 必须返回 0: got %d", got)
 	}
 }

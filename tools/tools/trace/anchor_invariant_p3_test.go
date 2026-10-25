@@ -25,12 +25,14 @@ func invariantTestContent(lines, changeLine int) string {
 	return b.String()
 }
 
-// TestRenderTraceBlocks_StaleAnchorFallsBackToFull 方案2 的前提是「旧块此刻还在 PrevMsgID 位置上」。
-// 旧块锚点与旧端位置不一致时（read unread=true 删过行 / 整块前移过之后又重新 read：
-// AnchorMsgID=20 是重新 read 的注入位置，prevEvents=5 是被 unread 掉的那次旧 read）
-// 必须退化为方案1：否则会把陈旧旧块塞进历史中段、再追加一份相对陈旧基线的 diff，
-// 该位置之后的前缀缓存全部失效，上下文里还会同时出现同一内容两份。
-func TestRenderTraceBlocks_StaleAnchorFallsBackToFull(t *testing.T) {
+// TestRenderTraceBlocks_StalePrevEventKeepsDiff 「窗口内最早事件」早于上次注入锚点时
+// （典型：read unread=true 删过行、或块被前移过之后又重新 read：AnchorMsgID=20 是重新 read
+// 的注入位置，prevEvents=5 是被 unread 掉的那次旧 read），旧块的字节仍然在 AnchorMsgID 上，
+// 因此必须走方案2：旧块留在 20、增量块锚最新事件 30。
+//
+// 早期实现把「最早事件」当旧端锚点并要求它等于 AnchorMsgID，这条路径会退化成整块搬家，
+// 从旧锚点到列表末尾整段按未命中重算；而且搬家一次后该等式永久不成立（见下一个用例）。
+func TestRenderTraceBlocks_StalePrevEventKeepsDiff(t *testing.T) {
 	db := setupTestDB(t)
 	defer u.Unwrap(db.DB()).Close()
 
@@ -65,23 +67,72 @@ func TestRenderTraceBlocks_StaleAnchorFallsBackToFull(t *testing.T) {
 
 	plans, _ := session.TemporyDataOfSession[structs.TempKeyTraceAnchorPlan].(map[string]*AnchorPlan)
 	p := plans["stale.txt"]
-	if p == nil || p.Mode != AnchorFull || p.MsgID != 30 || !p.Full {
-		t.Fatalf("旧块锚点陈旧时必须退化为方案1（完整块锚最新事件）: %+v", p)
+	if p == nil || p.Mode != AnchorDiff || p.MsgID != 30 || p.PrevMsgID != 20 {
+		t.Fatalf("旧块应按注入锚点（20）保留，增量块锚最新事件（30）: %+v", p)
 	}
 	diffPlans, _ := session.TemporyDataOfSession[structs.TempKeyTraceDiffPlan].(map[string]DiffPlan)
-	if dp, ok := diffPlans["stale.txt"]; ok && dp.Keep {
-		t.Error("退化方案1 时不得留下方案2 候选")
+	if !diffPlans["stale.txt"].Keep {
+		t.Fatal("应产出方案2 候选（Keep=true）")
 	}
 
 	var tr structs.Traces
 	if err := db.Where("chat_id = 1 AND path = 'stale.txt'").First(&tr).Error; err != nil {
 		t.Fatalf("reload trace: %v", err)
 	}
-	if tr.AnchorMsgID != 30 {
-		t.Errorf("完整块注入位置必须同步回写锚点: want 30 got %d", tr.AnchorMsgID)
+	if tr.AnchorMsgID != 20 || tr.LastContent != oldContent {
+		t.Errorf("方案2 不得推进锚点/基线: anchor=%d lastLen=%d", tr.AnchorMsgID, len(tr.LastContent))
 	}
-	if tr.LastContent != newContent {
-		t.Errorf("方案1 必须推进旧端存档: got %d bytes", len(tr.LastContent))
+}
+
+// TestRenderTraceBlocks_NoRatchetAfterMove 搬家（完整块落到最新事件、AnchorMsgID 被推进）之后，
+// 下一次内容变化仍必须能走方案2。早期实现用「窗口内最早事件」当旧端锚点并要求它等于
+// AnchorMsgID：锚点被推进到 90、最早事件仍停在 5，等式永远不成立 → 此后每轮都整块搬家，
+// 旧锚点之后（往往就是整个上下文）全部按未命中计费。
+func TestRenderTraceBlocks_NoRatchetAfterMove(t *testing.T) {
+	db := setupTestDB(t)
+	defer u.Unwrap(db.DB()).Close()
+
+	tmpDir := t.TempDir()
+	oldContent := invariantTestContent(40, -1)
+	newContent := invariantTestContent(40, 21)
+	if err := os.WriteFile(filepath.Join(tmpDir, "ratchet.txt"), []byte(newContent), 0644); err != nil {
+		t.Fatalf("write ratchet.txt: %v", err)
+	}
+	if err := db.Create(&structs.Traces{ChatID: 1, Path: "ratchet.txt", TraceID: 1, AgentID: "test_agent",
+		LastContent: oldContent, AnchorMsgID: 90}).Error; err != nil {
+		t.Fatalf("create trace: %v", err)
+	}
+
+	session := &structs.Chats{
+		ID:       1,
+		DB:       db,
+		NowAgent: "test_agent",
+		Root:     tmpDir,
+		TemporyDataOfSession: map[string]any{
+			structs.TempKeyTraceEvents: map[string]*structs.TraceEvent{
+				"ratchet.txt": {MsgID: 100, ToolCallID: "call_edit"},
+			},
+			structs.TempKeyTracePrevEvents: map[string]*structs.TraceEvent{
+				"ratchet.txt": {MsgID: 5, ToolCallID: "call_old_read"},
+			},
+		},
+	}
+	if _, _, err := RenderTraceBlocks(session); err != nil {
+		t.Fatalf("RenderTraceBlocks: %v", err)
+	}
+
+	plans, _ := session.TemporyDataOfSession[structs.TempKeyTraceAnchorPlan].(map[string]*AnchorPlan)
+	p := plans["ratchet.txt"]
+	if p == nil || p.Mode != AnchorDiff || p.MsgID != 100 || p.PrevMsgID != 90 {
+		t.Fatalf("搬家一次之后仍必须按 AnchorMsgID 保留旧块: %+v", p)
+	}
+
+	var tr structs.Traces
+	if err := db.Where("chat_id = 1 AND path = 'ratchet.txt'").First(&tr).Error; err != nil {
+		t.Fatalf("reload trace: %v", err)
+	}
+	if tr.AnchorMsgID != 90 {
+		t.Errorf("方案2 不得推进锚点: want 90 got %d", tr.AnchorMsgID)
 	}
 }
 

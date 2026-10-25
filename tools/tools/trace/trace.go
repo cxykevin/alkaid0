@@ -645,6 +645,28 @@ func updateCachedTrace(session *structs.Chats, path string, apply func(*structs.
 	}
 }
 
+// CountInjectedTokensFrom 估算「注入锚点位于 fromMsgID 之后」的已注入内容块 token 总量。
+//
+// build 层用它补全断链成本：内容块不在消息链表里（上一轮插进去的，本轮重建时要重新插回），
+// 只统计回放消息会让「搬家」的代价被低估到只剩正文那一点。块大小按 last_content
+// （上次以完整块注入的字节）估算——diff 块通常只占原内容的一小部分，对成本比较无影响。
+func CountInjectedTokensFrom(session *structs.Chats, fromMsgID uint64) int {
+	if session == nil || session.TemporyDataOfSession == nil {
+		return 0
+	}
+	cache, ok := session.TemporyDataOfSession["tools:trace"].(traceCache)
+	if !ok {
+		return 0
+	}
+	total := 0
+	for _, tr := range cache[session.NowAgent] {
+		if tr.AnchorMsgID > fromMsgID && tr.LastContent != "" {
+			total += u.EstimateTokens(tr.LastContent)
+		}
+	}
+	return total
+}
+
 // ConfirmEditContent 记录 Agent 编辑完成后的最终磁盘内容，供同一轮后续 edit 校验。
 func ConfirmEditContent(session *structs.Chats, path, content string) {
 	confirmTraceContent(session, path, content)
@@ -1050,30 +1072,28 @@ func RenderTraceBlocks(session *structs.Chats) (topBlock string, eventBlocks map
 		case !changed:
 			// 无事件也无锚点：落到末尾，锚点由 build 层回写
 			ap = &AnchorPlan{Mode: AnchorTail, Full: true}
-		case eventMsgID != 0 && traceObj.AnchorMsgID != 0 && eventMsgID <= traceObj.AnchorMsgID:
-			// 内容变了但没有新事件承载：前移到消息列表末尾
-			ap = &AnchorPlan{Mode: AnchorTail, Full: true}
 		default:
-			// 方案2 的「旧端锚点」：优先最早 read/edit 事件（普通文件连续编辑），
-			// 没有事件时回落到上次完整块注入锚点 AnchorMsgID——虚拟对象（@tree）与
-			// 后台刷新类内容靠它也能拿到"字节稳定的旧块"，从而走保留+差分而不是整块前移。
-			prevMsgID := uint64(0)
-			if prev, ok := prevEvents[path]; ok && prev != nil && prev.MsgID != 0 {
-				prevMsgID = prev.MsgID
-			}
+			// 方案2 的「旧端锚点」= 上次完整块注入的位置 AnchorMsgID。
+			//
+			// 旧块的字节此刻必然还在这个位置上：上一轮无论走 Full / Tail 还是 Diff 的旧块，
+			// 都是插在 AnchorMsgID 之后，之后只会向列表末尾追加消息。
+			//
+			// 早期实现优先拿「窗口内最早事件」当旧端锚点，并要求它与 AnchorMsgID 相等。
+			// 但锚点会随一次完整块注入前移到最新事件，而最早事件永远停在窗口内第一次 read 上，
+			// 于是**搬家一次之后两者再也不相等**：方案2 永久失效，此后每次内容变化都整块搬到
+			// 最新事件，从旧锚点到列表末尾（往往就是整个上下文）全部按未命中重新计费。
+			// 现在直接用 AnchorMsgID，只有历史库行没有锚点时才退回最早事件（与旧行为一致）。
+			prevMsgID := traceObj.AnchorMsgID
 			if prevMsgID == 0 {
-				prevMsgID = traceObj.AnchorMsgID
+				if prev, ok := prevEvents[path]; ok && prev != nil && prev.MsgID != 0 {
+					prevMsgID = prev.MsgID
+				}
 			}
 			// newEvent 决定本次变化是否由新消息承载：是 → 锚到最新事件；否 → 锚到列表末尾。
 			newEvent := eventMsgID != 0 && (traceObj.AnchorMsgID == 0 || eventMsgID > traceObj.AnchorMsgID)
-			// 方案2 要求"旧块的字节此刻确实还在 prevMsgID 位置上"：AnchorMsgID 正是
-			// 上次以完整块/旧块注入的位置。若它早于 prevMsgID（典型场景：read unread=true
-			// 删过行或整块被前移过，之后又重新 read），该位置上的块早已不在上下文里，
-			// 再插旧块等于把整段旧内容塞进历史中段、并追加一份相对陈旧基线的 diff——
-			// 该位置之后的前缀缓存全部失效。此时代价更低的方案1（完整新块落在最新事件上、
-			// 但不再回头改写历史）反而更省，并且不会制造"同一内容两份"的上下文。
-			// 若 AnchorMsgID 晚于 prevMsgID（两轮之间又发生过 read/前移），同理方案1更省。
-			if prevMsgID != 0 && prevMsgID == traceObj.AnchorMsgID && canKeepEventDiff(session, path) {
+			// prevMsgID == eventMsgID：旧块与增量块会落在同一个插入点（两者顺序不可控），
+			// 没有可用的稳定旧端，交回方案1。
+			if prevMsgID != 0 && prevMsgID != eventMsgID {
 				if plan, keep := decideDiffPlan(path, traceObj.LastContent, newContent, timeout, mult); keep {
 					// 方案2：旧块字节稳定地留在旧锚点，增量块锚到最新位置；
 					// 旧端存档与注入锚点都不推进，下一次 diff 的旧端仍然稳定（前缀缓存不被打断）。

@@ -170,26 +170,32 @@ func TestRenderTraceBlocks_VirtualContentTail(t *testing.T) {
 	// 还原基线继续后续用例
 	AdvanceTraceLastContent(session, vpath, content)
 
-	// 4) 模型 edit 了 @tree（事件晚于锚点）→ 完整块锚到事件位置，并 upsert 出数据库行
+	// 4) 模型 edit 了 @tree（事件晚于锚点）→ 方案2：旧块留在上次注入锚点（77），
+	//    完整内容以 diff 形式锚到事件位置（200）。搬家一次之后也不得退化成整块搬家。
 	session.TemporyDataOfSession[structs.TempKeyTraceEvents] = map[string]*structs.TraceEvent{
 		vpath: {MsgID: 200, ToolCallID: "call_v"},
 	}
+	baseline := content
 	content = "tree line 1\n"
 	if _, _, err := RenderTraceBlocks(session); err != nil {
 		t.Fatalf("RenderTraceBlocks #4: %v", err)
 	}
 	p := plansOf()[vpath]
-	if p == nil || p.Mode != AnchorFull || p.MsgID != 200 {
-		t.Fatalf("有事件时必须锚到事件位置: %+v", p)
+	if p == nil || p.Mode != AnchorDiff || p.MsgID != 200 || p.PrevMsgID != 77 {
+		t.Fatalf("有事件时必须保留旧块（77）并把增量块锚到事件位置（200）: %+v", p)
+	}
+	diffPlans, _ := session.TemporyDataOfSession[structs.TempKeyTraceDiffPlan].(map[string]DiffPlan)
+	if !diffPlans[vpath].Keep {
+		t.Fatal("应产出方案2 候选（Keep=true）")
 	}
 	var tr structs.Traces
 	if err := db.Where("chat_id = 1 AND path = ?", vpath).First(&tr).Error; err != nil {
 		t.Fatalf("虚拟对象必须能自动建 trace 行（锚点/基线持久化）: %v", err)
 	}
-	if tr.AnchorMsgID != 200 {
-		t.Errorf("锚点必须写入数据库: want 200 got %d", tr.AnchorMsgID)
+	if tr.AnchorMsgID != 77 {
+		t.Errorf("方案2 不得推进锚点: want 77 got %d", tr.AnchorMsgID)
 	}
-	if tr.LastContent != content {
-		t.Errorf("旧端存档必须写入数据库: want %q got %q", content, tr.LastContent)
+	if tr.LastContent != baseline {
+		t.Errorf("方案2 不得推进旧端存档: want %q got %q", baseline, tr.LastContent)
 	}
 }

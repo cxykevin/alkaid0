@@ -1077,6 +1077,10 @@ func insertEventContentBlocks(l *list.List, dbIDToElement map[uint64]*list.Eleme
 		return s
 	}
 
+	// 断链损失按「旧块锚点之后的整段」估算，且必须在插入任何内容块之前算好：
+	// 此刻链表里只有历史回放消息，本轮要插入的块由 nTok/dTok 单独计入。
+	suffixTokAt := suffixTokenIndex(l)
+
 	renderedFull := make(map[string]struct{})    // 实际注入完整内容的 path（供 omit 判定）
 	groups := make(map[uint64]*eventInsertGroup) // 同一锚点消息的多文件块合并为一条 user 消息
 	tailPaths := make([]string, 0)
@@ -1132,7 +1136,11 @@ func insertEventContentBlocks(l *list.List, dbIDToElement map[uint64]*list.Eleme
 				} else {
 					diffAnchor = l.Back()
 				}
-				if prevAnchor != nil && diffAnchor != nil && trace.KeepDiffPlan(dp, betweenTokens(prevAnchor, diffAnchor)) {
+				// 断链损失 = 旧块锚点之后的整段消息 + 这段里已注入的内容块。
+				// 内容块不在消息链表里（上一轮插入的），必须按锚点位置单独累加，
+				// 否则「搬家」的代价会被低估到只剩消息正文那一点点。
+				suffixTok := suffixTokAt[prevAnchor] + trace.CountInjectedTokensFrom(chatLn, plan.PrevMsgID)
+				if prevAnchor != nil && diffAnchor != nil && trace.KeepDiffPlan(dp, suffixTok) {
 					if content := renderBlock(dp.OldBlock); content != "" {
 						l.InsertAfter(reqStruct.Message{Role: "user", Content: content}, prevAnchor)
 					}
@@ -1358,19 +1366,40 @@ func elementAfter(a, b *list.Element) bool {
 	return false
 }
 
-// betweenTokens 估算旧块锚点（最早事件）与 diff 锚点（最新事件）之间（含 diff 锚点、不含 prev 锚点）消息的 token 总量。
-// 用于方案2 软条件复核：这段内容在方案1 因前缀失效全价重算，在方案2 命中缓存。
-func betweenTokens(prev, diff *list.Element) int {
-	total := 0
-	for e := prev.Next(); e != nil; e = e.Next() {
-		if m, ok := e.Value.(reqStruct.Message); ok {
-			total += u.EstimateTokens(m.Content)
+// messageTokens 估算单条回放消息在请求体里实际占用的 token 数。
+//
+// 必须按「真正发给 provider 的字节」估：assistant 的 tool_calls 参数（edit 的整文件 text、
+// run 的命令行等）与 content 是平级的大字段。早期实现只统计 m.Content，漏掉参数与已注入
+// 的内容块后，单会话实测只能看到真实失效前缀的 4%~13%——搬家代价被系统性低估一个数量级，
+// 明明保留旧块 + diff 更便宜，却因为「估算搬家很便宜」而搬了家。
+//
+// reasoning_content 不计入：DeepSeek 上游会把历史轮次的 reasoning 裁掉，不产生费用。
+func messageTokens(m reqStruct.Message) int {
+	total := u.EstimateTokens(m.Content)
+	for _, c := range m.ToolCalls {
+		if c.Function == nil {
+			continue
 		}
-		if e == diff {
-			break
-		}
+		total += u.EstimateTokens(c.Function.Name)
+		total += u.EstimateTokens(c.Function.Arguments)
 	}
 	return total
+}
+
+// suffixTokenIndex 预计算「每条消息之后（不含自身）到列表末尾」的 token 总量。
+//
+// 断链成本按整段后缀算：前缀一旦在旧块锚点处断裂，后面所有消息（不只到 diff 锚点）都会
+// 按未命中重新计费。索引在任何内容块插入之前构建一次，保证插入顺序不参与成本决策。
+func suffixTokenIndex(l *list.List) map[*list.Element]int {
+	idx := make(map[*list.Element]int, l.Len())
+	total := 0
+	for e := l.Back(); e != nil; e = e.Prev() {
+		idx[e] = total
+		if m, ok := e.Value.(reqStruct.Message); ok {
+			total += messageTokens(m)
+		}
+	}
+	return idx
 }
 
 // getEffectiveAutoApprove 获取用户配置的 AutoApprove 规则（不含内置规则合并）

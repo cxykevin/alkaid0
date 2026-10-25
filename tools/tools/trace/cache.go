@@ -144,23 +144,29 @@ func decideDiffPlan(path, oldContent, newContent string, timeout bool, mult floa
 	}, true
 }
 
-// KeepDiffPlan 在 insert 阶段用真实 betweenTok（旧块锚点与 diff 块锚点之间的内容 token）复核软条件。
-//   - 方案1（破坏缓存）：新内容块全价 + betweenTok 因前缀失效而全价重算
-//   - 方案2（保留+diff）：旧块与 betweenTok 命中缓存（mult 倍）+ diff 块全价
+// KeepDiffPlan 在 insert 阶段用真实 suffixTok 复核软条件。
+//
+// suffixTok 是「旧块锚点之后、到消息列表末尾」的全部 token 总量：前缀一旦在旧块锚点处断裂，
+// 这段内容整体按未命中重新计费。早期实现只统计旧锚点与 diff 锚点之间的消息正文，既漏掉
+// 已注入的内容块（不在消息链表里）、漏掉 assistant 的 tool_calls 参数，也漏掉 diff 锚点之后
+// 仍在请求里的尾巴——实测只能看到真实损失的 4%~13%，于是「搬家」的代价被低估一个数量级。
+//
+//   - 方案1（搬家）：旧位置那份块消失，旧锚点之后的整段都要全价重算 → suffixTok + nTok
+//   - 方案2（保留+diff）：旧块与整段都留在原位命中缓存（mult），只多付 diff → suffixTok*mult + dTok
 //
 // 返回 true 表示最终执行方案2；false 表示退化为方案1。
-func KeepDiffPlan(plan DiffPlan, betweenTok int) bool {
+func KeepDiffPlan(plan DiffPlan, suffixTok int) bool {
 	if !plan.Keep {
 		return false
 	}
-	if betweenTok < 0 {
-		betweenTok = 0
+	if suffixTok < 0 {
+		suffixTok = 0
 	}
 	mult := plan.mult
 	if mult <= 0 {
 		mult = cacheDefaultMultiplier
 	}
-	cost1 := float64(plan.nTok + betweenTok)
-	cost2 := float64(plan.oTok+betweenTok)*float64(mult) + float64(plan.dTok)
+	cost1 := float64(suffixTok + plan.nTok)
+	cost2 := float64(suffixTok)*float64(mult) + float64(plan.dTok)
 	return cost2 <= cacheCostRatio*cost1
 }
