@@ -989,7 +989,8 @@ func RenderTraceBlocks(session *structs.Chats) (topBlock string, eventBlocks map
 		}
 	}
 	mult, retention := cacheModelConfig(session)
-	timeout := cacheTimeout(session, retention)
+	// 以「上一轮请求时间」判缓存是否过期（不能用会话行 UpdatedAt，见 lastRequestTime）
+	timeout := cacheTimeout(lastRequestTime(session), retention)
 
 	events, _ := session.TemporyDataOfSession[structs.TempKeyTraceEvents].(map[string]*structs.TraceEvent)
 	prevEvents, _ := session.TemporyDataOfSession[structs.TempKeyTracePrevEvents].(map[string]*structs.TraceEvent)

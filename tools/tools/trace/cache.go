@@ -53,12 +53,41 @@ func cacheModelConfig(session *structs.Chats) (float32, int32) {
 	return mult, ret
 }
 
-// cacheTimeout 判断会话是否超过缓存保留时间（从最后活动时间 UpdatedAt 起算）。
-func cacheTimeout(session *structs.Chats, retentionMinutes int32) bool {
-	if retentionMinutes <= 0 || session.UpdatedAt.IsZero() {
+// lastRequestTime 返回会话「上一次请求」的时间，作为前缀缓存是否还有效的判断依据。
+//
+// 取最后一条已落库消息的 time 列（autoCreateTime，unix 秒）：消息是请求的产物，
+// 它的落库时间就是上一轮请求的下界。同一轮内的多次工具循环会不断刷新这个值，
+// 活跃回合因此永远不会被判超时；而隔了几小时再聊时，它正好停在最后一次请求上。
+//
+// 不能用 session.UpdatedAt：那是会话行的 autoUpdateTime，任何单列 UPDATE（如 SaveState
+// 写 state、SetTraceAnchor 之外的 trace_id 更新）都会顺带刷新它，time.Since 恒≈0，
+// 过期判断永远不成立（跨过保留期仍按"旧块还能命中"走方案2）。
+func lastRequestTime(session *structs.Chats) time.Time {
+	if session == nil || session.DB == nil || session.ID == 0 {
+		return time.Time{}
+	}
+	var last structs.Messages
+	if err := session.DB.Select("time").Where("chat_id = ?", session.ID).
+		Order("id DESC").Limit(1).Find(&last).Error; err != nil {
+		logger.Warn("query last message time failed: %v", err)
+		return time.Time{}
+	}
+	if last.Time == 0 {
+		return time.Time{}
+	}
+	return time.Unix(int64(last.Time), 0)
+}
+
+// cacheTimeout 判断距上一次请求是否已超过模型的缓存保留时间。
+//
+// 超过保留期说明供应商侧的前缀缓存大概率已被回收：此时"保留旧块 + diff"换不到任何
+// 缓存折扣，只剩多传一份旧块的成本，应直接走方案1（完整块落到最新事件）。
+// lastRequest 为零值（新会话、查询失败）时不判超时——保守按"缓存仍有效"处理。
+func cacheTimeout(lastRequest time.Time, retentionMinutes int32) bool {
+	if retentionMinutes <= 0 || lastRequest.IsZero() {
 		return false
 	}
-	return time.Since(session.UpdatedAt) > time.Duration(retentionMinutes)*time.Minute
+	return time.Since(lastRequest) > time.Duration(retentionMinutes)*time.Minute
 }
 
 // AnchorMode 内容块落位方式（见 docs/trace-cache-spec.md §4.2）。
