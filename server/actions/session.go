@@ -18,6 +18,7 @@ import (
 	cfgStructs "github.com/cxykevin/alkaid0/config/structs"
 	"github.com/cxykevin/alkaid0/context/codebase"
 	"github.com/cxykevin/alkaid0/hooks"
+	"github.com/cxykevin/alkaid0/provider/mask"
 	"github.com/cxykevin/alkaid0/provider/request"
 	"github.com/cxykevin/alkaid0/storage"
 	"github.com/cxykevin/alkaid0/storage/structs"
@@ -147,6 +148,13 @@ type sessionObj struct {
 	cronHold bool
 	// lastToolStreamTime 工具调用增量流式广播的上次推送时间（限流用）
 	lastToolStreamTime time.Time
+	// clientMask 客户端展示脱敏器（DataMask.MaskClientMessages 开启时惰性创建）。
+	// 只作用于发往客户端的内容，不影响落库与模型输入。
+	clientMaskMu sync.Mutex
+	clientMask   *mask.ClientMasker
+	// clientMaskMsgID 当前正在流式脱敏的消息 ID（见 flushClientMaskStreams）。
+	// loop 回调单 goroutine 串行执行，无需额外加锁。
+	clientMaskMsgID uint64
 	// indexDone 异步索引 goroutine（loadSession 启动）的完成信号。
 	// goroutine 完成后 close 该 channel；测试等它完成后再清理 TempDir，
 	// 避免异步索引在目录清理期间重新打开 codebase.sqlite 导致 Windows 删除失败。
@@ -505,6 +513,10 @@ func broadcastSessionUpdate(sessionID string, update any, excludeConnID uint64) 
 
 	logger.Debug("broadcast \"%#v\" in session %s exclude %d", update, sessionID, excludeConnID)
 
+	// 客户端展示脱敏（DataMask.MaskClientMessages）：在广播前把对话文本
+	// 替换为假值；关闭时不做任何转换。
+	update = maskClientUpdate(sessionID, update)
+
 	sessionConnLock.Lock()
 	connIDs := make([]uint64, len(sessionConnMap[sessionID]))
 	copy(connIDs, sessionConnMap[sessionID])
@@ -529,6 +541,48 @@ func broadcastSessionUpdate(sessionID string, update any, excludeConnID uint64) 
 		}
 	}
 	return lastErr
+}
+
+// flushClientMaskStreams 刷出指定消息在客户端脱敏流中被扣留的尾部。
+//
+// AC 自动机为了等待可能跨 chunk 的已知敏感值，会扣留末尾若干字节；
+// 消息流结束时必须刷出并作为 chunk 广播，否则消息末尾会少几个字。
+func flushClientMaskStreams(obj *sessionObj, cm *mask.ClientMasker, sessionID string, dbMsgID uint64) {
+	if obj == nil || cm == nil || dbMsgID == 0 {
+		return
+	}
+	reasoningKey := mask.StreamKey{Choice: int(dbMsgID), Kind: mask.StreamKindReasoning}
+	if tail := cm.FinishStream(reasoningKey); tail != "" {
+		if active := obj.activeAgentMessages[dbMsgID]; active != nil {
+			active.Thinking += tail
+		}
+		if err := broadcastSessionUpdate(sessionID, SessionUpdate{
+			SessionID: sessionID,
+			Update: SessionUpdateUpdate{
+				SessionUpdate: "agent_thought_chunk",
+				MessageID:     msgID(dbMsgID),
+				Content:       u.H{"type": "text", "text": tail},
+			},
+		}, 0); err != nil {
+			logger.Warn("failed to broadcast masked reasoning tail: %v", err)
+		}
+	}
+	contentKey := mask.StreamKey{Choice: int(dbMsgID), Kind: mask.StreamKindContent}
+	if tail := cm.FinishStream(contentKey); tail != "" {
+		if active := obj.activeAgentMessages[dbMsgID]; active != nil {
+			active.Content += tail
+		}
+		if err := broadcastSessionUpdate(sessionID, SessionUpdate{
+			SessionID: sessionID,
+			Update: SessionUpdateUpdate{
+				SessionUpdate: "agent_message_chunk",
+				MessageID:     msgID(dbMsgID),
+				Content:       u.H{"type": "text", "text": tail},
+			},
+		}, 0); err != nil {
+			logger.Warn("failed to broadcast masked content tail: %v", err)
+		}
+	}
 }
 
 // acpStateOf 把会话内部状态映射为 ACP v2 state_update 的 state 值。
@@ -726,9 +780,14 @@ func requestPermission(obj *sessionObj, pending *[]funcs.ToolCall) (bool, error)
 		obj.permMu.Unlock()
 	}()
 
-	// 向会话所有连接发起请求（首个响应生效）
+	// 向会话所有连接发起请求（首个响应生效）。
+	// 审批界面会展示工具参数，客户端脱敏开启时同样替换为假值。
+	payload := any(params)
+	if cm := obj.clientMasker(); cm != nil {
+		payload = maskClientPayload(cm, params)
+	}
 	for _, fn := range connCallFuncsFor(obj) {
-		_ = fn("session/request_permission", params, &id)
+		_ = fn("session/request_permission", payload, &id)
 	}
 
 	select {
@@ -978,8 +1037,27 @@ func loadSession(cwd string, id *uint32, knowID bool, hidden ...bool) (*structs.
 		// 设置回调接收流式响应
 		obj.loopCallback = func(resp loop.AIResponse) {
 			logger.Debug("callback respose ID=%d", resp.MsgID)
+			// 客户端展示脱敏（DataMask.MaskClientMessages）：正文/思考按流式 AC
+			// 替换已知敏感值，跨 chunk 被切开的值也能完整命中。
+			cm := obj.clientMasker()
 			// 串行化快照和广播：新连接要么先看到本次广播，要么从快照补齐，不能出现空档。
 			obj.streamMu.Lock()
+			if cm != nil {
+				// 消息切换时先刷出上一条消息被扣留的敏感值前缀。
+				if obj.clientMaskMsgID != 0 && resp.MsgID != obj.clientMaskMsgID {
+					flushClientMaskStreams(obj, cm, sessID, obj.clientMaskMsgID)
+					obj.clientMaskMsgID = 0
+				}
+				if resp.MsgID != 0 && (resp.ThinkingContext != "" || resp.Content != "") {
+					obj.clientMaskMsgID = resp.MsgID
+					resp.ThinkingContext = cm.Stream(mask.StreamKey{
+						Choice: int(resp.MsgID), Kind: mask.StreamKindReasoning,
+					}, resp.ThinkingContext)
+					resp.Content = cm.Stream(mask.StreamKey{
+						Choice: int(resp.MsgID), Kind: mask.StreamKindContent,
+					}, resp.Content)
+				}
+			}
 			if resp.MsgID != 0 && (resp.ThinkingContext != "" || resp.Content != "") {
 				active := obj.activeAgentMessages[resp.MsgID]
 				if active == nil {
@@ -989,6 +1067,12 @@ func loadSession(cwd string, id *uint32, knowID bool, hidden ...bool) (*structs.
 					if err := sess.DB.Where("id = ? AND chat_id = ?", resp.MsgID, sess.ID).First(&persisted).Error; err == nil {
 						active.Content = persisted.Delta
 						active.Thinking = persisted.ThinkingDelta
+					}
+					// 快照同样必须脱敏：数据库里是原文，直接拼进去会让中途加入的
+					// 客户端先看到一段原文、再接着看假值。
+					if cm != nil {
+						active.Content = cm.Text(active.Content)
+						active.Thinking = cm.Text(active.Thinking)
 					}
 					obj.activeAgentMessages[resp.MsgID] = active
 				}
@@ -1139,6 +1223,15 @@ func loadSession(cwd string, id *uint32, knowID bool, hidden ...bool) (*structs.
 						},
 					}, 0)
 				}
+			}
+
+			// 本轮内容流已结束（结束 / 取消 / 等待审批）：刷出脱敏替换器
+			// 扣留的尾巴，否则消息末尾的少许字节会丢失。
+			if cm != nil && resp.StopReason != loop.StopReasonNone && obj.clientMaskMsgID != 0 {
+				obj.streamMu.Lock()
+				flushClientMaskStreams(obj, cm, sessID, obj.clientMaskMsgID)
+				obj.clientMaskMsgID = 0
+				obj.streamMu.Unlock()
 			}
 
 			// 停止分支：广播 idle state_update（stopReason）并结束本轮。
@@ -1648,7 +1741,7 @@ func SessionTerminalStatus(req SessionTerminalStatusRequest, call func(string, a
 	terminal := terminalInfo(job, req.SessionID)
 	// Status also immediately sends the complete current terminal content to the caller.
 	if call != nil {
-		if err := call("session/update", SessionUpdate{SessionID: req.SessionID, Update: SessionUpdateUpdate{SessionUpdate: "alk.cxykevin.top/terminal_update", Terminals: []SessionTerminalInfo{terminal}, TerminalID: terminal.TerminalID, Status: terminal.Status, Content: terminal.Content, TerminalUpdateType: "full"}}, nil); err != nil {
+		if err := callSessionUpdate(req.SessionID, call, SessionUpdate{SessionID: req.SessionID, Update: SessionUpdateUpdate{SessionUpdate: "alk.cxykevin.top/terminal_update", Terminals: []SessionTerminalInfo{terminal}, TerminalID: terminal.TerminalID, Status: terminal.Status, Content: terminal.Content, TerminalUpdateType: "full"}}); err != nil {
 			return SessionTerminalStatusResponse{}, err
 		}
 		// workflow 终端：附带 workflow 快照，客户端无需再单独请求即可渲染 workflow 视图。
@@ -1858,7 +1951,7 @@ func SessionTerminalHistory(req SessionTerminalHistoryRequest, call func(string,
 			update.Status = "stop"
 			update.Content = terminals[0].Content
 		}
-		if err := call("session/update", SessionUpdate{SessionID: req.SessionID, Update: update}, nil); err != nil {
+		if err := callSessionUpdate(req.SessionID, call, SessionUpdate{SessionID: req.SessionID, Update: update}); err != nil {
 			return SessionTerminalHistoryResponse{}, err
 		}
 		// workflow 终端：逐条附带 workflow 快照通知（内存 job 优先，其次按持久化记录判断），
@@ -2271,20 +2364,20 @@ func SessionResume(req SessionResumeRequest, call func(string, any, *string) err
 		for id, active := range obj.activeAgentMessages {
 			activeMessageIDs[id] = struct{}{}
 			if active.Thinking != "" {
-				if err := call("session/update", SessionUpdate{SessionID: req.SessionID, Update: SessionUpdateUpdate{
+				if err := callSessionUpdate(req.SessionID, call, SessionUpdate{SessionID: req.SessionID, Update: SessionUpdateUpdate{
 					SessionUpdate: "agent_thought", MessageID: msgID(id),
 					Content:     []u.H{{"type": "text", "text": active.Thinking}},
 					AgentStatus: new(u.ValDefault(active.AgentID, "")),
-				}}, nil); err != nil {
+				}}); err != nil {
 					obj.streamMu.Unlock()
 					return SessionResumeResponse{}, err
 				}
 			}
-			if err := call("session/update", SessionUpdate{SessionID: req.SessionID, Update: SessionUpdateUpdate{
+			if err := callSessionUpdate(req.SessionID, call, SessionUpdate{SessionID: req.SessionID, Update: SessionUpdateUpdate{
 				SessionUpdate: "agent_message", MessageID: msgID(id),
 				Content:     []u.H{{"type": "text", "text": active.Content}},
 				AgentStatus: new(u.ValDefault(active.AgentID, "")),
-			}}, nil); err != nil {
+			}}); err != nil {
 				obj.streamMu.Unlock()
 				return SessionResumeResponse{}, err
 			}
@@ -2361,7 +2454,7 @@ func SessionResume(req SessionResumeRequest, call func(string, any, *string) err
 		for _, val := range page {
 			switch val.Type {
 			case structs.MessagesRoleUser:
-				err := call("session/update", SessionUpdate{
+				err := callSessionUpdate(req.SessionID, call, SessionUpdate{
 					SessionID: req.SessionID,
 					Update: SessionUpdateUpdate{
 						SessionUpdate: "user_message",
@@ -2369,7 +2462,7 @@ func SessionResume(req SessionResumeRequest, call func(string, any, *string) err
 						Content:       []u.H{{"type": "text", "text": val.Delta}},
 						AgentStatus:   new(u.ValDefault(val.AgentID, "")),
 					},
-				}, nil)
+				})
 				if err != nil {
 					return SessionResumeResponse{}, err
 				}
@@ -2382,7 +2475,7 @@ func SessionResume(req SessionResumeRequest, call func(string, any, *string) err
 					continue
 				}
 				if val.ThinkingDelta != "" {
-					err := call("session/update", SessionUpdate{
+					err := callSessionUpdate(req.SessionID, call, SessionUpdate{
 						SessionID: req.SessionID,
 						Update: SessionUpdateUpdate{
 							SessionUpdate: "agent_thought",
@@ -2390,12 +2483,12 @@ func SessionResume(req SessionResumeRequest, call func(string, any, *string) err
 							Content:       []u.H{{"type": "text", "text": val.ThinkingDelta}},
 							AgentStatus:   new(u.ValDefault(val.AgentID, "")),
 						},
-					}, nil)
+					})
 					if err != nil {
 						return SessionResumeResponse{}, err
 					}
 				}
-				err := call("session/update", SessionUpdate{
+				err := callSessionUpdate(req.SessionID, call, SessionUpdate{
 					SessionID: req.SessionID,
 					Update: SessionUpdateUpdate{
 						SessionUpdate: "agent_message",
@@ -2403,7 +2496,7 @@ func SessionResume(req SessionResumeRequest, call func(string, any, *string) err
 						Content:       []u.H{{"type": "text", "text": val.Delta}},
 						AgentStatus:   new(u.ValDefault(val.AgentID, "")),
 					},
-				}, nil)
+				})
 				previousToolJSON = val.ToolCallingJSONString
 				previousToolContent = val.ToolCallingContent
 				prevMsgID = val.ID
@@ -2457,7 +2550,7 @@ func SessionResume(req SessionResumeRequest, call func(string, any, *string) err
 							// 用与直播同一份渲染从完整参数重建，保证两端展示一致、参数不省略。
 							content = structs.BuildToolCallingContent(toolName, prevMsgID, params)
 						}
-						err = call("session/update", SessionUpdate{
+						err = callSessionUpdate(req.SessionID, call, SessionUpdate{
 							SessionID: req.SessionID,
 							Update: SessionUpdateUpdate{
 								SessionUpdate:  "tool_call_update",
@@ -2468,7 +2561,7 @@ func SessionResume(req SessionResumeRequest, call func(string, any, *string) err
 								Content:        content,
 								ToolTerminalID: replayTerminalIDs[toolID],
 							},
-						}, nil)
+						})
 						if err != nil {
 							return SessionResumeResponse{}, err
 						}
@@ -2839,6 +2932,15 @@ func SessionList(req SessionListRequest, call func(string, any, *string) error, 
 	end := min(start+sessionListPageSize, len(chats))
 	page := chats[start:end]
 
+	// 客户端展示脱敏：会话标题由模型根据对话生成，可能带有敏感内容。
+	// 列表 RPC 不经过 session/update，需要在这里单独处理。
+	var titleMasker *mask.ClientMasker
+	if cfg := config.GlobalConfigSafe().DataMask; cfg.Enable && cfg.MaskClientMessages {
+		titleMasker = mask.NewClientMasker(db)
+		if titleMasker != nil {
+			titleMasker.SetConfig(cfg)
+		}
+	}
 	sess := make([]SessionInfo, len(page))
 	for idx, chat := range page {
 		// 展示回退链：用户设置的标题 → AI 生成的标题 → Untitled(N)
@@ -2848,6 +2950,9 @@ func SessionList(req SessionListRequest, call func(string, any, *string) error, 
 		}
 		if tit == "" {
 			tit = fmt.Sprintf("Untitled(%d)", chat.ID)
+		}
+		if titleMasker != nil {
+			tit = titleMasker.Text(tit)
 		}
 		sess[idx] = SessionInfo{
 			SessionID: cwd2SessionID(req.Cwd, chat.ID),

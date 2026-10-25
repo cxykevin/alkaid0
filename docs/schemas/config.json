@@ -1077,7 +1077,8 @@
                 "mask_phone": false,
                 "mask_ip": false,
                 "mask_session_cookie": false,
-                "mask_jwt": true
+                "mask_jwt": true,
+                "mask_client_messages": false
             },
             "properties": {
                 "enable": {
@@ -1117,6 +1118,11 @@
                     "type": "boolean",
                     "description": "是否脱敏 JWT",
                     "default": true
+                },
+                "mask_client_messages": {
+                    "type": "boolean",
+                    "description": "是否把发送给客户端的会话消息也替换为脱敏后的内容（演示/直播用）：开启后客户端看到的用户消息、AI 正文/思考、工具参数、历史回放与摘要均为同格式假值；模型输入与本地数据库仍保留原文。仅在 enable=true 时生效。",
+                    "default": false
                 }
             }
         },

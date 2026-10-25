@@ -97,4 +97,7 @@ func TestDataMaskDefaults(t *testing.T) {
 	if c.DataMask.MaskSession {
 		t.Error("DataMask.MaskSession should default to false")
 	}
+	if c.DataMask.MaskClientMessages {
+		t.Error("DataMask.MaskClientMessages should default to false")
+	}
 }

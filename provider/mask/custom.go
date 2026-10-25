@@ -15,7 +15,12 @@ func AddCustom(db *gorm.DB, value string) error {
 	if value == "" {
 		return fmt.Errorf("mask value is empty")
 	}
-	return db.Where("value = ?", value).FirstOrCreate(&storageStructs.CustomMask{Value: value}).Error
+	if err := db.Where("value = ?", value).FirstOrCreate(&storageStructs.CustomMask{Value: value}).Error; err != nil {
+		return err
+	}
+	// 客户端展示侧的 ClientMasker 需要感知自定义值的增删。
+	mappingVersion.Add(1)
+	return nil
 }
 
 // DelCustom 移除 value 并清理已生成的脱敏映射（原值→假值），
@@ -28,5 +33,10 @@ func DelCustom(db *gorm.DB, value string) error {
 	if err := db.Where("value = ?", value).Delete(&storageStructs.CustomMask{}).Error; err != nil {
 		return err
 	}
-	return db.Where("key_type = ? AND original = ?", TypeCustom, value).Delete(&storageStructs.KeyMapping{}).Error
+	if err := db.Where("key_type = ? AND original = ?", TypeCustom, value).Delete(&storageStructs.KeyMapping{}).Error; err != nil {
+		return err
+	}
+	// 客户端展示侧的 ClientMasker 需要感知自定义值的增删。
+	mappingVersion.Add(1)
+	return nil
 }

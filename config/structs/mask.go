@@ -21,4 +21,10 @@ type DataMaskConfig struct {
 	MaskSession bool `json:"mask_session_cookie" default:"false"`
 	// MaskJWT 是否脱敏 JWT（构造同 header+payload、签名伪造的假 JWT）。
 	MaskJWT bool `json:"mask_jwt" default:"true"`
+	// MaskClientMessages 是否把发送给客户端的会话消息也替换为脱敏后的内容。
+	// 默认关闭，客户端看到原文；开启后客户端看到的用户消息、AI 正文/思考、
+	// 工具调用参数、历史回放与摘要都是同格式假值，便于演示与直播。
+	// 仅影响发往客户端的内容：模型输入与本地数据库仍保留原文。
+	// 依赖 Enable 总开关（映射表与出站脱敏共用）。
+	MaskClientMessages bool `json:"mask_client_messages" default:"false"`
 }

@@ -759,7 +759,7 @@ func broadcastMsgQueueEvent(sessionID string, ev msgQueueEvent) {
 	clientConnCapsMu.RUnlock()
 
 	for _, t := range allowed {
-		_ = t.fn("session/update", SessionUpdate{SessionID: sessionID, Update: ev}, nil)
+		_ = callSessionUpdate(sessionID, t.fn, SessionUpdate{SessionID: sessionID, Update: ev})
 	}
 }
 
@@ -779,7 +779,7 @@ func pushMsgQueueSnapshotToConn(connID uint64, sessionID string, call func(strin
 		Reason:        "snapshot",
 		Items:         items,
 	}
-	_ = call("session/update", SessionUpdate{SessionID: sessionID, Update: ev}, nil)
+	_ = callSessionUpdate(sessionID, call, SessionUpdate{SessionID: sessionID, Update: ev})
 }
 
 // notifyMsgQueueForConn initialize 晚于 session/new 时为已绑定会话补推快照。
@@ -855,12 +855,12 @@ func msgQueueForConn(sessionID string, connID uint64) (*msgQueue, string, error)
 
 // MsgQueueList 返回当前队列快照。
 func MsgQueueList(req MsgQueueListRequest, _ func(string, any, *string) error, connID uint64) (MsgQueueListResponse, error) {
-	q, _, err := msgQueueForConn(req.SessionID, connID)
+	q, canonical, err := msgQueueForConn(req.SessionID, connID)
 	if err != nil {
 		return MsgQueueListResponse{}, err
 	}
 	rev, items := q.snapshot()
-	return MsgQueueListResponse{Revision: rev, Items: items}, nil
+	return MsgQueueListResponse{Revision: rev, Items: maskMsgQueueItems(canonical, items)}, nil
 }
 
 // MsgQueueCancel 取消（删除）一条排队项。
@@ -868,7 +868,7 @@ func MsgQueueCancel(req MsgQueueCancelRequest, _ func(string, any, *string) erro
 	if req.ItemID == "" {
 		return MsgQueueSnapshotResponse{}, fmt.Errorf("itemId is empty")
 	}
-	q, _, err := msgQueueForConn(req.SessionID, connID)
+	q, canonical, err := msgQueueForConn(req.SessionID, connID)
 	if err != nil {
 		return MsgQueueSnapshotResponse{}, err
 	}
@@ -876,7 +876,7 @@ func MsgQueueCancel(req MsgQueueCancelRequest, _ func(string, any, *string) erro
 	if err != nil {
 		return MsgQueueSnapshotResponse{}, err
 	}
-	return MsgQueueSnapshotResponse{Revision: rev, Items: items}, nil
+	return MsgQueueSnapshotResponse{Revision: rev, Items: maskMsgQueueItems(canonical, items)}, nil
 }
 
 // MsgQueueUpdate 修改一条排队项：prompt 改 text，command 改 args。
@@ -884,7 +884,7 @@ func MsgQueueUpdate(req MsgQueueUpdateRequest, _ func(string, any, *string) erro
 	if req.ItemID == "" {
 		return MsgQueueSnapshotResponse{}, fmt.Errorf("itemId is empty")
 	}
-	q, _, err := msgQueueForConn(req.SessionID, connID)
+	q, canonical, err := msgQueueForConn(req.SessionID, connID)
 	if err != nil {
 		return MsgQueueSnapshotResponse{}, err
 	}
@@ -892,12 +892,12 @@ func MsgQueueUpdate(req MsgQueueUpdateRequest, _ func(string, any, *string) erro
 	if err != nil {
 		return MsgQueueSnapshotResponse{}, err
 	}
-	return MsgQueueSnapshotResponse{Revision: rev, Items: items}, nil
+	return MsgQueueSnapshotResponse{Revision: rev, Items: maskMsgQueueItems(canonical, items)}, nil
 }
 
 // MsgQueueClear 清空队列。
 func MsgQueueClear(req MsgQueueClearRequest, _ func(string, any, *string) error, connID uint64) (MsgQueueSnapshotResponse, error) {
-	q, _, err := msgQueueForConn(req.SessionID, connID)
+	q, canonical, err := msgQueueForConn(req.SessionID, connID)
 	if err != nil {
 		return MsgQueueSnapshotResponse{}, err
 	}
@@ -905,5 +905,5 @@ func MsgQueueClear(req MsgQueueClearRequest, _ func(string, any, *string) error,
 	if err != nil {
 		return MsgQueueSnapshotResponse{}, err
 	}
-	return MsgQueueSnapshotResponse{Revision: rev, Items: items}, nil
+	return MsgQueueSnapshotResponse{Revision: rev, Items: maskMsgQueueItems(canonical, items)}, nil
 }

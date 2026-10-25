@@ -2,6 +2,7 @@ package mask
 
 import (
 	"sync"
+	"sync/atomic"
 
 	"github.com/cxykevin/alkaid0/config"
 	configStructs "github.com/cxykevin/alkaid0/config/structs"
@@ -13,6 +14,14 @@ import (
 )
 
 var logger = log.New("mask")
+
+// mappingVersion 是进程内「原值 → 假值」映射表的变更代次。
+//
+// 每次新建映射（以及 /mask add、/mask del 改动）都会递增。请求侧 Engine 是
+// 一次性的，但客户端展示侧的 ClientMasker 需要跨请求长期持有映射快照，
+// 它据此判断内存里的映射是否落后于数据库，从而避免把已生成的假值
+// 再次当成敏感值脱敏。
+var mappingVersion atomic.Uint64
 
 // KeyRef 按「类型 + 原值」唯一定位一个映射。
 type KeyRef struct {
@@ -28,7 +37,7 @@ type KeyRef struct {
 // 多条工具参数流之间同样会互相串字节。因此每条流必须有独立状态。
 type StreamKey struct {
 	Choice int   // choices 下标
-	Kind   uint8 // StreamKindContent / StreamKindArguments
+	Kind   uint8 // StreamKindContent / StreamKindArguments / StreamKindReasoning
 	Index  int   // 工具调用下标（Kind == StreamKindArguments 时有效）
 }
 
@@ -37,6 +46,8 @@ const (
 	StreamKindContent uint8 = iota
 	// StreamKindArguments 工具调用参数流
 	StreamKindArguments
+	// StreamKindReasoning 思考流（客户端展示脱敏用；与正文流状态隔离）
+	StreamKindReasoning
 )
 
 // PendingArg 是流结束时某条工具参数流的残留字节。
@@ -176,6 +187,32 @@ func (e *Engine) MaskMessages(messages []structs.Message) []structs.Message {
 	return out
 }
 
+// MaskText 返回对单段文本脱敏后的内容（原值 → 同格式假值）。
+// 与原文本等长替换，因此可以安全地用于保持格式的展示场景。
+func (e *Engine) MaskText(text string) string {
+	if e == nil || text == "" {
+		return text
+	}
+	out, _ := e.maskText(text)
+	return out
+}
+
+// maskItems 返回当前「原值 → 假值」映射的 AC 自动机条目快照。
+// 供客户端展示侧的流式脱敏使用：已知敏感值即使被切分到多个 chunk，
+// 也能被完整替换。
+func (e *Engine) maskItems() []ahocorasick.Item {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	items := make([]ahocorasick.Item, 0, len(e.origToMask))
+	for ref, fake := range e.origToMask {
+		if ref.Original == "" || fake == "" || ref.Original == fake {
+			continue
+		}
+		items = append(items, ahocorasick.Item{Keyword: ref.Original, Replace: fake})
+	}
+	return items
+}
+
 // maskText 对单段文本执行脱敏替换（从右到左，假值等长索引不回移）。
 func (e *Engine) maskText(text string) (string, bool) {
 	e.mu.RLock()
@@ -232,6 +269,7 @@ func (e *Engine) lookupOrCreate(typ, original string) (string, error) {
 		if err := e.db.Create(&row).Error; err == nil {
 			e.origToMask[KeyRef{typ, original}] = fake
 			e.maskToOrig[fake] = original
+			mappingVersion.Add(1)
 			return fake, nil
 		}
 		// 唯一索引冲突：可能是并发请求已建同 original（复用），或 masked 冲突（换一个）
@@ -239,6 +277,7 @@ func (e *Engine) lookupOrCreate(typ, original string) (string, error) {
 		if e.db.Where("key_type = ? AND original = ?", typ, original).First(&existing).Error == nil {
 			e.origToMask[KeyRef{typ, original}] = existing.Masked
 			e.maskToOrig[existing.Masked] = existing.Original
+			mappingVersion.Add(1)
 			return existing.Masked, nil
 		}
 	}

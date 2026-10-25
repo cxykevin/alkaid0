@@ -46,6 +46,12 @@ type cmdObj struct {
 // 补上独立 messageId 后作为一条新消息展示（协议 cmd_<chatID>_<seq> 格式）。
 func broadcastCmdText(obj *sessionObj, text string) {
 	sessionID := cwd2SessionID(obj.cwd, obj.id)
+	// 命令回复是整段文本（不是流式增量），直接按客户端脱敏配置整段替换。
+	// 广播层对 agent_message_chunk 会跳过处理（流式 chunk 已由 loop 脱敏），
+	// 因此这里必须显式处理；/mask add 的回复就属于这种情况。
+	if cm := obj.clientMasker(); cm != nil {
+		text = cm.Text(text)
+	}
 	_ = broadcastSessionUpdate(sessionID, SessionUpdate{
 		SessionID: sessionID,
 		Update: SessionUpdateUpdate{
@@ -316,6 +322,12 @@ var commandMaps = map[string]*cmdObj{
 				msg string
 				err error
 			)
+			// 演示/直播模式下回复里不能回显待脱敏值：add 后映射虽已存在、Text 能替换，
+			// 但 del 会先删掉映射（Text 已无法识别），所以统一用占位符展示。
+			shown := val
+			if cfg := config.GlobalConfigSafe().DataMask; cfg.Enable && cfg.MaskClientMessages {
+				shown = "***"
+			}
 			switch op {
 			case "add":
 				// 引擎禁用时 AddCustom 只会往 DB 里写一条永远不生效的记录，
@@ -325,12 +337,12 @@ var commandMaps = map[string]*cmdObj{
 				}
 				err = mask.AddCustom(obj.session.DB, val)
 				if err == nil {
-					msg = fmt.Sprintf("**mask added**: `%s` 会在请求出站前脱敏，并在 AI 响应中还原为原文。", val)
+					msg = fmt.Sprintf("**mask added**: `%s` 会在请求出站前脱敏，并在 AI 响应中还原为原文。", shown)
 				}
 			case "del":
 				err = mask.DelCustom(obj.session.DB, val)
 				if err == nil {
-					msg = fmt.Sprintf("**mask removed**: `%s` 不再脱敏。", val)
+					msg = fmt.Sprintf("**mask removed**: `%s` 不再脱敏。", shown)
 				}
 			default:
 				return false, fmt.Errorf("unknown operation %q, usage: add | del", op)

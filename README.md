@@ -292,6 +292,12 @@ C:\ProgramData\alkaid0\config.json
 `run` 工具一律在沙盒外执行）。配置里的 `DisableSandbox` 与 `run` 的 `sandbox` 参数
 > 暂时不产生效果，后续版本恢复。
 
+### 数据脱敏（DataMask）
+
+配置中的 `DataMask` 控制安全 key 上下文：请求发送给模型前把 apikey/JWT/手机号/公网 IP/session/cookie 等替换为同格式假值，流式响应中再还原，模型与日志不会接触到原文。各类型开关见 `docs/schemas/config.json`；`/mask add <值>` 可追加自定义脱敏值。
+
+演示或直播时可开启 `mask_client_messages`：发往客户端的内容（用户消息、AI 正文/思考、工具参数、历史回放、摘要与会话标题）同样显示为假值，且与模型侧使用同一套映射；模型输入与本地数据库仍保留原文。默认关闭，依赖 `enable` 总开关。
+
 ### 事件钩子（Hooks）
 
 配置中的 `Hooks` 可以在会话的关键时刻执行外部命令。命令在事件发生时**同步执行**（阻塞到命令退出后才继续会话流程），适合做桌面通知、日志归档、外部系统联动等。
