@@ -461,8 +461,13 @@ func ancestorDirs(dir, stop string) []string {
 	return out
 }
 
-// canonicalPath 规范化路径：展开 ~ 与环境变量、转绝对路径、解析符号链接。
-// 解析失败（路径不存在等）时退回上一步的结果。
+// canonicalPath 把路径规范成绝对、无符号链接的形式，用于规则路径与待检查路径的统一比较。
+//
+// 待检查的路径通常**还不存在**（要新建的文件、要创建的目录）。若只对存在的路径做
+// EvalSymlinks，规则路径会被解析（macOS 上 /tmp → /private/tmp、/var → /private/var），
+// 而不存在的目标保持字面量，两边落在不同字符串上，白名单永远匹配不上
+// （CI 上表现为 macOS 的 /tmp、/var/log 判定为不可写）。
+// 因此这里对不存在的路径回退到"最近的存在祖先"解析后再拼回剩余部分。
 func canonicalPath(path string) string {
 	path = strings.TrimSpace(path)
 	if path == "" {
@@ -474,10 +479,31 @@ func canonicalPath(path string) string {
 			p = abs
 		}
 	}
-	if real, err := filepath.EvalSymlinks(p); err == nil && real != "" {
-		p = filepath.Clean(real)
+	if real, ok := evalSymlinksPartial(p); ok {
+		p = real
 	}
 	return p
+}
+
+// evalSymlinksPartial 解析路径中的符号链接；路径尾部不存在时，
+// 解析最近的存在祖先并把剩余部分原样拼回。
+func evalSymlinksPartial(p string) (string, bool) {
+	rest := ""
+	cur := p
+	for {
+		if real, err := filepath.EvalSymlinks(cur); err == nil && real != "" {
+			if rest == "" {
+				return filepath.Clean(real), true
+			}
+			return filepath.Clean(filepath.Join(real, rest)), true
+		}
+		parent := filepath.Dir(cur)
+		if parent == cur {
+			return "", false
+		}
+		rest = filepath.Join(filepath.Base(cur), rest)
+		cur = parent
+	}
 }
 
 // pathDepth 返回路径层级（分隔符数量），用于"最深规则优先"的排序。

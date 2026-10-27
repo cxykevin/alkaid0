@@ -193,3 +193,47 @@ func TestBuildPolicyProtectedAddsNoDirsOutsideWorkspace(t *testing.T) {
 		}
 	}
 }
+
+// TestCanonicalPathSymlinkPrefix 校验"规则路径含符号链接、目标路径尚不存在"时的匹配。
+//
+// macOS 上 /tmp → /private/tmp、/var → /private/var。若只解析存在路径的符号链接，
+// 规则会落到 /private/tmp，而还不存在的目标保持 /tmp/... 字面量，白名单永远匹配不上
+// （CI 上 sandbox_test.go 的 TestDirectoryPermissions 就是这样在 macOS 挂掉的）。
+func TestCanonicalPathSymlinkPrefix(t *testing.T) {
+	root := policyTestRoot(t)
+	real := filepath.Join(root, "real")
+	if err := os.MkdirAll(real, 0o755); err != nil {
+		t.Fatalf("创建目录失败: %v", err)
+	}
+	link := filepath.Join(root, "link")
+	if err := os.Symlink(real, link); err != nil {
+		t.Skipf("当前环境不支持符号链接: %v", err)
+	}
+
+	p := &Policy{}
+	p.add(link, AccessReadWrite)
+	p.add(filepath.Join(link, "sealed"), AccessReadOnly)
+
+	cases := []struct {
+		name string
+		path string
+		want Access
+	}{
+		{"符号链接下新建文件", filepath.Join(link, "new-file.txt"), AccessReadWrite},
+		{"符号链接下多级新目录", filepath.Join(link, "a", "b", "new.txt"), AccessReadWrite},
+		{"更深规则仍然生效", filepath.Join(link, "sealed", "new.txt"), AccessReadOnly},
+		{"规则之外保持只读", filepath.Join(root, "outside", "new.txt"), AccessReadOnly},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := p.AccessFor(c.path); got != c.want {
+				t.Fatalf("AccessFor(%q) = %v, want %v", c.path, got, c.want)
+			}
+		})
+	}
+
+	// 规则本身也应被规范化（存的是真实路径，而不是符号链接路径）
+	if got := p.Paths(AccessReadWrite); len(got) != 1 || got[0] != real {
+		t.Fatalf("Paths(rw) = %v, want [%s]", got, real)
+	}
+}
