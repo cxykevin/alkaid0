@@ -994,6 +994,7 @@ func (s *Service) runCommand(ctx context.Context, job *Job, req *Request) *Resul
 
 	sand, err := sandbox.New(sandbox.Config{
 		WorkDir:       req.WorkDir,
+		Workspace:     req.Workspace,
 		Env:           req.Env,
 		Context:       ctx,
 		Timeout:       sandTimeout,
@@ -1105,6 +1106,7 @@ func (s *Service) runCommand(ctx context.Context, job *Job, req *Request) *Resul
 		errString := "[System] Sandbox unavailable, fallback to non-sandbox\n"
 		sand2, err2 := sandbox.New(sandbox.Config{
 			WorkDir:       req.WorkDir,
+			Workspace:     req.Workspace,
 			Env:           req.Env,
 			Context:       ctx,
 			Timeout:       sandTimeout,

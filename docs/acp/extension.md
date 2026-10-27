@@ -306,7 +306,7 @@ alkaid0 现在遵循 ACP v2 标准事件，且字段置于 update 对象**顶层
 
 - `ALKAID0_WORKFLOW_REPORT=1`：开启 stdout JSONL 状态上报；
 - `ALKAID0_WORKFLOW_SESSION_ID=<chatId>`：会话作用域（缓存隔离）；
-- `ALKAID0_WORKFLOW_CONN_INFO=<ws URL>`：dynworkflow `AgentClient` 的连接信息，指向本机 WebSocket ACP 服务端（`ws://<host>:<port><path>`，`0.0.0.0`/`::` 等通配地址改写为 `127.0.0.1`，`key` 非空时附加 `?key=<key>`），工作流代码无需硬编码地址与 key。沙盒当前在所有平台被强制禁用（临时策略，后续版本恢复），因此工作流不受沙盒网络限制；恢复后 macOS seatbelt 默认禁网会让沙盒内的工作流建立不了该连接，Linux/Windows 沙盒不限制回环网络。
+- `ALKAID0_WORKFLOW_CONN_INFO=<ws URL>`：dynworkflow `AgentClient` 的连接信息，指向本机 WebSocket ACP 服务端（`ws://<host>:<port><path>`，`0.0.0.0`/`::` 等通配地址改写为 `127.0.0.1`，`key` 非空时附加 `?key=<key>`），工作流代码无需硬编码地址与 key。Linux/Windows 沙盒不限制网络，`sandbox` 为默认值时工作流可以建立该连接；把 `sandbox` 置为 `false` 同样可用。macOS 的 seatbelt 默认禁网，若将来接入该实现需要单独放行回环地址。
 
 不会注册 workflow/start 方法。
 

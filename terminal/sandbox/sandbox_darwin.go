@@ -74,15 +74,30 @@ func (s *Sandbox) generateSeatbeltProfile() string {
 	rules = append(rules, "(allow process-fork)")
 	rules = append(rules, "(allow sysctl-read)")
 
-	// 允许读取系统目录
+	// 允许读取系统目录（全盘默认只读，与 Linux/Windows 的策略保持一致）
 	rules = append(rules, "(allow file-read* (subpath \"/usr\"))")
 	rules = append(rules, "(allow file-read* (subpath \"/System\"))")
 	rules = append(rules, "(allow file-read* (subpath \"/Library\"))")
 	rules = append(rules, "(allow file-read* (subpath \"/\"))")
 
-	// 允许读写指定目录
-	for _, dir := range s.writableDirs {
-		rules = append(rules, fmt.Sprintf("(allow file-read* file-write* (subpath \"%s\"))", dir))
+	// 路径策略：seatbelt 按规则顺序求值，最后匹配的规则生效，
+	// 因此"拒绝"必须写在"放开"之前（配置目录里的 venv 要在拒绝之后再放开）。
+	var readWrite, readOnly, deny []string
+	if s.policy != nil {
+		readWrite = s.policy.Paths(AccessReadWrite)
+		readOnly = s.policy.Paths(AccessReadOnly)
+		deny = s.policy.Paths(AccessDeny)
+	} else {
+		readWrite = s.writableDirs
+	}
+	for _, dir := range deny {
+		rules = append(rules, fmt.Sprintf("(deny file-read* file-write* (subpath %q))", dir))
+	}
+	for _, dir := range readWrite {
+		rules = append(rules, fmt.Sprintf("(allow file-read* file-write* (subpath %q))", dir))
+	}
+	for _, dir := range readOnly {
+		rules = append(rules, fmt.Sprintf("(allow file-read* (subpath %q))", dir))
 	}
 
 	return strings.Join(rules, "\n")

@@ -4,8 +4,6 @@ package windows
 
 import (
 	"fmt"
-	"os"
-	"path"
 	"syscall"
 	"unsafe"
 
@@ -218,6 +216,13 @@ func createRestrictedToken(currentToken *windows.Token, wkSIDs *WellknownSIDs) (
 		// },
 	}
 
+	// 沙盒账户本身也作为受限 SID：策略里的"拒绝 ACE"只针对该账户，只有它
+	// 出现在受限 SID 集合里，拒绝才会对沙盒进程生效；服务进程没有这个 SID，
+	// 因此不会被误伤。账户尚未创建时跳过（不能把 nil SID 塞进列表）。
+	if sid := sandboxAccountSID(); sid != nil {
+		restrictSIDs = append(restrictSIDs, windows.SIDAndAttributes{Sid: sid, Attributes: 0})
+	}
+
 	token, err := winExtra.LibCreateRestrictedToken(
 		*currentToken,
 		winExtra.LibCreateRestrictedTokenFlagsDisableMaxPrivilege,
@@ -342,6 +347,17 @@ const (
 	codePage    = 65001
 	countryCode = 0
 )
+
+// sandboxAccountSID 返回沙盒账户的 SID。
+// 账户尚未创建时（理论上 InitAlkaid0SandboxUser 之后不会发生）返回 nil，
+// 调用方需要跳过而不是把 nil 塞进受限 SID 列表。
+func sandboxAccountSID() *windows.SID {
+	sid, err := getAccountSID(UserName)
+	if err != nil {
+		return nil
+	}
+	return sid
+}
 
 // getAccountSID 获取账户 SID
 func getAccountSID(accountName string) (*windows.SID, error) {
@@ -884,20 +900,10 @@ func SetLimitToWorkdir(workDir string) (func() error, error) {
 		return nil
 	}
 
-	_, err = os.Stat(path.Join(workDir, ".alkaid0"))
-	// os.IsExist 只对"已存在"类错误返回 true，对成功 Stat（err==nil）恒为 false，
-	// 必须用 err==nil 判断目录存在，否则保护规则目录的 DenyDACL 永远不会被应用。
-	if err == nil {
-		DenyDACL, err := GetDenyDACL()
-		if err != nil {
-			return cleanFunc, err
-		}
-		err = ApplyDACL(path.Join(workDir, ".alkaid0"), DenyDACL)
-		if err != nil {
-			return cleanFunc, err
-		}
-	}
-
+	// 注意：<workDir>/.alkaid0 的封锁不在这里做。它需要"可列出但不可读写，
+	// 且 skills/temp/images 例外"的精细语义，统一由 ApplyPolicy 施加
+	// （见 policy.go）。这里如果沿用旧的继承性 DenyDACL，会把拒绝传播到
+	// skills/temp，且拒绝 ACE 无法被后续授予覆盖。
 	return cleanFunc, nil
 }
 

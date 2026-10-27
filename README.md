@@ -288,9 +288,12 @@ C:\ProgramData\alkaid0\config.json
 > `final_answer` = 最终答复）一律原样落库；开启 `EnablePhase` 后历史回放把该字段原样回传——模型据此
 > 判断自己上一轮是「还没干完」还是「已收尾」，丢字段会明显掉性能（容易干一半就停）。
 
-> 沙盒当前在所有平台被**强制禁用**（临时策略：沙盒存在 Linux 缺少 `/dev/shm` 等已知问题，修复前
-`run` 工具一律在沙盒外执行）。配置里的 `DisableSandbox` 与 `run` 的 `sandbox` 参数
-> 暂时不产生效果，后续版本恢复。
+> `run` 工具默认在沙盒内执行命令（Linux：user namespace + chroot；Windows：受限令牌 + DACL）。
+> 沙盒对文件系统的规则是：**全盘只读**，只有下列路径可写——工作区（会话激活目录）、系统临时目录、
+> Python venv、git 仓库的 `.git`（含 worktree 的 commondir）、工具与 shell 的运行时目录（`~/.config/gh`、
+> bash/zsh 历史等）。alkaid0 的配置目录与日志目录不可读写；工作区 `.alkaid0` 只能列出条目，
+> 其中 `skills`、`temp` 可读写，`images` 只读。需要突破这些限制时把 `run` 的 `sandbox` 置为 `false`，
+> 或配置 `DisableSandbox`（全局 / Agent 级）与 `ALKAID0_DISABLE_SANDBOX=true`。
 
 ### 数据脱敏（DataMask）
 

@@ -46,6 +46,8 @@ type Sandbox struct {
 	tmpDir string
 	// 工作目录，命令启动时的初始路径。
 	workDir string
+	// 工作区根目录（用于定位工作区 .alkaid0 与 git 仓库）。
+	workspace string
 	// 环境变量，传递给被执行命令的配置。
 	env []string
 	// 超时时间，防止恶意脚本或死循环耗尽系统资源。
@@ -56,6 +58,10 @@ type Sandbox struct {
 	isolationMode IsolationMode
 	// runAs 目标运行用户（配置指定且确认可切换时非 nil，否则为当前用户）
 	runAs *runAsUser
+	// policy 文件系统访问策略（Linux 挂载 / Windows DACL 共用同一份规则）。
+	policy *Policy
+	// policyInput 策略输入（SetWorkDir 重建策略时复用）。
+	policyInput policyInput
 	// 互斥锁，保证多线程环境下沙盒配置的安全性。
 	mu sync.RWMutex
 }
@@ -68,6 +74,13 @@ type Config struct {
 	TmpDir string
 	// 工作目录
 	WorkDir string
+	// 工作区根目录（会话 Root）。用于定位工作区的 .alkaid0 与 git 仓库；
+	// 留空时退回 WorkDir。
+	Workspace string
+	// ConfigDir / LogDir 覆盖策略中的 alkaid0 配置目录与日志目录。
+	// 留空时按当前配置与日志初始化状态自动检测；显式指定用于测试/嵌入式调用。
+	ConfigDir string
+	LogDir    string
 	// 环境变量
 	Env []string
 	// 调用方上下文，用于在命令启动前或执行中传播取消信号。
@@ -128,7 +141,24 @@ func New(cfg Config) (*Sandbox, error) {
 	// 如果用户没有显式设置，使用OS级隔离
 	// 这里我们保持用户的选择，包括IsolationNone
 
-	logger.Info("Sandbox: created new sandbox (workDir: %s, isolation: %s)", workDir, isolationMode.String())
+	workspace := cfg.Workspace
+	if workspace == "" {
+		workspace = workDir
+	}
+	// 统一访问策略：全局只读 + 定向放开（完整规则见 policy.go）。
+	// Linux 用挂载实现，Windows 用 DACL 实现，两边读同一份规则。
+	in := policyInput{
+		workDir:      workDir,
+		workspace:    workspace,
+		tmpDir:       tmpDir,
+		configDir:    cfg.ConfigDir,
+		logDir:       cfg.LogDir,
+		writableDirs: cfg.WritableDirs,
+	}
+	policy := buildPolicy(in)
+
+	logger.Info("Sandbox: created new sandbox (workDir: %s, workspace: %s, isolation: %s, rules: %d)",
+		workDir, workspace, isolationMode.String(), len(policy.rules))
 	return &Sandbox{
 		writableDirs:  writableDirs,
 		tmpDir:        tmpDir,
@@ -138,6 +168,9 @@ func New(cfg Config) (*Sandbox, error) {
 		baseContext:   cfg.Context,
 		isolationMode: isolationMode,
 		runAs:         runAs,
+		policy:        policy,
+		policyInput:   in,
+		workspace:     workspace,
 	}, nil
 }
 
@@ -346,27 +379,44 @@ func (s *Sandbox) IsPathWritable(path string) bool {
 		return false
 	}
 
-	for _, dir := range s.writableDirs {
-		absDir, err := filepath.Abs(dir)
-		if err != nil {
-			continue
-		}
+	// 策略里"最深规则优先"：全局默认只读，白名单目录才可写。
+	if s.policy != nil && s.policy.Writable(absPath) {
+		return true
+	}
 
-		// 通过计算相对路径来判断 absPath 是否位于 absDir 内部。
-		// 如果相对路径不包含 ".."，说明 absPath 是 absDir 的子路径或其本身。
-		rel, err := filepath.Rel(absDir, absPath)
-		if err != nil {
-			continue
-		}
-
-		// 如果相对路径不以..开头，说明在允许的目录下
-		if !strings.HasPrefix(rel, "..") {
-			return true
+	// 策略之外的兜底：显式白名单（cfg.WritableDirs）仍然算可写。
+	if s.policy == nil {
+		for _, dir := range s.writableDirs {
+			absDir, err := filepath.Abs(dir)
+			if err != nil {
+				continue
+			}
+			rel, err := filepath.Rel(absDir, absPath)
+			if err != nil {
+				continue
+			}
+			if !strings.HasPrefix(rel, "..") {
+				return true
+			}
 		}
 	}
 
 	logger.Warn("path not writable: %s (abs: %s)", path, absPath)
 	return false
+}
+
+// GetPolicy 返回沙盒使用的文件系统访问策略（只读使用，不要修改返回值）。
+func (s *Sandbox) GetPolicy() *Policy {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.policy
+}
+
+// GetWorkspace 获取工作区根目录。
+func (s *Sandbox) GetWorkspace() string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.workspace
 }
 
 // ValidateCommand 验证待执行的命令及其参数是否安全。
@@ -429,6 +479,11 @@ func (s *Sandbox) SetWorkDir(dir string) error {
 	}
 
 	s.workDir = cleanDir
+	// 工作目录变了，.alkaid0 / git 仓库的位置也跟着变，策略必须重建。
+	in := s.policyInput
+	in.workDir = cleanDir
+	s.policyInput = in
+	s.policy = buildPolicy(in)
 	return nil
 }
 

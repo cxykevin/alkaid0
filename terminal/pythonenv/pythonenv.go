@@ -56,6 +56,19 @@ func VenvDir() string {
 	return venvDir
 }
 
+// VenvDirForConfig 返回配置文件对应的虚拟环境目录。
+// 与 VenvDir 不同，即使 venv 尚未初始化也能给出预期路径（沙盒需要提前把
+// venv 目录设为可读写，而策略在命令执行前就要构建）。
+func VenvDirForConfig(configFile string) string {
+	if dir := VenvDir(); dir != "" {
+		return dir
+	}
+	if configFile == "" {
+		return ""
+	}
+	return filepath.Join(filepath.Dir(configutil.ExpandPath(configFile)), venvName)
+}
+
 // VenvPython returns the Python interpreter path inside the initialized venv.
 // It returns an empty string until Initialize succeeds.
 func VenvPython() string {

@@ -105,8 +105,12 @@ chroot "$T" sh -uc '
 		mknod -m 666 /dev/random c 1 8 2>/dev/null || :
 		mknod -m 666 /dev/urandom c 1 9 2>/dev/null || :
 	}
+	# devtmpfs 覆盖了宿主 /dev，宿主的 /dev/shm（独立 tmpfs）随之消失。
+	# 没有它，Python multiprocessing 的 SemLock/Queue 会直接 FileNotFoundError。
+	[ -d /dev/shm ] || mkdir -p /dev/shm 2>/dev/null || :
+	mount -t tmpfs -o mode=1777 tmpfs /dev/shm 2>/dev/null || :
 
-	# 可写目录重新挂载（覆盖ro层）
+	# 路径策略：全局只读 + 定向放开/封存（由 terminal/sandbox 按 policy.go 生成）
 	%s
 
 	# 伪造 /etc/passwd 和 /etc/group，使 whoami/id 输出真实用户名

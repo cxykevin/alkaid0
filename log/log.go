@@ -35,6 +35,25 @@ func defaultLogPathAt(now time.Time) string {
 	return filepath.Join(defaultLogDir, "log"+now.Format("20060102-150405")+".log")
 }
 
+// Path 返回当前日志文件路径；日志尚未初始化时返回默认路径模板所在目录之外的空串。
+// 只用于展示/诊断，不改变日志行为。
+func Path() string {
+	if logPath == "" {
+		return ""
+	}
+	return configutil.ExpandPath(logPath)
+}
+
+// Dir 返回日志文件所在目录。
+// 日志未初始化时返回默认日志目录（~/.config/alkaid0）。沙盒用它把日志目录设为
+// 不可读写，避免沙箱内进程读到日志里的密钥/请求内容或篡改日志。
+func Dir() string {
+	if logPath != "" {
+		return filepath.Dir(configutil.ExpandPath(logPath))
+	}
+	return configutil.ExpandPath(defaultLogDir)
+}
+
 // openLogFile 以独占方式创建日志文件。
 //
 // 默认日志文件名精确到秒（logYYYYMMDD-HHMMSS.log）。此前用 O_TRUNC 打开：

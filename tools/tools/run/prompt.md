@@ -15,7 +15,7 @@ Workflow usage:
 - `reason` (string, required): A short reason for the operation (20 words or fewer).
 - `command` (string, required): The shell command for `shell`, an integer number of seconds for `sleep`, the `run_id` returned by a background run for `wait`, or complete Python source code for `python`.
 - `timeout` (number, optional): For `shell` and `python`. Defaults to 60 seconds for foreground runs. Foreground values must be less than 300 seconds; a background run defaults to no timeout. A non-positive foreground value falls back to 60 seconds.
-- `sandbox` (boolean, optional): For `shell` and `python`; defaults to `true`. The sandbox is currently force-disabled on all platforms by runtime policy, so this parameter has no effect: commands always run unsandboxed until the sandbox is re-enabled in a later release.
+- `sandbox` (boolean, optional): For `shell` and `python`; defaults to `true`. When enabled, the command runs inside the OS sandbox: the whole filesystem is read-only, and only the workspace, the system temporary directory, the Python venv, git repositories (`.git`), and a few tool/shell state directories are writable. The sandboxed command cannot read the alkaid0 config/log directory, and `<workspace>/.alkaid0` is listable but not readable or writable (except `.alkaid0/skills`, `.alkaid0/temp` and the read-only `.alkaid0/images`). Set it to `false` only when the command genuinely needs to touch paths outside those.
 - `background` (boolean, optional): For `shell` and `python`; defaults to `false`. When true, return immediately with a `run_id` and update its temporary result while the command runs.
 
 #### Types
@@ -34,7 +34,7 @@ Set `background: true` for a command that may outlive the current request. Inter
 
 - Do not use `run` as a substitute for a dedicated tool.
 - Review commands before execution. Avoid destructive or externally visible commands unless the user has authorized them; do not expose credentials in commands or output.
-- The runtime currently executes commands without the OS sandbox (temporarily force-disabled on all platforms); review commands accordingly and avoid destructive or externally visible actions.
+- Commands default to the OS sandbox. Writing outside the writable whitelist fails; do not work around sandbox denials by disabling the sandbox unless the user asked for it. `sandbox: false` runs on the host with full access — treat it as an explicitly privileged action.
 - Treat stdout, stderr, exit status, and temporary output as evidence. A successful tool call does not imply the command itself succeeded; inspect the result and run follow-up verification when needed.
 
 #### Quick examples

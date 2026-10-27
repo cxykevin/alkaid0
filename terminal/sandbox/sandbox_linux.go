@@ -35,8 +35,8 @@ func (s *Sandbox) createIsolatedCommand(ctx context.Context, name string, args .
 
 // createLinuxIsolatedCommand 创建Linux隔离命令
 func (s *Sandbox) createLinuxIsolatedCommand(ctx context.Context, name string, args ...string) (*exec.Cmd, error) {
-	// 构建可写目录的 bind mount 命令（返回外部 export 与内层挂载命令）
-	writableExports, writableCmds := s.generateWritableMounts()
+	// 构建路径策略的挂载命令（返回外部 export 与内层挂载命令）
+	policyExports, policyCmds := s.generatePolicyMounts()
 
 	// 工作目录处理（确保在chroot内存在）
 	chrootWorkDir := s.workDir
@@ -81,7 +81,7 @@ func (s *Sandbox) createLinuxIsolatedCommand(ctx context.Context, name string, a
 
 	// 工作目录与可写目录通过环境变量传给内层脚本，
 	// 避免含单引号路径拼进 sh -uc '...' 单引号字符串导致脚本语法破坏/注入
-	exports := writableExports
+	exports := policyExports
 	if exports != "" {
 		exports += "\n"
 	}
@@ -93,7 +93,7 @@ func (s *Sandbox) createLinuxIsolatedCommand(ctx context.Context, name string, a
 	script := fmt.Sprintf(mountScript,
 		shellQuote(realUser),
 		exports,
-		writableCmds,
+		policyCmds,
 		shellQuote(name),
 		shellQuote(name),
 	)
@@ -151,39 +151,159 @@ func (s *Sandbox) getWorkDirOwner() (int, int) {
 	return int(st.Uid), int(st.Gid)
 }
 
-// generateWritableMounts 生成可写目录挂载相关命令。
-// 返回两部分：外部 export 语句（shellQuote 安全）与内层挂载命令（用 "$ALK_WD_n" 引用），
-// 避免含单引号路径被拼进 sh -uc '...' 单引号字符串导致语法破坏/注入。
-func (s *Sandbox) generateWritableMounts() (string, string) {
-	if len(s.writableDirs) == 0 {
+// generatePolicyMounts 生成路径策略对应的 mount 命令。
+//
+// 返回两部分：
+//   - exports：在 chroot **外**执行的 export 语句（路径经 shellQuote 转义，
+//     可以安全包含单引号/百分号）；
+//   - cmds：在 chroot **内**执行的命令，只能引用上面导出的变量（内层脚本被
+//     单引号包裹，因此这里绝不能出现单引号，也不能出现裸百分号）。
+//
+// 约定：
+//   - 内层脚本开始时先把沙盒临时目录 remount rw（scratch 需要可写）；
+//   - 真实内容在被 tmpfs 覆盖前先 bind 到 scratch，再 bind 回目标路径，
+//     否则覆盖后就再也拿不到真实内容；
+//   - 规则按路径深度从浅到深应用，深层规则覆盖浅层规则；
+//   - 最后把所有"封存"（deny / list-only）挂载点 remount 成只读，
+//     避免沙箱内进程在封存视图里新建文件。
+func (s *Sandbox) generatePolicyMounts() (string, string) {
+	p := s.policy
+	if p == nil || len(p.rules) == 0 {
 		return "", ""
 	}
 
+	rules := p.Rules()
 	var exports []string
 	var cmds []string
-	for i, dir := range s.writableDirs {
-		varName := fmt.Sprintf("ALK_WD_%d", i)
-		exports = append(exports, fmt.Sprintf("export %s=%s", varName, shellQuote(dir)))
-		// 确保目录存在，然后 rbind 并 remount rw。
-		// 注意 remount 必须带 bind：外层只读化用的是 remount,ro,bind（只改挂载项
-		// 自身的 ro 标志），对称地恢复写权限也必须用 remount,rw,bind。不带 bind 时
-		// util-linux 会尝试修改整个 superblock 的 ro 标志，在 user namespace 中必然
-		// EPERM（实测 rc=32）→ 可写目录保持只读，命令写入报"只读文件系统"。
-		cmds = append(cmds, fmt.Sprintf(`
-			mkdir -p "$%s" 2>/dev/null || :
-			mount --rbind "$%s" "$%s" 2>/dev/null || :
-			mount -o remount,rw,bind "$%s" 2>/dev/null || :`,
-			varName, varName, varName, varName,
-		))
-		// 保护可写目录中的 .alkaid0 子目录（只读），防止沙箱内进程修改聊天记录和配置
-		cmds = append(cmds, fmt.Sprintf(`
-			if [ -d "$%s/.alkaid0" ]; then
-				mount --bind "$%s/.alkaid0" "$%s/.alkaid0" 2>/dev/null || :
-				mount -o remount,ro,bind "$%s/.alkaid0" 2>/dev/null || :
-			fi`,
-			varName, varName, varName, varName,
-		))
+
+	exports = append(exports, "export ALK_TMP="+shellQuote(s.tmpDir))
+	names := make([]string, len(rules))
+	for i, r := range rules {
+		names[i] = fmt.Sprintf("ALK_P%d", i)
+		exports = append(exports, fmt.Sprintf("export %s=%s", names[i], shellQuote(r.Path)))
 	}
+
+	// 封存点（deny / list-only）下标
+	var seals []int
+	for i, r := range rules {
+		if r.Access == AccessDeny || r.Access == AccessListOnly {
+			seals = append(seals, i)
+		}
+	}
+
+	// 规则是否被某个封存点覆盖（覆盖后必须从 scratch 取真实内容）
+	sealOf := make(map[int]int)
+	for _, si := range seals {
+		for i, r := range rules {
+			if i == si {
+				continue
+			}
+			if isWithin(r.Path, rules[si].Path) {
+				if _, ok := sealOf[i]; !ok {
+					sealOf[i] = si
+				}
+			}
+		}
+	}
+
+	// 变量兜底：内层脚本以 sh -uc 执行（nounset）。正常情况下这些变量都由外层
+	// export 好；兜底只为让脚本在单独运行时（测试/诊断）也不会因未绑定而中断。
+	defs := []string{`: "${ALK_TMP:=/tmp}"`}
+	for i := range rules {
+		defs = append(defs, fmt.Sprintf(`: "${%s:=/nonexistent-alkaid0-slot-%d}"`, names[i], i))
+	}
+
+	// 沙盒临时目录先放开：下面的 scratch（被封存内容的真实来源）要写在这里。
+	// scratch 里的 bind 在命令结束后逐个 umount + rmdir（不用 rm -rf：scratch
+	// 里的目录是 bind 挂载点，递归删除会把真实内容删掉）。
+	cmds = append(cmds, strings.Join(defs, "\n")+`
+mkdir -p "$ALK_TMP" 2>/dev/null || :
+mount --rbind "$ALK_TMP" "$ALK_TMP" 2>/dev/null || :
+mount -o remount,rw,bind "$ALK_TMP" 2>/dev/null || :
+_ALK_SCRATCH=$(mktemp -d "$ALK_TMP/.alk-sandbox-mnt-XXXXXX" 2>/dev/null) || _ALK_SCRATCH=/nonexistent-alkaid0-scratch`)
+
+	// 阶段 A：在被封存覆盖之前，把真实内容 bind 到 scratch。
+	// 每个封存点一个真实来源（用于列出条目），每条被覆盖的规则一个来源。
+	for _, si := range seals {
+		cmds = append(cmds, fmt.Sprintf(`
+mkdir -p "$_ALK_SCRATCH/s%d" 2>/dev/null || :
+mount --rbind "$%s" "$_ALK_SCRATCH/s%d" 2>/dev/null || :
+mount -o remount,ro,bind "$_ALK_SCRATCH/s%d" 2>/dev/null || :`,
+			si, names[si], si, si))
+	}
+	for i := range sealOf {
+		cmds = append(cmds, fmt.Sprintf(`
+mkdir -p "$_ALK_SCRATCH/r%d" 2>/dev/null || :
+mount --rbind "$%s" "$_ALK_SCRATCH/r%d" 2>/dev/null || :`,
+			i, names[i], i))
+	}
+
+	// 阶段 B：按深度从浅到深应用规则。
+	for i, r := range rules {
+		// 源路径必须加引号：workspace 路径里带空格时未加引号的 $ALK_Pn 会被
+		// shell 拆成多个参数，mount 直接失败（沙盒静默变成只读）。
+		source := fmt.Sprintf("\"$%s\"", names[i])
+		if _, ok := sealOf[i]; ok {
+			source = fmt.Sprintf("\"$_ALK_SCRATCH/r%d\"", i)
+			// 被封存目录里的占位条目是指向不存在目标的符号链接，而挂载点必须
+			// 是真的目录：先删掉占位。只删符号链接——封存没生效时这里仍是真实
+			// 路径，绝不能误删真实内容。
+			cmds = append(cmds, fmt.Sprintf(`[ -L "$%s" ] && rm -f "$%s" 2>/dev/null || :`, names[i], names[i]))
+		}
+		switch r.Access {
+		case AccessReadWrite:
+			// remount 必须带 bind：外层只读化用的是 remount,ro,bind（只改挂载项
+			// 自身的 ro 标志），对称地恢复写权限也必须用 remount,rw,bind。不带 bind
+			// 时 util-linux 会尝试修改整个 superblock 的 ro 标志，在 user namespace
+			// 中必然 EPERM（实测 rc=32）→ 可写目录保持只读。
+			cmds = append(cmds, fmt.Sprintf(`
+mkdir -p "$%s" 2>/dev/null || :
+mount --rbind %s "$%s" 2>/dev/null || :
+mount -o remount,rw,bind "$%s" 2>/dev/null || :`,
+				names[i], source, names[i], names[i]))
+		case AccessReadOnly:
+			cmds = append(cmds, fmt.Sprintf(`
+mkdir -p "$%s" 2>/dev/null || :
+mount --rbind %s "$%s" 2>/dev/null || :
+mount -o remount,ro,bind "$%s" 2>/dev/null || :`,
+				names[i], source, names[i], names[i]))
+		case AccessDeny:
+			// 空 tmpfs 覆盖：目录存在但内容完全不可见（配置目录、日志目录）。
+			cmds = append(cmds, fmt.Sprintf(`
+mkdir -p "$%s" 2>/dev/null || :
+mount -t tmpfs tmpfs "$%s" 2>/dev/null || :`,
+				names[i], names[i]))
+		case AccessListOnly:
+			// 可视但不可读：tmpfs 覆盖后按真实条目的名字建占位符号链接。
+			// 占位链接指向不存在的路径，所以读内容报 ENOENT、写入也落不到任何地方，
+			// 而 `ls` 仍能看到条目名。
+			cmds = append(cmds, fmt.Sprintf(`
+mkdir -p "$%s" 2>/dev/null || :
+mount -t tmpfs tmpfs "$%s" 2>/dev/null || :
+for _alk_e in "$_ALK_SCRATCH/s%d"/* "$_ALK_SCRATCH/s%d"/.[!.]* "$_ALK_SCRATCH/s%d"/..?*; do
+	if [ -e "$_alk_e" ] || [ -L "$_alk_e" ]; then
+		ln -s "$_ALK_SCRATCH/s%d/.alkaid0-sealed" "$%s/${_alk_e##*/}" 2>/dev/null || :
+	fi
+done`,
+				names[i], names[i], i, i, i, i, names[i]))
+		}
+	}
+
+	// 阶段 C：封存点置为只读（深层优先，与内核递归语义一致）。
+	for k := len(seals) - 1; k >= 0; k-- {
+		i := seals[k]
+		cmds = append(cmds, fmt.Sprintf(`mount -o remount,ro,bind "$%s" 2>/dev/null || :`, names[i]))
+	}
+
+	// 阶段 D：清掉 scratch 里的 bind（只 umount + rmdir，绝不递归删除）。
+	cmds = append(cmds, `
+for _alk_d in "$_ALK_SCRATCH"/*; do
+	[ -d "$_alk_d" ] || continue
+	umount "$_alk_d" 2>/dev/null || :
+	rmdir "$_alk_d" 2>/dev/null || :
+done
+rmdir "$_ALK_SCRATCH" 2>/dev/null || :`)
+
 	return strings.Join(exports, "\n"), strings.Join(cmds, "\n")
 }
 

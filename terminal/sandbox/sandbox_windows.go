@@ -31,43 +31,25 @@ func (s *Sandbox) createIsolatedCommand(ctx context.Context, name string, args .
 		return nil, fmt.Errorf("初始化沙盒用户失败: %w", err)
 	}
 
-	// workDir 必须从 SetLimitToDir 的列表中排除，交给 SetLimitToWorkdir 单独处理。
-	// 原因有两个，缺一都会让权限无法还原：
-	//  1) 两个函数都会保存各自目录的原始 DACL 快照。SetLimitToWorkdir 读取的是
-	//     "当前" DACL —— 如果 SetLimitToDir 已经先改过 workDir，它保存到的就是
-	//     "已授予沙盒账户"的那份，清理时会把这份授予权限当成原始值写回去。
-	//     先排除 workDir，SetLimitToWorkdir 才能快照到真正的原始 DACL。
-	//  2) SetLimitToWorkdir 是 SetLimitToDir 对 workDir 的超集（除了授予写权限，
-	//     还会给 <workDir>/.alkaid0 施加沙盒账户的 DenyDACL）；两者都清理 workDir
-	//     时，后执行的那个会覆盖前一个的结果。
-	otherDirs := make([]string, 0, len(s.writableDirs))
-	for _, dir := range s.writableDirs {
-		if !sameWindowsPath(dir, s.workDir) {
-			otherDirs = append(otherDirs, dir)
-		}
+	// 统一策略落地：与 Linux 沙盒读同一份 terminal/sandbox.Policy。
+	//   - 可读写路径 → 追加继承性"完全控制"ACE；
+	//   - 配置/日志目录 → 追加继承性拒绝 ACE（内容完全隐藏）；
+	//   - 工作区 .alkaid0 → 目录可列不可写，子项逐个拒绝读写（白名单除外）。
+	// 所有被改动的 DACL 都保存快照，命令结束后按逆序还原。
+	winPolicy := winSandbox.Policy{}
+	if s.policy != nil {
+		winPolicy.ReadWrite = s.policy.Paths(AccessReadWrite)
+		winPolicy.Deny = s.policy.Paths(AccessDeny)
+		winPolicy.ReadOnly = s.policy.Paths(AccessReadOnly)
+		winPolicy.ListOnly = s.policy.Paths(AccessListOnly)
+		winPolicy.AllowedChildren = s.policy.AllowedChildren()
+	} else {
+		// 策略缺失（理论上不会发生）：退回旧的可写目录白名单
+		winPolicy.ReadWrite = s.writableDirs
 	}
-
-	release1, err := winSandbox.SetLimitToDir(otherDirs)
+	release, err := winSandbox.ApplyPolicy(winPolicy)
 	if err != nil {
-		// SetLimitToDir 可能已经成功改过列表里靠前的若干目录后才失败；它返回的
-		// 清理函数正好用于回滚这些已改动项。不调用就会把"已授予沙盒账户"的
-		// DACL 永久留在那些目录上。
-		if release1 != nil {
-			_ = release1()
-		}
-		return nil, fmt.Errorf("设置目录权限失败: %w", err)
-	}
-
-	release2, err := winSandbox.SetLimitToWorkdir(s.workDir)
-	if err != nil {
-		// 同理：SetLimitToWorkdir 可能已经给 workDir 授予了权限（仅在 .alkaid0
-		// 那几步失败时才会带着错误返回），必须回滚，否则沙盒账户会永久保留
-		// 对工作目录的写权限。
-		if release2 != nil {
-			_ = release2()
-		}
-		_ = release1()
-		return nil, fmt.Errorf("设置工作目录权限失败: %w", err)
+		return nil, fmt.Errorf("设置沙盒路径权限失败: %w", err)
 	}
 
 	cmd := winSandbox.CommandContext(ctx, name, args...)
@@ -88,16 +70,8 @@ func (s *Sandbox) createIsolatedCommand(ctx context.Context, name string, args .
 		env:     s.env,
 		temp: &windowsCommandCleanup{
 			token: nil,
-			release: func() error {
-				// 按相反顺序释放：先恢复 workDir，再恢复其余目录。
-				// 两组目录不会重叠（workDir 已被排除），而恢复 workDir 会重新触发
-				// 继承传播、可能覆盖其未受保护子目录的 DACL —— 把子目录的恢复放在
-				// 后面执行，最终状态才一定是各自保存的原始值。
-				if err := release2(); err != nil {
-					return err
-				}
-				return release1()
-			},
+			// ApplyPolicy 内部按逆序还原（子项先于父目录），这里直接复用。
+			release: release,
 		},
 	}, nil
 }
