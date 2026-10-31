@@ -384,3 +384,89 @@ func TestCloneFile(t *testing.T) {
 		t.Errorf("cloneFile content mismatch: got %q, want %q", got, content)
 	}
 }
+
+func TestCopyWithProgressReportsAndCopies(t *testing.T) {
+	dir := t.TempDir()
+	src := filepath.Join(dir, "src.bin")
+	dst := filepath.Join(dir, "dst.bin")
+	want := bytes.Repeat([]byte{0x5a}, 3*1024*1024+17)
+	if err := os.WriteFile(src, want, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var lastCopied, lastTotal int64
+	calls := 0
+	if err := CopyWithProgress(src, dst, func(copied, total int64) {
+		calls++
+		lastCopied, lastTotal = copied, total
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if calls == 0 {
+		t.Fatal("expected progress callbacks for a 3 MiB file")
+	}
+	if lastCopied != int64(len(want)) || lastTotal != int64(len(want)) {
+		t.Fatalf("last progress = (%d, %d), want (%d, %d)", lastCopied, lastTotal, len(want), len(want))
+	}
+	got, err := os.ReadFile(dst)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, want) {
+		t.Fatal("copied content mismatch")
+	}
+}
+
+func TestCopyWithProgressCloneFastPath(t *testing.T) {
+	dir := t.TempDir()
+	src := filepath.Join(dir, "src.bin")
+	dst := filepath.Join(dir, "dst.bin")
+	if err := os.WriteFile(src, []byte("payload"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	oldLimit, oldClone := maxCopyLimit, cloneFileFn
+	defer func() { maxCopyLimit, cloneFileFn = oldLimit, oldClone }()
+	maxCopyLimit = 1
+	cloneFileFn = func(_, _ int) error { return nil }
+
+	calls := 0
+	if err := CopyWithProgress(src, dst, func(copied, total int64) {
+		calls++
+		if copied != total || copied != int64(len("payload")) {
+			t.Fatalf("clone progress = (%d, %d), want (%d, %d)", copied, total, len("payload"), len("payload"))
+		}
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if calls != 1 {
+		t.Fatalf("clone progress calls = %d, want 1", calls)
+	}
+}
+
+func TestCopyWithProgressCloneFallback(t *testing.T) {
+	dir := t.TempDir()
+	src := filepath.Join(dir, "src.bin")
+	dst := filepath.Join(dir, "dst.bin")
+	want := bytes.Repeat([]byte("z"), 2*1024*1024)
+	if err := os.WriteFile(src, want, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	oldLimit, oldClone := maxCopyLimit, cloneFileFn
+	defer func() { maxCopyLimit, cloneFileFn = oldLimit, oldClone }()
+	maxCopyLimit = 1
+	cloneFileFn = func(_, _ int) error { return errors.New("clone unsupported") }
+
+	var last int64
+	if err := CopyWithProgress(src, dst, func(copied, _ int64) { last = copied }); err != nil {
+		t.Fatal(err)
+	}
+	if last != int64(len(want)) {
+		t.Fatalf("last progress = %d, want %d", last, len(want))
+	}
+	got, err := os.ReadFile(dst)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, want) {
+		t.Fatal("fallback copied content mismatch")
+	}
+}

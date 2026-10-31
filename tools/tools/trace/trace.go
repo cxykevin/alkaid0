@@ -845,6 +845,44 @@ func isVirtualContentSuppressed(session *structs.Chats, path string) bool {
 	return m[path]
 }
 
+// ProviderContent 返回虚拟对象（@tree/@task/@memory/@cron/@agents 等）、@docs
+// 或 @history/{session_id} 的当前内容，供其它工具把虚拟路径当作纯文本源使用
+// （例如 file 工具把虚拟路径写入文件或终端）。
+// 内容为空或提供者不可用时返回 ok=false。
+func ProviderContent(session *structs.Chats, path string) (string, bool) {
+	if session == nil || path == "" {
+		return "", false
+	}
+	if fn, ok := virtualContentProviders[path]; ok {
+		content, ok := fn(session)
+		if !ok || content == "" {
+			return "", false
+		}
+		return content, true
+	}
+	if structs.IsHistoryPath(path) {
+		content, err := historySessionContent(session, path)
+		if err != nil || content == "" {
+			return "", false
+		}
+		return content, true
+	}
+	if isDocsPath(path) {
+		snapshot, ok := getDocsSnapshots(session)[path]
+		return snapshot.Content, ok && snapshot.Active && snapshot.Content != ""
+	}
+	return "", false
+}
+
+// IsProviderPath 判断 path 是否为内容提供者路径（虚拟对象、@docs 或 @history）。
+// 供其它工具区分"虚拟路径"与普通文件路径（file 工具的 src/dst 校验）。
+func IsProviderPath(path string) bool {
+	if path == "" {
+		return false
+	}
+	return isProviderContentPath(path) || isDocsPath(path)
+}
+
 // readTraceFileContent 读取被追踪文件的原始内容
 // （虚拟对象走提供者、@docs 读快照、@temp 读 ReferFiles、普通文件读磁盘），
 // 返回编码转换后的字符串内容；失败返回 ok=false。

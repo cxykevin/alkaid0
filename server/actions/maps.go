@@ -18,6 +18,7 @@ var ToolNameToTypeMap = map[string]string{
 	"activate_agent":   "other",
 	"deactivate_agent": "other",
 	"edit":             "edit",
+	"file":             "edit", // move/copy/link 同属文件编辑类操作
 	"read":             "read",
 	"trace":            "read", // 兼容改名前（trace）落库的历史工具调用
 	"run":              "execute",

@@ -998,6 +998,22 @@ func loadSession(cwd string, id *uint32, knowID bool, hidden ...bool) (*structs.
 			// （run 的 wait / 读取 @temp/run/<n>）时才会看到命令结果
 			// （见 docs/acp/extension.md §2.3）。
 		})
+		// 工具执行进度（file 复制等长任务）：直接广播 tool_call_update(status=in_progress)，
+		// 不写库；工具结束后的最终状态广播会覆盖这一条内容。
+		sess.SetToolProgressFn(func(toolCallID, toolName, content string) {
+			if err := broadcastSessionUpdate(sessID, SessionUpdate{
+				SessionID: sessID,
+				Update: SessionUpdateUpdate{
+					SessionUpdate: "tool_call_update",
+					ToolCallID:    toolCallID,
+					Kind:          ToolNameToTypeMap[toolName],
+					Status:        "in_progress",
+					Content:       []u.H{{"type": "text", "text": content}},
+				},
+			}, 0); err != nil {
+				logger.Warn("failed to broadcast tool progress: %v", err)
+			}
+		})
 		sess.SetPlanPushFn(func(entries []structs.PlanEntry) {
 			err := broadcastSessionUpdate(sessID, SessionUpdate{
 				SessionID: sessID,

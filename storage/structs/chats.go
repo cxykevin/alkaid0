@@ -112,6 +112,9 @@ type Chats struct {
 	TerminalPushFn  func(terminalID, status, content string) `gorm:"-" json:"-"`
 	WorkflowEventFn func(runID string, event any)            `gorm:"-" json:"-"`
 	ShellStopFn     func(runID, command string, result any)  `gorm:"-" json:"-"`
+	// ToolProgressFn 工具执行进度回调（file 复制等长任务），由 server 层注册为
+	// tool_call_update(status=in_progress) 广播；未注册时进度汇报为空操作。
+	ToolProgressFn func(toolCallID, toolName, content string) `gorm:"-" json:"-"`
 	// WorkflowStopFn workflow 终端结束回调（runID、终态、最终结果），用于终态落库。
 	WorkflowStopFn func(runID string, status string, result any) `gorm:"-" json:"-"`
 }
@@ -353,6 +356,32 @@ func (c *Chats) SetShellStopFn(fn func(runID, command string, result any)) {
 	c.planPushMu.Lock()
 	defer c.planPushMu.Unlock()
 	c.ShellStopFn = fn
+}
+
+// SetToolProgressFn 注册工具执行进度回调（server 层在 loadSession 时注册）。
+// file 等长任务通过 PushToolProgress 汇报进度，广播为 tool_call_update(status=in_progress)。
+func (c *Chats) SetToolProgressFn(fn func(toolCallID, toolName, content string)) {
+	if c == nil {
+		return
+	}
+	c.planPushMu.Lock()
+	defer c.planPushMu.Unlock()
+	c.ToolProgressFn = fn
+}
+
+// PushToolProgress 汇报工具执行进度（回调未注册时为空操作）。
+// content 是给人看的进度文本（如 "copy 42% (12.3 MiB / 29.1 MiB)"）；
+// toolName 供 server 层映射 ACP kind（ToolNameToTypeMap）。
+func (c *Chats) PushToolProgress(toolCallID, toolName, content string) {
+	if c == nil || toolCallID == "" || content == "" {
+		return
+	}
+	c.planPushMu.RLock()
+	fn := c.ToolProgressFn
+	c.planPushMu.RUnlock()
+	if fn != nil {
+		fn(toolCallID, toolName, content)
+	}
 }
 
 // SetWorkflowStopFn 注册 workflow 终端结束回调。

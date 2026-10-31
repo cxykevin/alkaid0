@@ -29,6 +29,7 @@ func TestToolNameToTypeMap(t *testing.T) {
 		"activate_agent":   "other",
 		"deactivate_agent": "other",
 		"edit":             "edit",
+		"file":             "edit",
 		"trace":            "read",
 		"run":              "execute",
 	}
