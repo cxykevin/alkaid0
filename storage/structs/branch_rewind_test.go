@@ -17,7 +17,7 @@ import (
 func rewindTestChain(t *testing.T, db *gorm.DB, chatID uint32, n int) []*Messages {
 	t.Helper()
 	msgs := make([]*Messages, 0, n)
-	for i := 0; i < n; i++ {
+	for i := range n {
 		msgs = append(msgs, branchTestAppend(t, db, chatID, fmt.Sprintf("m%d", i+1)))
 	}
 	return msgs

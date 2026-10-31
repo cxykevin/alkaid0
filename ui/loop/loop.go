@@ -851,9 +851,7 @@ func (p *Object) SetCallback(callFunc func(AIResponse)) {
 		logger.Warn("SetCallback called more than once, ignoring duplicate registration")
 		return
 	}
-	p.callbackWG.Add(1)
-	go func() {
-		defer p.callbackWG.Done()
+	p.callbackWG.Go(func() {
 		for {
 			select {
 			case resp := <-p.recvQueue:
@@ -869,7 +867,7 @@ func (p *Object) SetCallback(callFunc func(AIResponse)) {
 				return
 			}
 		}
-	}()
+	})
 }
 
 // invokeCallback 调用回调并捕获 panic：单个响应处理失败不得杀死消费者 goroutine、

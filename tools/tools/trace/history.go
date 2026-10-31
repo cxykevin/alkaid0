@@ -192,7 +192,7 @@ func historyIncrement(oldContent, newContent string) (string, bool) {
 	// 重叠区必须从 newBody 的第 0 行开始，而这一行是带消息 id 的角色头（唯一），
 	// 用它作为锚点在 oldBody 中定位旧窗口的对应起点，避免逐 k 全量比较。
 	target := newBody[0]
-	for p := 0; p < len(oldBody); p++ {
+	for p := range oldBody {
 		if oldBody[p] != target {
 			continue
 		}

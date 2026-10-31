@@ -225,10 +225,7 @@ func (v *workflowView) Render(raw string) string {
 	}
 	rawLines := strings.Split(raw, "\n")
 	// 预留分隔线与空行，并让原始输出不超过单项上限。
-	budget := workflowViewMaxTotalLines - viewLines - 1
-	if budget > workflowViewMaxRawLines {
-		budget = workflowViewMaxRawLines
-	}
+	budget := min(workflowViewMaxTotalLines-viewLines-1, workflowViewMaxRawLines)
 	if budget <= 0 {
 		return b.String()
 	}

@@ -162,10 +162,7 @@ func searchHistorySessions(db *gorm.DB, query string, scopeID, currentID uint32,
 	} else {
 		mq = mq.Where("chat_id <> ?", currentID)
 	}
-	scanLimit := maxResults * 8
-	if scanLimit > historyMaxMessageScan {
-		scanLimit = historyMaxMessageScan
-	}
+	scanLimit := min(maxResults*8, historyMaxMessageScan)
 	var hits []structs.Messages
 	if err := mq.Order("id DESC").Limit(scanLimit).Find(&hits).Error; err != nil {
 		return nil, err
@@ -274,14 +271,8 @@ func historySnippetText(delta, query string) string {
 	if idx < 0 {
 		return truncateRunes(flat, historySnippetMaxRunes)
 	}
-	start := idx - historySnippetRadius
-	if start < 0 {
-		start = 0
-	}
-	end := idx + len(query) + historySnippetRadius
-	if end > len(flat) {
-		end = len(flat)
-	}
+	start := max(idx-historySnippetRadius, 0)
+	end := min(idx+len(query)+historySnippetRadius, len(flat))
 	// 对齐到 UTF-8 字符边界
 	for start > 0 && start < len(flat) && !utf8.RuneStart(flat[start]) {
 		start--

@@ -18,7 +18,7 @@ func TestRenderTraceBlocks_VirtualContentDiffTail(t *testing.T) {
 
 	const vpath = "@test-virtual-diff"
 	var old strings.Builder
-	for i := 0; i < 200; i++ {
+	for i := range 200 {
 		fmt.Fprintf(&old, "node-%03d some tree entry text\n", i)
 	}
 	content := old.String()
@@ -95,7 +95,7 @@ func TestRenderTraceBlocks_VirtualContentTail(t *testing.T) {
 	// 一次小改也会超过比例上限，那是比例阈值的固有边界（见 3c 用例）。
 	const vpath = "@test-virtual"
 	var seed strings.Builder
-	for i := 0; i < 40; i++ {
+	for i := range 40 {
 		fmt.Fprintf(&seed, "node-%02d some tree entry text\n", i)
 	}
 	content := seed.String()
@@ -157,7 +157,7 @@ func TestRenderTraceBlocks_VirtualContentTail(t *testing.T) {
 	}
 	// 3b) 大幅重写：diff 超过 2× 安全阀 → 退化为整块末尾落位
 	var rewritten strings.Builder
-	for i := 0; i < 40; i++ {
+	for i := range 40 {
 		fmt.Fprintf(&rewritten, "rewritten-%02d completely different payload\n", i)
 	}
 	content = rewritten.String()

@@ -185,7 +185,6 @@ func TestBroadcastRewindResult(t *testing.T) {
 	byConn := map[uint64][]u.H{}
 	conns := []uint64{701, 702}
 	for _, cid := range conns {
-		cid := cid
 		registerCaptureConn(t, cid, sessionID, func(su SessionUpdate) {
 			content, ok := su.Update.(u.H)
 			if !ok {

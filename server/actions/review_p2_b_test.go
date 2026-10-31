@@ -175,12 +175,10 @@ func TestCloseSessionJoinsLoopBeforeClosingDB(t *testing.T) {
 
 	// 模拟一个仍在运行的 loop goroutine（旧实现先 closeDB 再返回）
 	exited := make(chan struct{})
-	obj.loopWG.Add(1)
-	go func() {
-		defer obj.loopWG.Done()
+	obj.loopWG.Go(func() {
 		defer close(exited)
 		time.Sleep(300 * time.Millisecond)
-	}()
+	})
 
 	closeSession(sessionID)
 

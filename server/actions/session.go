@@ -1431,11 +1431,9 @@ func (obj *sessionObj) startSessionLoop(lp *loop.Object) {
 	if obj.loopReleasing {
 		return
 	}
-	obj.loopWG.Add(1)
-	go func() {
-		defer obj.loopWG.Done()
+	obj.loopWG.Go(func() {
 		lp.Start(context.Background())
-	}()
+	})
 }
 
 // releaseSessionLoop 阻止新的 loop 启动，并等待已启动的 loop goroutine 退出。

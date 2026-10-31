@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"slices"
 	"strconv"
 	"strings"
 	"syscall"
@@ -290,8 +291,7 @@ done`,
 	}
 
 	// 阶段 C：封存点置为只读（深层优先，与内核递归语义一致）。
-	for k := len(seals) - 1; k >= 0; k-- {
-		i := seals[k]
+	for _, i := range slices.Backward(seals) {
 		cmds = append(cmds, fmt.Sprintf(`mount -o remount,ro,bind "$%s" 2>/dev/null || :`, names[i]))
 	}
 

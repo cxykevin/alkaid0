@@ -39,10 +39,7 @@ func (c *cappedBuffer) Write(p []byte) (int, error) {
 	defer c.mu.Unlock()
 
 	if len(c.head) < maxCaptureHead {
-		room := maxCaptureHead - len(c.head)
-		if room > len(p) {
-			room = len(p)
-		}
+		room := min(maxCaptureHead-len(c.head), len(p))
 		c.head = append(c.head, p[:room]...)
 		p = p[room:]
 	}

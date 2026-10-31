@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"slices"
 	"sort"
 	"strings"
 
@@ -301,8 +302,7 @@ scan:
 							// 保证 assistant 的每个 tool_call_id 都有响应，满足 API 校验
 							// "assistant with tool_calls must be followed by tool messages"。
 							// 倒序 PushFront：占位按 toolCalls 顺序排在 assistant 之后。
-							for i := len(toolCalls) - 1; i >= 0; i-- {
-								c := toolCalls[i]
+							for _, c := range slices.Backward(toolCalls) {
 								if c.ID == "" {
 									continue
 								}
@@ -399,8 +399,7 @@ scan:
 				// PushFront 正序：多条需倒序 push。
 				results, err := parseStoredToolResults(v.Delta)
 				if err == nil && len(results) > 0 {
-					for i := len(results) - 1; i >= 0; i-- {
-						r := results[i]
+					for _, r := range slices.Backward(results) {
 						if _, ok := toolCallIDs[r.ID]; !ok {
 							continue
 						}
@@ -952,8 +951,7 @@ func DetectTraceEvents(db *gorm.DB, session *structs.Chats, agentCode string) er
 	prevMap := make(map[string]*structs.TraceEvent)
 	suppressed := make(map[string]bool)
 	// 从新到旧扫描：先扫到的即最近事件；prevMap 反复覆盖，最后留下最早一条（方案2 旧块的固定锚点）
-	for i := len(window) - 1; i >= 0; i-- {
-		v := window[i]
+	for _, v := range slices.Backward(window) {
 		if v.Type != structs.MessagesRoleAgent || v.ToolCallingJSONString == "" {
 			continue
 		}

@@ -156,10 +156,7 @@ func (p *Parser) processCSI(b byte) {
 		lastIdx := len(p.params) - 1
 		// 饱和累加：达到上限后不再增长，避免 int 溢出成负数/巨值导致坐标越界
 		if p.params[lastIdx] < maxCSIParam {
-			p.params[lastIdx] = p.params[lastIdx]*10 + int(b-'0')
-			if p.params[lastIdx] > maxCSIParam {
-				p.params[lastIdx] = maxCSIParam
-			}
+			p.params[lastIdx] = min(p.params[lastIdx]*10+int(b-'0'), maxCSIParam)
 		}
 	} else if b == ';' {
 		// 参数分隔符，新建一个参数槽（默认值 0）；超出上限则忽略，避免参数洪水无限增长

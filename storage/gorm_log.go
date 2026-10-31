@@ -71,7 +71,7 @@ func (l *Logger) Error(ctx context.Context, msg string, data ...any) {
 // （等效官方 ParameterizedQueries 选项），排查问题时语句/耗时/行数仍然可见。
 //
 // 本方法不受 LogMode 影响：DEBUG 级别同样只输出占位符。
-func (l *Logger) ParamsFilter(_ context.Context, sql string, _ ...interface{}) (string, []interface{}) {
+func (l *Logger) ParamsFilter(_ context.Context, sql string, _ ...any) (string, []any) {
 	return sql, nil
 }
 

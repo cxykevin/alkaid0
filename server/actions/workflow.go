@@ -3,6 +3,7 @@ package actions
 import (
 	"encoding/json"
 	"fmt"
+	"maps"
 	"strconv"
 
 	"github.com/cxykevin/alkaid0/storage/structs"
@@ -108,9 +109,7 @@ func broadcastWorkflowEvent(sessionID, runID string, ev runTool.WorkflowEvent) {
 		"eventType":     ev.Type,
 		"time":          time.Now().UTC().Format(time.RFC3339Nano),
 	}
-	for k, v := range ev.Data {
-		payload[k] = v
-	}
+	maps.Copy(payload, ev.Data)
 	if _, exists := payload["workflow"]; !exists {
 		payload["workflow"] = runID
 	}

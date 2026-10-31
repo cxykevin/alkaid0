@@ -221,7 +221,7 @@ func TestAddShorthandIsExpanded(t *testing.T) {
 func TestAddRepeatingLimitPerSession(t *testing.T) {
 	_, session, _ := setup(t)
 
-	for i := 0; i < maxRepeatingJobsPerSession; i++ {
+	for range maxRepeatingJobsPerSession {
 		requireSuccess(t, exec(t, session, map[string]any{
 			"type": "add", "cron": "* * * * *", "prompt": "repeat", "run_once": false,
 		}))

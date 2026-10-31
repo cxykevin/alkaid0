@@ -35,7 +35,7 @@ func TestCappedBuffer_BoundsTotalSize(t *testing.T) {
 	var c cappedBuffer
 	chunk := bytes.Repeat([]byte("x"), 32<<10) // 32 KiB
 	total := 0
-	for i := 0; i < 400; i++ { // 12.5 MiB
+	for range 400 { // 12.5 MiB
 		n, err := c.Write(chunk)
 		if err != nil {
 			t.Fatal(err)
@@ -110,14 +110,12 @@ func TestCappedBuffer_SingleHugeWrite(t *testing.T) {
 func TestCappedBuffer_ConcurrentWrites(t *testing.T) {
 	var c cappedBuffer
 	var wg sync.WaitGroup
-	for i := 0; i < 8; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for j := 0; j < 500; j++ {
+	for range 8 {
+		wg.Go(func() {
+			for range 500 {
 				_, _ = c.WriteString("concurrent line\n")
 			}
-		}()
+		})
 	}
 	wg.Wait()
 	if c.String() == "" {

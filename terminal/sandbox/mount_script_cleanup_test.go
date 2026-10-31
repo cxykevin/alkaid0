@@ -33,11 +33,11 @@ func extractInnerMountScript(t *testing.T, outer string) string {
 		t.Fatalf("未找到内层脚本起始标记 %q", marker)
 	}
 	rest := outer[start+len(marker):]
-	end := strings.Index(rest, `' -- "$@"`)
-	if end < 0 {
+	before, _, ok := strings.Cut(rest, `' -- "$@"`)
+	if !ok {
 		t.Fatalf("未找到内层脚本结束标记")
 	}
-	return rest[:end]
+	return before
 }
 
 // TestMountScriptRemovesFakeEtcFiles 回归测试：mount.sh 在 chroot 内用 mktemp 生成

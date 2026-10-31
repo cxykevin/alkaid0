@@ -39,7 +39,7 @@ func TestReplayWindowAppendOnly(t *testing.T) {
 	const chatID = 77
 	// 205 > readPageSize*maxPage（旧上限 200），确保旧的滑动窗口行为会在此用例下暴露
 	const seeded = 205
-	for i := 0; i < seeded; i++ {
+	for i := range seeded {
 		typ := structs.MessagesRoleUser
 		delta := "user message number"
 		if i%2 == 1 {

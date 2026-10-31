@@ -150,8 +150,8 @@ type logMessage struct {
 var logChannel chan logMessage
 var logWaitGroup sync.WaitGroup
 var logFlushMutex sync.Mutex
-var droppedLogCount uint64
-var isShutdown uint32
+var droppedLogCount atomic.Uint64
+var isShutdown atomic.Uint32
 
 // var logLck sync.Mutex
 
@@ -328,7 +328,7 @@ func Shutdown() {
 	if !loggerInited.Load() {
 		return
 	}
-	atomic.StoreUint32(&isShutdown, 1)
+	isShutdown.Store(1)
 	if syncOnly.Load() {
 		// 降级模式下没有异步 worker，logChannel 为 nil，close 会 panic
 		return
@@ -379,7 +379,7 @@ func (l *LogsObj) log(level string, msg string, v ...any) {
 	// 防止 Shutdown 在 isShutdown 检查和 logWaitGroup.Add(1) 之间关闭通道导致 panic。
 	// 详见 Shutdown() 中对 flushLogs 的调用顺序说明。
 	logFlushMutex.Lock()
-	if atomic.LoadUint32(&isShutdown) == 1 {
+	if isShutdown.Load() == 1 {
 		logFlushMutex.Unlock()
 		l.logSync(level, "%s", str)
 		return
@@ -397,8 +397,8 @@ func (l *LogsObj) log(level string, msg string, v ...any) {
 		// 通道已满时丢弃日志并计数，防止日志阻塞主程序
 		// 同时同步回写一条 WARN 日志作为预警
 		logWaitGroup.Done()
-		atomic.AddUint64(&droppedLogCount, 1)
-		l.logSync("WARN", "log channel full, drop log (total dropped: %d)", atomic.LoadUint64(&droppedLogCount))
+		droppedLogCount.Add(1)
+		l.logSync("WARN", "log channel full, drop log (total dropped: %d)", droppedLogCount.Load())
 	}
 }
 

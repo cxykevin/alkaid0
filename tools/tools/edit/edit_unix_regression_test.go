@@ -18,7 +18,7 @@ func TestWriteFile_RejectsFIFOWithoutBlocking(t *testing.T) {
 	}
 
 	session := newEditSession(t, dir)
-	mp := map[string]*any{"path": ptr("pipe"), "target": ptr("@all"), "text": ptr("x")}
+	mp := map[string]*any{"path": new(any("pipe")), "target": new(any("@all")), "text": new(any("x"))}
 
 	type editResult struct {
 		ret map[string]*any

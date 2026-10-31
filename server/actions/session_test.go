@@ -78,34 +78,28 @@ func TestSessionRegistryReadsAreLocked(t *testing.T) {
 	var wg sync.WaitGroup
 
 	// 写入方：模拟 loadSession 插入 / releaseFunc 删除
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		for time.Now().Before(deadline) {
 			sessLock.Lock()
 			sessions[sid] = obj
 			delete(sessions, sid)
 			sessLock.Unlock()
 		}
-	}()
+	})
 
 	// 读取方 1：broadcastToolCallCancelled 的注册表查询
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		for time.Now().Before(deadline) {
 			broadcastToolCallCancelled(sid, emptyPending)
 		}
-	}()
+	})
 
 	// 读取方 2：session/resume 的注册表查询（统一走 lookupSession）
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		for time.Now().Before(deadline) {
 			_, _ = lookupSession(sid)
 		}
-	}()
+	})
 
 	wg.Wait()
 }

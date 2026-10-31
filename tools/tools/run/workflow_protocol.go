@@ -105,10 +105,7 @@ func (p *WorkflowOutputParser) Feed(chunk []byte) (string, []WorkflowEvent) {
 // markerPrefixLen 返回 data 末尾最长的、同时是 marker 前缀的后缀长度
 // （不含完整 marker 本身）；没有这种后缀时返回 0。
 func markerPrefixLen(data []byte, marker string) int {
-	limit := len(marker) - 1
-	if limit > len(data) {
-		limit = len(data)
-	}
+	limit := min(len(marker)-1, len(data))
 	for n := limit; n > 0; n-- {
 		if bytes.HasPrefix([]byte(marker), data[len(data)-n:]) {
 			return n

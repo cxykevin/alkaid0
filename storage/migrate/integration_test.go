@@ -93,8 +93,8 @@ func TestInitStorageMigratesLegacyDatabase(t *testing.T) {
 	if n := countInt(t, db, "SELECT count(*) FROM pragma_table_info('chats') WHERE name = 'active_leaf_id'"); n != 1 {
 		t.Fatal("chats.active_leaf_id 列未创建")
 	}
-	assertNullable(t, "messages[2].parent_id", readNullable(t, db, "SELECT parent_id FROM messages WHERE id = ?", 2), ptr(1))
-	assertNullable(t, "chats[1].active_leaf_id", readNullable(t, db, "SELECT active_leaf_id FROM chats WHERE id = ?", 1), ptr(4))
+	assertNullable(t, "messages[2].parent_id", readNullable(t, db, "SELECT parent_id FROM messages WHERE id = ?", 2), new(uint64(1)))
+	assertNullable(t, "chats[1].active_leaf_id", readNullable(t, db, "SELECT active_leaf_id FROM chats WHERE id = ?", 1), new(uint64(4)))
 	if n := countInt(t, db, "SELECT count(*) FROM metadata WHERE key = 'schema_version' AND value = '2'"); n != 1 {
 		t.Fatal("metadata.schema_version 未提升到 2")
 	}
@@ -162,10 +162,8 @@ func TestInitStorageSkipsMigrationWhenMetadataViewConflicts(t *testing.T) {
 		t.Fatalf("second InitStorage: %v", err)
 	}
 	defer closeDB(t, db2)
-	assertNullable(t, "messages[2].parent_id（重试后）", readNullable(t, db2, "SELECT parent_id FROM messages WHERE id = ?", 2), ptr(1))
+	assertNullable(t, "messages[2].parent_id（重试后）", readNullable(t, db2, "SELECT parent_id FROM messages WHERE id = ?", 2), new(uint64(1)))
 	if n := countInt(t, db2, "SELECT count(*) FROM metadata"); n != 2 {
 		t.Fatalf("重试成功后 metadata 应有 2 行，实际 %d", n)
 	}
 }
-
-func ptr(v uint64) *uint64 { return &v }

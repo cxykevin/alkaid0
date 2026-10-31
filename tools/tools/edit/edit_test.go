@@ -12,9 +12,6 @@ import (
 	u "github.com/cxykevin/alkaid0/utils"
 )
 
-//go:fix inline
-func ptr(v any) *any { return new(v) }
-
 func TestCheckEditContentRejectsExternalChange(t *testing.T) {
 	session := &structs.Chats{}
 	trace.ConfirmEditContent(session, "a.txt", "agent snapshot\n")
@@ -432,7 +429,7 @@ func TestWriteFile_RejectsSymlinkEscape(t *testing.T) {
 	session := &structs.Chats{CurrentActivatePath: workspace}
 
 	// 通过链接写工作区外的文件（新文件，链接目录已存在）
-	mp := map[string]*any{"path": ptr("link/evil.txt"), "target": ptr(""), "text": ptr("pwned")}
+	mp := map[string]*any{"path": new(any("link/evil.txt")), "target": new(any("")), "text": new(any("pwned"))}
 	_, _, ret, _ := writeFile(session, mp, nil)
 	assertEditFailed(t, ret)
 	if _, err := os.Stat(target); err == nil {
@@ -440,7 +437,7 @@ func TestWriteFile_RejectsSymlinkEscape(t *testing.T) {
 	}
 
 	// 通过链接改工作区外的已有文件
-	mp = map[string]*any{"path": ptr("link/secret.txt"), "target": ptr("@all"), "text": ptr("pwned")}
+	mp = map[string]*any{"path": new(any("link/secret.txt")), "target": new(any("@all")), "text": new(any("pwned"))}
 	_, _, ret, _ = writeFile(session, mp, nil)
 	assertEditFailed(t, ret)
 	data, _ := os.ReadFile(filepath.Join(outside, "secret.txt"))
@@ -456,7 +453,7 @@ func TestWriteFile_RejectsAlkaid0Path(t *testing.T) {
 	}
 	session := &structs.Chats{CurrentActivatePath: workspace}
 
-	mp := map[string]*any{"path": ptr(".alkaid0/session.db"), "target": ptr(""), "text": ptr("x")}
+	mp := map[string]*any{"path": new(any(".alkaid0/session.db")), "target": new(any("")), "text": new(any("x"))}
 	_, _, ret, _ := writeFile(session, mp, nil)
 	assertEditFailed(t, ret)
 	if _, err := os.Stat(filepath.Join(workspace, ".alkaid0", "session.db")); err == nil {

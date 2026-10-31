@@ -15,7 +15,7 @@ import (
 // 使一次小改动的 unified diff 占比足够低，方案2 的硬条件成立）。
 func invariantTestContent(lines, changeLine int) string {
 	var b strings.Builder
-	for i := 0; i < lines; i++ {
+	for i := range lines {
 		if i == changeLine {
 			fmt.Fprintf(&b, "trace line %02d CHANGED payload text\n", i)
 			continue

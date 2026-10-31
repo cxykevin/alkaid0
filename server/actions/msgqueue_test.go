@@ -96,7 +96,7 @@ func TestMsgQueueWaitsForIdle(t *testing.T) {
 // TestMsgQueueCapacityAndMutations 验证 32 上限、修改、取消与清空。
 func TestMsgQueueCapacityAndMutations(t *testing.T) {
 	q := newMsgQueue(3, nil, func() bool { return false }, nil, nil)
-	for i := 0; i < msgQueueCapacity; i++ {
+	for i := range msgQueueCapacity {
 		if _, err := q.enqueue(msgQueueKindPrompt, "", "", fmt.Sprintf("m%d", i)); err != nil {
 			t.Fatalf("enqueue %d: %v", i, err)
 		}
@@ -431,12 +431,10 @@ func TestMsgQueueStopIdempotent(t *testing.T) {
 	q := newMsgQueue(5, nil, func() bool { return false }, nil, nil)
 	q.start()
 	var wg sync.WaitGroup
-	for i := 0; i < 2; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+	for range 2 {
+		wg.Go(func() {
 			q.stop()
-		}()
+		})
 	}
 	wg.Wait()
 }

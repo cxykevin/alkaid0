@@ -48,8 +48,7 @@ func executeSleep(sb *Sandbox, seconds int) (*Command, error) {
 // 此时"超时/报错"是用例自身没跑起来的结果，必须失败而不是通过。
 func assertCommandStarted(t *testing.T, err error) {
 	t.Helper()
-	var execErr *exec.Error
-	if errors.As(err, &execErr) {
+	if _, ok := errors.AsType[*exec.Error](err); ok {
 		t.Fatalf("命令未能启动，用例前提不成立: %v", err)
 	}
 }

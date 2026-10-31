@@ -15,7 +15,7 @@ import (
 	"gorm.io/gorm"
 )
 
-var lessMemModeDBID int32
+var lessMemModeDBID atomic.Int32
 
 // perConnPragmas 每个新建连接都必须执行的 SQLite PRAGMA 设置。
 //
@@ -79,7 +79,7 @@ func InitDB(dbPath string) (*gorm.DB, error) {
 			// 临时 DB 放入系统临时目录，避免测试反复运行在项目数据目录累积 __lessmem_*.db 文件
 			// 文件名加入进程号：go test 并行运行多个测试包时各进程的 lessMemModeDBID 均从 0
 			// 开始，不加进程号会在 Windows 上产生跨进程同名文件冲突（SQLite 表已存在等偶发错误）
-			dbPath = filepath.Join(os.TempDir(), fmt.Sprintf("alkaid0_lessmem_%d_%d.db", os.Getpid(), atomic.AddInt32(&lessMemModeDBID, 1)))
+			dbPath = filepath.Join(os.TempDir(), fmt.Sprintf("alkaid0_lessmem_%d_%d.db", os.Getpid(), lessMemModeDBID.Add(1)))
 		} else {
 			// 必须归一化为 SQLite 真正识别为内存库的名字：只有恰好等于 ":memory:"
 			// （或 file::memory: URI）才走内存模式。".alkaid0/:memory:" 这类后缀路径

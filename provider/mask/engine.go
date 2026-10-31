@@ -1,6 +1,7 @@
 package mask
 
 import (
+	"slices"
 	"sync"
 	"sync/atomic"
 
@@ -226,8 +227,7 @@ func (e *Engine) maskText(text string) (string, bool) {
 		return text, false
 	}
 	result := []byte(text)
-	for i := len(spans) - 1; i >= 0; i-- {
-		s := spans[i]
+	for _, s := range slices.Backward(spans) {
 		fake, err := e.lookupOrCreate(s.Type, s.Original)
 		if err != nil {
 			continue

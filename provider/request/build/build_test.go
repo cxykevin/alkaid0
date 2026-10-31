@@ -1,6 +1,7 @@
 package build
 
 import (
+	"maps"
 	"sync"
 	"testing"
 
@@ -498,9 +499,7 @@ func TestBuildUsesAgentModel(t *testing.T) {
 	// 注册第二个模型（写时复制：复制 map 后整体替换配置对象）
 	base := config.GlobalConfigSafe()
 	models := make(map[int32]cfgStruct.ModelConfig, len(base.Model.Models)+1)
-	for k, v := range base.Model.Models {
-		models[k] = v
-	}
+	maps.Copy(models, base.Model.Models)
 	models[2] = cfgStruct.ModelConfig{
 		ModelName:        "agent-model",
 		ModelID:          "agent-model-id",

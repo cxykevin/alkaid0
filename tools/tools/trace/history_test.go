@@ -16,7 +16,7 @@ func seedHistoryMessages(t *testing.T, db *gorm.DB, id uint32, title string, n i
 	if err := db.Create(&structs.Chats{ID: id, Title: title}).Error; err != nil {
 		t.Fatalf("create chat: %v", err)
 	}
-	for i := 0; i < n; i++ {
+	for i := range n {
 		role := structs.MessagesRoleUser
 		if i%2 == 1 {
 			role = structs.MessagesRoleAgent

@@ -42,7 +42,7 @@ func (b *lockedBuffer) waitLines(t *testing.T, n int) []string {
 
 func nonEmptyLines(s string) []string {
 	var out []string
-	for _, l := range strings.Split(strings.TrimSpace(s), "\n") {
+	for l := range strings.SplitSeq(strings.TrimSpace(s), "\n") {
 		if strings.TrimSpace(l) != "" {
 			out = append(out, l)
 		}

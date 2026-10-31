@@ -5,6 +5,7 @@ package build
 
 import (
 	"encoding/json"
+	"maps"
 	"strings"
 	"testing"
 
@@ -19,9 +20,7 @@ func enablePhase(t *testing.T, enable bool) {
 	setupTestConfig()
 	cfg := *config.GlobalConfig
 	models := make(map[int32]cfgStruct.ModelConfig, len(cfg.Model.Models))
-	for k, v := range cfg.Model.Models {
-		models[k] = v
-	}
+	maps.Copy(models, cfg.Model.Models)
 	model := models[cfg.Model.DefaultModelID]
 	model.ProviderSpecificConfig.EnablePhase = enable
 	models[cfg.Model.DefaultModelID] = model

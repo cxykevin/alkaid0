@@ -219,7 +219,7 @@ func validatePath(cwd, relPath string) (string, error) {
 	// ".Alkaid0" 会解析到同一个目录，此前的大小写敏感前缀比较可被绕过；
 	// 逐分量还顺带覆盖嵌套路径（sub/.alkaid0/x），且不会像前缀比较那样误伤
 	// ".alkaid0-backup" 这类合法名字。
-	for _, part := range strings.Split(strings.ReplaceAll(rel, "\\", "/"), "/") {
+	for part := range strings.SplitSeq(strings.ReplaceAll(rel, "\\", "/"), "/") {
 		if strings.EqualFold(part, ".alkaid0") {
 			return "", fmt.Errorf("access to .alkaid0 directory is not allowed")
 		}
@@ -517,10 +517,7 @@ func FsRead(req FsReadRequest, _ func(string, any, *string) error, _ uint64) (Fs
 			// 确保读范围不超出文件结尾，超出时静默截断。
 			// 入口已保证 req.Offset >= 0；这里仍对 maxRead 做下界防御，
 			// 避免任何未来改动让负数进入 make([]byte, n)。
-			maxRead := fileSize - req.Offset
-			if maxRead < 0 {
-				maxRead = 0
-			}
+			maxRead := max(fileSize-req.Offset, 0)
 			if req.Length > maxRead {
 				req.Length = maxRead
 			}

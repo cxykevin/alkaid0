@@ -121,13 +121,13 @@ func (w *commandOutput) Write(p []byte) (int, error) {
 	w.buf.Write(p)
 	for {
 		s := w.buf.String()
-		i := strings.IndexByte(s, '\n')
-		if i < 0 {
+		before, after, ok := strings.Cut(s, "\n")
+		if !ok {
 			break
 		}
-		line := strings.TrimRight(s[:i], "\r")
+		line := strings.TrimRight(before, "\r")
 		w.buf.Reset()
-		w.buf.WriteString(s[i+1:])
+		w.buf.WriteString(after)
 		w.logLine(line)
 	}
 	return len(p), nil

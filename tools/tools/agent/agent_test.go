@@ -610,7 +610,7 @@ func TestBuildGlobalPrompt_DeterministicTagOrder(t *testing.T) {
 	if err != nil {
 		t.Fatalf("buildGlobalPrompt: %v", err)
 	}
-	for i := 0; i < 8; i++ {
+	for i := range 8 {
 		next, err := buildGlobalPrompt(session)
 		if err != nil {
 			t.Fatalf("buildGlobalPrompt #%d: %v", i+2, err)

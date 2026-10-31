@@ -17,7 +17,7 @@ func NextRuns(expr string, n int) []time.Time {
 	}
 	now := time.Now()
 	out := make([]time.Time, 0, n)
-	for i := 0; i < n; i++ {
+	for range n {
 		next := sched.Next(now)
 		if next.IsZero() {
 			break

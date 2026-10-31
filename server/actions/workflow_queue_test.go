@@ -17,7 +17,7 @@ func TestWorkflowQueueOrderAndStop(t *testing.T) {
 		mu.Unlock()
 	})
 	const n = 200
-	for i := 0; i < n; i++ {
+	for i := range n {
 		q.enqueue(workflowQueueItem{sessionID: "s", runID: strconv.Itoa(i)})
 	}
 	q.stop()
@@ -54,7 +54,7 @@ func TestWorkflowQueueDropsWhenFull(t *testing.T) {
 
 	done := make(chan struct{})
 	go func() {
-		for i := 0; i < workflowQueueCapacity+10; i++ {
+		for range workflowQueueCapacity + 10 {
 			q.enqueue(workflowQueueItem{sessionID: "s", runID: "filler"})
 		}
 		close(done)

@@ -541,7 +541,7 @@ func readGitDirFile(path string) string {
 	if err != nil {
 		return ""
 	}
-	for _, line := range strings.Split(string(data), "\n") {
+	for line := range strings.SplitSeq(string(data), "\n") {
 		line = strings.TrimSpace(line)
 		if value, ok := strings.CutPrefix(line, "gitdir:"); ok {
 			return strings.TrimSpace(value)

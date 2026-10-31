@@ -215,7 +215,7 @@ func TestOnActiveBranchChainable(t *testing.T) {
 	db := setupBranchTest(t)
 	branchTestChat(t, db, 1)
 
-	for i := 0; i < 5; i++ {
+	for range 5 {
 		branchTestAppend(t, db, 1, "m")
 	}
 

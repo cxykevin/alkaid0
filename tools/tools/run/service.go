@@ -914,9 +914,7 @@ func (f *contentFlusher) start() (stop func()) {
 	f.publish()
 	stopCh := make(chan struct{})
 	var wg sync.WaitGroup
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		t := time.NewTicker(contentPumpInterval)
 		defer t.Stop()
 		for {
@@ -927,7 +925,7 @@ func (f *contentFlusher) start() (stop func()) {
 				return
 			}
 		}
-	}()
+	})
 	var once sync.Once
 	return func() {
 		once.Do(func() {

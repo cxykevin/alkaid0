@@ -7,7 +7,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -510,7 +509,7 @@ func TestLogFallbackKeepsMessages(t *testing.T) {
 		Logger, logPath = oldLogger, oldPath
 		loggerInited.Store(false)
 		syncOnly.Store(false)
-		atomic.StoreUint32(&isShutdown, 0)
+		isShutdown.Store(0)
 		Load()
 	})
 
@@ -523,7 +522,7 @@ func TestLogFallbackKeepsMessages(t *testing.T) {
 
 	loggerInited.Store(false)
 	syncOnly.Store(false)
-	atomic.StoreUint32(&isShutdown, 0)
+	isShutdown.Store(0)
 	logPath = ""
 
 	Load()

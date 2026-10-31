@@ -100,8 +100,6 @@ func readNullableU64(t *testing.T, db *gorm.DB, query string, args ...any) *uint
 	return &u
 }
 
-func ptrU64(v uint64) *uint64 { return &v }
-
 func formatNullable(v *uint64) string {
 	if v == nil {
 		return "NULL"
@@ -188,8 +186,8 @@ func TestMigrateToTreeBackfillsLinearHistory(t *testing.T) {
 
 	// 3) parent_id 回填：父 = 同会话内上一条消息；每个会话最小 id 保持 NULL 根节点
 	wantParents := map[uint64]*uint64{
-		1: nil, 2: ptrU64(1), 3: ptrU64(2), 4: ptrU64(3),
-		5: nil, 6: ptrU64(5),
+		1: nil, 2: new(uint64(1)), 3: new(uint64(2)), 4: new(uint64(3)),
+		5: nil, 6: new(uint64(5)),
 		7: nil,
 	}
 	for id, want := range wantParents {
@@ -199,7 +197,7 @@ func TestMigrateToTreeBackfillsLinearHistory(t *testing.T) {
 
 	// 4) active_leaf_id 回填：各会话最新消息；空会话保持 NULL
 	wantLeaves := map[uint32]*uint64{
-		1: ptrU64(4), 2: ptrU64(6), 3: nil, 4: ptrU64(7),
+		1: new(uint64(4)), 2: new(uint64(6)), 3: nil, 4: new(uint64(7)),
 	}
 	for id, want := range wantLeaves {
 		got := readNullableU64(t, db, "SELECT active_leaf_id FROM chats WHERE id = ?", id)
@@ -284,7 +282,7 @@ func TestMigrateToTreeIdempotent(t *testing.T) {
 	}
 	// 其余回填不受影响
 	leaf := readNullableU64(t, db, "SELECT active_leaf_id FROM chats WHERE id = ?", 1)
-	assertNullableU64(t, "chats[1].active_leaf_id（重跑后）", leaf, ptrU64(4))
+	assertNullableU64(t, "chats[1].active_leaf_id（重跑后）", leaf, new(uint64(4)))
 }
 
 // TestMigrateToTreeFreshDatabase 全新数据库：一切从零建起，metadata 版本记录齐备。
@@ -358,7 +356,7 @@ func TestMigrateToTreeRollsBackOnFailure(t *testing.T) {
 		t.Fatal("重试迁移后 parent_id 列应创建")
 	}
 	got := readNullableU64(t, db, "SELECT parent_id FROM messages WHERE id = ?", 2)
-	assertNullableU64(t, "messages[2].parent_id（重试后）", got, ptrU64(1))
+	assertNullableU64(t, "messages[2].parent_id（重试后）", got, new(uint64(1)))
 }
 
 // TestMigrateToTreeNilDB nil 句柄直接报错，避免启动路径静默跳过。

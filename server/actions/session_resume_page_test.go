@@ -55,7 +55,7 @@ func (f *replayArgsFixture) resumeChunk(t *testing.T, cursor string) replayChunk
 // insertHistory 顺序落库 n 条用户消息（历史回放的最小单位）。
 func (f *replayArgsFixture) insertHistory(t *testing.T, n int) {
 	t.Helper()
-	for i := 0; i < n; i++ {
+	for i := range n {
 		msg := structs.Messages{ChatID: f.chatID, Type: structs.MessagesRoleUser, Delta: fmt.Sprintf("history %d", i)}
 		if err := f.db.Create(&msg).Error; err != nil {
 			t.Fatalf("insert history message failed: %v", err)

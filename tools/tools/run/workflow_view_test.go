@@ -112,7 +112,7 @@ func TestRenderWorkflowResult(t *testing.T) {
 func TestWorkflowViewLogsAreBounded(t *testing.T) {
 	v := newWorkflowView()
 	v.Apply(workflowViewEvent(t, `{"type":"graph","graph":{"nodes":{"n":{"name":"N"}},"edges":{},"start":["n"]}}`))
-	for i := 0; i < workflowViewMaxLogsPerNode+5; i++ {
+	for i := range workflowViewMaxLogsPerNode + 5 {
 		v.Apply(workflowViewEvent(t, fmt.Sprintf(`{"type":"node_log","nodeId":"n","message":"line-%d"}`, i)))
 	}
 	got := v.Render("")

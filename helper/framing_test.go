@@ -24,13 +24,7 @@ func (r *chunkedReader) Read(p []byte) (int, error) {
 	if len(r.data) == 0 {
 		return 0, io.EOF
 	}
-	n := len(p)
-	if n > r.chunk {
-		n = r.chunk
-	}
-	if n > len(r.data) {
-		n = len(r.data)
-	}
+	n := min(len(p), r.chunk, len(r.data))
 	copy(p, r.data[:n])
 	r.data = r.data[n:]
 	return n, nil

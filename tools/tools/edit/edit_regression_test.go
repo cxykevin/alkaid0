@@ -52,9 +52,9 @@ func newEditSession(t *testing.T, dir string) *structs.Chats {
 func runEdit(t *testing.T, session *structs.Chats, path, target, text string) (map[string]*any, error) {
 	t.Helper()
 	mp := map[string]*any{
-		"path":   ptr(path),
-		"target": ptr(target),
-		"text":   ptr(text),
+		"path":   new(any(path)),
+		"target": new(any(target)),
+		"text":   new(any(text)),
 	}
 	_, _, ret, err := writeFile(session, mp, nil)
 	return ret, err
@@ -465,13 +465,13 @@ func TestWriteFile_WritesThroughSymlinkWithoutReplacingIt(t *testing.T) {
 func TestCheckPath_RunPrefixStillValidated(t *testing.T) {
 	// run/<n> 是终端输入的兼容写法，但 "run/" 同时是普通目录名：
 	// 不能因为前缀匹配就跳过路径校验，否则 run/../x 会绕过 ".."
-	if p, err := CheckPath(map[string]*any{"path": ptr("run/../secret.txt")}); err == nil {
+	if p, err := CheckPath(map[string]*any{"path": new(any("run/../secret.txt"))}); err == nil {
 		t.Fatalf("run/ 前缀不能绕过 '..' 校验, got %q", p)
 	}
-	if p, err := CheckPath(map[string]*any{"path": ptr("run/main.go")}); err != nil || p != "run/main.go" {
+	if p, err := CheckPath(map[string]*any{"path": new(any("run/main.go"))}); err != nil || p != "run/main.go" {
 		t.Fatalf("普通 run/ 路径应正常通过: %q %v", p, err)
 	}
-	if p, err := CheckPath(map[string]*any{"path": ptr("@temp/run/3")}); err != nil || p != "@temp/run/3" {
+	if p, err := CheckPath(map[string]*any{"path": new(any("@temp/run/3"))}); err != nil || p != "@temp/run/3" {
 		t.Fatalf("@temp/run/ 路径应直接放行: %q %v", p, err)
 	}
 }
