@@ -23,9 +23,6 @@ import (
 
 const toolName = "tree"
 
-//go:embed prompt.md
-var prompt string
-
 //go:embed trace.md
 var treePrompt string
 
@@ -35,7 +32,8 @@ var logger = log.New("tools:tree")
 
 func init() {
 	treeTempate = prompts.Load("tools:tree:tree", treePrompt)
-	// @tree 作为虚拟对象接入 trace 的落位/差分机制（tree → edit → trace 已有依赖，反向无环）
+	// @tree 作为只读虚拟对象接入 trace 的落位/差分机制（tree → edit → trace 依赖保留，
+	// 仅用于已下线的写语义实现，反向无环）
 	trace.RegisterVirtualContent("@tree", TreeContent)
 }
 
@@ -546,10 +544,7 @@ func TreeContent(session *structs.Chats) (string, bool) {
 	return content, true
 }
 
-func buildPrompt(session *structs.Chats) (string, error) {
-	return prompt, nil
-}
-
+// Deprecated: @tree 的 AI 写入口已下线（不再注册到 edit 工具），仅保留供差分模块复用与回归测试。
 func updateInfo(session *structs.Chats, mp map[string]*any, cross []*any, _ string) (bool, []*any, error) {
 	ret := any(edit.PassInfo{
 		From:        "tree",
@@ -561,6 +556,7 @@ func updateInfo(session *structs.Chats, mp map[string]*any, cross []*any, _ stri
 	return true, cross, nil
 }
 
+// Deprecated: @tree 的 AI 写入口已下线（不再注册到 edit 工具），保留实现与测试供差分模块复用。
 func writeTree(session *structs.Chats, mp map[string]*any, cross []*any) (bool, []*any, map[string]*any, error) {
 	path, err := edit.CheckPath(mp)
 	if err != nil {
@@ -738,23 +734,8 @@ func load() string {
 	}); err != nil {
 		panic(err)
 	}
-	if err := actions.HookTool("edit", &toolobj.Hook{
-		Scope: "",
-		PreHook: toolobj.PreHookFunction{
-			Priority: 90,
-			Func:     buildPrompt,
-		},
-		OnHook: toolobj.OnHookFunction{
-			Priority: 110,
-			Func:     updateInfo,
-		},
-		PostHook: toolobj.PostHookFunction{
-			Priority: 110,
-			Func:     writeTree,
-		},
-	}); err != nil {
-		panic(err)
-	}
+	// @tree 的写语义已下线：不再向 edit 工具注册提示词（PreHook）、类型信息（OnHook）
+	// 与写回逻辑（PostHook），避免 AI 继续尝试通过 edit 编辑 @tree。
 	return toolName
 }
 

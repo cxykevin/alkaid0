@@ -4,7 +4,7 @@ Edit a workspace file or one of the supported virtual objects. Before changing a
 
 #### Parameters
 
-- `path` (string, required): A workspace-relative file path, or `@tree`, `@task`, `@memory`, `@memory/global`, or `@temp/run/<id>`. A `@temp/run/<id>` path sends raw input to the running background terminal. Do not use absolute paths, `..`, shell globs, or paths outside the workspace.
+- `path` (string, required): A workspace-relative file path, or `@task`, `@memory`, `@memory/global`, or `@temp/run/<id>`. A `@temp/run/<id>` path sends raw input to the running background terminal. Do not use absolute paths, `..`, shell globs, or paths outside the workspace.
 - `target` (string, optional): Selects the edit operation below. It is ignored when `path` is `@temp/run/<id>`.
 - `text` (string, required): Replacement, inserted, or appended text. Preserve the file's existing format and newline style.
 
@@ -30,7 +30,6 @@ Treat diagnostics as actionable evidence. A successful write does not mean the f
 
 #### Virtual objects
 
-- `@tree`: edit the workspace tree structurally. Files use ``- name `ID` ``; directories have no ID. Copy an entry by reusing its exact ID, delete an entry with its descendants, and move or rename it without changing its ID. Keep exactly 4 spaces per level. Do not expand `... (N files)` entries. Adding a new file entry is valid only when the corresponding real file is also created with `edit`.
 - `@task`: edit the Markdown task list. Use only `- [ ]`, `- [-]`, or `- [X]`; separate the task name and details with the first `:`; use exactly 2 spaces per nesting level. Change only the intended task and preserve unrelated ordering.
 - `@memory` and `@memory/global`: store durable project or global notes. Keep them concise, factual, non-sensitive, and non-redundant; never store credentials, tokens, private data, or transient conversational details.
 

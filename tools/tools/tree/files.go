@@ -298,7 +298,9 @@ func sortNodes(nodes []*Node) {
 	}
 }
 
-// BuildNodeFromString 从字符串构建节点
+// BuildNodeFromString 从字符串构建节点。
+//
+// Deprecated: @tree 写语义已下线，仅保留供 SolveCall 与回归测试使用。
 func BuildNodeFromString(str string) (*Node, error) {
 	str = strings.ReplaceAll(str, "\t", indentString)
 	lines := strings.Split(str, "\n")
@@ -581,7 +583,9 @@ func solveNodesTreeDiff(result *Node, origin *Node, target *Node) error {
 	return nil
 }
 
-// DiffStatus 差异表状态
+// DiffStatus 差异表状态。
+//
+// Deprecated: @tree 写语义已下线，差异表仅保留供差分模块复用与回归测试。
 type DiffStatus int8
 
 // 差异类型
@@ -892,7 +896,9 @@ func solveDiffTask(path string, diff []Diff) error {
 	return nil
 }
 
-// SolveCall 解决调用
+// SolveCall 解决调用（解析目标树、计算差异并落盘）。
+//
+// Deprecated: @tree 写语义已下线，不再有 AI 工具入口；仅保留供差分模块复用与回归测试。
 func SolveCall(path string, node *Node, dist string) ([]Diff, error) {
 	distNode, err := BuildNodeFromString(dist)
 	if err != nil {
