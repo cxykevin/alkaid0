@@ -14,6 +14,7 @@ import (
 	"github.com/cxykevin/alkaid0/log"
 	"github.com/cxykevin/alkaid0/prompts"
 	"github.com/cxykevin/alkaid0/storage/structs"
+	"github.com/cxykevin/alkaid0/terminal/sandbox"
 	"github.com/cxykevin/alkaid0/tools/actions"
 	"github.com/cxykevin/alkaid0/tools/index"
 	"github.com/cxykevin/alkaid0/tools/toolobj"
@@ -463,6 +464,17 @@ func buildTreeBlock(session *structs.Chats) (string, error) {
 	if err != nil {
 		logger.Warn("tree get abs error: %v", err)
 		return "", err
+	}
+	// 挂载自愈：清理失效的 mount 链接（链接缺失、指向错误、目标目录不可达）。
+	// 必须在扫描之前完成，指纹与树内容才反映清理后的真实状态。只删不增——
+	// 新增挂载必须由 AI 显式调用 file 工具的 mount 操作，扫描不会把任意目录
+	// 并入沙盒可写白名单。
+	if session.Root != "" {
+		if mountRoot, absErr := filepath.Abs(session.Root); absErr == nil {
+			if removed := sandbox.ReconcileMounts(mountRoot); removed > 0 {
+				logger.Info("tree reconciled %d stale mount link(s) under %s", removed, mountRoot)
+			}
+		}
 	}
 	states, stateErr := treeStates(workPath)
 	// 扫描未报错时（即使因截断而不完整）也计算指纹：指纹覆盖全部已扫描到的目录形状，

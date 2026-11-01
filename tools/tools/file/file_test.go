@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/cxykevin/alkaid0/storage/structs"
+	"github.com/cxykevin/alkaid0/terminal/sandbox"
 	_ "github.com/cxykevin/alkaid0/tools/tools/task" // 注册 @task 虚拟内容提供者
 	"github.com/cxykevin/alkaid0/tools/tools/trace"
 )
@@ -314,4 +315,136 @@ func TestCopyOrMoveIntoItselfRejected(t *testing.T) {
 
 	wantErr(t, run(t, s, map[string]any{"type": "copy", "src": "src", "dst": "src/sub"}), "inside the source")
 	wantErr(t, run(t, s, map[string]any{"type": "move", "src": "src", "dst": "src/sub"}), "inside the source")
+}
+
+func TestMountCreatesLinkAndRegistersTarget(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("creating symlinks usually requires developer mode / privileges on Windows")
+	}
+	s, dir := newSession(t)
+	outside := t.TempDir()
+
+	res := run(t, s, map[string]any{"type": "mount", "src": outside, "dst": "data"})
+	wantOK(t, res)
+
+	link := filepath.Join(dir, "data.alkmount")
+	info, err := os.Lstat(link)
+	if err != nil {
+		t.Fatalf("mount link not created: %v", err)
+	}
+	if info.Mode()&os.ModeSymlink == 0 {
+		t.Fatalf("mount destination is not a symlink: %v", info.Mode())
+	}
+	if target, err := os.Readlink(link); err != nil || target != outside {
+		t.Fatalf("mount link target = %q, %v; want %q", target, err, outside)
+	}
+
+	entries := sandbox.LoadMounts(dir)
+	if len(entries) != 1 || entries[0].Name != "data" {
+		t.Fatalf("mount table = %#v, want one entry named data", entries)
+	}
+	if targets := sandbox.MountTargets(dir); len(targets) != 1 {
+		t.Fatalf("mount targets = %v, want exactly one", targets)
+	}
+}
+
+func TestMountRejectsInvalidRequests(t *testing.T) {
+	s, dir := newSession(t)
+	outside := t.TempDir()
+	plain := filepath.Join(dir, "plain.txt")
+	writeFile(t, plain, "x")
+
+	// src 必须是绝对目录
+	wantErr(t, run(t, s, map[string]any{"type": "mount", "src": "relative/dir", "dst": "data"}), "absolute")
+	wantErr(t, run(t, s, map[string]any{"type": "mount", "src": filepath.Join(dir, "missing"), "dst": "data"}), "not found")
+	wantErr(t, run(t, s, map[string]any{"type": "mount", "src": plain, "dst": "data"}), "not a directory")
+	// dst 只允许字母数字下划线
+	wantErr(t, run(t, s, map[string]any{"type": "mount", "src": outside, "dst": "data-dir"}), "letters, digits and underscores")
+	wantErr(t, run(t, s, map[string]any{"type": "mount", "src": outside, "dst": "../data"}), "letters, digits and underscores")
+
+	if runtime.GOOS == "windows" {
+		t.Skip("creating symlinks usually requires developer mode / privileges on Windows")
+	}
+	// 同名挂载链接允许覆盖（AI 可以补一条 mount 修正失效挂载）。
+	wantOK(t, run(t, s, map[string]any{"type": "mount", "src": outside, "dst": "data"}))
+	wantOK(t, run(t, s, map[string]any{"type": "mount", "src": outside, "dst": "data"}))
+	if entries := sandbox.LoadMounts(dir); len(entries) != 1 {
+		t.Fatalf("mount table = %#v, want a single entry", entries)
+	}
+
+	// 普通文件占位时拒绝覆盖，绝不误删工作区内容。
+	link := filepath.Join(dir, "data.alkmount")
+	if err := os.Remove(link); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, link, "not a link")
+	wantErr(t, run(t, s, map[string]any{"type": "mount", "src": outside, "dst": "data"}), "not a mount link")
+	if got := readFile(t, link); got != "not a link" {
+		t.Fatalf("plain file must be kept, got %q", got)
+	}
+}
+
+func TestMountReclaimedByMoveToTrash(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("creating symlinks usually requires developer mode / privileges on Windows")
+	}
+	s, dir := newSession(t)
+	outside := t.TempDir()
+	wantOK(t, run(t, s, map[string]any{"type": "mount", "src": outside, "dst": "data"}))
+
+	res := run(t, s, map[string]any{"type": "move", "src": "data.alkmount", "dst": "@trash"})
+	wantOK(t, res)
+	if msg, _ := res["message"].(string); msg != "mount reclaimed" {
+		t.Fatalf("message = %q, want mount reclaimed", msg)
+	}
+	if _, err := os.Lstat(filepath.Join(dir, "data.alkmount")); !os.IsNotExist(err) {
+		t.Fatalf("mount link still exists: %v", err)
+	}
+	if entries := sandbox.LoadMounts(dir); len(entries) != 0 {
+		t.Fatalf("mount table = %#v, want empty", entries)
+	}
+}
+
+func TestMountReclaimFallsBackToWorkspaceRoot(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("creating symlinks usually requires developer mode / privileges on Windows")
+	}
+	s, dir := newSession(t)
+	outside := t.TempDir()
+	wantOK(t, run(t, s, map[string]any{"type": "mount", "src": outside, "dst": "data"}))
+	if err := os.MkdirAll(filepath.Join(dir, "sub"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	// 子激活路径里没有 data.alkmount：回退到工作区根回收。
+	sub := &structs.Chats{ID: s.ID, Root: s.Root, CurrentActivatePath: "sub"}
+	res := run(t, sub, map[string]any{"type": "move", "src": "data.alkmount", "dst": "@trash"})
+	wantOK(t, res)
+	if _, err := os.Lstat(filepath.Join(dir, "data.alkmount")); !os.IsNotExist(err) {
+		t.Fatalf("mount link still exists: %v", err)
+	}
+	if entries := sandbox.LoadMounts(dir); len(entries) != 0 {
+		t.Fatalf("mount table = %#v, want empty", entries)
+	}
+}
+
+func TestMoveToTrashDoesNotUnbindPlainFile(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("creating symlinks usually requires developer mode / privileges on Windows")
+	}
+	s, dir := newSession(t)
+	outside := t.TempDir()
+	wantOK(t, run(t, s, map[string]any{"type": "mount", "src": outside, "dst": "data"}))
+
+	// 子目录里的同名普通文件不是挂载链接，删除它不能解绑挂载。
+	writeFile(t, filepath.Join(dir, "sub", "data.alkmount"), "plain")
+	sub := &structs.Chats{ID: s.ID, Root: s.Root, CurrentActivatePath: "sub"}
+	wantOK(t, run(t, sub, map[string]any{"type": "move", "src": "data.alkmount", "dst": "@trash"}))
+
+	if entries := sandbox.LoadMounts(dir); len(entries) != 1 {
+		t.Fatalf("mount table = %#v, want the mount to stay bound", entries)
+	}
+	if _, err := os.Lstat(filepath.Join(dir, "data.alkmount")); err != nil {
+		t.Fatalf("mount link must survive: %v", err)
+	}
 }

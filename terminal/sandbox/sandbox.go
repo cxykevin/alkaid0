@@ -145,6 +145,11 @@ func New(cfg Config) (*Sandbox, error) {
 	if workspace == "" {
 		workspace = workDir
 	}
+	// 工作区挂载表（file 工具的 type="mount"）登记的目标目录同样可写：
+	// 表按工作区根存放，沙盒内通过 <name>.alkmount 软链接访问。
+	mountTargets := MountTargets(workspace)
+	writableDirs = append(writableDirs, mountTargets...)
+
 	// 统一访问策略：全局只读 + 定向放开（完整规则见 policy.go）。
 	// Linux 用挂载实现，Windows 用 DACL 实现，两边读同一份规则。
 	in := policyInput{
@@ -153,7 +158,7 @@ func New(cfg Config) (*Sandbox, error) {
 		tmpDir:       tmpDir,
 		configDir:    cfg.ConfigDir,
 		logDir:       cfg.LogDir,
-		writableDirs: cfg.WritableDirs,
+		writableDirs: append(append([]string{}, cfg.WritableDirs...), mountTargets...),
 	}
 	policy := buildPolicy(in)
 

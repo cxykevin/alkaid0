@@ -1,10 +1,13 @@
-// Package file 提供 move / copy / link 三种文件操作。
+// Package file 提供 move / copy / link / mount 四种文件操作。
 //
 // 语义要点：
 //   - src 可以是虚拟对象（@task/@memory/@tree 等）：其文本内容写入 dst；
 //   - dst=@trash（仅 move）删除 src；
 //   - dst=@temp/run/<id> 把 src 的整个文件内容喂给运行中的终端（不发送 EOF）；
 //   - link 只接受真实路径，src/dst 都不能是虚拟对象、@trash 或终端；
+//   - mount 语义同 link，但 src 是工作区之外的绝对目录：链接名固定为
+//     dst + ".alkmount"，并登记到工作区挂载表（.alkaid0/mounts.json），
+//     沙盒据此把目标目录并入可写白名单；
 //   - copy 大文件优先 CoW（FICLONE 等），回退到分块复制并通过
 //     session.PushToolProgress 汇报进度（客户端 tool_call_update in_progress）。
 package file
@@ -53,17 +56,17 @@ var paras = map[string]parser.ToolParameters{
 	"type": {
 		Type:        parser.ToolTypeString,
 		Required:    true,
-		Description: `Operation: "move", "copy" or "link"`,
+		Description: `Operation: "move", "copy", "link" or "mount"`,
 	},
 	"src": {
 		Type:        parser.ToolTypeString,
 		Required:    true,
-		Description: "Source path relative to the workspace, or a virtual object (e.g. @task, @memory, @tree, @cron). Virtual sources are written to dst as text",
+		Description: "Source path relative to the workspace, or a virtual object (e.g. @task, @memory, @tree, @cron). Virtual sources are written to dst as text. For mount, src must be an absolute directory path outside the workspace",
 	},
 	"dst": {
 		Type:        parser.ToolTypeString,
 		Required:    true,
-		Description: `Destination path relative to the workspace. For move only, "@trash" deletes src. "@temp/run/<id>" sends the whole file to that running terminal without EOF. dst cannot be a virtual object`,
+		Description: `Destination path relative to the workspace. For move only, "@trash" deletes src (moving dst + ".alkmount" also unmounts it). "@temp/run/<id>" sends the whole file to that running terminal without EOF. dst cannot be a virtual object. For mount, dst may only contain letters, digits and underscores; the link is created in the workspace root as dst + ".alkmount" and an existing mount link with the same name is replaced`,
 	},
 }
 
@@ -92,7 +95,7 @@ func init() {
 	index.AddIndex(load)
 }
 
-// runFile 执行 move / copy / link。
+// runFile 执行 move / copy / link / mount。
 func runFile(session *structs.Chats, args map[string]*any, cross []*any) (bool, []*any, map[string]*any, error) {
 	if session == nil {
 		return fail(cross, "session is not available")
@@ -106,8 +109,8 @@ func runFile(session *structs.Chats, args map[string]*any, cross []*any) (bool, 
 		return fail(cross, err.Error())
 	}
 	op := strings.ToLower(strings.TrimSpace(typ))
-	if op != "move" && op != "copy" && op != "link" {
-		return fail(cross, fmt.Sprintf(`unknown type %q: expected "move", "copy" or "link"`, typ))
+	if op != "move" && op != "copy" && op != "link" && op != "mount" {
+		return fail(cross, fmt.Sprintf(`unknown type %q: expected "move", "copy", "link" or "mount"`, typ))
 	}
 	src, err := requiredString(args, "src")
 	if err != nil {
@@ -131,12 +134,12 @@ func runFile(session *structs.Chats, args map[string]*any, cross []*any) (bool, 
 	dstIsTerminal := isTerminalDst(workspace, dst)
 
 	// 逐项校验 dst 与 type 的组合，错误信息在运行时返回（提示词不展开 @trash+虚拟源的限制）。
-	if op == "link" {
+	if op == "link" || op == "mount" {
 		if srcVirtual {
-			return fail(cross, "link does not support a virtual source path")
+			return fail(cross, op+" does not support a virtual source path")
 		}
 		if dstIsTrash || dstIsTerminal || trace.IsProviderPath(dst) {
-			return fail(cross, "link destination must be a real file path (not @trash, a terminal or a virtual object)")
+			return fail(cross, op+" destination must be a real file path (not @trash, a terminal or a virtual object)")
 		}
 	} else {
 		if dstIsTrash {
@@ -175,7 +178,20 @@ func runFile(session *structs.Chats, args map[string]*any, cross []*any) (bool, 
 		return successResult(cross, op, src, dst, "virtual content written to file", int64(len(content)))
 	}
 
+	// mount 把工作区之外的绝对目录挂进来：src 是绝对路径，不复用下面的
+	// 工作区相对路径解析。
+	if op == "mount" {
+		return runMount(cross, session, src, dst)
+	}
+
 	srcAbs, err := resolveWorkspacePath(workspace, src, true)
+	if err != nil && op == "move" && dstIsTrash {
+		// 子激活路径里没有该链接时，回退到工作区根的同名挂载链接（mount
+		// 的链接固定在工作区根），保证任何位置都能用 move @trash 回收。
+		if abs, ok := findMountLinkFallback(session, src); ok {
+			srcAbs, err = abs, nil
+		}
+	}
 	if err != nil {
 		return fail(cross, err.Error())
 	}
@@ -193,10 +209,16 @@ func runFile(session *structs.Chats, args map[string]*any, cross []*any) (bool, 
 	switch op {
 	case "move":
 		if dstIsTrash {
+			// 删除 <name>.alkmount 链接时同步回收挂载表记录（mount 的回收方式）。
+			reclaimed := reclaimMount(session, srcAbs)
 			if err := os.RemoveAll(srcAbs); err != nil {
 				return fail(cross, "failed to delete source: "+err.Error())
 			}
-			return successResult(cross, op, src, dst, "deleted", fileBytes(srcInfo))
+			message := "deleted"
+			if reclaimed {
+				message = "mount reclaimed"
+			}
+			return successResult(cross, op, src, dst, message, fileBytes(srcInfo))
 		}
 		if dstIsTerminal {
 			if !srcInfo.Mode().IsRegular() {
@@ -312,6 +334,61 @@ func runFile(session *structs.Chats, args map[string]*any, cross []*any) (bool, 
 	return fail(cross, "unreachable")
 }
 
+// runMount 把工作区之外的绝对目录挂载进工作区。
+//
+// 与 link 的差别：
+//   - src 必须是绝对目录（不受工作区相对路径限制，符号链接越界检查也不适用）；
+//   - dst 只能包含字母、数字与下划线，实际链接名为 dst + sandbox.MountLinkSuffix；
+//   - 链接固定在工作区根，登记到 .alkaid0/mounts.json，沙盒据此把目标目录
+//     并入可写白名单（见 sandbox.MountTargets）；
+//   - 同名链接已存在时覆盖（只覆盖符号链接），方便 AI 修补失效挂载。
+func runMount(cross []*any, session *structs.Chats, src, dst string) (bool, []*any, map[string]*any, error) {
+	if !filepath.IsAbs(src) {
+		return fail(cross, "mount source must be an absolute directory path")
+	}
+	if !sandbox.ValidMountName(dst) {
+		return fail(cross, "mount destination may only contain letters, digits and underscores")
+	}
+	target := filepath.Clean(src)
+	info, err := os.Stat(target)
+	if err != nil {
+		return fail(cross, "mount source not found: "+err.Error())
+	}
+	if !info.IsDir() {
+		return fail(cross, "mount source is not a directory: "+target)
+	}
+
+	// 链接固定在工作区根：沙盒豁免按工作区整体生效，链接也应在根目录与
+	// 子激活路径下都可见；回收（move @trash）与自愈（tree 扫描）同样以
+	// 这个位置为准。
+	root, err := filepath.Abs(session.Root)
+	if err != nil {
+		return fail(cross, "failed to resolve workspace root: "+err.Error())
+	}
+	linkName := sandbox.MountLinkName(dst)
+	linkAbs := sandbox.MountLinkPath(root, dst)
+
+	// 允许覆盖同名挂载链接：AI 可以补一条 mount 修正失效的挂载。
+	// 只覆盖符号链接——普通文件/目录绝不删除，避免误伤工作区内容。
+	if existing, lstatErr := os.Lstat(linkAbs); lstatErr == nil {
+		if existing.Mode()&os.ModeSymlink == 0 {
+			return fail(cross, "destination already exists and is not a mount link: "+linkName)
+		}
+		if err := os.Remove(linkAbs); err != nil {
+			return fail(cross, "failed to replace existing mount link: "+err.Error())
+		}
+	}
+	if err := os.Symlink(target, linkAbs); err != nil {
+		return fail(cross, "failed to create symlink: "+err.Error())
+	}
+	if err := sandbox.AddMount(root, dst, target); err != nil {
+		_ = os.Remove(linkAbs)
+		return fail(cross, "failed to register mount: "+err.Error())
+	}
+	logger.Info("file mount %s -> %s (%s) in ID=%d", target, dst, linkName, session.ID)
+	return successResult(cross, "mount", src, linkName, "mount created", 0)
+}
+
 // === 路径与校验 ===
 
 // resolveWorkspacePath 校验相对路径并解析为绝对路径（含符号链接越界检查）。
@@ -330,6 +407,45 @@ func resolveWorkspacePath(workspace, p string, mustExist bool) (string, error) {
 		}
 	}
 	return abs, nil
+}
+
+// reclaimMount 删除挂载链接时同步回收挂载表记录。
+//
+// 只有文件名形如 <name>.alkmount 且确实是符号链接时才尝试回收；普通文件
+// 不碰表，保证 move @trash 删除同名普通文件时不会误解绑挂载。
+func reclaimMount(session *structs.Chats, srcAbs string) bool {
+	name, ok := sandbox.MountNameFromLink(srcAbs)
+	if !ok {
+		return false
+	}
+	info, err := os.Lstat(srcAbs)
+	if err != nil || info.Mode()&os.ModeSymlink == 0 {
+		return false
+	}
+	root, err := filepath.Abs(session.Root)
+	if err != nil {
+		return false
+	}
+	return sandbox.RemoveMount(root, name)
+}
+
+// findMountLinkFallback 在子激活路径里找不到 src 时，回退到工作区根的同名
+// 挂载链接：mount 的链接固定在工作区根，任何位置都应能用 move @trash 回收。
+func findMountLinkFallback(session *structs.Chats, src string) (string, bool) {
+	name, ok := sandbox.MountNameFromLink(src)
+	if !ok {
+		return "", false
+	}
+	root, err := filepath.Abs(session.Root)
+	if err != nil {
+		return "", false
+	}
+	link := sandbox.MountLinkPath(root, name)
+	info, err := os.Lstat(link)
+	if err != nil || info.Mode()&os.ModeSymlink == 0 {
+		return "", false
+	}
+	return link, true
 }
 
 // checkRelativePath 复用 edit 工具的词法校验（拒绝 ..、绝对路径、通配符等）。
