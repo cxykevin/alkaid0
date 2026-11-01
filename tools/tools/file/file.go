@@ -24,6 +24,7 @@ import (
 
 	"github.com/cxykevin/alkaid0/log"
 	"github.com/cxykevin/alkaid0/provider/parser"
+	"github.com/cxykevin/alkaid0/skill"
 	"github.com/cxykevin/alkaid0/storage/structs"
 	"github.com/cxykevin/alkaid0/terminal/sandbox"
 	"github.com/cxykevin/alkaid0/tools/actions"
@@ -168,7 +169,7 @@ func runFile(session *structs.Chats, args map[string]*any, cross []*any) (bool, 
 			}
 			return successResult(cross, op, src, dst, "virtual content written to terminal", int64(len(content)))
 		}
-		dstAbs, err := resolveWorkspacePath(workspace, dst, false)
+		dstAbs, err := resolveWorkspaceDst(workspace, dst)
 		if err != nil {
 			return fail(cross, err.Error())
 		}
@@ -232,7 +233,7 @@ func runFile(session *structs.Chats, args map[string]*any, cross []*any) (bool, 
 			}
 			return successResult(cross, op, src, dst, "content sent to terminal and source removed", fileBytes(srcInfo))
 		}
-		dstAbs, err := resolveWorkspacePath(workspace, dst, false)
+		dstAbs, err := resolveWorkspaceDst(workspace, dst)
 		if err != nil {
 			return fail(cross, err.Error())
 		}
@@ -269,7 +270,7 @@ func runFile(session *structs.Chats, args map[string]*any, cross []*any) (bool, 
 			}
 			return successResult(cross, op, src, dst, "content sent to terminal", fileBytes(srcInfo))
 		}
-		dstAbs, err := resolveWorkspacePath(workspace, dst, false)
+		dstAbs, err := resolveWorkspaceDst(workspace, dst)
 		if err != nil {
 			return fail(cross, err.Error())
 		}
@@ -306,7 +307,7 @@ func runFile(session *structs.Chats, args map[string]*any, cross []*any) (bool, 
 		return successResult(cross, op, src, dst, "copied", srcInfo.Size())
 
 	case "link":
-		dstAbs, err := resolveWorkspacePath(workspace, dst, false)
+		dstAbs, err := resolveWorkspaceDst(workspace, dst)
 		if err != nil {
 			return fail(cross, err.Error())
 		}
@@ -405,6 +406,19 @@ func resolveWorkspacePath(workspace, p string, mustExist bool) (string, error) {
 		if _, err := os.Lstat(abs); err != nil {
 			return "", fmt.Errorf("source not found: %w", err)
 		}
+	}
+	return abs, nil
+}
+
+// resolveWorkspaceDst 解析目标路径，并拒绝写入 skill 只读目录
+// （.alkaid0/skills 与各 skill 来源目录），与 edit / 沙盒的只读策略一致。
+func resolveWorkspaceDst(workspace, p string) (string, error) {
+	abs, err := resolveWorkspacePath(workspace, p, false)
+	if err != nil {
+		return "", err
+	}
+	if skill.IsReadOnlyPath(workspace, abs) {
+		return "", fmt.Errorf("skill directories are read-only: %s", p)
 	}
 	return abs, nil
 }

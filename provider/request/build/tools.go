@@ -7,6 +7,7 @@ import (
 
 	"github.com/cxykevin/alkaid0/prompts"
 	"github.com/cxykevin/alkaid0/provider/parser"
+	"github.com/cxykevin/alkaid0/skill"
 	"github.com/cxykevin/alkaid0/storage/structs"
 	"github.com/cxykevin/alkaid0/tools"
 	"github.com/cxykevin/alkaid0/tools/toolobj"
@@ -45,6 +46,15 @@ func Tools(session *structs.Chats) (string, string, *[]*parser.ToolsDefine, erro
 			Enable:      enabled,
 		}
 	})
+	// skill scope 按会话工作区动态发现（skill.<name>），不进入全局 toolobj.Scopes：
+	// 每个工作区可见的 skill 不同，全局注册会让不同会话互相污染。
+	for _, s := range skill.Scopes(session.Root) {
+		scopes = append(scopes, scopeInfo{
+			ID:          s.ID,
+			Description: s.Description,
+			Enable:      session.EnableScopes[s.ID],
+		})
+	}
 	sort.Slice(scopes, func(i, j int) bool { return scopes[i].ID < scopes[j].ID })
 	toolScopesRendered, err := prompts.Render(prompts.ToolScopesTemplate, struct {
 		Scopes []scopeInfo

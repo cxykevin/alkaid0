@@ -16,6 +16,7 @@ import (
 	"github.com/cxykevin/alkaid0/context/outline"
 	"github.com/cxykevin/alkaid0/log"
 	"github.com/cxykevin/alkaid0/provider/parser"
+	"github.com/cxykevin/alkaid0/skill"
 	"github.com/cxykevin/alkaid0/storage/structs"
 	"github.com/cxykevin/alkaid0/terminal/sandbox"
 	"github.com/cxykevin/alkaid0/tools/actions"
@@ -557,6 +558,17 @@ func writeFile(session *structs.Chats, mp map[string]*any, cross []*any) (bool, 
 		boolx := false
 		success := any(boolx)
 		errMsg := any(err.Error())
+		return false, cross, map[string]*any{
+			"success": &success,
+			"error":   &errMsg,
+		}, nil
+	}
+	// skill 目录默认只读：即便位于可写工作区（如 <ws>/.claude/skills），
+	// 也不允许通过 edit 改写技能定义——与 run 沙盒的只读策略保持一致。
+	if skill.IsReadOnlyPath(session.Root, path) {
+		boolx := false
+		success := any(boolx)
+		errMsg := any(fmt.Sprintf("skill directories are read-only: %s", origRelPath))
 		return false, cross, map[string]*any{
 			"success": &success,
 			"error":   &errMsg,

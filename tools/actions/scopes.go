@@ -4,6 +4,7 @@ import (
 	"maps"
 
 	"github.com/cxykevin/alkaid0/log"
+	"github.com/cxykevin/alkaid0/skill"
 	"github.com/cxykevin/alkaid0/storage/structs"
 	"gorm.io/gorm"
 )
@@ -26,6 +27,9 @@ func Load(session *structs.Chats) {
 	} else {
 		logger.Error("failed to load scopes from storage: %v", err)
 	}
+	// 已启用的 skill scope 需要对应的 .alkaid0/skills 链接就位（可能被手动删除，
+	// 或由同一工作区的其它会话停用过）。失败只记日志，不影响会话加载。
+	skill.SyncEnabled(session.Root, session.EnableScopes)
 }
 
 // SetScopeEnabled 设置或更新命名空间启用状态

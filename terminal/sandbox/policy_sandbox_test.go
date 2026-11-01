@@ -84,6 +84,10 @@ func newPolicyFixtureSandbox(t *testing.T) *policyFixture {
 	}
 	write(filepath.Join(f.ws, ".alkaid0", "db.sqlite"), "DB-SECRET")
 	write(filepath.Join(f.ws, ".alkaid0", "images", "logo.png"), "PNG-DATA")
+	// 已启用 skill 的链接目录内容：沙盒内可读不可写（skills 只读）。
+	write(filepath.Join(f.ws, ".alkaid0", "skills", "demo", "SKILL.md"), "SKILL-DATA")
+	// 工作区里的 skill 来源目录同样是只读的。
+	write(filepath.Join(f.ws, ".claude", "skills", "demo2", "SKILL.md"), "SKILL2-DATA")
 	write(filepath.Join(f.cfg, "config.json"), `{"key":"CONFIG-SECRET"}`)
 	write(filepath.Join(f.logs, "log.log"), "LOG-SECRET")
 	write(filepath.Join(f.venv, "bin", "python"), "#!/bin/sh\nexit 0\n")
@@ -190,14 +194,24 @@ func TestSandboxPolicy(t *testing.T) {
 			t.Fatalf("沙盒内不应能删除 .alkaid0 里的文件: %v", err)
 		}
 
-		// skills / temp 可读写（含删除）
-		f.mustSucceed(t, fmt.Sprintf("echo ok > %q && cat %q", filepath.Join(f.ws, ".alkaid0", "skills", "a.md"), filepath.Join(f.ws, ".alkaid0", "skills", "a.md")))
-		f.mustSucceed(t, fmt.Sprintf("rm -f %q", filepath.Join(f.ws, ".alkaid0", "skills", "a.md")))
+		// temp 可读写（含删除）
 		f.mustSucceed(t, fmt.Sprintf("echo ok > %q && rm -f %q", filepath.Join(f.ws, ".alkaid0", "temp", "t"), filepath.Join(f.ws, ".alkaid0", "temp", "t")))
 
-		// images 只读（可读不可写）
-		f.mustSucceed(t, fmt.Sprintf("cat %q", filepath.Join(f.ws, ".alkaid0", "images", "logo.png")))
-		f.mustFail(t, fmt.Sprintf("echo hacked > %q", filepath.Join(f.ws, ".alkaid0", "images", "new.png")))
+		// skills / images 只读（可读不可写）：已加载的 skill 路径不允许被改写
+		for _, file := range []string{
+			filepath.Join(f.ws, ".alkaid0", "skills", "demo", "SKILL.md"),
+			filepath.Join(f.ws, ".alkaid0", "images", "logo.png"),
+		} {
+			f.mustSucceed(t, fmt.Sprintf("cat %q", file))
+			f.mustFail(t, fmt.Sprintf("echo hacked > %q", file))
+		}
+		f.mustFail(t, fmt.Sprintf("echo hacked > %q", filepath.Join(f.ws, ".alkaid0", "skills", "new.md")))
+		f.mustFail(t, fmt.Sprintf("rm -f %q", filepath.Join(f.ws, ".alkaid0", "skills", "demo", "SKILL.md")))
+
+		// 工作区里的 skill 来源目录（.claude/skills）同样是只读的
+		srcSkill := filepath.Join(f.ws, ".claude", "skills", "demo2", "SKILL.md")
+		f.mustSucceed(t, fmt.Sprintf("cat %q", srcSkill))
+		f.mustFail(t, fmt.Sprintf("echo hacked > %q", srcSkill))
 	})
 
 	t.Run("配置目录与日志目录不可读写", func(t *testing.T) {

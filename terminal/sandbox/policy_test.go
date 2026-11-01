@@ -92,9 +92,9 @@ func TestBuildPolicyRules(t *testing.T) {
 		// 工作区 .alkaid0：仅可列出
 		{filepath.Join(ws, ".alkaid0"), AccessListOnly},
 		{filepath.Join(ws, ".alkaid0", "db.sqlite"), AccessListOnly},
-		// 固定子目录
-		{filepath.Join(ws, ".alkaid0", "skills"), AccessReadWrite},
-		{filepath.Join(ws, ".alkaid0", "skills", "a", "SKILL.md"), AccessReadWrite},
+		// 固定子目录：skills / images 只读（已加载的 skill 路径不可改写）
+		{filepath.Join(ws, ".alkaid0", "skills"), AccessReadOnly},
+		{filepath.Join(ws, ".alkaid0", "skills", "a", "SKILL.md"), AccessReadOnly},
 		{filepath.Join(ws, ".alkaid0", "temp"), AccessReadWrite},
 		{filepath.Join(ws, ".alkaid0", "images"), AccessReadOnly},
 		{filepath.Join(ws, ".alkaid0", "images", "x.png"), AccessReadOnly},
@@ -190,6 +190,60 @@ func TestBuildPolicyProtectedAddsNoDirsOutsideWorkspace(t *testing.T) {
 		}
 		if isWithin(cfg, dir) && dir != filepath.Join(cfg, "venv") {
 			t.Errorf("配置目录的子路径只应放开 venv，得到 %s", dir)
+		}
+	}
+}
+
+// TestBuildPolicySkillDirsReadOnly 验证 skill 来源目录在可写工作区里仍被收敛为只读。
+//
+// 会话激活路径为空时 WorkDir == Workspace，整个工作区可写；此时工作区内的
+// .claude/skills、.agents/skills 必须单独登记为只读，否则沙盒内能改写技能定义。
+func TestBuildPolicySkillDirsReadOnly(t *testing.T) {
+	root := policyTestRoot(t)
+	ws := filepath.Join(root, "ws")
+	for _, dir := range []string{
+		filepath.Join(ws, ".claude", "skills", "a"),
+		filepath.Join(ws, ".agents", "skills", "b"),
+		filepath.Join(ws, ".alkaid0", "skills", "c"),
+		filepath.Join(ws, ".alkaid0", "temp"),
+		filepath.Join(ws, "src"),
+	} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatalf("MkdirAll(%s) failed: %v", dir, err)
+		}
+	}
+	// 真实的 skill 入口文件，确保 canonicalPath 解析的是已存在路径。
+	for _, file := range []string{
+		filepath.Join(ws, ".claude", "skills", "a", "SKILL.md"),
+		filepath.Join(ws, ".agents", "skills", "b", "SKILL.md"),
+		filepath.Join(ws, ".alkaid0", "skills", "c", "SKILL.md"),
+	} {
+		if err := os.WriteFile(file, []byte("---\nname: x\n---\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	p := buildPolicy(policyInput{
+		workDir:   ws,
+		workspace: ws,
+		tmpDir:    filepath.Join(root, "tmp"),
+		configDir: filepath.Join(root, "cfg"),
+		logDir:    filepath.Join(root, "logs"),
+	})
+	cases := []struct {
+		path string
+		want Access
+	}{
+		{filepath.Join(ws, "src", "main.go"), AccessReadWrite},
+		{filepath.Join(ws, ".claude", "skills", "a", "SKILL.md"), AccessReadOnly},
+		{filepath.Join(ws, ".claude", "settings.json"), AccessReadWrite},
+		{filepath.Join(ws, ".agents", "skills", "b", "SKILL.md"), AccessReadOnly},
+		{filepath.Join(ws, ".alkaid0", "skills", "c", "SKILL.md"), AccessReadOnly},
+		{filepath.Join(ws, ".alkaid0", "temp", "t"), AccessReadWrite},
+	}
+	for _, c := range cases {
+		if got := p.AccessFor(c.path); got != c.want {
+			t.Errorf("AccessFor(%q) = %s, want %s", c.path, got, c.want)
 		}
 	}
 }

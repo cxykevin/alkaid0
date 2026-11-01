@@ -292,7 +292,7 @@ C:\ProgramData\alkaid0\config.json
 > 沙盒对文件系统的规则是：**全盘只读**，只有下列路径可写——工作区（会话激活目录）、系统临时目录、
 > Python venv、git 仓库的 `.git`（含 worktree 的 commondir）、工具与 shell 的运行时目录（`~/.config/gh`、
 > bash/zsh 历史等）。alkaid0 的配置目录与日志目录不可读写；工作区 `.alkaid0` 只能列出条目，
-> 其中 `skills`、`temp` 可读写，`images` 只读。需要突破这些限制时把 `run` 的 `sandbox` 置为 `false`，
+> 其中 `skills`、`images` 只读，`temp` 可读写。需要突破这些限制时把 `run` 的 `sandbox` 置为 `false`，
 > 或配置 `DisableSandbox`（全局 / Agent 级）与 `ALKAID0_DISABLE_SANDBOX=true`。
 
 ### 数据脱敏（DataMask）
@@ -390,6 +390,22 @@ C:\ProgramData\alkaid0\config.json
 | Linux | mount namespace + 挂载隔离 |
 | Windows | 作业对象（Job Object）+ 令牌限制（Token Restrictions） |
 | macOS | 暂无 |
+
+### Skills
+
+支持标准 Agent Skill（目录内含带 YAML frontmatter 的 `SKILL.md`）。服务会扫描安装目录
+（`<可执行文件目录>/skills`、`<prefix>/share/alkaid0/skills`）、配置目录 `skills/`、
+以及用户与工作区的 `~/.claude/skills`、`~/.agents/skills`、`<工作区>/.claude/skills`、
+`<工作区>/.agents/skills`，把每个 skill 以 `skill.<name>` 的 scope 列进 `<scopes>`。
+
+启用该 scope 会把 skill 目录软链接到 `<工作区>/.alkaid0/skills/<name>`，并把其中的
+`SKILL.md` 自动加入会话读取上下文（trace list，等同一轮 read）；停用会删除该软链接，
+同时移除该 skill 路径下的所有 trace（只删软链接与上下文记录，绝不删除真实目录）。
+沙盒内 `.alkaid0/skills` 与各 skill 来源目录均为**只读**，避免技能定义被改写。
+
+同名 skill 按「工作区 > 用户 > 配置 > 安装」的顺序覆盖。启用/停用依赖软链接（与 `file` 工具的
+`link` 一致）：Windows 服务以 SYSTEM 运行时可正常创建；若手动以普通用户身份启动、又没开开发者模式，
+启用 skill 会因缺少软链接权限而失败。
 
 ---
 

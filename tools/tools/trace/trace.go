@@ -14,6 +14,7 @@ import (
 	"github.com/cxykevin/alkaid0/log"
 	"github.com/cxykevin/alkaid0/prompts"
 	"github.com/cxykevin/alkaid0/provider/parser"
+	"github.com/cxykevin/alkaid0/skill"
 	"github.com/cxykevin/alkaid0/storage/structs"
 	"github.com/cxykevin/alkaid0/tools/actions"
 	docresources "github.com/cxykevin/alkaid0/tools/docs"
@@ -303,7 +304,6 @@ func Trace(session *structs.Chats, mp map[string]*any, push []*any) (bool, []*an
 		InvalidateTraceCache(session)
 	} else {
 		var str string
-		var err error
 		isHistory := structs.IsHistoryPath(path)
 		if vpath, ok := strings.CutPrefix(path, "@temp/"); ok {
 			// 查db：记录不存在时必须报错。旧实现忽略 First 的错误，把空内容当成
@@ -336,17 +336,32 @@ func Trace(session *structs.Chats, mp map[string]*any, push []*any) (bool, []*an
 		} else {
 			path2 := filepath.Join(nowpath, path)
 			path2 = filepath.Clean(path2)
+			// skill 链接固定在工作区根：会话激活了子目录时，按 nowpath 拼出来的
+			// 路径并不存在，回退到工作区根再试一次，保证技能内容始终可读。
+			if _, serr := os.Stat(path2); serr != nil && session.Root != "" && isSkillTracePath(path) {
+				if alt := filepath.Clean(filepath.Join(session.Root, path)); alt != path2 {
+					if _, aerr := os.Stat(alt); aerr == nil {
+						path2 = alt
+					}
+				}
+			}
 			// read 由内置规则自动批准，纯词法校验挡不住工作区内指向外部的符号链接
 			// （os.Stat / os.ReadFile 都会跟随链接）。这里补上"解析符号链接 +
 			// 保护 .alkaid0"的包含性校验。
-			if err := u.EnsureWorkspacePath(nowpath, path2, ".alkaid0"); err != nil {
-				boolx := false
-				success := any(boolx)
-				errMsg := any(err.Error())
-				return false, push, map[string]*any{
-					"success": &success,
-					"error":   &errMsg,
-				}, nil
+			//
+			// 例外：已启用 skill 的链接就在 .alkaid0/skills/<name>，解析后仍落在
+			// skill 来源目录里（沙盒把两侧都设为只读）。放行这一类路径，模型才能
+			// 读到 SKILL.md 与技能自带资源；其余 .alkaid0 内容继续保持不可读。
+			if !skill.IsLinkedPath(session.Root, path2) {
+				if err := u.EnsureWorkspacePath(nowpath, path2, ".alkaid0"); err != nil {
+					boolx := false
+					success := any(boolx)
+					errMsg := any(err.Error())
+					return false, push, map[string]*any{
+						"success": &success,
+						"error":   &errMsg,
+					}, nil
+				}
 			}
 			// 检查文件是否存在
 			stat, err := os.Stat(path2)
@@ -438,12 +453,10 @@ func Trace(session *structs.Chats, mp map[string]*any, push []*any) (bool, []*an
 			}
 		}
 
-		// 若文件已在当前会话的跟踪列表中，静默成功（避免复合主键唯一约束冲突）
-		var tracedCount int64
-		if err := session.DB.Model(&structs.Traces{}).
-			Where("chat_id = ? AND path = ? AND agent_id = ?", session.ID, path, session.NowAgent).
-			Count(&tracedCount).Error; err != nil {
-			logger.Warn("check trace failed: %v", err)
+		// 若文件已在当前会话的跟踪列表中，静默成功（避免复合主键唯一约束冲突）；
+		// 否则写入新行。抽成 writeTraceRow 供 skill 启用时的自动注入复用。
+		if err := writeTraceRow(session, path, str, readMode, isHistory); err != nil {
+			logger.Warn("trace failed: %v", err)
 			boolx := false
 			success := any(boolx)
 			errMsg := any(err.Error())
@@ -451,62 +464,6 @@ func Trace(session *structs.Chats, mp map[string]*any, push []*any) (bool, []*an
 				"success": &success,
 				"error":   &errMsg,
 			}, err
-		}
-		if tracedCount == 0 {
-			// 更新 TraceID
-			session.TraceID++
-			// 写数据库
-			trace := structs.Traces{
-				ChatID:      session.ID,
-				Path:        path,
-				TraceID:     session.TraceID,
-				AgentID:     session.NowAgent,
-				LastContent: str,
-				ReadMode:    readMode,
-			}
-			err = session.DB.Save(&trace).Error
-			if err != nil {
-				logger.Warn("trace failed: %v", err)
-				boolx := false
-				success := any(boolx)
-				errMsg := any(err.Error())
-				return false, push, map[string]*any{
-					"success": &success,
-					"error":   &errMsg,
-				}, nil
-			}
-			err = session.DB.Model(&structs.Chats{}).Where("id = ?", session.ID).Update("trace_id", session.TraceID).Error
-			if err != nil {
-				logger.Warn("update trace failed: %v", err)
-				boolx := false
-				success := any(boolx)
-				errMsg := any(err.Error())
-				return false, push, map[string]*any{
-					"success": &success,
-					"error":   &errMsg,
-				}, nil
-			}
-			// 后台静默索引（打 tempfs 标签）。历史会话内容来自其它会话的消息表，
-			// 不是文件产物，不进工作区索引；history 模式的 search 直接查消息表。
-			if !isHistory {
-				go func() {
-					idxPath := path
-					if vpath, ok := strings.CutPrefix(idxPath, "@temp/"); ok {
-						idxPath = vpath
-					}
-					if indexTaskFn != nil {
-						indexTaskFn(session.Root, idxPath, str, str, []string{"tempfs"})
-					}
-				}()
-			}
-		} else {
-			// 已跟踪：本轮的读取模式（首次受限 / 再次 read 升级全量）写回行，
-			// 下一轮构建上下文时据此决定注入大纲、截断还是全文。
-			if uerr := session.DB.Model(&structs.Traces{}).
-				Where("chat_id = ? AND path = ? AND agent_id = ?", session.ID, path, session.NowAgent).
-				Update("read_mode", readMode).Error; uerr != nil {
-				logger.Warn("update read mode failed: %v", uerr)
-			}
 		}
 	}
 
@@ -915,6 +872,11 @@ func readTraceFileContent(session *structs.Chats, nowpath string, traceObj struc
 		return fileObj.Content, true
 	}
 	path := filepath.Join(nowpath, traceObj.Path)
+	if _, statErr := os.Stat(path); statErr != nil && session.Root != "" && isSkillTracePath(traceObj.Path) {
+		// skill 链接固定在工作区根：会话有激活路径时相对 nowpath 找不到，
+		// 回退到工作区根（启用 skill 时写入的是工作区相对路径）。
+		path = filepath.Join(session.Root, traceObj.Path)
+	}
 	stat, err := os.Stat(path)
 	if err != nil {
 		logger.Warn("trace warning: \"%s\" get stat error: %v", traceObj.Path, err)
@@ -1139,8 +1101,8 @@ func RenderTraceBlocks(session *structs.Chats) (topBlock string, eventBlocks map
 		ev, hasEvent := events[path]
 		// 拼接期活跃裁剪（docs/trace-cache-spec.md §4.5）：events 已按 summary 边界截断，
 		// 不在其中即"边界之前 / 无事件"的 trace——本轮不注入，但数据库行保留（审计不丢数据）。
-		// @docs 快照与虚拟对象（@tree）的内容不来自消息事件，不参与该裁剪。
-		if events != nil && !hasEvent && !isDocsPath(path) && !isProviderContentPath(path) {
+		// @docs 快照、虚拟对象（@tree）与 skill 入口文件的内容不来自消息事件，不参与该裁剪。
+		if events != nil && !hasEvent && !isDocsPath(path) && !isProviderContentPath(path) && !isSkillTracePath(path) {
 			continue
 		}
 		// 被 read unread=true 抑制的虚拟对象本轮不注入：traces 行与基线/锚点都保留，

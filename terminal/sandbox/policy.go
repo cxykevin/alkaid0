@@ -9,6 +9,7 @@ import (
 
 	"github.com/cxykevin/alkaid0/config"
 	"github.com/cxykevin/alkaid0/internal/configutil"
+	"github.com/cxykevin/alkaid0/internal/skillpath"
 	"github.com/cxykevin/alkaid0/log"
 	"github.com/cxykevin/alkaid0/terminal/pythonenv"
 )
@@ -205,7 +206,7 @@ func buildPolicy(in policyInput) *Policy {
 		p.add(venv, AccessReadWrite)
 	}
 
-	// 3) 所有工作区的 .alkaid0：仅可列出条目；skills/temp 可读写，images 只读。
+	// 3) 所有工作区的 .alkaid0：仅可列出条目；skills/images 只读，temp 可读写。
 	for _, dir := range workspaceScanDirs(in.workDir, in.workspace, in.writableDirs) {
 		alk := filepath.Join(dir, alkaid0DirName)
 		if !isRealDir(alk) {
@@ -224,11 +225,21 @@ func buildPolicy(in policyInput) *Policy {
 	p.addShellState()
 	p.addToolState()
 
+	// 6) skill 来源目录只读：工作区里的 .claude/skills 等会落在可写的工作区中，
+	//    必须显式收敛为只读；配置目录下的 skills 则要盖过配置目录的 deny，
+	//    让沙盒内既读得到技能内容，又改不了技能定义。
+	for _, root := range skillpath.Roots(in.workspace, configDir) {
+		p.add(root.Path, AccessReadOnly)
+	}
+
 	return p
 }
 
 // addWorkspaceAlkaid0 把工作区 .alkaid0 及其固定子目录登记成策略。
 // 目录不存在时按需求"提前建上"（skills/temp/images）。
+//
+// skills 是 skill scope 的软链接目录：链接由服务进程创建/删除，沙盒内只需读取
+// 技能内容，因此固定为只读（默认加载的 skill 路径只读）。
 func (p *Policy) addWorkspaceAlkaid0(alk string) {
 	p.add(alk, AccessListOnly)
 
@@ -240,7 +251,7 @@ func (p *Policy) addWorkspaceAlkaid0(alk string) {
 			logger.Warn("create workspace dir %s failed: %v", dir, err)
 		}
 	}
-	p.add(skills, AccessReadWrite)
+	p.add(skills, AccessReadOnly)
 	p.add(temp, AccessReadWrite)
 	p.add(images, AccessReadOnly)
 }
