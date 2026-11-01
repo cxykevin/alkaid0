@@ -349,9 +349,10 @@ func Trace(session *structs.Chats, mp map[string]*any, push []*any) (bool, []*an
 			// （os.Stat / os.ReadFile 都会跟随链接）。这里补上"解析符号链接 +
 			// 保护 .alkaid0"的包含性校验。
 			//
-			// 例外：已启用 skill 的链接就在 .alkaid0/skills/<name>，解析后仍落在
-			// skill 来源目录里（沙盒把两侧都设为只读）。放行这一类路径，模型才能
-			// 读到 SKILL.md 与技能自带资源；其余 .alkaid0 内容继续保持不可读。
+			// 例外：已启用 skill 的链接就在 .alkaid0/skills/<name>，解析后落在
+			// 技能源目录里（源目录本身可写，只有 .alkaid0/skills 这个视图只读）。
+			// 放行这一类路径，模型才能读到 SKILL.md 与技能自带资源；
+			// 其余 .alkaid0 内容继续保持不可读。
 			if !skill.IsLinkedPath(session.Root, path2) {
 				if err := u.EnsureWorkspacePath(nowpath, path2, ".alkaid0"); err != nil {
 					boolx := false

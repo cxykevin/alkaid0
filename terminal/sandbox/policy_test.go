@@ -194,11 +194,12 @@ func TestBuildPolicyProtectedAddsNoDirsOutsideWorkspace(t *testing.T) {
 	}
 }
 
-// TestBuildPolicySkillDirsReadOnly 验证 skill 来源目录在可写工作区里仍被收敛为只读。
+// TestBuildPolicySkillDirs 验证 skill 目录的读写口径：
 //
-// 会话激活路径为空时 WorkDir == Workspace，整个工作区可写；此时工作区内的
-// .claude/skills、.agents/skills 必须单独登记为只读，否则沙盒内能改写技能定义。
-func TestBuildPolicySkillDirsReadOnly(t *testing.T) {
+//   - 工作区里的 .claude/skills、.agents/skills 属于普通工作区内容，跟随工作区可写；
+//   - 只有 .alkaid0/skills（已启用技能的链接目录）收敛为只读；
+//   - 配置目录下的 skills 位于 deny 的配置目录内，单独放行为只读。
+func TestBuildPolicySkillDirs(t *testing.T) {
 	root := policyTestRoot(t)
 	ws := filepath.Join(root, "ws")
 	for _, dir := range []string{
@@ -231,19 +232,24 @@ func TestBuildPolicySkillDirsReadOnly(t *testing.T) {
 		logDir:    filepath.Join(root, "logs"),
 	})
 	cases := []struct {
+		name string
 		path string
 		want Access
 	}{
-		{filepath.Join(ws, "src", "main.go"), AccessReadWrite},
-		{filepath.Join(ws, ".claude", "skills", "a", "SKILL.md"), AccessReadOnly},
-		{filepath.Join(ws, ".claude", "settings.json"), AccessReadWrite},
-		{filepath.Join(ws, ".agents", "skills", "b", "SKILL.md"), AccessReadOnly},
-		{filepath.Join(ws, ".alkaid0", "skills", "c", "SKILL.md"), AccessReadOnly},
-		{filepath.Join(ws, ".alkaid0", "temp", "t"), AccessReadWrite},
+		{"工作区普通文件", filepath.Join(ws, "src", "main.go"), AccessReadWrite},
+		{"工作区技能源目录（可写）", filepath.Join(ws, ".claude", "skills", "a", "SKILL.md"), AccessReadWrite},
+		{"工作区技能源目录新文件（可写）", filepath.Join(ws, ".claude", "skills", "a", "new.md"), AccessReadWrite},
+		{"工作区 .claude 其它文件", filepath.Join(ws, ".claude", "settings.json"), AccessReadWrite},
+		{"工作区 .agents 技能源目录（可写）", filepath.Join(ws, ".agents", "skills", "b", "SKILL.md"), AccessReadWrite},
+		{"链接目录（只读）", filepath.Join(ws, ".alkaid0", "skills", "c", "SKILL.md"), AccessReadOnly},
+		{"链接目录下新文件（只读）", filepath.Join(ws, ".alkaid0", "skills", "c", "new.md"), AccessReadOnly},
+		{".alkaid0/temp 可写", filepath.Join(ws, ".alkaid0", "temp", "t"), AccessReadWrite},
+		{"配置目录下的 skills（只读）", filepath.Join(root, "cfg", "skills", "x", "SKILL.md"), AccessReadOnly},
+		{"配置目录其它文件（deny）", filepath.Join(root, "cfg", "config.json"), AccessDeny},
 	}
 	for _, c := range cases {
 		if got := p.AccessFor(c.path); got != c.want {
-			t.Errorf("AccessFor(%q) = %s, want %s", c.path, got, c.want)
+			t.Errorf("AccessFor(%q/%s) = %s, want %s", c.name, c.path, got, c.want)
 		}
 	}
 }

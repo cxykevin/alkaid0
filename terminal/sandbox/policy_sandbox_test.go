@@ -86,7 +86,7 @@ func newPolicyFixtureSandbox(t *testing.T) *policyFixture {
 	write(filepath.Join(f.ws, ".alkaid0", "images", "logo.png"), "PNG-DATA")
 	// 已启用 skill 的链接目录内容：沙盒内可读不可写（skills 只读）。
 	write(filepath.Join(f.ws, ".alkaid0", "skills", "demo", "SKILL.md"), "SKILL-DATA")
-	// 工作区里的 skill 来源目录同样是只读的。
+	// 工作区里的 skill 来源目录属于普通工作区内容（可写）。
 	write(filepath.Join(f.ws, ".claude", "skills", "demo2", "SKILL.md"), "SKILL2-DATA")
 	write(filepath.Join(f.cfg, "config.json"), `{"key":"CONFIG-SECRET"}`)
 	write(filepath.Join(f.logs, "log.log"), "LOG-SECRET")
@@ -197,7 +197,7 @@ func TestSandboxPolicy(t *testing.T) {
 		// temp 可读写（含删除）
 		f.mustSucceed(t, fmt.Sprintf("echo ok > %q && rm -f %q", filepath.Join(f.ws, ".alkaid0", "temp", "t"), filepath.Join(f.ws, ".alkaid0", "temp", "t")))
 
-		// skills / images 只读（可读不可写）：已加载的 skill 路径不允许被改写
+		// .alkaid0/skills（已启用技能的链接目录）与 images 只读（可读不可写）
 		for _, file := range []string{
 			filepath.Join(f.ws, ".alkaid0", "skills", "demo", "SKILL.md"),
 			filepath.Join(f.ws, ".alkaid0", "images", "logo.png"),
@@ -208,10 +208,16 @@ func TestSandboxPolicy(t *testing.T) {
 		f.mustFail(t, fmt.Sprintf("echo hacked > %q", filepath.Join(f.ws, ".alkaid0", "skills", "new.md")))
 		f.mustFail(t, fmt.Sprintf("rm -f %q", filepath.Join(f.ws, ".alkaid0", "skills", "demo", "SKILL.md")))
 
-		// 工作区里的 skill 来源目录（.claude/skills）同样是只读的
+		// 工作区里的 skill 来源目录（.claude/skills）属于普通工作区内容：可读可写
 		srcSkill := filepath.Join(f.ws, ".claude", "skills", "demo2", "SKILL.md")
 		f.mustSucceed(t, fmt.Sprintf("cat %q", srcSkill))
-		f.mustFail(t, fmt.Sprintf("echo hacked > %q", srcSkill))
+		f.mustSucceed(t, fmt.Sprintf("echo hacked > %q", srcSkill))
+		f.mustSucceed(t, fmt.Sprintf("mkdir -p %q && echo new > %q",
+			filepath.Join(f.ws, ".claude", "skills", "demo3"),
+			filepath.Join(f.ws, ".claude", "skills", "demo3", "SKILL.md")))
+		if data, err := os.ReadFile(srcSkill); err != nil || !strings.Contains(string(data), "hacked") {
+			t.Fatalf("沙盒内改写技能源文件未落到宿主: %v %q", err, data)
+		}
 	})
 
 	t.Run("配置目录与日志目录不可读写", func(t *testing.T) {

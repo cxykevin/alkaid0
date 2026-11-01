@@ -410,15 +410,16 @@ func resolveWorkspacePath(workspace, p string, mustExist bool) (string, error) {
 	return abs, nil
 }
 
-// resolveWorkspaceDst 解析目标路径，并拒绝写入 skill 只读目录
-// （.alkaid0/skills 与各 skill 来源目录），与 edit / 沙盒的只读策略一致。
+// resolveWorkspaceDst 解析目标路径，并拒绝写入 skill 链接目录
+// （<ws>/.alkaid0/skills），与 edit / 沙盒的只读策略一致。
+// 技能源目录（.claude/skills 等）属于普通工作区内容，允许写入。
 func resolveWorkspaceDst(workspace, p string) (string, error) {
 	abs, err := resolveWorkspacePath(workspace, p, false)
 	if err != nil {
 		return "", err
 	}
 	if skill.IsReadOnlyPath(workspace, abs) {
-		return "", fmt.Errorf("skill directories are read-only: %s", p)
+		return "", fmt.Errorf("skills link directory is read-only: %s", p)
 	}
 	return abs, nil
 }

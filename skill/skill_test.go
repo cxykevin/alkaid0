@@ -361,7 +361,8 @@ func TestSanitizeName(t *testing.T) {
 	}
 }
 
-// TestIsReadOnlyPath 技能区域（工作区链接目录 + 所有来源目录）一律只读。
+// TestIsReadOnlyPath 只有 .alkaid0/skills（已启用技能的链接目录）受保护；
+// 技能源目录属于普通工作区内容，允许编辑（沙盒策略也不再收敛它们）。
 func TestIsReadOnlyPath(t *testing.T) {
 	ws := t.TempDir()
 	skillDir := writeSkill(t, filepath.Join(ws, ".claude", "skills"), "demo", "---\nname: demo\n---\nbody\n")
@@ -372,17 +373,24 @@ func TestIsReadOnlyPath(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(ws, ".alkaid0", "temp"), 0o755); err != nil {
 		t.Fatal(err)
 	}
+	// 真实启用的链接：.alkaid0/skills/demo -> .claude/skills/demo
+	requireSymlink(t)
+	if err := os.Symlink(skillDir, filepath.Join(linkDir, "demo")); err != nil {
+		t.Skipf("创建符号链接失败: %v", err)
+	}
 
 	cases := []struct {
 		name string
 		path string
 		want bool
 	}{
-		{"技能来源目录本身", skillDir, true},
-		{"技能入口文件", filepath.Join(skillDir, skillpath.ManifestName), true},
-		{"技能目录下尚不存在的文件", filepath.Join(skillDir, "new-file.md"), true},
+		{"技能来源目录本身（可写）", skillDir, false},
+		{"技能入口文件（可写）", filepath.Join(skillDir, skillpath.ManifestName), false},
+		{"技能目录下尚不存在的文件（可写）", filepath.Join(skillDir, "new-file.md"), false},
 		{"工作区 links 目录", linkDir, true},
-		{"links 下已启用 skill 的路径", filepath.Join(linkDir, "demo", skillpath.ManifestName), true},
+		{"links 下已启用 skill 的入口", filepath.Join(linkDir, "demo", skillpath.ManifestName), true},
+		{"links 下尚不存在的文件", filepath.Join(linkDir, "demo", "new-file.md"), true},
+		{"links 路径的大小写变体", filepath.Join(ws, ".alkaid0", "SKILLS", "demo", "x.md"), true},
 		{"工作区普通文件", filepath.Join(ws, "main.go"), false},
 		{".alkaid0 下非 skills 的目录", filepath.Join(ws, ".alkaid0", "temp", "x.txt"), false},
 		{".alkaid0 下的记录文件", filepath.Join(ws, ".alkaid0", "MEMORY.md"), false},
@@ -399,13 +407,22 @@ func TestIsReadOnlyPath(t *testing.T) {
 		t.Error("workspace 为空时应返回 false")
 	}
 
-	// 指向技能目录的符号链接等价于技能目录本身
-	requireSymlink(t)
+	// 相对路径按 workspace 解析：edit 之外的调用方可能直接传相对路径
+	if !IsReadOnlyPath(ws, filepath.Join(".alkaid0", "skills", "demo", skillpath.ManifestName)) {
+		t.Error("链接目录下的相对路径应视为只读")
+	}
+
+	// 前缀相近但不是链接目录本身（skills2）不能被误判
+	if IsReadOnlyPath(ws, filepath.Join(ws, ".alkaid0", "skills2", "x.md")) {
+		t.Error("skills2 不在链接目录内，不应判为只读")
+	}
+
+	// 指向技能源目录的别名不再是只读：源目录可写
 	alias := filepath.Join(ws, "alias")
 	if err := os.Symlink(skillDir, alias); err != nil {
 		t.Skipf("创建符号链接失败: %v", err)
 	}
-	if !IsReadOnlyPath(ws, alias) {
-		t.Error("指向技能目录的符号链接应视为只读")
+	if IsReadOnlyPath(ws, alias) {
+		t.Error("指向技能源目录的符号链接不应再视为只读")
 	}
 }

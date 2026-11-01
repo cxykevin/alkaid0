@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/cxykevin/alkaid0/context/outline"
 	"github.com/cxykevin/alkaid0/storage/structs"
 	"github.com/cxykevin/alkaid0/tools/tools/trace"
 	"github.com/glebarez/sqlite"
@@ -476,10 +477,13 @@ func TestCheckPath_RunPrefixStillValidated(t *testing.T) {
 	}
 }
 
-// TestWriteFile_RejectsSkillDirectories 技能定义默认只读：edit 不得改写 SKILL.md
-// 或技能目录下的任何文件（与沙盒的只读策略对应）。
-func TestWriteFile_RejectsSkillDirectories(t *testing.T) {
+// TestWriteFile_SkillDirectories 技能读写口径（与沙盒策略同一口径）：
+//   - 工作区技能源目录（.claude/skills）可写，AI 能正常维护技能定义；
+//   - .alkaid0/skills（已启用技能的链接目录）不可写，拒绝且源文件不变。
+func TestWriteFile_SkillDirectories(t *testing.T) {
 	ws := t.TempDir()
+	// 写 .md 会触发大纲索引，句柄不关时 Windows 上 TempDir 清理会失败
+	t.Cleanup(func() { outline.CloseWorkdir(ws) })
 	dir := filepath.Join(ws, ".claude", "skills", "demo")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatalf("mkdir: %v", err)
@@ -489,11 +493,19 @@ func TestWriteFile_RejectsSkillDirectories(t *testing.T) {
 	if err := os.WriteFile(manifest, []byte(original), 0o644); err != nil {
 		t.Fatalf("write SKILL.md: %v", err)
 	}
+	linkDir := filepath.Join(ws, ".alkaid0", "skills")
+	if err := os.MkdirAll(linkDir, 0o755); err != nil {
+		t.Fatalf("mkdir skills: %v", err)
+	}
+	if err := os.Symlink(dir, filepath.Join(linkDir, "demo")); err != nil {
+		t.Skipf("创建符号链接失败: %v", err)
+	}
 
 	session := newEditSession(t, ws)
 	session.CurrentActivatePath = ""
 	session.Root = ws
 
+	// 1) 技能源目录可写
 	ret, err := runEdit(t, session, ".claude/skills/demo/SKILL.md", "", "hacked")
 	if err != nil {
 		t.Fatalf("writeFile 返回错误: %v", err)
@@ -501,17 +513,37 @@ func TestWriteFile_RejectsSkillDirectories(t *testing.T) {
 	if ret == nil {
 		t.Fatal("writeFile 返回了 nil 结果 map")
 	}
-	if v, ok := (*ret["success"]).(bool); !ok || v {
-		t.Fatalf("期望 success=false（技能目录只读），实际 %v", *ret["success"])
-	}
-	if msg, ok := (*ret["error"]).(string); !ok || !strings.Contains(msg, "read-only") {
-		t.Fatalf("错误信息应说明目录只读, 实际 %v", ret["error"])
+	if v, ok := (*ret["success"]).(bool); !ok || !v {
+		t.Fatalf("技能源目录应可写，实际 %v", ret["success"])
 	}
 	got, err := os.ReadFile(manifest)
 	if err != nil {
 		t.Fatalf("read SKILL.md: %v", err)
 	}
+	if !strings.Contains(string(got), "hacked") {
+		t.Fatalf("技能源文件未被改写:\n%s", got)
+	}
+	// 还原，方便下一步比较
+	if err := os.WriteFile(manifest, []byte(original), 0o644); err != nil {
+		t.Fatalf("restore SKILL.md: %v", err)
+	}
+
+	// 2) 已启用技能的链接目录不可写
+	ret, err = runEdit(t, session, ".alkaid0/skills/demo/SKILL.md", "", "hacked")
+	if err != nil {
+		t.Fatalf("writeFile 返回错误: %v", err)
+	}
+	if ret == nil {
+		t.Fatal("writeFile 返回了 nil 结果 map")
+	}
+	if v, ok := (*ret["success"]).(bool); !ok || v {
+		t.Fatalf("期望 success=false（链接目录只读），实际 %v", *ret["success"])
+	}
+	got, err = os.ReadFile(manifest)
+	if err != nil {
+		t.Fatalf("read SKILL.md: %v", err)
+	}
 	if string(got) != original {
-		t.Fatalf("技能文件被改写:\n%s", got)
+		t.Fatalf("技能文件被通过链接目录改写:\n%s", got)
 	}
 }

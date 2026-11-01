@@ -563,12 +563,13 @@ func writeFile(session *structs.Chats, mp map[string]*any, cross []*any) (bool, 
 			"error":   &errMsg,
 		}, nil
 	}
-	// skill 目录默认只读：即便位于可写工作区（如 <ws>/.claude/skills），
-	// 也不允许通过 edit 改写技能定义——与 run 沙盒的只读策略保持一致。
+	// 只拦 <ws>/.alkaid0/skills（已启用技能的链接目录）：从那里写入等价于改
+	// 技能源目录，且与沙盒里该目录的只读挂载保持一致。技能源目录
+	// （.claude/skills、.agents/skills 等）属于普通工作区内容，允许编辑。
 	if skill.IsReadOnlyPath(session.Root, path) {
 		boolx := false
 		success := any(boolx)
-		errMsg := any(fmt.Sprintf("skill directories are read-only: %s", origRelPath))
+		errMsg := any(fmt.Sprintf("skills link directory is read-only: %s", origRelPath))
 		return false, cross, map[string]*any{
 			"success": &success,
 			"error":   &errMsg,

@@ -6,7 +6,8 @@
 // <workspace>/.alkaid0/skills/<name>，停用时删除该链接。
 //
 // 软链接只指向发现的 skill 目录：停用只删除软链接本身，绝不删除真实目录；
-// 沙盒策略把 skill 来源目录与 .alkaid0/skills 都收敛为只读。
+// 沙盒策略把 .alkaid0/skills 收敛为只读，技能源目录则跟随工作区保持可写，
+// 由 IsReadOnlyPath 保证链接目录这条"视图"不能被用来改写技能。
 package skill
 
 import (
@@ -237,10 +238,14 @@ func IsLinkedPath(workspace, abs string) bool {
 	}
 	// 先做纯词法包含判断：链接目录本身必然是真实的 .alkaid0/skills，
 	// 不能用会解析符号链接的 skillpath.Within（它会把 demo/SKILL.md 解析到技能目录）。
-	linkDir := filepath.Clean(skillpath.LinkDir(workspace))
-	target := filepath.Clean(abs)
-	rel, err := filepath.Rel(linkDir, target)
-	if err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+	// 词法比较折叠大小写，Windows 上用 .alkaid0/SKILLS/... 也能读到技能内容。
+	linkDir := skillpath.LinkDir(workspace)
+	target := abs
+	if !filepath.IsAbs(target) {
+		target = filepath.Join(workspace, target)
+	}
+	if !lexicalWithin(linkDir, target) ||
+		strings.EqualFold(filepath.Clean(linkDir), filepath.Clean(target)) {
 		return false
 	}
 	real, err := filepath.EvalSymlinks(target)
@@ -255,34 +260,45 @@ func IsLinkedPath(workspace, abs string) bool {
 	return false
 }
 
-// IsReadOnlyPath 判断 abs 是否落在只读的 skill 区域：
+// IsReadOnlyPath 判断 abs 是否落在只读的 skill 链接目录（<workspace>/.alkaid0/skills）内。
 //
-//   - <workspace>/.alkaid0/skills（已加载 skill 的链接目录）；
-//   - 任一 skill 来源目录（工作区 .claude/skills、.agents/skills、用户目录等）。
+// 只有链接目录受保护：它是"已启用技能"的视图，从那里写入等同于改技能源目录，
+// 而且与沙盒里 .alkaid0/skills 的只读挂载保持同一口径。技能源目录
+// （工作区 .claude/skills、.agents/skills 等）属于普通工作区内容，允许编辑。
 //
-// edit/file 工具据此拒绝改写技能定义，与沙盒内的只读策略保持一致。
-// 路径允许尚不存在（新建文件）：此时退化为词法比较。
+// 路径允许尚不存在（新建文件）：只做词法比较，不解析符号链接——
+// 链接目录下的路径解析后总会跳到技能源目录，解析会让判断失效。
 func IsReadOnlyPath(workspace, abs string) bool {
 	if workspace == "" || abs == "" {
 		return false
 	}
-	clean := filepath.Clean(abs)
-	linkDir := filepath.Clean(skillpath.LinkDir(workspace))
-	if rel, err := filepath.Rel(linkDir, clean); err == nil {
-		if rel == "." || (rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))) {
-			return true
-		}
+	linkDir := skillpath.LinkDir(workspace)
+	if linkDir == "" {
+		return false
 	}
-	real := clean
-	if resolved, err := filepath.EvalSymlinks(clean); err == nil {
-		real = resolved
+	target := abs
+	if !filepath.IsAbs(target) {
+		target = filepath.Join(workspace, target)
 	}
-	for _, root := range skillpath.Roots(workspace, Alkaid0ConfigDir()) {
-		if skillpath.Within(root.Path, clean) || skillpath.Within(root.Path, real) {
-			return true
-		}
+	return lexicalWithin(linkDir, target)
+}
+
+// lexicalWithin 不解析符号链接，按词法判断 target 是否等于 dir 或位于 dir 之下。
+//
+// 比较时折叠大小写：Windows/macOS 的默认文件系统大小写不敏感，
+// `.alkaid0/SKILLS/x` 这种写法同样指向链接目录里的文件，词法比较不能漏掉。
+func lexicalWithin(dir, target string) bool {
+	d := filepath.Clean(dir)
+	t := filepath.Clean(target)
+	if d == "" || t == "" || d == "." || d == string(filepath.Separator) {
+		return false
 	}
-	return false
+	lowerDir := strings.ToLower(d)
+	lowerTarget := strings.ToLower(t)
+	if lowerTarget == lowerDir {
+		return true
+	}
+	return strings.HasPrefix(lowerTarget, lowerDir+string(filepath.Separator))
 }
 
 // load 读取 dir 下的 SKILL.md 并构造 Skill；没有入口文件或 frontmatter 非法时返回 false。

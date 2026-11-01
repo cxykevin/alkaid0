@@ -57,6 +57,10 @@ const (
 	alkaid0Images  = "images"
 	// alkaid0VenvName 与 terminal/pythonenv 的 venv 目录名一致。
 	alkaid0VenvName = "venv"
+	// skillsSourceDirClaude / skillsSourceDirAgents 工作区里技能定义所在的目录名
+	// （见 internal/skillpath 的发现根）。
+	skillsSourceDirClaude = ".claude"
+	skillsSourceDirAgents = ".agents"
 )
 
 // PathRule 一条路径访问规则。
@@ -225,11 +229,21 @@ func buildPolicy(in policyInput) *Policy {
 	p.addShellState()
 	p.addToolState()
 
-	// 6) skill 来源目录只读：工作区里的 .claude/skills 等会落在可写的工作区中，
-	//    必须显式收敛为只读；配置目录下的 skills 则要盖过配置目录的 deny，
-	//    让沙盒内既读得到技能内容，又改不了技能定义。
-	for _, root := range skillpath.Roots(in.workspace, configDir) {
-		p.add(root.Path, AccessReadOnly)
+	// 6) 工作区里的 .claude / .agents 整目录可写：技能定义就在其中，AI 要能维护。
+	//    可写范围内核上只有"工作目录"（会话激活路径），工作区根的 .claude 会落到
+	//    默认只读，因此显式放开（目录不存在时不登记，避免 mkdir 出空目录）。
+	//    只读的只有 .alkaid0/skills 这个"已启用技能"的链接目录（见
+	//    addWorkspaceAlkaid0）；配置目录下的 skills 位于 deny 的配置目录内，
+	//    单独放行为只读，保证沙盒里读得到技能内容。
+	for _, dir := range workspaceScanDirs(in.workDir, in.workspace, in.writableDirs) {
+		for _, name := range []string{skillsSourceDirClaude, skillsSourceDirAgents} {
+			if sub := filepath.Join(dir, name); isRealDir(sub) {
+				p.add(sub, AccessReadWrite)
+			}
+		}
+	}
+	if configDir != "" {
+		p.add(filepath.Join(configDir, skillpath.InstallDirName), AccessReadOnly)
 	}
 
 	return p
@@ -239,7 +253,8 @@ func buildPolicy(in policyInput) *Policy {
 // 目录不存在时按需求"提前建上"（skills/temp/images）。
 //
 // skills 是 skill scope 的软链接目录：链接由服务进程创建/删除，沙盒内只需读取
-// 技能内容，因此固定为只读（默认加载的 skill 路径只读）。
+// 技能内容，因此固定为只读。技能源目录（.claude/skills、.agents/skills 等）
+// 不在此列，它们跟随工作区保持可写。
 func (p *Policy) addWorkspaceAlkaid0(alk string) {
 	p.add(alk, AccessListOnly)
 
