@@ -360,3 +360,52 @@ func TestSanitizeName(t *testing.T) {
 		}
 	}
 }
+
+// TestIsReadOnlyPath 技能区域（工作区链接目录 + 所有来源目录）一律只读。
+func TestIsReadOnlyPath(t *testing.T) {
+	ws := t.TempDir()
+	skillDir := writeSkill(t, filepath.Join(ws, ".claude", "skills"), "demo", "---\nname: demo\n---\nbody\n")
+	linkDir := skillpath.LinkDir(ws)
+	if err := os.MkdirAll(linkDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(ws, ".alkaid0", "temp"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	cases := []struct {
+		name string
+		path string
+		want bool
+	}{
+		{"技能来源目录本身", skillDir, true},
+		{"技能入口文件", filepath.Join(skillDir, skillpath.ManifestName), true},
+		{"技能目录下尚不存在的文件", filepath.Join(skillDir, "new-file.md"), true},
+		{"工作区 links 目录", linkDir, true},
+		{"links 下已启用 skill 的路径", filepath.Join(linkDir, "demo", skillpath.ManifestName), true},
+		{"工作区普通文件", filepath.Join(ws, "main.go"), false},
+		{".alkaid0 下非 skills 的目录", filepath.Join(ws, ".alkaid0", "temp", "x.txt"), false},
+		{".alkaid0 下的记录文件", filepath.Join(ws, ".alkaid0", "MEMORY.md"), false},
+		{"空路径", "", false},
+	}
+	for _, c := range cases {
+		if got := IsReadOnlyPath(ws, c.path); got != c.want {
+			t.Errorf("IsReadOnlyPath(%q) = %v, want %v", c.name, got, c.want)
+		}
+	}
+
+	// 工作区为空时不做任何保护（调用方必须提供会话根目录）
+	if IsReadOnlyPath("", skillDir) {
+		t.Error("workspace 为空时应返回 false")
+	}
+
+	// 指向技能目录的符号链接等价于技能目录本身
+	requireSymlink(t)
+	alias := filepath.Join(ws, "alias")
+	if err := os.Symlink(skillDir, alias); err != nil {
+		t.Skipf("创建符号链接失败: %v", err)
+	}
+	if !IsReadOnlyPath(ws, alias) {
+		t.Error("指向技能目录的符号链接应视为只读")
+	}
+}

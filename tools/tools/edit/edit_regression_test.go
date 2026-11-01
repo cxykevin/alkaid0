@@ -475,3 +475,43 @@ func TestCheckPath_RunPrefixStillValidated(t *testing.T) {
 		t.Fatalf("@temp/run/ 路径应直接放行: %q %v", p, err)
 	}
 }
+
+// TestWriteFile_RejectsSkillDirectories 技能定义默认只读：edit 不得改写 SKILL.md
+// 或技能目录下的任何文件（与沙盒的只读策略对应）。
+func TestWriteFile_RejectsSkillDirectories(t *testing.T) {
+	ws := t.TempDir()
+	dir := filepath.Join(ws, ".claude", "skills", "demo")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	original := "---\nname: demo\ndescription: demo skill\n---\n\nbody\n"
+	manifest := filepath.Join(dir, "SKILL.md")
+	if err := os.WriteFile(manifest, []byte(original), 0o644); err != nil {
+		t.Fatalf("write SKILL.md: %v", err)
+	}
+
+	session := newEditSession(t, ws)
+	session.CurrentActivatePath = ""
+	session.Root = ws
+
+	ret, err := runEdit(t, session, ".claude/skills/demo/SKILL.md", "", "hacked")
+	if err != nil {
+		t.Fatalf("writeFile 返回错误: %v", err)
+	}
+	if ret == nil {
+		t.Fatal("writeFile 返回了 nil 结果 map")
+	}
+	if v, ok := (*ret["success"]).(bool); !ok || v {
+		t.Fatalf("期望 success=false（技能目录只读），实际 %v", *ret["success"])
+	}
+	if msg, ok := (*ret["error"]).(string); !ok || !strings.Contains(msg, "read-only") {
+		t.Fatalf("错误信息应说明目录只读, 实际 %v", ret["error"])
+	}
+	got, err := os.ReadFile(manifest)
+	if err != nil {
+		t.Fatalf("read SKILL.md: %v", err)
+	}
+	if string(got) != original {
+		t.Fatalf("技能文件被改写:\n%s", got)
+	}
+}
