@@ -73,6 +73,26 @@ func TestBuildTelemetryModelLogs(t *testing.T) {
 	}
 }
 
+// TestTelemetryTimestampPath 验证时间戳落在配置文件同目录（并展开 ~）。
+func TestTelemetryTimestampPath(t *testing.T) {
+	dir := t.TempDir()
+	got := telemetryTimestampPath(filepath.Join(dir, "config.json"))
+	want := filepath.Join(dir, "telemetry.timestamp")
+	if got != want {
+		t.Errorf("telemetryTimestampPath = %q, want %q", got, want)
+	}
+
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Skipf("no home dir: %v", err)
+	}
+	got = telemetryTimestampPath("~/alkaid0/config.json")
+	want = filepath.Join(home, "alkaid0", "telemetry.timestamp")
+	if got != want {
+		t.Errorf("expanded telemetryTimestampPath = %q, want %q", got, want)
+	}
+}
+
 // TestRunAutoTelemetry 验证自动 Telemetry 的禁用、周期与上报行为。
 func TestRunAutoTelemetry(t *testing.T) {
 	forceFeedbackEnabled(t)
@@ -102,7 +122,7 @@ func TestRunAutoTelemetry(t *testing.T) {
 		}
 	})
 
-	t.Run("first run skips", func(t *testing.T) {
+	t.Run("first run skips but records baseline", func(t *testing.T) {
 		restore := config.GlobalConfigSwap(cfgStructs.Config{})
 		defer restore()
 		_ = os.Remove(path)
@@ -114,6 +134,32 @@ func TestRunAutoTelemetry(t *testing.T) {
 		runAutoTelemetry()
 		if called {
 			t.Error("submitter should not be called on first run (no timestamp)")
+		}
+		// 基线必须落盘：否则每次启动都没有时间戳，永远攒不出一个上报周期。
+		last, err := readTelemetryLast(path)
+		if err != nil {
+			t.Fatalf("baseline timestamp should be written on first run, err=%v", err)
+		}
+		if delta := time.Now().Unix() - last; delta < 0 || delta > 60 {
+			t.Errorf("baseline timestamp should be now, got %d (delta %ds)", last, delta)
+		}
+	})
+
+	t.Run("corrupt timestamp records baseline", func(t *testing.T) {
+		restore := config.GlobalConfigSwap(cfgStructs.Config{})
+		defer restore()
+		_ = os.WriteFile(path, []byte("not-a-number"), 0600)
+		called := false
+		feedbackSubmit = func(context.Context, string, string, string) (*feedbacksdk.Result, error) {
+			called = true
+			return nil, nil
+		}
+		runAutoTelemetry()
+		if called {
+			t.Error("submitter should not be called when timestamp is unreadable")
+		}
+		if _, err := readTelemetryLast(path); err != nil {
+			t.Errorf("corrupt timestamp should be replaced by a valid baseline, err=%v", err)
 		}
 	})
 

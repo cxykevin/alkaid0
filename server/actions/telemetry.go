@@ -12,24 +12,32 @@ import (
 	"time"
 
 	"github.com/cxykevin/alkaid0/config"
+	"github.com/cxykevin/alkaid0/internal/configutil"
 	"github.com/cxykevin/alkaid0/product"
 )
 
 // telemetryInterval 自动 Telemetry 上报间隔（一个月）。
 const telemetryInterval = 30 * 24 * time.Hour
 
+// telemetryTimestampName 时间戳文件名（与配置文件同目录，便于随配置一起备份/清理）。
+const telemetryTimestampName = "telemetry.timestamp"
+
 // telemetryLastPath 上次 Telemetry 上报时间戳文件路径。var 便于测试注入。
+// 放在配置文件同目录（与 usage.json、cron.sqlite 一致），而不是用户缓存目录：
+// 服务端以 root/systemd 运行时常拿不到预期的缓存目录，日志排查时也难找。
 var telemetryLastPath = func() string {
-	dir, err := os.UserCacheDir()
-	if err != nil {
-		return ""
-	}
-	return filepath.Join(dir, "alkaid0", "telemetry_last_unix")
+	return telemetryTimestampPath(config.Path())
+}
+
+// telemetryTimestampPath 由配置文件路径推导时间戳路径。
+func telemetryTimestampPath(configPath string) string {
+	return filepath.Join(filepath.Dir(configutil.ExpandPath(configPath)), telemetryTimestampName)
 }
 
 // runAutoTelemetry 自动 Telemetry：仅当距上次上报超过一个周期时，
-// 走反馈接口异步上报一条以 [Telemetry] 开头的内容，成功后记录时间戳。
-// 首次启动（无时间戳记录）不上报；禁用（Config.Feedback.DisableAutoTelemetry）或 debug 模式下跳过。
+// 走反馈接口异步上报一条以 [Telemetry] 开头的内容，成功或失败都记录尝试时间戳。
+// 首次启动（无时间戳记录）本次不上报，只写入基线时间戳；禁用
+// （Config.Feedback.DisableAutoTelemetry）或 debug 模式下跳过。
 func runAutoTelemetry() {
 	if config.GlobalConfigSafe().Feedback.DisableAutoTelemetry {
 		return
@@ -43,7 +51,11 @@ func runAutoTelemetry() {
 	}
 	last, err := readTelemetryLast(path)
 	if err != nil {
-		return // 从未上报过：首次启动不上报
+		// 首次运行（或时间戳损坏）：本次不上报，只写入基线时间戳。
+		// 必须写，否则每次启动都会走进这个分支、永远不会积累出上报周期。
+		logger.Info("auto telemetry: no valid timestamp, recording baseline")
+		writeTelemetryTimestamp(path)
+		return
 	}
 	if time.Now().Unix()-last < int64(telemetryInterval.Seconds()) {
 		return // 距上次上报不足一个周期
@@ -54,12 +66,16 @@ func runAutoTelemetry() {
 	osInfo := buildFeedbackOSInfo()
 	ctx, cancel := context.WithTimeout(context.Background(), product.FeedbackSubmitTimeout)
 	defer cancel()
-	if _, err := feedbackSubmit(ctx, content, modelLogs, osInfo); err != nil {
+	res, err := feedbackSubmit(ctx, content, modelLogs, osInfo)
+	if err != nil {
 		logger.Warn("auto telemetry submit failed: %v", err)
 		// 失败也要记录本次尝试时间：否则反馈服务端长期不可用时，每次启动都会
 		// 重试上报（无上限）。宁可失败后推迟一个周期，也不做无限重试。
 		writeTelemetryTimestamp(path)
 		return
+	}
+	if res != nil {
+		logger.Info("auto telemetry submitted: id=%s", res.FeedbackID)
 	}
 	writeTelemetryTimestamp(path)
 }
@@ -69,8 +85,13 @@ func writeTelemetryTimestamp(path string) {
 	if path == "" {
 		return
 	}
-	if dir := filepath.Dir(path); os.MkdirAll(dir, 0700) == nil {
-		_ = os.WriteFile(path, []byte(strconv.FormatInt(time.Now().Unix(), 10)), 0600)
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		logger.Warn("auto telemetry: create dir %s failed: %v", dir, err)
+		return
+	}
+	if err := os.WriteFile(path, []byte(strconv.FormatInt(time.Now().Unix(), 10)), 0600); err != nil {
+		logger.Warn("auto telemetry: write timestamp %s failed: %v", path, err)
 	}
 }
 
