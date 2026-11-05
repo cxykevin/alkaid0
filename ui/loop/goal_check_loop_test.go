@@ -191,7 +191,9 @@ func setupGoalCheckLoopTest(t *testing.T, mode goalCheckTestMode) (*goalCheckTes
 	}
 	chat := createTestChat(db, t)
 	chat.Root = t.TempDir()
-	chat.Goal = "all tests pass"
+	if err := chat.SaveGoal("all tests pass"); err != nil {
+		t.Fatalf("seed goal: %v", err)
+	}
 
 	events := make(chan AIResponse, 256)
 	loopObj := New(chat)
@@ -250,6 +252,18 @@ func TestLoopGoalCheckRejectThenPass(t *testing.T) {
 	if chat.CurrentAgentID != "" {
 		t.Fatalf("goal-check agent must be cleared, got %q", chat.CurrentAgentID)
 	}
+	// 校验通过 = 任务完成：goal 必须清空（内存 + DB）。
+	if chat.Goal != "" {
+		t.Fatalf("goal must be cleared after task completion, got %q", chat.Goal)
+	}
+	var persistedGoal string
+	if err := chat.DB.Model(&storageStructs.Chats{}).Where("id = ?", chat.ID).
+		Pluck("goal", &persistedGoal).Error; err != nil {
+		t.Fatalf("query persisted goal: %v", err)
+	}
+	if persistedGoal != "" {
+		t.Fatalf("persisted goal must be cleared after task completion, got %q", persistedGoal)
+	}
 
 	mainBodies, goalBodies := srv.bodies()
 	if len(goalBodies) < 1 || !strings.Contains(goalBodies[0], "attempt 1") {
@@ -266,6 +280,15 @@ func TestLoopGoalCheckRejectThenPass(t *testing.T) {
 func TestLoopGoalCheckPassFirstTry(t *testing.T) {
 	srv, chat, events, loopObj := setupGoalCheckLoopTest(t, goalCheckPassFirst)
 
+	// 记录 goal 清空广播：任务完成后必须推送空快照，客户端才能清掉旧 goal。
+	pushed := make(chan string, 4)
+	chat.SetGoalPushFn(func(goal string) {
+		select {
+		case pushed <- goal:
+		default:
+		}
+	})
+
 	if err := loopObj.Chat("do the work", nil); err != nil {
 		t.Fatalf("Chat: %v", err)
 	}
@@ -281,10 +304,21 @@ func TestLoopGoalCheckPassFirstTry(t *testing.T) {
 	if chat.SystemPrompt != "" {
 		t.Fatalf("pass must not inject a rejection notice: %q", chat.SystemPrompt)
 	}
+	if chat.Goal != "" {
+		t.Fatalf("goal must be cleared after pass, got %q", chat.Goal)
+	}
+	select {
+	case goal := <-pushed:
+		if goal != "" {
+			t.Fatalf("cleared goal push = %q, want empty", goal)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("goal clear must be pushed to clients")
+	}
 }
 
 func TestLoopGoalSessionEmptyResponseRetries(t *testing.T) {
-	srv, _, events, loopObj := setupGoalCheckLoopTest(t, goalCheckEmptyThenPass)
+	srv, chat, events, loopObj := setupGoalCheckLoopTest(t, goalCheckEmptyThenPass)
 
 	if err := loopObj.Chat("do the work", nil); err != nil {
 		t.Fatalf("Chat: %v", err)
@@ -306,5 +340,8 @@ func TestLoopGoalSessionEmptyResponseRetries(t *testing.T) {
 	}
 	if goalReqs != 1 {
 		t.Fatalf("goal-check requests = %d, want 1", goalReqs)
+	}
+	if chat.Goal != "" {
+		t.Fatalf("goal must be cleared after retry + pass, got %q", chat.Goal)
 	}
 }

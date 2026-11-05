@@ -431,6 +431,7 @@ C:\ProgramData\alkaid0\config.json
 - 主 Agent 每次正常结束（`end_turn`）时，服务端自动激活内置的 **goal-check** 内部代理校验 goal；它只读检查，不需要完成实际工作。
   - 校验代理调用 `deactivate_agent` 表示**未完成**：调用参数里的说明会作为打回理由注入主 Agent，主 Agent 继续工作。
   - 校验代理不调用生命周期工具并正常结束，表示**通过**，本轮回合才真正结束（广播 idle）。
+- **通过校验即任务完成，goal 会自动清空**并广播空快照；取消或请求失败不会清空，目标会保留供用户继续。
 - 主 Agent 输出为空时按异常处理：指数退避后重试，而不是直接结束。
 - goal 由用户控制：`/goal <文本>` 设置/覆盖，`/goal clear` 清除；AI 只能通过 `edit` 工具写 `@goal`，且**仅在为空时允许写一次**，之后不可修改。goal 设置/变更会广播 `alk.cxykevin.top/session/goal`。
 - 客户端可用私有方法 `alk.cxykevin.top/session/goal/get` / `set` 读写（见 `docs/acp/extension.md` §3.12）。
@@ -444,7 +445,7 @@ C:\ProgramData\alkaid0\config.json
 - `/background (on|off)`: 切换后台运行模式，断连后保持会话存活
 - `/compress`: 压缩上下文历史
 - `/feedback <反馈内容>`: 提交反馈到反馈服务端
-- `/goal [文本|clear]`: 查看/设置会话目标（goal）；无参数显示当前值，`clear` 清除。设置后每轮请求都会强制注入上下文顶端，并在主 Agent 结束时由内部 goal-check 校验是否完成
+- `/goal [文本|clear]`: 查看/设置会话目标（goal）；无参数显示当前值，`clear` 清除。设置后每轮请求都会强制注入上下文顶端，并在主 Agent 结束时由内部 goal-check 校验是否完成；校验通过后 goal 自动清空
 - `/help`: 显示命令帮助（无参数）
 - `/index [clean|status|cancel|lsp-reset]`: 构建代码库索引（提取 LSP 符号 → 提交 embedding 任务）；子命令：`clean` 清库、`status` 显示进度、`cancel` 停止、`lsp-reset` 重置 LSP 失败计数
 - `/init`: 分析代码库并生成 AGENTS.md 指导文件（无参数）

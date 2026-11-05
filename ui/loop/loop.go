@@ -67,6 +67,19 @@ func retryBackoff(attempt int) time.Duration {
 	return backoff
 }
 
+// clearGoalAfterCompletion 清空已通过校验的会话 goal。
+// goal 的生命周期与任务绑定：goal-check 通过即任务完成，立即落库清空并广播空快照，
+// 避免下一条用户消息继续被旧 goal 校验。取消/错误路径不清空，保留目标供用户继续。
+func clearGoalAfterCompletion(session *structs.Chats) {
+	if session == nil || strings.TrimSpace(session.Goal) == "" {
+		return
+	}
+	if err := session.SaveGoal(""); err != nil {
+		logger.Warn("failed to clear goal after completion: %v", err)
+	}
+	session.PushGoal("")
+}
+
 // consumeGoalCheckRejection 消费内部 goal-check 的 deactivate 打回标记。
 // 工具执行阶段只是记录理由；这里立即清掉校验代理并把理由注入主 agent，
 // 避免带着校验代理再请求一轮（否则每次打回都会多一次无意义请求）。
@@ -452,6 +465,9 @@ func (p *Object) Start(ctx context.Context) {
 						continue
 					}
 					agents.ClearInternalAgent(session)
+					// 校验通过 = 任务完成：goal 只服务于当前任务，清空并广播，
+					// 避免下一条用户消息继续被旧 goal 校验。
+					clearGoalAfterCompletion(session)
 					call(AIResponse{StopReason: StopReasonModel})
 					break
 				}

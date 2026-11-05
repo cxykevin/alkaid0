@@ -126,7 +126,9 @@ func TestLoopGoalFatalErrorStopsRetry(t *testing.T) {
 	}
 	chat := createTestChat(db, t)
 	chat.Root = t.TempDir()
-	chat.Goal = "all tests pass"
+	if err := chat.SaveGoal("all tests pass"); err != nil {
+		t.Fatalf("seed goal: %v", err)
+	}
 
 	events := make(chan AIResponse, 64)
 	loopObj := New(chat)
@@ -165,5 +167,9 @@ func TestLoopGoalFatalErrorStopsRetry(t *testing.T) {
 	}
 	if !strings.Contains(lastErr, "Insufficient Balance") {
 		t.Fatalf("final error = %q, want Insufficient Balance", lastErr)
+	}
+	// 未通过 goal-check（请求失败）不算任务完成，goal 必须保留供用户继续。
+	if chat.Goal != "all tests pass" {
+		t.Fatalf("goal must survive fatal error, got %q", chat.Goal)
 	}
 }

@@ -263,6 +263,7 @@ alkaid0 现在遵循 ACP v2 标准事件，且字段置于 update 对象**顶层
 触发时机：
 
 - `/goal <文本>` 设置/覆盖、`/goal clear` 清除、AI 首次写入 `@goal`、`goal/set` RPC 写入后，向会话所有连接广播。
+- goal-check 校验通过（任务完成）后服务端自动清空 goal，并广播一次空 `goal` 快照。
 - `session/new` 与 `session/resume` 建连后向该连接补推一次当前快照（空 goal 也推，客户端据此清空旧缓存）。
 
 语义：
@@ -735,6 +736,7 @@ ACP v2 中 `session/update` 是服务端 → 客户端的通知（含 `session_i
 - 写入后立即落库并向会话所有连接广播 `alk.cxykevin.top/session/goal`（§2.9）；会话忙碌时也允许，同一回合的下一轮请求立即生效。
 - 会话不存在或 `sessionId` 未绑定到当前连接时返回错误（`session not found` / `session ... is not bound to this connection`）。
 - 本组方法只改会话元数据，不触发模型回合；AI 侧的等价入口是 `edit` 工具写 `@goal`（仅 goal 为空时允许一次）。
+- goal-check 通过（任务完成）后服务端会自动清空 goal，此后 `goal/get` 返回空串；取消/请求失败不会清空。客户端应以 `alk.cxykevin.top/session/goal` 快照为准，不能假设 goal 会跨任务保留。
 
 ```jsonc
 // 请求

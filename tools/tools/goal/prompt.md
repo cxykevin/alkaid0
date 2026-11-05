@@ -10,3 +10,4 @@
 - After the goal is set, every edit fails. Only the user can replace or clear it with `/goal`.
 - Keep it short, concrete, and verifiable: describe what must be true when the task is complete.
 - Once set, the goal is injected at the top of the context. Keep working until it is satisfied; do not stop early.
+- When goal-check passes, the task is complete and the server clears the goal automatically. Do not assume it persists into the next task.
