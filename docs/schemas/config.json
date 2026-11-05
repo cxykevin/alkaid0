@@ -509,7 +509,7 @@
                 },
                 "OnlineSearch": {
                     "type": "object",
-                    "description": "在线搜索配置项（alkaid0-search-engine）。全部 provider 默认关闭，仅 Bing 默认启用（无需密钥）。search 工具 online=true 时可通过 path 参数用 provider id（bing/github/arxiv/tavily/deepseek/context7/zread/brave/grepapp/sourcegraph/stackoverflow/hackernews/devto/librariesio）限定搜索源",
+                    "description": "在线搜索配置项（alkaid0-search-engine）。全部 provider 默认关闭，仅 Bing 默认启用（无需密钥）。search 工具 type=online 时可通过 path 参数用 provider id（bing/github/arxiv/tavily/deepseek/context7/zread/brave/grepapp/sourcegraph/stackoverflow/hackernews/devto/librariesio）限定搜索源",
                     "properties": {
                         "timeout": {
                             "type": "integer",

@@ -17,7 +17,7 @@ const (
 // EnsureCacheDefaults 填充 Model.Models 各模型缺失的缓存字段为期望默认值。
 // raw 是加载的完整配置 JSON（可为 nil/空，表示无既有配置）。
 //
-// 与 EnsureOnlineSearchDefaults 同理：Load() 在 unmarshal 成功后用
+// 与 EnsureElementDefaults 同理：Load() 在 unmarshal 成功后用
 // *GlobalConfig = *tempConfig 整体替换，会导致存量配置缺失的新字段变零值
 // （0.0 / 0），而非 default tag 的默认值。因此探测 raw 中各模型实际写过的键，
 // 未写的字段才填默认，用户显式写过的值（含 0）一律保留。

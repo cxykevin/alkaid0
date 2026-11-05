@@ -17,7 +17,6 @@ func applyLoadPipeline(t *testing.T, raw string) *structs.Config {
 	if err := json.Unmarshal([]byte(raw), cfg); err != nil {
 		t.Fatalf("unmarshal config: %v", err)
 	}
-	EnsureOnlineSearchDefaults(cfg, json.RawMessage(raw))
 	EnsureCacheDefaults(cfg, json.RawMessage(raw))
 	EnsureElementDefaults(cfg, json.RawMessage(raw))
 	return cfg

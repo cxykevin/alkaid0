@@ -1,9 +1,5 @@
 package structs
 
-import (
-	secconfig "github.com/cxykevin/alkaid0-search-engine/config"
-)
-
 // CodebaseConfig 代码库搜索引擎配置
 type CodebaseConfig struct {
 	// BM25Weight BM25 搜索权重（0~1），向量搜索权重为 1-BM25Weight，默认 0.7
@@ -18,10 +14,10 @@ type CodebaseConfig struct {
 
 // ContextConfig 上下文/集成相关配置
 type ContextConfig struct {
-	LSP                LSPConfig        // LSP 客户端配置
-	EmbeddingModelID   int32            `default:"1"` // 嵌入模型
-	SearchSummaryModel int32            `default:"0"` // 搜索摘要模型
-	OnlineSearch       secconfig.Config // 在线搜索配置
-	Codebase           CodebaseConfig   // 代码库搜索引擎调参
-	Phrase             PhraseConfig     // 短语系统：/s <short> 展开为长内容发送
+	LSP                LSPConfig          // LSP 客户端配置
+	EmbeddingModelID   int32              `default:"1"` // 嵌入模型
+	SearchSummaryModel int32              `default:"0"` // 搜索摘要模型
+	OnlineSearch       OnlineSearchConfig // 在线搜索配置
+	Codebase           CodebaseConfig     // 代码库搜索引擎调参
+	Phrase             PhraseConfig       // 短语系统：/s <short> 展开为长内容发送
 }

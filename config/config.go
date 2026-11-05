@@ -164,7 +164,6 @@ func Load() {
 	cfg := structs.BuildDefault(structs.Config{})
 	cfg.Version = product.VersionID
 	cfg.Model = model
-	EnsureOnlineSearchDefaults(&cfg, nil)
 
 	globalConfigMu.Lock()
 	GlobalConfig = &cfg
@@ -222,7 +221,6 @@ func Load() {
 	// 解析成功：先把默认值补齐到**尚未发布**的 tempConfig 上，再整体替换指针发布。
 	// 注意不能写成 *GlobalConfig = *tempConfig —— 那会就地改写已经发布出去的对象，
 	// 与正在遍历其 map 的读者并发时 Go 运行时会 fatal 终止进程（写时复制不变量）。
-	EnsureOnlineSearchDefaults(tempConfig, json.RawMessage(data))
 	EnsureCacheDefaults(tempConfig, json.RawMessage(data))
 	// map 字段的元素会被 encoding/json 整体替换（而不是像 struct 字段那样就地更新），
 	// 元素内未写出的字段需要单独补默认值：否则 Models 里只写 ModelName/ModelID 时

@@ -972,8 +972,8 @@ func runOnlineSearch(_ *structs.Chats, mp map[string]*any, cross []*any) (bool, 
 	// 读取在线搜索配置
 	onCfg := config.GlobalConfig.Context.OnlineSearch
 
-	// 构建搜索引擎配置
-	seCfg := onCfg
+	// 构建搜索引擎配置（本项目自有配置结构 → 搜索引擎配置结构）
+	seCfg := onCfg.EngineConfig()
 
 	// 执行搜索
 	searchCtx, cancel := context.WithTimeout(context.Background(), time.Duration(onCfg.Timeout)*time.Second)
@@ -1056,7 +1056,7 @@ func runOnlineSearch(_ *structs.Chats, mp map[string]*any, cross []*any) (bool, 
 // UpdateToolPathDesp 更新工具描述
 func UpdateToolPathDesp() {
 	onCfg := config.GlobalConfig.Context.OnlineSearch
-	seCfg := onCfg
+	seCfg := onCfg.EngineConfig()
 	v := paras["path"]
 	v.Description = pathDesp + strings.Join(searchengine.EnabledProviders(&seCfg), ",")
 	// map 取值是值拷贝，必须写回，否则描述始终停留在占位符 <will_be_replaced_desp>
