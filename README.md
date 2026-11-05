@@ -137,6 +137,7 @@ C:\ProgramData\alkaid0\config.json
         "IgnoreBuiltinAgents": false,
         "GlobalPrompt": "始终使用中文回答",
         "SummaryModel": 0,
+        "GoalCheckModel": -1,
         "MaxCallCount": 50,
         "AutoApprove": "",
         "AutoReject": "",
@@ -371,7 +372,12 @@ C:\ProgramData\alkaid0\config.json
 
 ## 请求重试
 
-网络请求采用指数退避重试机制，最多重试 3 次。当 LLM Provider 返回临时性错误时自动重试，提升系统稳定性。
+网络请求采用指数退避重试机制：未设置会话 goal 时最多重试 3 次（1s / 2s / 4s）；设置了 goal 的会话**不限制重试次数**，直到请求成功或遇到不可恢复错误。
+
+- 仅在流式响应尚未开始时重试；已经开始输出后不会重试，避免历史里出现两份半截回复。
+- 用户取消（`session/cancel` / Esc）与上层 context 超时不重试。
+- 余额/额度类错误（`balance`、`quota`、`欠费` 等关键词）不重试，直接结束本轮并报错。
+- 每次重试前广播 `alk.cxykevin.top/session/retry`（`attempt` / `backoffMs` / `error`），客户端可展示重试状态（见 `docs/acp/extension.md` §2.10）。
 
 ---
 
@@ -417,11 +423,28 @@ C:\ProgramData\alkaid0\config.json
 - 支持独立的作用域（Scope）控制
 - 子 Agent 可自动审批规则独立配置，未配置时回退到全局默认
 
+## 会话目标（Goal）
+
+会话可以设置一条 **goal**（短文本，最多 1024 字符），描述「任务完成时必须为真」的状态。设置后：
+
+- goal 被强制注入主请求 system 消息的**最顶端**（`<goal>...</goal>`），且不参与 trace 锚点/差分，因此位置固定；摘要与标题请求也会在 system 末尾带上 goal。
+- 主 Agent 每次正常结束（`end_turn`）时，服务端自动激活内置的 **goal-check** 内部代理校验 goal；它只读检查，不需要完成实际工作。
+  - 校验代理调用 `deactivate_agent` 表示**未完成**：调用参数里的说明会作为打回理由注入主 Agent，主 Agent 继续工作。
+  - 校验代理不调用生命周期工具并正常结束，表示**通过**，本轮回合才真正结束（广播 idle）。
+- 主 Agent 输出为空时按异常处理：指数退避后重试，而不是直接结束。
+- goal 由用户控制：`/goal <文本>` 设置/覆盖，`/goal clear` 清除；AI 只能通过 `edit` 工具写 `@goal`，且**仅在为空时允许写一次**，之后不可修改。goal 设置/变更会广播 `alk.cxykevin.top/session/goal`。
+- 客户端可用私有方法 `alk.cxykevin.top/session/goal/get` / `set` 读写（见 `docs/acp/extension.md` §3.12）。
+
+`Agent.GoalCheckModel` 控制校验代理使用的模型：默认 `-1` 表示跟随会话当前模型；大于 `0` 时使用指定模型（校验通常只需短上下文，可配一个更便宜的模型）。
+
+普通子 Agent 若未调用 `deactivate_agent` 就结束，服务端不会让会话卡在子 Agent 状态：它最后一段输出会作为回传消息交给主 Agent；没有任何输出时则回传一条明确的异常说明。
+
 ## Agent 命令
 
 - `/background (on|off)`: 切换后台运行模式，断连后保持会话存活
 - `/compress`: 压缩上下文历史
 - `/feedback <反馈内容>`: 提交反馈到反馈服务端
+- `/goal [文本|clear]`: 查看/设置会话目标（goal）；无参数显示当前值，`clear` 清除。设置后每轮请求都会强制注入上下文顶端，并在主 Agent 结束时由内部 goal-check 校验是否完成
 - `/help`: 显示命令帮助（无参数）
 - `/index [clean|status|cancel|lsp-reset]`: 构建代码库索引（提取 LSP 符号 → 提交 embedding 任务）；子命令：`clean` 清库、`status` 显示进度、`cancel` 停止、`lsp-reset` 重置 LSP 失败计数
 - `/init`: 分析代码库并生成 AGENTS.md 指导文件（无参数）

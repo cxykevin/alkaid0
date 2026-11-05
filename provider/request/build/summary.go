@@ -231,9 +231,14 @@ func SummaryWithKeepNumber(chatID uint32, agentID string, db *gorm.DB, keepNum i
 	if err != nil {
 		return 0, nil, err
 	}
+	// 摘要请求的 goal 追加在 system 末尾（不占最顶端，避免影响摘要主提示的结构）。
+	systemContent := globalRendered
+	if goalBlock := GoalBlock(loadGoalForRequest(db, chatID)); goalBlock != "" {
+		systemContent += "\n\n" + goalBlock
+	}
 	messages = append(messages, reqStruct.Message{
 		Role:    "system",
-		Content: globalRendered,
+		Content: systemContent,
 	})
 
 	// 2. 放入对话内容

@@ -367,6 +367,13 @@ var commandMaps = map[string]*cmdObj{
 			return false, titleCommand(obj, strings.TrimSpace(arg))
 		},
 	},
+	"/goal": {
+		Description: "Show, set, or clear the session goal. A goal is immutable for the AI once set; /goal can replace or clear it",
+		Hint:        "[goal text] | clear",
+		Function: func(obj *sessionObj, arg string) (bool, error) {
+			return false, goalCommand(obj, strings.TrimSpace(arg))
+		},
+	},
 	"/s": {
 		Description:  "Send a configured phrase — /s <short> expands the phrase to its full text and sends it to the model; /s with no args lists all configured phrases",
 		Hint:         "[short]",

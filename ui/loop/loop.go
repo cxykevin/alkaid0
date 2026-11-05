@@ -13,6 +13,7 @@ import (
 	"github.com/cxykevin/alkaid0/config"
 	"github.com/cxykevin/alkaid0/log"
 	"github.com/cxykevin/alkaid0/provider/request"
+	"github.com/cxykevin/alkaid0/provider/request/agents"
 	reqStructs "github.com/cxykevin/alkaid0/provider/request/structs"
 	"github.com/cxykevin/alkaid0/storage/structs"
 	"github.com/cxykevin/alkaid0/ui/funcs"
@@ -21,11 +22,68 @@ import (
 
 // 重试配置
 const (
-	// maxRetries 请求失败时的最大重试次数
+	// maxRetries 请求失败时的最大重试次数（会话未设置 goal 时）
 	maxRetries = 3
-	// baseBackoff 指数退避的基准间隔（秒），第 n 次重试等待 baseBackoff * 2^(n-1)
+	// baseBackoff 指数退避的基准间隔，第 n 次重试等待 baseBackoff * 2^(n-1)
 	baseBackoff = 1 * time.Second
+	// maxBackoffShift 退避翻倍的安全上限。goal 会话要求“退避不封顶”，
+	// 但 time.Duration 是 int64 纳秒：1s<<34 即溢出。1s<<33 ≈ 272 年，
+	// 实际不会等到，只是防止溢出成负数导致狂刷请求。
+	maxBackoffShift = 33
 )
+
+// fatalRetryKeywords 出现即停止重试的错误关键词（不区分大小写）。
+// 部分中转站返回非标准状态码，无法按 HTTP 分类；余额/额度类错误重试再多次也不会恢复，
+// 必须尽早终止。
+var fatalRetryKeywords = []string{
+	"balance", "credit", "insufficient", "quota", "billing", "payment",
+	"欠费", "余额", "额度",
+}
+
+// isFatalRetryError 判断错误文案是否命中不可恢复的余额/额度关键词。
+func isFatalRetryError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	for _, kw := range fatalRetryKeywords {
+		if strings.Contains(msg, kw) {
+			return true
+		}
+	}
+	return false
+}
+
+// retryBackoff 返回第 attempt 次重试的退避时长（1s, 2s, 4s ... 不封顶，防溢出）。
+func retryBackoff(attempt int) time.Duration {
+	if attempt < 1 {
+		attempt = 1
+	}
+	shift := min(attempt-1, maxBackoffShift)
+	backoff := baseBackoff << shift
+	if backoff <= 0 {
+		return time.Duration(1<<63 - 1)
+	}
+	return backoff
+}
+
+// consumeGoalCheckRejection 消费内部 goal-check 的 deactivate 打回标记。
+// 工具执行阶段只是记录理由；这里立即清掉校验代理并把理由注入主 agent，
+// 避免带着校验代理再请求一轮（否则每次打回都会多一次无意义请求）。
+func consumeGoalCheckRejection(session *structs.Chats) bool {
+	if session == nil || session.CurrentAgentID != agents.GoalCheckInstanceID {
+		return false
+	}
+	rejected, ok := session.TemporyDataOfSession[structs.TempKeyGoalCheckRejected]
+	if !ok {
+		return false
+	}
+	delete(session.TemporyDataOfSession, structs.TempKeyGoalCheckRejected)
+	agents.ClearInternalAgent(session)
+	// 只回传 deactivate 的 prompt（用户要求），不附加校验轮正文。
+	session.AppendSystemPrompt("[goal-check rejected]\n" + fmt.Sprint(rejected))
+	return true
+}
 
 var logger = log.New("loop")
 
@@ -61,6 +119,16 @@ type AIResponse struct {
 	// Rewind 非 nil 时表示这是一条 rewind 指令的处理结果（见 Object.Rewind）；
 	// server 层据此把结果广播为 alk.cxykevin.top/session/rewind（成功/失败都报告）。
 	Rewind *RewindResult
+	// Retry 非 nil 时表示即将进行一次请求重试（不是模型响应）。
+	// server 层据此广播 alk.cxykevin.top/session/retry，不把它当普通响应处理。
+	Retry *RetryInfo
+}
+
+// RetryInfo 一次请求重试的通知信息。
+type RetryInfo struct {
+	Attempt   int
+	Backoff   time.Duration
+	ErrorText string
 }
 
 // RewindResult 一条 rewind 指令的处理结果。
@@ -203,6 +271,8 @@ func (p *Object) Start(ctx context.Context) {
 	var runResponseLoop func()
 	runResponseLoop = func() {
 		loopCount := 0
+		// goalEmptyRetries 统计“goal 会话主 agent 空输出打回”的连续次数，用于指数退避。
+		goalEmptyRetries := 0
 		for {
 			// Stop() 已调用，跳过此轮 AI 交互
 			if p.stopped.Load() {
@@ -210,6 +280,12 @@ func (p *Object) Start(ctx context.Context) {
 					StopReason: StopReasonUser,
 				})
 				break
+			}
+
+			// 手动审批在 runResponseLoop 之外执行工具：进入本轮前先消费 goal-check
+			// 打回标记，否则会先带着校验代理请求一次才处理。
+			if consumeGoalCheckRejection(session) {
+				continue
 			}
 
 			thinkingFlag := false
@@ -289,16 +365,38 @@ func (p *Object) Start(ctx context.Context) {
 					// 用户主动取消，不重试
 					logger.Info("request canceled by user, skip retry")
 				} else {
-					for retryCount := 1; retryCount <= maxRetries; retryCount++ {
-						backoff := baseBackoff * (1 << (retryCount - 1)) // 指数退避: 1s, 2s, 4s
-						logger.Warn("request failed (attempt %d/%d), retrying in %v: %v",
-							retryCount, maxRetries, backoff, err)
+					// goal 会话：无限次数、退避不封顶（防溢出）；未设置 goal 时保持 3 次上限。
+					unlimitedRetry := strings.TrimSpace(session.Goal) != ""
+					for retryCount := 1; ; retryCount++ {
+						// 余额/额度类错误不可恢复：无论是否 goal 会话都立即终止。
+						if isFatalRetryError(err) {
+							logger.Error("request failed with unrecoverable error, stop retrying: %v", err)
+							break
+						}
+						if !unlimitedRetry && retryCount > maxRetries {
+							break
+						}
+						backoff := retryBackoff(retryCount)
+						if unlimitedRetry {
+							logger.Warn("request failed (attempt %d, unlimited), retrying in %v: %v",
+								retryCount, backoff, err)
+						} else {
+							logger.Warn("request failed (attempt %d/%d), retrying in %v: %v",
+								retryCount, maxRetries, backoff, err)
+						}
+						call(AIResponse{Retry: &RetryInfo{
+							Attempt:   retryCount,
+							Backoff:   backoff,
+							ErrorText: err.Error(),
+						}})
 
 						select {
 						case <-time.After(backoff):
 						case <-p.ctx.Done():
 							goto retryDone
 						case <-responseCtx.Done():
+							goto retryDone
+						case <-p.done:
 							goto retryDone
 						}
 
@@ -340,10 +438,69 @@ func (p *Object) Start(ctx context.Context) {
 				// 等待用户或自动规则决策后才能继续
 				if session.GetState() == state.StateWaitApprove {
 					if p.handleWaitApprove(session, call, needCompress, doAutoSummary) {
+						// goal-check 的 deactivate_agent 刚在工具执行阶段记录打回：
+						// 立即消费并回到主 agent，不再带着校验代理请求一轮。
+						consumeGoalCheckRejection(session)
 						continue
 					}
 					break
 				}
+
+				// 内部 goal-check 轮：调用 deactivate_agent 即打回，否则视为通过。
+				if session.CurrentAgentID == agents.GoalCheckInstanceID {
+					if consumeGoalCheckRejection(session) {
+						continue
+					}
+					agents.ClearInternalAgent(session)
+					call(AIResponse{StopReason: StopReasonModel})
+					break
+				}
+
+				// 普通子代理未调用 deactivate_agent 就结束：把最后一段输出回传主 agent，
+				// 没有输出时投递明确的报错，然后继续（不再让会话卡在子代理状态）。
+				if session.CurrentAgentID != "" {
+					if err := agents.AbortAgentWithOutput(session); err != nil {
+						logger.Warn("failed to return subagent output: %v", err)
+					}
+					continue
+				}
+
+				// 主 agent 正常结束且设置了 goal：进入 goal-check。
+				if strings.TrimSpace(session.Goal) != "" {
+					last := agents.LastAgentOutput(session, "")
+					if last == "" {
+						// 空输出属于明显异常退出：直接打回，按无限重试的指数退避后重跑。
+						goalEmptyRetries++
+						backoff := retryBackoff(goalEmptyRetries)
+						logger.Warn("goal session produced an empty final response, retry in %v (attempt %d)",
+							backoff, goalEmptyRetries)
+						call(AIResponse{Retry: &RetryInfo{
+							Attempt:   goalEmptyRetries,
+							Backoff:   backoff,
+							ErrorText: "empty response",
+						}})
+						select {
+						case <-time.After(backoff):
+						case <-p.ctx.Done():
+							call(AIResponse{StopReason: StopReasonUser})
+							return
+						case <-p.done:
+							return
+						}
+						continue
+					}
+					goalEmptyRetries = 0
+					prompt := "The main agent has just finished. Verify whether it satisfied the session goal.\n\n" +
+						"Main agent's final message:\n" + last
+					if err := agents.ActivateInternalAgent(session, agents.GoalCheckAgentID,
+						agents.GoalCheckInstanceID, prompt); err != nil {
+						logger.Warn("failed to activate goal-check agent: %v", err)
+						// 无法进入校验时不要卡死：按正常结束处理。
+					} else {
+						continue
+					}
+				}
+
 				if !responseStarted && !thinkingFlag {
 					call(AIResponse{
 						Error:      errors.New("no response"),
@@ -358,7 +515,8 @@ func (p *Object) Start(ctx context.Context) {
 			}
 
 			loopCount++
-			if loopCount >= int(config.GlobalConfig.Agent.MaxCallCount) {
+			// goal 会话不受 MaxCallCount 限制：goal-check 可能无限打回，主 agent 需要持续工作。
+			if strings.TrimSpace(session.Goal) == "" && loopCount >= int(config.GlobalConfig.Agent.MaxCallCount) {
 				call(AIResponse{
 					Error:      fmt.Errorf("loop count exceeded %d", config.GlobalConfig.Agent.MaxCallCount),
 					StopReason: StopReasonError,

@@ -8,6 +8,7 @@ import (
 	_ "github.com/cxykevin/alkaid0/tools/tools/edit"
 	_ "github.com/cxykevin/alkaid0/tools/tools/fetch"
 	_ "github.com/cxykevin/alkaid0/tools/tools/file"
+	_ "github.com/cxykevin/alkaid0/tools/tools/goal"
 	_ "github.com/cxykevin/alkaid0/tools/tools/memory"
 	_ "github.com/cxykevin/alkaid0/tools/tools/run"
 	_ "github.com/cxykevin/alkaid0/tools/tools/scope"

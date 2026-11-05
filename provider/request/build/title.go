@@ -39,7 +39,7 @@ func Title(chatID uint32, db *gorm.DB) (*reqStruct.ChatCompletionRequest, error)
 	return buildTitleRequest([]reqStruct.Message{
 		{Role: "user", Content: userMsg.Delta},
 		{Role: "assistant", Content: agentMsg.Delta},
-	})
+	}, loadGoalForRequest(db, chatID))
 }
 
 // TitleFull 构建会话标题生成请求（compress 重生成：最近 titleWindowMessages 条对话消息）。
@@ -87,11 +87,12 @@ func TitleFull(chatID uint32, db *gorm.DB) (*reqStruct.ChatCompletionRequest, er
 	for j := responseDeltaList.Front(); j != nil; j = j.Next() {
 		messages = append(messages, j.Value.(reqStruct.Message))
 	}
-	return buildTitleRequest(messages)
+	return buildTitleRequest(messages, loadGoalForRequest(db, chatID))
 }
 
-// buildTitleRequest 组装标题生成请求：标题专用 system 提示词 + 对话消息 + 标题指令
-func buildTitleRequest(dialogMessages []reqStruct.Message) (*reqStruct.ChatCompletionRequest, error) {
+// buildTitleRequest 组装标题生成请求：标题专用 system 提示词 + 对话消息 + 标题指令。
+// goal 非空时追加在 system 末尾（与摘要一致，不占最顶端）。
+func buildTitleRequest(dialogMessages []reqStruct.Message, goal string) (*reqStruct.ChatCompletionRequest, error) {
 	modelConfig, err := GetModelConfig(config.GlobalConfig.Agent.TitleModel)
 	if err != nil {
 		return nil, err
@@ -122,10 +123,14 @@ func buildTitleRequest(dialogMessages []reqStruct.Message) (*reqStruct.ChatCompl
 	if err != nil {
 		return nil, err
 	}
+	titleSystemContent := titleSystemRendered
+	if goalBlock := GoalBlock(goal); goalBlock != "" {
+		titleSystemContent += "\n\n" + goalBlock
+	}
 	messages := make([]reqStruct.Message, 0, len(dialogMessages)+2)
 	messages = append(messages, reqStruct.Message{
 		Role:    "system",
-		Content: titleSystemRendered,
+		Content: titleSystemContent,
 	})
 	messages = append(messages, dialogMessages...)
 	messages = append(messages, reqStruct.Message{

@@ -483,6 +483,14 @@ scan:
 	// 合并所有 system 消息
 	var systemContent string
 
+	// 0. 会话 goal：强制放在 system 最顶端（最终 messages[0] 的开头）。
+	// system 不参与 trace 锚点/差分/搬家，因此 goal 天然锁定；goal 为空时不出现。
+	if chatLn != nil {
+		if goalBlock := GoalBlock(chatLn.Goal); goalBlock != "" {
+			systemContent += goalBlock + "\n\n"
+		}
+	}
+
 	// 1. global提示词 (GlobalTemplate)
 	globalRendered, err := prompts.Render(prompts.GlobalTemplate, struct {
 		ModelName string

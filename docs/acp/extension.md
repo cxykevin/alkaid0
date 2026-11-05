@@ -46,9 +46,12 @@ alkaid0 对于客户端并 **不强制** 要求客户端初始化，这与 [ACP 
   "alk.cxykevin.top/alkaid0/v0.5": {},
   "alk.cxykevin.top/alkaid0/v0.6": {},
   "alk.cxykevin.top/msgqueue": {},
-  "alk.cxykevin.top/cron": {}
+  "alk.cxykevin.top/cron": {},
+  "alk.cxykevin.top/goal": {}
 }
 ```
+
+`alk.cxykevin.top/goal` 表示服务端支持会话 goal 的读写与推送（`.../session/goal/get`、`.../session/goal/set`，以及 `session/update` 中的 `alk.cxykevin.top/session/goal` 快照事件，见 §2.9/§3.12）。goal 推送与请求重试通知（§2.10）都是普通 `session/update` 通知，不要求客户端在 `initialize` 中声明能力。
 
 `alk.cxykevin.top/msgqueue` 表示服务端支持会话消息队列。**客户端必须在自己的 `initialize` 请求 `capabilities` 顶层显式声明同名键**（值为 `{}` 或 `true`；缺失、`false` 或 `null` 均视为不支持），服务端才会向该连接推送队列事件（见 §2.8）。未声明的客户端不会收到任何 `msgqueue` 推送，但其 `session/prompt` 仍然可用：提交时服务端会走「终止当前生成 + 合并发送」的降级路径（见 §2.8 末尾）。
 
@@ -248,6 +251,40 @@ alkaid0 现在遵循 ACP v2 标准事件，且字段置于 update 对象**顶层
 - 队列持久化在会话数据库中，服务端重启/会话重连后按 `seq` 恢复并继续消费；`session/delete` 会清理该会话的队列行。
 - `session/new`、`session/resume` 以及晚到的 `initialize` 都会向已声明能力的连接补推一次 `reason: "snapshot"` 的全量快照。
 - **不支持该能力的客户端**：提交普通 prompt 或可入队命令时，服务端会先终止当前正在生成的 assistant 内容（`loop.Stop()`，必要时拒绝待审批工具），把队列中的内容与本次输入一起按 FIFO 冲刷：连续 `prompt` 项用 `\n\n` 合并为**一条**用户消息发送，`command` 项各自执行并作为合并批次的分界。
+
+### 2.9. `alk.cxykevin.top/session/goal`
+
+会话 goal 快照通知。goal 是「工作目录 + 会话」级别的短文本目标（上限 1024 个字符），由 `/goal` 命令、`edit` 工具的 `@goal` 虚拟对象或 `.../session/goal/set` 写入；它会被强制注入主请求 system 消息的最顶端，用于 goal-check 校验。
+
+- `sessionUpdate` ***string***：固定为 `alk.cxykevin.top/session/goal`。
+- `goal` ***string***：当前 goal，空字符串表示未设置。
+- `updatedAt` ***string?***：RFC 3339 最后活动时间。
+
+触发时机：
+
+- `/goal <文本>` 设置/覆盖、`/goal clear` 清除、AI 首次写入 `@goal`、`goal/set` RPC 写入后，向会话所有连接广播。
+- `session/new` 与 `session/resume` 建连后向该连接补推一次当前快照（空 goal 也推，客户端据此清空旧缓存）。
+
+语义：
+
+- goal 是会话元数据，不进入消息时间线、不产生 `user_message`，也不触发模型回合。
+- 写入后不可再由 AI 修改（`@goal` 只在为空时允许写一次）；用户可随时用 `/goal` 或 RPC 覆盖/清除。
+- 会话忙碌时也允许写入；同一回合的下一轮请求立即使用新值。
+
+### 2.10. `alk.cxykevin.top/session/retry`
+
+请求重试通知。当 LLM 请求在**尚未开始流式响应**时失败，服务端按指数退避重试前广播本事件。纯通知，不参与消息时间线。
+
+- `sessionUpdate` ***string***：固定为 `alk.cxykevin.top/session/retry`。
+- `attempt` ***number***：第几次重试（从 1 开始）。
+- `backoffMs` ***number(int64)***：本次退避时长（毫秒）。
+- `error` ***string***：失败原因摘要（已脱敏）。
+
+语义：
+
+- 未设置 goal 的会话最多重试 3 次（1s / 2s / 4s）；设置了 goal 的会话不限制次数，退避按 2 的幂递增（仅防溢出）。
+- 余额/额度类不可恢复错误（`balance`、`quota`、`欠费` 等关键词）不重试，直接以该错误结束本轮。
+- 用户取消、上层 context 超时、或流式响应已开始（`responseStarted`）时不重试。
 
 ## 3. 方法扩展
 
@@ -680,6 +717,34 @@ ACP v2 中 `session/update` 是服务端 → 客户端的通知（含 `session_i
 - 任务列表不主动推送，客户端在进入会话、打开定时任务面板或删除成功后重新调用 `cron/list` 即可。
 - 新增/修改任务不在本组方法中：仍由 AI 通过 `cron` 工具完成（避免前端与模型各自维护一套校验规则）。
 - `cron` 存储不可用（例如本进程没有启动调度器）时返回 `cron is not available in this process`。
+
+### 3.12. `alk.cxykevin.top/session/goal/*`
+
+读写会话 goal。能力标记 `alk.cxykevin.top/goal` 表示服务端支持本组方法与 §2.9 的推送。
+
+两个方法都要求 `sessionId` 已由当前连接通过 `session/new` / `session/resume` 绑定；允许冷会话（服务端重启后内存注册表为空），但 `sessionId` 中的工作目录必须是规范绝对路径且已存在 `.alkaid0`。
+
+| 方法 | 请求 | 响应 |
+|---|---|---|
+| `.../session/goal/get` | `{ sessionId }` | `{ goal, updatedAt? }` |
+| `.../session/goal/set` | `{ sessionId, goal }` | `{ goal, updatedAt? }` |
+
+- `goal` ***string***：当前 goal；空字符串表示未设置，`set` 传空串即清除。
+- `updatedAt` ***string?***：RFC 3339 最后活动时间。
+- goal 上限 **1024 个字符**（按 Unicode 码点计），超出返回 `goal is too long: <n> runes (max 1024)`。
+- 写入后立即落库并向会话所有连接广播 `alk.cxykevin.top/session/goal`（§2.9）；会话忙碌时也允许，同一回合的下一轮请求立即生效。
+- 会话不存在或 `sessionId` 未绑定到当前连接时返回错误（`session not found` / `session ... is not bound to this connection`）。
+- 本组方法只改会话元数据，不触发模型回合；AI 侧的等价入口是 `edit` 工具写 `@goal`（仅 goal 为空时允许一次）。
+
+```jsonc
+// 请求
+{ "jsonrpc": "2.0", "id": 1, "method": "alk.cxykevin.top/session/goal/set",
+  "params": { "sessionId": "sess_7:/path/to/project", "goal": "全部测试通过并提交" } }
+
+// 响应
+{ "jsonrpc": "2.0", "id": 1, "result": { "goal": "全部测试通过并提交",
+  "updatedAt": "2026-11-05T12:00:00+08:00" } }
+```
 
 ## 4. 字段扩展
 

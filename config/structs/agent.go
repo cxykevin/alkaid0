@@ -11,6 +11,9 @@ type AgentConfig struct {
 	AutoApprove           string `default:""`                            // 自动批准表达式
 	AutoReject            string `default:""`                            // 自动拒绝表达式
 	DisableSandbox        bool   `default:"false"`                       // 禁用沙盒
+	// Internal 内部 agent：不出现在 <agents>/<agent_tags> 与 subagent/list 中，
+	// 且禁止 AI 通过 agent / activate_agent 创建或激活（仅服务端内部使用，如 goal-check）。
+	Internal bool `default:"false"`
 }
 
 // FetchConfig fetch 工具配置
@@ -28,6 +31,9 @@ type AgentsConfig struct {
 	GlobalPrompt            string `default:""`
 	SummaryModel            int32
 	TitleModel              int32  // 标题生成模型编号（0 表示回退 DefaultModelID，与 SummaryModel 一致）
+	// GoalCheckModel goal-check 内部代理使用的模型编号。
+	// -1（默认）或 0 表示跟随会话当前模型（LastModelID）；>0 时覆盖内置 goal-check 的模型。
+	GoalCheckModel int32 `default:"-1"`
 	MaxCallCount            int32  `default:"50"`
 	DefaultAutoApprove      string `default:"" json:"AutoApprove"` // 全局默认自动批准表达式
 	DefaultAutoReject       string `default:"" json:"AutoReject"`  // 全局默认自动拒绝表达式

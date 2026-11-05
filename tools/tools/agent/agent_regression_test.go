@@ -276,3 +276,41 @@ func TestBuildGlobalPrompt_SkipsInvalidLegacyName(t *testing.T) {
 		t.Errorf("合法实例名应保留在提示词中:\n%s", rendered)
 	}
 }
+
+// TestUnuseAgent_GoalCheckRecordedAsRejection 内部 goal-check 的 deactivate_agent
+// 不是普通停用：只记录打回理由并返回成功，不写回传消息、不清空激活状态
+//（清理与切回主 Agent 由 loop 状态机负责）。
+func TestUnuseAgent_GoalCheckRecordedAsRejection(t *testing.T) {
+	db := setupTestDB(t)
+	session := setupTestSession(t, db)
+	session.CurrentAgentID = storageStructs.GoalCheckInstanceID
+	session.NowAgent = storageStructs.GoalCheckInstanceID
+
+	pass, _, result, err := unuseAgent(session, map[string]*any{
+		"prompt": anyPtr("tests are still failing"),
+	}, nil)
+	if err != nil {
+		t.Fatalf("unuseAgent failed: %v", err)
+	}
+	if pass {
+		t.Fatal("goal-check deactivate_agent must terminate the hook chain")
+	}
+	if !resultSuccess(result) {
+		t.Fatalf("goal-check must see a success result, got %v", result)
+	}
+	rejected, ok := session.TemporyDataOfSession[storageStructs.TempKeyGoalCheckRejected]
+	if !ok || rejected != "tests are still failing" {
+		t.Fatalf("rejection reason not recorded: %#v", session.TemporyDataOfSession)
+	}
+	if session.CurrentAgentID != storageStructs.GoalCheckInstanceID ||
+		session.NowAgent != storageStructs.GoalCheckInstanceID {
+		t.Fatal("unuseAgent must not clear the internal agent state")
+	}
+	var count int64
+	if err := db.Model(&storageStructs.Messages{}).Where("chat_id = ?", session.ID).Count(&count).Error; err != nil {
+		t.Fatal(err)
+	}
+	if count != 0 {
+		t.Fatalf("goal-check rejection must not persist messages, got %d", count)
+	}
+}

@@ -7,6 +7,6 @@
     ToolCall.Name == "search" ||
     ToolCall.Name == "time" ||
     (ToolCall.Name == "fetch" && param(ToolCall, "method") == "GET") ||
-    (ToolCall.Name == "edit" && (param(ToolCall, "path") == "@task" || param(ToolCall, "path") == "@memory" || param(ToolCall, "path") == "@memory/global")) ||
+    (ToolCall.Name == "edit" && (param(ToolCall, "path") == "@task" || param(ToolCall, "path") == "@memory" || param(ToolCall, "path") == "@memory/global" || param(ToolCall, "path") == "@goal")) ||
     (ToolCall.Name == "run" && param(ToolCall, "type") == "sleep")
 )

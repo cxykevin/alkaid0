@@ -336,6 +336,16 @@ func editAgent(session *structs.Chats, mp map[string]*any, cross []*any) (bool, 
 			"error":   &errMsg,
 		}, nil
 	}
+	// 内部代理 tag（goal-check）不允许 AI 创建实例。
+	if cfg, ok := agentconfig.GetAgentConfig(tag); ok && cfg.Internal {
+		boolx := false
+		success := any(boolx)
+		errMsg := any(fmt.Sprintf("agent tag %q is reserved and cannot be used", tag))
+		return false, cross, map[string]*any{
+			"success": &success,
+			"error":   &errMsg,
+		}, nil
+	}
 
 	// 检查 path 参数
 	pathPtr, ok := mp["path"]
@@ -493,6 +503,21 @@ func unuseAgent(session *structs.Chats, mp map[string]*any, cross []*any) (bool,
 		}, nil
 	}
 
+	// 内部代理（goal-check）的 deactivate_agent 是“打回”信号：
+	// 不执行普通停用（不写回传消息、不跑 Summary、不清状态），只记录理由，
+	// 由 loop 状态机读走后切回主 agent 并继续。
+	if session.CurrentAgentID == structs.GoalCheckInstanceID {
+		if session.TemporyDataOfSession == nil {
+			session.TemporyDataOfSession = make(map[string]any)
+		}
+		session.TemporyDataOfSession[structs.TempKeyGoalCheckRejected] = prompt
+		boolx := true
+		success := any(boolx)
+		return false, cross, map[string]*any{
+			"success": &success,
+		}, nil
+	}
+
 	// A stale tool call may arrive after the previous deactivation already
 	// cleared the session. Treat it as an idempotent success and do not write
 	// another communication message or start another summary.
@@ -555,6 +580,10 @@ func buildGlobalPrompt(session *structs.Chats) (string, error) {
 			logger.Warn("skip invalid agent instance in prompt: %v", err)
 			continue
 		}
+		// 内部代理（如 goal-check）不允许 AI 看到或激活。
+		if cfg, ok := agentconfig.GetAgentConfig(agent.AgentID); ok && cfg.Internal {
+			continue
+		}
 		tmpl.Agents = append(tmpl.Agents, agentPromptEntry{
 			Name: agent.ID,
 			Path: agent.BindPath,
@@ -572,6 +601,10 @@ func buildGlobalPrompt(session *structs.Chats) (string, error) {
 	sort.Strings(tagNames)
 	for _, name := range tagNames {
 		agent := agentconfig.GetAgentConfigMap()[name]
+		// 内部代理（goal-check）不对 AI 暴露 tag。
+		if agent.Internal {
+			continue
+		}
 		tmpl.Tags = append(tmpl.Tags, agentPromptTag{
 			Name:        name,
 			Description: agent.AgentDescription,

@@ -277,6 +277,11 @@
                                 "type": "boolean",
                                 "description": "禁用 sandbox 执行",
                                 "default": false
+                            },
+                            "Internal": {
+                                "type": "boolean",
+                                "description": "内部 Agent：不出现在 <agents>/<agent_tags> 与 subagent/list 中，且禁止 AI 通过 agent / activate_agent 创建或激活（仅服务端内部使用，如 goal-check）",
+                                "default": false
                             }
                         }
                     }
@@ -293,6 +298,11 @@
                 "TitleModel": {
                     "type": "integer",
                     "description": "用于生成会话标题的模型ID，未设置或为 0 时回退到 Model.DefaultModelID"
+                },
+                "GoalCheckModel": {
+                    "type": "integer",
+                    "description": "goal-check 内部校验代理使用的模型ID；-1（默认）或 0 表示跟随会话当前模型，大于 0 时覆盖内置 goal-check 的模型",
+                    "default": -1
                 },
                 "MaxCallCount": {
                     "type": "integer",

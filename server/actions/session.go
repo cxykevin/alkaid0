@@ -1031,6 +1031,11 @@ func loadSession(cwd string, id *uint32, knowID bool, hidden ...bool) (*structs.
 			}
 		})
 
+		// 会话 goal 变更（@goal 编辑 / /goal 命令 / goal/set RPC）统一广播快照。
+		sess.SetGoalPushFn(func(goal string) {
+			broadcastGoalUpdate(sess, sessID)
+		})
+
 		// 后台启动 codebase 索引。
 		// 必须在 QueryChat/InitChat 验证会话真实存在并成功之后再启动：
 		// 若过早启动，会话无效（QueryChat/InitChat 失败）时 goroutine 仍会 loadDB
@@ -1053,6 +1058,11 @@ func loadSession(cwd string, id *uint32, knowID bool, hidden ...bool) (*structs.
 		// 设置回调接收流式响应
 		obj.loopCallback = func(resp loop.AIResponse) {
 			logger.Debug("callback respose ID=%d", resp.MsgID)
+			// 请求重试通知：只广播 retry 事件，不进入消息/状态流。
+			if resp.Retry != nil {
+				broadcastRetryEvent(sessID, resp.Retry)
+				return
+			}
 			// 客户端展示脱敏（DataMask.MaskClientMessages）：正文/思考按流式 AC
 			// 替换已知敏感值，跨 chunk 被切开的值也能完整命中。
 			cm := obj.clientMasker()
@@ -2155,6 +2165,8 @@ func SessionNew(req SessionNewRequest, call func(string, any, *string) error, co
 	registerConnCall(connID, sessionID, call)
 	// 声明了 msgqueue 能力的连接补推当前队列快照。
 	pushMsgQueueSnapshotToConn(connID, sessionID, call)
+	// 建连后补推一次 goal 快照（空 goal 也推，客户端据此确认未设置）。
+	pushGoalToConn(sessionID, call, sess)
 	// 新会话通常空闲，但仍补发一次状态，保证客户端状态与 worker 随后可能派发
 	// 的队列项一致（与 SessionResume 相同，见 syncSessionStateToConn）。
 	syncSessionStateToConn(sessionID, call, sess)
@@ -2359,6 +2371,8 @@ func SessionResume(req SessionResumeRequest, call func(string, any, *string) err
 	registerConnCall(connID, req.SessionID, call)
 	// 声明了 msgqueue 能力的连接补推当前队列快照。
 	pushMsgQueueSnapshotToConn(connID, req.SessionID, call)
+	// 建连后补推一次 goal 快照（空 goal 也推，客户端据此确认未设置）。
+	pushGoalToConn(req.SessionID, call, sess)
 	// 建连后补发会话当前状态。state_update 是纯事件、不会随 resume 重放：
 	// 一轮在旧连接上开始时广播的 running 新连接永远收不到——若服务端仍在跑
 	// （断连后回合继续、/background、cron 回合等），客户端会一直显示空闲，
@@ -3187,7 +3201,7 @@ func SubAgentList(req SubAgentListRequest, call func(string, any, *string) error
 				Path: v.BindPath,
 			}, !v.Deleted
 		}),
-		Tags: u.Map(tags, func(v funcs.AgentTagsList) AgentTagsInfo {
+		Tags: u.MapFilter(tags, func(v funcs.AgentTagsList) (AgentTagsInfo, bool) {
 			return AgentTagsInfo{
 				Name:    v.Agent.AgentName,
 				ID:      v.ID,
@@ -3202,7 +3216,7 @@ func SubAgentList(req SubAgentListRequest, call func(string, any, *string) error
 				Description: v.Agent.AgentDescription,
 				Prompt:      v.Agent.AgentPrompt,
 				ShortPrompt: v.Agent.AgentShortDescription,
-			}
+			}, !v.Agent.Internal
 		}),
 	}, nil
 }

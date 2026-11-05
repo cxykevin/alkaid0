@@ -56,6 +56,10 @@ func InitFuncs(srv *jsonrpc.Server) {
 		jsonrpc.Set(srv, "alk.cxykevin.top/session/cron/list", CronList)
 		jsonrpc.Set(srv, "alk.cxykevin.top/session/cron/delete", CronDelete)
 
+		// 会话 goal（读写 + 推送 alk.cxykevin.top/session/goal）
+		jsonrpc.Set(srv, "alk.cxykevin.top/session/goal/get", GoalGet)
+		jsonrpc.Set(srv, "alk.cxykevin.top/session/goal/set", GoalSet)
+
 		// 会话消息队列（仅向声明了 alk.cxykevin.top/msgqueue 能力的连接推送）
 		jsonrpc.Set(srv, "alk.cxykevin.top/session/msgqueue/list", MsgQueueList)
 		jsonrpc.Set(srv, "alk.cxykevin.top/session/msgqueue/cancel", MsgQueueCancel)

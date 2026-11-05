@@ -46,6 +46,9 @@ type Chats struct {
 	AITitle         string // AI 生成的标题（自动生成/compress 重生成写入）
 	ReasoningEffort string
 	Task            string // 任务计划（markdown 列表，@task 虚拟对象编辑，持久化到 chats 表）
+	// Goal 会话目标（≤1024 rune）。设置后不可由 AI 修改，仅能通过 /goal 或私有协议清除/覆盖。
+	// 非空时：goal 注入 system 最顶端、请求失败无限指数重试、主 agent 结束后进入 goal-check。
+	Goal            string `gorm:"type:text"`
 	Hidden          bool   `gorm:"not null;default:false"`
 	// ActiveLeafID 当前活跃叶子的消息 ID（NULL = 空会话）。
 	// 线性历史迁移后指向会话最新消息；fork/rewind 后指向当前活跃分支的末端。
@@ -108,6 +111,9 @@ type Chats struct {
 	// PlanPushFn 注册 ACP plan 推送回调（server 层在 loadSession 时注册）。
 	// task 工具每次修改 @task 后调用 PushPlan，向会话所有客户端广播完整 plan 列表。
 	PlanPushFn func(entries []PlanEntry) `gorm:"-" json:"-"`
+	// GoalPushFn 注册会话 goal 变更推送回调（server 层在 loadSession 时注册）。
+	// @goal 编辑与 /goal 命令、goal/set RPC 写入后调用 PushGoal。
+	GoalPushFn func(goal string) `gorm:"-" json:"-"`
 	// TerminalPushFn broadcasts a full active-terminal snapshot after background updates.
 	TerminalPushFn  func(terminalID, status, content string) `gorm:"-" json:"-"`
 	WorkflowEventFn func(runID string, event any)            `gorm:"-" json:"-"`
@@ -118,6 +124,20 @@ type Chats struct {
 	// WorkflowStopFn workflow 终端结束回调（runID、终态、最终结果），用于终态落库。
 	WorkflowStopFn func(runID string, status string, result any) `gorm:"-" json:"-"`
 }
+
+// GoalCheckInstanceID 内置 goal-check 代理的固定实例 ID。
+// 消息回放按 agent_id 过滤，固定 ID 让每轮校验都能看到之前的校验历史。
+// 定义在 structs 是为了让 tools/tools/agent 与 ui/loop 都能引用，
+// 避免 tool 层反向依赖 provider/request/agents。
+const GoalCheckInstanceID = "__goal_check__"
+
+// TempKeyGoalCheckRejected 内部 goal-check 调用 deactivate_agent 时的打回理由。
+// 写入 session.TemporyDataOfSession，由 loop 的状态机读取并切回主 agent。
+const TempKeyGoalCheckRejected = "goal-check:rejected"
+
+// MaxGoalRunes 会话 goal 的最大长度（按 rune 计）。
+// AI 的 edit @goal、用户的 /goal、客户端的 goal/set 共用这一上限。
+const MaxGoalRunes = 1024
 
 // PlanEntry ACP plan 更新条目（session/update 通知中 update.sessionUpdate="plan"）。
 // ACP 规范：每次推送完整列表，客户端整体替换当前 plan。
@@ -139,8 +159,9 @@ func (c *Chats) EffectiveModelID() uint32 {
 		return 0
 	}
 	if c.CurrentAgentID != "" {
-		if id := uint32(c.CurrentAgentConfig.AgentModel); id != 0 {
-			return id
+		// 只有正数才是显式指定；0 / -1（内部代理“跟随会话模型”）都回退 LastModelID。
+		if id := c.CurrentAgentConfig.AgentModel; id > 0 {
+			return uint32(id)
 		}
 	}
 	return c.LastModelID
@@ -326,6 +347,30 @@ func (c *Chats) PushPlan(entries []PlanEntry) {
 	c.planPushMu.RUnlock()
 	if fn != nil {
 		fn(entries)
+	}
+}
+
+// SetGoalPushFn 注册会话 goal 推送回调（server 层在 loadSession 时调用一次）。
+func (c *Chats) SetGoalPushFn(fn func(goal string)) {
+	if c == nil {
+		return
+	}
+	c.planPushMu.Lock()
+	defer c.planPushMu.Unlock()
+	c.GoalPushFn = fn
+}
+
+// PushGoal 调用已注册的 goal 推送回调（未注册时静默忽略）。
+// 锁内只取函数指针，网络广播在锁外执行，避免阻塞工具 PostHook。
+func (c *Chats) PushGoal(goal string) {
+	if c == nil {
+		return
+	}
+	c.planPushMu.RLock()
+	fn := c.GoalPushFn
+	c.planPushMu.RUnlock()
+	if fn != nil {
+		fn(goal)
 	}
 }
 
@@ -751,4 +796,17 @@ func (c *Chats) SnapshotLatest() (map[string]any, map[string]string) {
 	maps.Copy(ctx, c.LatestToolCallingContext)
 	maps.Copy(typ, c.LatestToolCallingType)
 	return ctx, typ
+}
+
+// SaveGoal 持久化会话 goal。与 SaveState 一样只更新单列，避免整行 Save
+// 覆盖并发写入的其它列（标题、模型、活跃叶子等）。
+func (c *Chats) SaveGoal(goal string) error {
+	if c == nil {
+		return gorm.ErrInvalidDB
+	}
+	c.Goal = goal
+	if c.DB == nil {
+		return gorm.ErrInvalidDB
+	}
+	return c.DB.Model(&Chats{}).Where("id = ?", c.ID).Update("goal", goal).Error
 }

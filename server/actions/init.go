@@ -43,6 +43,8 @@ var AgentCapabilities = u.H{
 	"alk.cxykevin.top/msgqueue": u.H{},
 	// 定时任务查询/删除（alk.cxykevin.top/session/cron/list | delete），纯请求-响应，无推送。
 	"alk.cxykevin.top/cron": u.H{},
+	// 会话 goal：goal/get | goal/set + 推送 alk.cxykevin.top/session/goal。
+	"alk.cxykevin.top/goal": u.H{},
 }
 
 // AgentInfo 服务端信息常量

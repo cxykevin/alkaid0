@@ -28,10 +28,17 @@ func Build(db *gorm.DB, session *storageStructs.Chats) (*reqStruct.ChatCompletio
 	// trace 内容块按末尾落位回写注入锚点/旧端存档时会因 session.DB == nil 静默跳过，
 	// 表现为块每轮都重新前移到末尾（前缀缓存白丢一轮）。RequestBody 也有同样的兜底。
 	chatLine.DB = db
+	// 内部代理（goal-check）不写 chats.now_agent，运行时状态只在 session.NowAgent。
+	// 消息回放、模板选择与缓存键都必须使用当前激活实例，否则内部代理会拿到主 agent
+	// 的消息历史、看不到自己的校验 prompt。
+	agentCode := session.NowAgent
+	if agentCode == "" {
+		agentCode = chatLine.NowAgent
+	}
 	if !session.InTestFlag {
 		// 检测每个 path 最近一次 read/edit 事件，写入 session.TemporyDataOfSession。
 		// trace/task 的全局 PreHook 据此分区（顶部 vs 事件块），RequestBody 据此按事件插入。
-		if err := DetectTraceEvents(db, session, chatLine.NowAgent); err != nil {
+		if err := DetectTraceEvents(db, session, agentCode); err != nil {
 			logger.Warn("detect trace events error: %v", err) // 非致命：降级为全部顶部聚合
 		}
 		var err error
@@ -62,7 +69,7 @@ func Build(db *gorm.DB, session *storageStructs.Chats) (*reqStruct.ChatCompletio
 	// AgentModel。此前这里直接用 chatLine.LastModelID，于是请求体里的 model 与全部
 	// 模型参数取自父模型，而连接目标/落库/计费/上下文统计按子代理模型走——轻则参数
 	// 不符，重则子代理模型跨供应商时直接 404。
-	body, err := RequestBody(session.ID, int32(session.EffectiveModelID()), chatLine.NowAgent, tools, db, addSystemPrompt, traces, session.CurrentAgentConfig, chatLine)
+	body, err := RequestBody(session.ID, int32(session.EffectiveModelID()), agentCode, tools, db, addSystemPrompt, traces, session.CurrentAgentConfig, chatLine)
 	if err != nil {
 		logger.Error("build request body error %v", err)
 		return nil, err
