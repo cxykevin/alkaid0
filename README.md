@@ -25,6 +25,7 @@ Alkaid0 是一个模块化的 AI Coding 工具 与 Agent 框架，专为构建�
 - **沙箱安全执行**：内置沙箱隔离机制，Linux 使用 mount namespace，Windows 使用 DACL + 受限令牌
 - **会话管理**：支持会话断连延迟释放（保留上下文，断线可重连恢复）、后台运行模式
 - **自动审批规则**：基于 expr 表达式引擎，支持细粒度工具调用自动审批/拒绝
+- **图片多模态**：支持视觉模型直接读图（prompt image 块、`read` 图片、`@image/{id}` 虚拟路径）
 - **测试覆盖**：持续提升测试覆盖率，集成 mock 服务器测试
 
 ---
@@ -92,6 +93,7 @@ C:\ProgramData\alkaid0\config.json
                 "CompressSize": 128000,
                 "Hide": false,
                 "Type": "",
+                "VisionMaxImageDimension": 1568,
                 "ProviderSpecificConfig": {
                     "EnableDeepseekThinking": false,
                     "EnableReasoningEffort": true,
@@ -295,6 +297,18 @@ C:\ProgramData\alkaid0\config.json
 > bash/zsh 历史等）。alkaid0 的配置目录与日志目录不可读写；工作区 `.alkaid0` 只能列出条目，
 > 其中 `skills`、`images` 只读，`temp` 可读写。需要突破这些限制时把 `run` 的 `sandbox` 置为 `false`，
 > 或配置 `DisableSandbox`（全局 / Agent 级）与 `ALKAID0_DISABLE_SANDBOX=true`。
+
+### 图片（Vision）
+
+支持视觉的模型可以直接接收图片：
+
+- 客户端在 `session/prompt` 的 `prompt` 数组里发 `image` 内容块（`data` base64 或 `data:` URI），单条最多 4 张；
+- 服务端按模型配置 `VisionMaxImageDimension`（默认 1568，0 表示不缩放）缩放后存入工作区 `.alkaid0/images/{sha256}.{ext}`，模型只收到缩放后的那份；
+- AI 可用 `read` 读取工作区图片文件或 `@image/{id}`，图片以 `image_url` 内容块注入上下文；
+- 客户端可用 `fs/read`（`path="@image/{id}"`）取回原图（base64 + 宽高）；`file` 工具支持 `src="@image/{id}"` 按二进制复制；
+- 图片同样进入 trace，但内容不可 diff、永远整块注入；用户消息附带的图片锚定在该消息之后，后续轮次不会搬家。
+
+协议细节见 `docs/acp/extension.md` §4.3 与 `docs/acp/fs.md`。
 
 ### 数据脱敏（DataMask）
 
