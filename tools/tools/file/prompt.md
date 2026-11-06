@@ -5,7 +5,7 @@ Move, copy, link or mount a file or directory. For `move`, `copy` and `link`, `s
 #### Parameters
 
 - `type` (string, required): `"move"`, `"copy"`, `"link"` or `"mount"`.
-- `src` (string, required): Source path, or a virtual object such as `@task`, `@memory`, `@memory/global`, `@tree`, `@cron`, `@agents`, `@docs/...` or `@history/{session_id}`. When `src` is a virtual object, its current text content is written to `dst` (move and copy behave the same; there is nothing to delete). For `mount`, `src` must be an absolute directory path (`/home/user/data`, `C:\data`) and describes the directory to expose inside the workspace.
+- `src` (string, required): Source path, or a virtual object such as `@task`, `@memory`, `@memory/global`, `@tree`, `@cron`, `@agents`, `@docs/...` or `@history/{session_id}`. `@image/{id}` copies the stored image bytes verbatim (binary, no text conversion). When `src` is a virtual object, its current text content is written to `dst` (move and copy behave the same; there is nothing to delete). For `mount`, `src` must be an absolute directory path (`/home/user/data`, `C:\data`) and describes the directory to expose inside the workspace.
 - `dst` (string, required): Destination path. For `move` only, `@trash` deletes `src`. `@temp/run/<id>` writes the entire source file to that running terminal's stdin without sending EOF. `dst` cannot be a virtual object. For `mount`, `dst` may only contain letters, digits and underscores.
 
 #### Semantics

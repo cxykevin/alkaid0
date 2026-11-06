@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/cxykevin/alkaid0/internal/imagestore"
 	"github.com/cxykevin/alkaid0/terminal/sandbox"
 	u "github.com/cxykevin/alkaid0/utils"
 )
@@ -329,6 +330,18 @@ type FsReadResponse struct {
 	Content any `json:"content"` // string | []FsDirEntry
 }
 
+// FsImageData fs/read 读取 @image/{id} 时返回的图片内容（base64，含元数据）。
+type FsImageData struct {
+	Type     string `json:"type"` // 固定 "image"
+	MimeType string `json:"mimeType"`
+	Data     string `json:"data"` // base64 编码的图片字节（模型看到的那一份）
+	Width    int    `json:"width"`
+	Height   int    `json:"height"`
+	Size     int    `json:"size"`
+	// ImageID 图片在会话内的虚拟路径 ID（@image/{id}），便于客户端回填引用。
+	ImageID string `json:"alk.cxykevin.top/image_id"`
+}
+
 // FsDirEntry 目录条目
 type FsDirEntry struct {
 	Name string `json:"name"`
@@ -437,6 +450,24 @@ func FsRead(req FsReadRequest, _ func(string, any, *string) error, _ uint64) (Fs
 		if err != nil {
 			return FsReadResponse{}, fmt.Errorf("invalid sessionId: %v", err)
 		}
+	}
+
+	// @image/{id}：图片虚拟路径，按会话工作区解析图片库条目并返回 base64 + 元数据。
+	// 不经过 validatePath（那不是磁盘路径），但只允许在绑定会话的工作区内解析。
+	if cwd != "" && imagestore.IsImagePath(req.Path) {
+		im, err := imagestore.Resolve(cwd, req.Path)
+		if err != nil {
+			return FsReadResponse{}, err
+		}
+		return FsReadResponse{Content: FsImageData{
+			Type:     "image",
+			MimeType: im.MIME,
+			Data:     base64.StdEncoding.EncodeToString(im.Data),
+			Width:    im.Width,
+			Height:   im.Height,
+			Size:     im.Bytes,
+			ImageID:  "@image/" + im.ID,
+		}}, nil
 	}
 
 	fullPath, err := validatePath(cwd, req.Path)

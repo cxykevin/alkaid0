@@ -135,6 +135,12 @@
                                 "minimum": 0,
                                 "default": 180
                             },
+                            "VisionMaxImageDimension": {
+                                "type": "integer",
+                                "description": "图片注入上下文前的长边缩放上限（像素）。0 表示不缩放；图片按内容寻址存到工作区 .alkaid0/images，模型只收到缩放后的那一份",
+                                "minimum": 0,
+                                "default": 1568
+                            },
                             "ProviderSpecificConfig": {
                                 "type": "object",
                                 "description": "供应商特定功能开关（可选，省略时使用以下默认值）",

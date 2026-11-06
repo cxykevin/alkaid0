@@ -66,11 +66,22 @@ func SessionPrompt(req SessionPromptRequest, call func(string, any, *string) err
 		}
 	}
 
-	if userMessage.String() == "" {
-		return SessionPromptResponse{}, fmt.Errorf("no text content in prompt")
+	// 图片内容块（ACP image）：保存到图片库，随 user 消息一起进入队列。
+	// 解析失败直接回错，避免把不可用的图片静默丢掉。
+	images, err := sessObj.parsePromptImages(req.Prompt)
+	if err != nil {
+		return SessionPromptResponse{}, err
+	}
+
+	if userMessage.String() == "" && len(images) == 0 {
+		return SessionPromptResponse{}, fmt.Errorf("no text or image content in prompt")
 	}
 
 	text := userMessage.String()
+	if text == "" {
+		// 纯图片消息：给一条占位文本，保证消息行与时间线有条目。
+		text = "[image]"
+	}
 	// isCommand 标记本 turn 是否为斜杠命令轮（命令轮不算正常请求，不触发 AI 标题生成）
 	isCommand := strings.HasPrefix(text, "/")
 
@@ -154,14 +165,14 @@ func SessionPrompt(req SessionPromptRequest, call func(string, any, *string) err
 	// 钩子拿到 SESSION_ID / SESSION_PATH，可用于外部通知或预处理。
 	hooks.Run(hooks.EventUserMessage, sessObj.id, sessObj.session.Root)
 
-	extra := msgQueueItem{Kind: msgQueueKindPrompt, Text: text}
+	extra := msgQueueItem{Kind: msgQueueKindPrompt, Text: text, Images: images}
 	if connHasMsgQueueCapability(connID) {
 		// 等待审批时收到新消息：与旧行为一致——先拒绝待审批工具，再把新消息入队。
 		// 否则队列会一直等不到 idle（loop 停在审批等待上）。
 		if sessObj.session.GetState() == state.StateWaitApprove {
 			cancelCurrentTurn(sessObj, "rejected by new message")
 		}
-		if _, err := sessObj.msgQueue.enqueue(extra.Kind, "", "", extra.Text); err != nil {
+		if _, err := sessObj.msgQueue.enqueue(extra.Kind, "", "", extra.Text, extra.Images...); err != nil {
 			broadcastStateUpdate(sessionID, "idle", "refusal", err.Error())
 			return SessionPromptResponse{}, err
 		}

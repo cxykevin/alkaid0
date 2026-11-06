@@ -37,24 +37,27 @@ type ProviderSpecificConfig struct {
 
 // ModelConfig 单个模型配置结构
 type ModelConfig struct {
-	ModelName              string                 `default:"Kimi K2 Thinking"`              // 模型名称
-	ModelID                string                 `default:"kimi-k2-thinking"`              // 模型ID
-	ModelDescription       string                 `default:""`                              // 模型描述
-	ModelAddPrompt         string                 `default:""`                              // 模型添加提示
-	ModelTopP              float32                `default:"-1"`                            // 模型TopP，-1 代表默认
-	ModelTopK              float32                `default:"-1"`                            // 模型TopK，-1 代表默认
-	ModelTemperature       float32                `default:"-1"`                            // 模型温度，-1 代表默认
-	TokenLimit             int32                  `default:"8192"`                          // 模型上下文上限（输入+输出总预算），不是输出上限
-	MaxCompletionTokens    int32                  `default:"16384"`                         // 最大输出 token 数（请求的 max_completion_tokens），使用时会夹到 4096–32768
-	ProviderURL            string                 `default:"https://openrouter.com/api/v1"` // 覆写模型提供者URL
-	ProviderKey            string                 `default:"sk-or-xxx"`                     // 复写模型提供者Key
-	EnableThinking         bool                   `default:"false"`                         // 是否启用思考
-	CompressSize           uint32                 `default:"128000"`                        // 压缩大小
-	Hide                   bool                   `default:"false"`                         // 在列表中隐藏
-	Type                   ModelType              `default:""`                              // 模型类型
-	CachePriceMultiplier   float32                `default:"0.2"`                           // 缓存命中 token 相对输入价格的倍率（仅按模型，用于 trace 保留/破坏缓存成本决策）
-	CacheRetentionMinutes  int32                  `default:"180"`                           // 缓存保留时间（分钟），从会话最后活动时间起算，超过则强制清除 trace
-	ProviderSpecificConfig ProviderSpecificConfig // 特定模型提供方配置
+	ModelName             string    `default:"Kimi K2 Thinking"`              // 模型名称
+	ModelID               string    `default:"kimi-k2-thinking"`              // 模型ID
+	ModelDescription      string    `default:""`                              // 模型描述
+	ModelAddPrompt        string    `default:""`                              // 模型添加提示
+	ModelTopP             float32   `default:"-1"`                            // 模型TopP，-1 代表默认
+	ModelTopK             float32   `default:"-1"`                            // 模型TopK，-1 代表默认
+	ModelTemperature      float32   `default:"-1"`                            // 模型温度，-1 代表默认
+	TokenLimit            int32     `default:"8192"`                          // 模型上下文上限（输入+输出总预算），不是输出上限
+	MaxCompletionTokens   int32     `default:"16384"`                         // 最大输出 token 数（请求的 max_completion_tokens），使用时会夹到 4096–32768
+	ProviderURL           string    `default:"https://openrouter.com/api/v1"` // 覆写模型提供者URL
+	ProviderKey           string    `default:"sk-or-xxx"`                     // 复写模型提供者Key
+	EnableThinking        bool      `default:"false"`                         // 是否启用思考
+	CompressSize          uint32    `default:"128000"`                        // 压缩大小
+	Hide                  bool      `default:"false"`                         // 在列表中隐藏
+	Type                  ModelType `default:""`                              // 模型类型
+	CachePriceMultiplier  float32   `default:"0.2"`                           // 缓存命中 token 相对输入价格的倍率（仅按模型，用于 trace 保留/破坏缓存成本决策）
+	CacheRetentionMinutes int32     `default:"180"`                           // 缓存保留时间（分钟），从会话最后活动时间起算，超过则强制清除 trace
+	// VisionMaxImageDimension 图片注入上下文前的长边缩放上限（像素）。
+	// 0 表示不缩放；图片按内容寻址存到工作区 .alkaid0/images，模型只收到缩放后的那一份。
+	VisionMaxImageDimension int                    `default:"1568"`
+	ProviderSpecificConfig  ProviderSpecificConfig // 特定模型提供方配置
 }
 
 // ModelsConfig 模型配置结构

@@ -4,7 +4,7 @@ Read a source file (also any text files) or a previously returned `@temp/...` ob
 
 #### Parameters
 
-- `path` (string, required): A workspace-relative source path, a read-only temporary path beginning with `@temp/`, the built-in read-only document `@docs/run/workflow`, or `@history/{session_id}` for another session in the same workspace. Absolute paths, `..`, globs, and local-file URLs are not allowed.
+- `path` (string, required): A workspace-relative source path, a read-only temporary path beginning with `@temp/`, the built-in read-only document `@docs/run/workflow`, or `@history/{session_id}` for another session in the same workspace. Absolute paths, `..`, globs, and local-file URLs are not allowed. Images are supported: reading an image file (`.png`, `.jpg`, `.jpeg`, `.gif`, `.webp`, `.bmp`) or an `@image/{id}` reference injects the picture itself into the context as an image content part (downscaled to the model limit), not as text.
 - `unread` (boolean, optional, default `false`): When `true`, remove the path from this conversation's read context instead of reading it.
 
 #### Limits and behavior

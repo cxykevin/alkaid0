@@ -1043,6 +1043,19 @@ func toolCallUnread(c storedToolCall) bool {
 	return unread
 }
 
+// imageContentPart 把图片内容块转换成 OpenAI 多模态内容块。
+// 图片字节只在内存里以 data URI 形式附加，EstimatedTokens 仅用于本地成本估算。
+func imageContentPart(fb trace.FileBlock) (reqStruct.ContentPart, bool) {
+	if fb.Image == nil || fb.Image.DataURL == "" {
+		return reqStruct.ContentPart{}, false
+	}
+	return reqStruct.ContentPart{
+		Type:            "image_url",
+		ImageURL:        &reqStruct.ImageURL{URL: fb.Image.DataURL},
+		EstimatedTokens: fb.Image.Tokens,
+	}, true
+}
+
 // eventInsertGroup 同一事件（一条 assistant 消息）内多个文件的内容块合并为一条 user 消息。
 type eventInsertGroup struct {
 	anchor *list.Element
@@ -1198,10 +1211,14 @@ func insertEventContentBlocks(l *list.List, dbIDToElement map[uint64]*list.Eleme
 		sort.Strings(g.paths)
 		var frags []trace.FileBlock
 		var contributed []string
+		var imageParts []reqStruct.ContentPart
 		for _, p := range g.paths {
 			if fb, ok := fileBlocks[p]; ok {
 				frags = append(frags, fb)
 				contributed = append(contributed, p)
+				if part, ok := imageContentPart(fb); ok {
+					imageParts = append(imageParts, part)
+				}
 			}
 		}
 		content, err := trace.RenderTraceBlock(frags)
@@ -1209,10 +1226,11 @@ func insertEventContentBlocks(l *list.List, dbIDToElement map[uint64]*list.Eleme
 			logger.Error("render trace event block error: %v", err)
 			content = ""
 		}
-		if content == "" {
+		// 纯文本内容为空但带图片时仍要插入（图片块本身没有正文）。
+		if content == "" && len(imageParts) == 0 {
 			continue
 		}
-		l.InsertAfter(reqStruct.Message{Role: "user", Content: content}, g.anchor)
+		l.InsertAfter(reqStruct.Message{Role: "user", Content: content, ContentParts: imageParts}, g.anchor)
 		for _, p := range contributed {
 			renderedFull[p] = struct{}{}
 		}
@@ -1222,13 +1240,17 @@ func insertEventContentBlocks(l *list.List, dbIDToElement map[uint64]*list.Eleme
 	sort.Strings(tailPaths)
 	for _, p := range tailPaths {
 		var content string
+		var parts []reqStruct.ContentPart
 		if fb, ok := fileBlocks[p]; ok {
 			content = renderBlock(fb)
+			if part, ok := imageContentPart(fb); ok {
+				parts = append(parts, part)
+			}
 		}
-		if content == "" {
+		if content == "" && len(parts) == 0 {
 			continue
 		}
-		l.PushBack(reqStruct.Message{Role: "user", Content: content})
+		l.PushBack(reqStruct.Message{Role: "user", Content: content, ContentParts: parts})
 		renderedFull[p] = struct{}{}
 		if chatLn == nil || tailMsgID == 0 {
 			continue
@@ -1382,6 +1404,10 @@ func elementAfter(a, b *list.Element) bool {
 // reasoning_content 不计入：DeepSeek 上游会把历史轮次的 reasoning 裁掉，不产生费用。
 func messageTokens(m reqStruct.Message) int {
 	total := u.EstimateTokens(m.Content)
+	// 图片按模型实际计费的估算 token 计入（base64 字节本身不作为文本计费）。
+	for _, p := range m.ContentParts {
+		total += p.EstimatedTokens
+	}
 	for _, c := range m.ToolCalls {
 		if c.Function == nil {
 			continue

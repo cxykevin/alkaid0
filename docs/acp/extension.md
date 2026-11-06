@@ -781,6 +781,16 @@ ACP v2 中 `session/update` 是服务端 → 客户端的通知（含 `session_i
 - `model`（category `model`）：模型选择。
 - `thought_level`（category `thought_level`）：推理强度，可选值 `unset`/`low`/`medium`/`high`/`max`/`xhigh`，经 `session/set_config_option`（`configId: "thought_level"`，`type: "id"`）修改。
 
+### 4.3. 图片内容（`alk.cxykevin.top/image`）
+
+服务端在 `initialize` 的 `agentCapabilities` 中声明 `alk.cxykevin.top/image`，表示支持 prompt 里的 image 内容块。
+
+- 请求：`session/prompt` 的 `prompt` 数组可包含 `{"type":"image","mimeType":"image/png","data":"<base64>"}`，或等价的 `{"type":"image","uri":"data:image/png;base64,..."}`；单条 prompt 最多 4 张图片。
+- 存储：服务端按模型配置 `VisionMaxImageDimension`（默认 1568）缩放后写入工作区 `.alkaid0/images/{sha256}.{ext}`（内容寻址），模型只收到缩放后的字节；原图不落库、不写 transcript。
+- 引用：AI 与客户端只看到 `@image/{id}`（base36 id）。`read` 工具可读取工作区图片文件或 `@image/{id}`，图片以 `image_url` 内容块注入模型上下文；`alk.cxykevin.top/fs/read` 传 `path="@image/{id}"`（需 `sessionId`）返回 `{type:"image", mimeType, data(base64), width, height, size, "alk.cxykevin.top/image_id"}`。
+- 广播：`user_message` 的 `content` 在文本块之后追加 image 块（`data` 为缩略图 base64，`alk.cxykevin.top/image_id` 指向原图），客户端可据此显示缩略图并在需要时用 `fs/read` 取原图。
+- `file` 工具可用 `src="@image/{id}"` 把图片原样复制到工作区路径（二进制，不做文本转换）。
+
 ## 5. ID 生成逻辑
 
 > 本部分说明了 alkaid0 中对应 ACP 各部分 ID 的生成逻辑。

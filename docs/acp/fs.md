@@ -159,6 +159,26 @@ Alkaid0 提供了一组通过 ACP (Agent Client Protocol) 对服务端文件系�
 
 ---
 
+### 响应（`@image/{id}`）
+
+`path` 为 `@image/{id}` 且请求带 `sessionId` 时，不按磁盘路径处理，返回图片库中的图片：
+
+```json
+{
+  "content": {
+    "type": "image",
+    "mimeType": "image/png",
+    "data": "<base64>",
+    "width": 800,
+    "height": 600,
+    "size": 123456,
+    "alk.cxykevin.top/image_id": "@image/xxxx"
+  }
+}
+```
+
+`data` 是模型看到的那一份（已按模型的 `VisionMaxImageDimension` 缩放）。`@image/{id}` 不存在或工作区没有图片库时返回错误。
+
 ## 3. `alk.cxykevin.top/fs/write`
 
 写入文件内容。文件不存在时会自动创建，父目录不存在时也会自动创建。

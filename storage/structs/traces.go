@@ -21,6 +21,27 @@ type Traces struct {
 	//     把块前移到消息列表末尾，使每轮只重算尾巴。
 	// 语义见 docs/trace-cache-spec.md §4.2。
 	AnchorMsgID uint64 `gorm:"default:0"`
+
+	// ---- 图片 trace（MediaKind="image"）----
+	//
+	// 图片与文本共用同一套事件/锚点/预算逻辑，但内容不可 diff，永远按完整块注入。
+	// 只保存模型实际看到的那张（已按 VisionMaxImageDimension 缩放）：
+	//   - MediaPath         .alkaid0/images/{sha256(缩放图)}.{ext}
+	//   - MediaHash         缩放图字节的 sha256（上次实际注入的基线）
+	//   - MediaSourceHash   源字节的 sha256（工作区文件 / @image store 的原始输入），用于变更检测
+	//   - MediaMaxDim       生成缩放图时的配置，配置变化后工作区图片会重新生成
+	// 物理路径只在服务端内部使用，AI 与客户端只看到 @image/{base36 id}。
+	MediaKind       string `gorm:"type:text"`
+	MediaPath       string `gorm:"type:text"`
+	MediaSourceHash string `gorm:"type:text"`
+	MediaHash       string `gorm:"type:text"`
+	MediaMIME       string `gorm:"type:text"`
+	MediaWidth      int
+	MediaHeight     int
+	MediaBytes      int
+	MediaTokens     int
+	MediaMaxDim     int
+
 	// 设计注记：本表与会话之间有意不建立外键/关联——deleteChat 只删会话表、保留聊天
 	// 记录（见 ui/funcs.DeleteChat），子表数据既不应阻止会话行删除、也不应被级联删除。
 	// 历史库遗留的 fk_traces_chats 外键由 storage/migrate.MigrateRemoveChatForeignKeys

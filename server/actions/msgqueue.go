@@ -39,12 +39,14 @@ const (
 // msgQueueItem 队列项。prompt 项保存待发送文本；command 项保存参与 loop 的命令
 // （/compress、/__alk_rewind、/init、/s <phrase>），出队时才执行。
 type msgQueueItem struct {
-	ID        string
-	Seq       uint64
-	Kind      string
-	Command   string
-	Args      string
-	Text      string
+	ID      string
+	Seq     uint64
+	Kind    string
+	Command string
+	Args    string
+	Text    string
+	// Images 图片虚拟路径（@image/{id}），出队落库后注册为锚定在该 user 消息上的图片 trace。
+	Images    []string
 	CreatedAt time.Time
 	// MessageID 仅在出队落库后填充，用于 started 事件与客户端关联 user_message。
 	MessageID string
@@ -52,13 +54,14 @@ type msgQueueItem struct {
 
 // msgQueueItemView 对客户端可见的队列项。
 type msgQueueItemView struct {
-	ID        string `json:"id"`
-	Kind      string `json:"kind"`
-	Command   string `json:"command,omitempty"`
-	Args      string `json:"args,omitempty"`
-	Text      string `json:"text"`
-	CreatedAt string `json:"createdAt"`
-	MessageID string `json:"messageId,omitempty"`
+	ID        string   `json:"id"`
+	Kind      string   `json:"kind"`
+	Command   string   `json:"command,omitempty"`
+	Args      string   `json:"args,omitempty"`
+	Text      string   `json:"text"`
+	Images    []string `json:"images,omitempty"`
+	CreatedAt string   `json:"createdAt"`
+	MessageID string   `json:"messageId,omitempty"`
 }
 
 // msgQueueEvent session/update 的 update 载荷，每次推送剩余队列的全量快照。
@@ -81,6 +84,7 @@ func (it msgQueueItem) view(messageID string) msgQueueItemView {
 		Command:   it.Command,
 		Args:      it.Args,
 		Text:      it.Text,
+		Images:    it.Images,
 		CreatedAt: created,
 		MessageID: messageID,
 	}
@@ -144,6 +148,7 @@ func (q *msgQueue) load() error {
 			Command:   row.Command,
 			Args:      row.Args,
 			Text:      row.Text,
+			Images:    decodeQueueImages(row.Images),
 			CreatedAt: row.CreatedAt,
 		})
 		if row.Seq > q.seq {
@@ -198,7 +203,8 @@ func (q *msgQueue) wakeup() {
 }
 
 // enqueue 入队并持久化。prompt 项此时不写主消息库；command 项只保存命令与参数。
-func (q *msgQueue) enqueue(kind, command, args, text string) (msgQueueItem, error) {
+// images 为 prompt 项附带的图片虚拟路径（@image/{id}）。
+func (q *msgQueue) enqueue(kind, command, args, text string, images ...string) (msgQueueItem, error) {
 	if q == nil {
 		return msgQueueItem{}, fmt.Errorf("message queue is not available")
 	}
@@ -230,6 +236,7 @@ func (q *msgQueue) enqueue(kind, command, args, text string) (msgQueueItem, erro
 			Command:   command,
 			Args:      args,
 			Text:      text,
+			Images:    encodeQueueImages(images),
 			CreatedAt: now,
 		}
 		if err := q.db.Create(&row).Error; err != nil {
@@ -245,6 +252,7 @@ func (q *msgQueue) enqueue(kind, command, args, text string) (msgQueueItem, erro
 		Command:   command,
 		Args:      args,
 		Text:      text,
+		Images:    append([]string(nil), images...),
 		CreatedAt: now,
 	}
 
@@ -570,12 +578,14 @@ func (obj *sessionObj) dispatchMsgQueueItem(item *msgQueueItem) error {
 			return fmt.Errorf("persist queued message: %w", err)
 		}
 		item.MessageID = msgID(userMsgID)
+		// 图片落库后注册为锚定在该 user 消息上的 trace，请求构建时作为 image_url 注入。
+		obj.attachPromptImages(item.Images, userMsgID)
 		_ = broadcastSessionUpdate(sessionID, SessionUpdate{
 			SessionID: sessionID,
 			Update: SessionUpdateUpdate{
 				SessionUpdate: "user_message",
 				MessageID:     item.MessageID,
-				Content:       []u.H{{"type": "text", "text": item.Text}},
+				Content:       userMessageContent(obj.session.Root, item.Text, item.Images),
 			},
 		}, 0)
 		broadcastStateUpdate(sessionID, "running", "", "")
@@ -654,12 +664,13 @@ func (obj *sessionObj) flushQueueMerged(extra msgQueueItem) error {
 		if err != nil {
 			return fmt.Errorf("persist merged message: %w", err)
 		}
+		obj.attachPromptImages(action.Images, userMsgID)
 		_ = broadcastSessionUpdate(sessionID, SessionUpdate{
 			SessionID: sessionID,
 			Update: SessionUpdateUpdate{
 				SessionUpdate: "user_message",
 				MessageID:     msgID(userMsgID),
-				Content:       []u.H{{"type": "text", "text": action.Text}},
+				Content:       userMessageContent(obj.session.Root, action.Text, action.Images),
 			},
 		}, 0)
 		broadcastStateUpdate(sessionID, "running", "", "")
@@ -673,6 +684,7 @@ func (obj *sessionObj) flushQueueMerged(extra msgQueueItem) error {
 // msgQueueFlushAction 冲刷队列时的一步：合并后的 prompt 文本或一条待执行命令。
 type msgQueueFlushAction struct {
 	Text    string
+	Images  []string
 	Command *msgQueueItem
 }
 
@@ -681,18 +693,21 @@ type msgQueueFlushAction struct {
 func planMsgQueueFlush(items []msgQueueItem) []msgQueueFlushAction {
 	actions := make([]msgQueueFlushAction, 0, len(items))
 	var batch []string
+	var imageBatch []string
 	flush := func() {
-		if len(batch) == 0 {
+		if len(batch) == 0 && len(imageBatch) == 0 {
 			return
 		}
-		actions = append(actions, msgQueueFlushAction{Text: strings.Join(batch, "\n\n")})
+		actions = append(actions, msgQueueFlushAction{Text: strings.Join(batch, "\n\n"), Images: imageBatch})
 		batch = batch[:0]
+		imageBatch = nil
 	}
 	for i := range items {
 		it := items[i]
 		switch it.Kind {
 		case msgQueueKindPrompt:
 			batch = append(batch, it.Text)
+			imageBatch = append(imageBatch, it.Images...)
 		case msgQueueKindCommand:
 			flush()
 			command := it

@@ -22,6 +22,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/cxykevin/alkaid0/internal/imagestore"
 	"github.com/cxykevin/alkaid0/log"
 	"github.com/cxykevin/alkaid0/provider/parser"
 	"github.com/cxykevin/alkaid0/skill"
@@ -131,12 +132,14 @@ func runFile(session *structs.Chats, args map[string]*any, cross []*any) (bool, 
 	}
 
 	srcVirtual := trace.IsProviderPath(src)
+	// 图片虚拟路径（@image/{id}）按二进制处理：不能当文本写，也不能 link/mount。
+	srcImage := imagestore.IsImagePath(src)
 	dstIsTrash := dst == trashPath
 	dstIsTerminal := isTerminalDst(workspace, dst)
 
 	// 逐项校验 dst 与 type 的组合，错误信息在运行时返回（提示词不展开 @trash+虚拟源的限制）。
 	if op == "link" || op == "mount" {
-		if srcVirtual {
+		if srcVirtual || srcImage {
 			return fail(cross, op+" does not support a virtual source path")
 		}
 		if dstIsTrash || dstIsTerminal || trace.IsProviderPath(dst) {
@@ -154,6 +157,28 @@ func runFile(session *structs.Chats, args map[string]*any, cross []*any) (bool, 
 		if !dstIsTrash && !dstIsTerminal && trace.IsProviderPath(dst) {
 			return fail(cross, "dst cannot be a virtual object; only @trash (move only) and @temp/run/<id> are accepted")
 		}
+	}
+
+	// 图片虚拟路径：把图片库里的字节原样写到 dst（move 与 copy 等价）。
+	if srcImage {
+		if dstIsTrash {
+			return fail(cross, "@trash cannot be used with an image source path")
+		}
+		im, err := imagestore.Resolve(session.Root, src)
+		if err != nil {
+			return fail(cross, fmt.Sprintf("image source %q is unavailable: %v", src, err))
+		}
+		if dstIsTerminal {
+			return fail(cross, "writing an image to a terminal is not supported")
+		}
+		dstAbs, err := resolveWorkspaceDst(workspace, dst)
+		if err != nil {
+			return fail(cross, err.Error())
+		}
+		if err := writeBinaryFile(dstAbs, im.Data); err != nil {
+			return fail(cross, "failed to write destination: "+err.Error())
+		}
+		return successResult(cross, op, src, dst, "image copied to file", int64(len(im.Data)))
 	}
 
 	// 虚拟源：把它当前的文本内容写到 dst（或终端）。虚拟对象本身没有实体可删除，
@@ -506,6 +531,18 @@ func ensureParentDir(path string) error {
 }
 
 // writeTextFile 写入虚拟对象文本（覆盖已有文件），并同步配置的运行用户属主。
+// writeBinaryFile 把二进制内容写到 dst（图片复制用）。
+func writeBinaryFile(path string, data []byte) error {
+	if err := ensureParentDir(path); err != nil {
+		return err
+	}
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		return err
+	}
+	sandbox.ApplyConfiguredFileOwner(path)
+	return nil
+}
+
 func writeTextFile(path, content string) error {
 	if err := ensureParentDir(path); err != nil {
 		return err

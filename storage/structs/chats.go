@@ -2,6 +2,7 @@ package structs
 
 import (
 	"context"
+	"encoding/json"
 	"maps"
 	"strconv"
 	"strings"
@@ -48,8 +49,8 @@ type Chats struct {
 	Task            string // 任务计划（markdown 列表，@task 虚拟对象编辑，持久化到 chats 表）
 	// Goal 会话目标（≤1024 rune）。设置后不可由 AI 修改，仅能通过 /goal 或私有协议清除/覆盖。
 	// 非空时：goal 注入 system 最顶端、请求失败无限指数重试、主 agent 结束后进入 goal-check。
-	Goal            string `gorm:"type:text"`
-	Hidden          bool   `gorm:"not null;default:false"`
+	Goal   string `gorm:"type:text"`
+	Hidden bool   `gorm:"not null;default:false"`
 	// ActiveLeafID 当前活跃叶子的消息 ID（NULL = 空会话）。
 	// 线性历史迁移后指向会话最新消息；fork/rewind 后指向当前活跃分支的末端。
 	// 由消息树维护逻辑更新：AppendMessage 推进、DeleteMessage 回退、
@@ -548,8 +549,49 @@ func (c *Chats) persistToolCallingContent(id string, content any) {
 	if toolID == "" {
 		toolID = id
 	}
-	if err := SaveToolCallingContent(c.DB, msgID, toolID, content); err != nil {
+	if err := SaveToolCallingContent(c.DB, msgID, toolID, sanitizeToolCallingContent(content)); err != nil {
 		logger.Warn("failed to persist tool calling content for %s: %v", id, err)
+	}
+}
+
+// sanitizeToolCallingContent 落库前去掉图片 content block 里的 base64 数据。
+//
+// 图片本身已存到 .alkaid0/images（内容寻址），ACP 缩略图也只是实时预览：
+// 把几十 KB 的 data 写进 Messages.ToolCallingContent 会让历史回放数据库无谓膨胀。
+// 落库保留 mimeType / alk.cxykevin.top/image_id，客户端 resume 后可用 @image/{id}
+// 走 v0.7 的 fs/read 取图。普通文本/工具内容原样返回。
+func sanitizeToolCallingContent(content any) any {
+	if content == nil {
+		return nil
+	}
+	raw, err := json.Marshal(content)
+	if err != nil {
+		return content
+	}
+	var v any
+	if err := json.Unmarshal(raw, &v); err != nil {
+		return content
+	}
+	stripImageData(v)
+	return v
+}
+
+func stripImageData(v any) {
+	switch x := v.(type) {
+	case []any:
+		for _, item := range x {
+			stripImageData(item)
+		}
+	case map[string]any:
+		if typ, _ := x["type"].(string); strings.EqualFold(typ, "image") {
+			delete(x, "data")
+			if uri, _ := x["uri"].(string); strings.HasPrefix(strings.ToLower(uri), "data:") {
+				delete(x, "uri")
+			}
+		}
+		for _, item := range x {
+			stripImageData(item)
+		}
 	}
 }
 

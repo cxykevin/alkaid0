@@ -302,6 +302,41 @@ func Trace(session *structs.Chats, mp map[string]*any, push []*any) (bool, []*an
 			}, nil
 		}
 		InvalidateTraceCache(session)
+	} else if isImageFilePath(path) {
+		// 图片：缩放后按内容寻址存到 .alkaid0/images，Traces 行只记元数据；
+		// 请求构建时再作为 image_url 内容块注入（不能走文本 diff）。
+		im, sourceHash, ierr := saveImageFromPath(session, nowpath, path)
+		if ierr != nil {
+			logger.Warn("trace image failed: %v", ierr)
+			boolx := false
+			success := any(boolx)
+			errMsg := any("cannot read image: " + ierr.Error())
+			return false, push, map[string]*any{
+				"success": &success,
+				"error":   &errMsg,
+			}, nil
+		}
+		if werr := writeImageTraceRow(session, path, im, sourceHash, VisionMaxDimension(session)); werr != nil {
+			logger.Warn("trace image failed: %v", werr)
+			boolx := false
+			success := any(boolx)
+			errMsg := any(werr.Error())
+			return false, push, map[string]*any{
+				"success": &success,
+				"error":   &errMsg,
+			}, werr
+		}
+		boolx := true
+		success := any(boolx)
+		msg := fmt.Sprintf("The image has been read and injected into the context as an image content part (%dx%d, %s, ~%d tokens).",
+			im.Width, im.Height, im.MIME, im.Tokens)
+		msgAny := any(msg)
+		pathAny := any(path)
+		return false, push, map[string]*any{
+			"success": &success,
+			"message": &msgAny,
+			"path":    &pathAny,
+		}, nil
 	} else {
 		var str string
 		isHistory := structs.IsHistoryPath(path)
@@ -520,7 +555,10 @@ type templateStruct struct {
 	Size   string
 	Length uint32
 	Text   string
-	Type   string // 空=完整文件内容块；"diff"=增量补丁块（unified diff 文本）
+	Type   string // 空=完整文件内容块；"diff"=增量补丁块（unified diff 文本）；"image"=图片块
+	// Image 非空时该块是图片：Text 只是说明文字，图片本体由 build 层
+	// 作为 image_url 内容块附加到同一条 user 消息（不进模板、不落库）。
+	Image *ImageBlock
 }
 
 // FileBlock 单个被追踪文件渲染后的内容块（trace.md 模板的模板对象），供 build 包类型断言。
@@ -687,7 +725,15 @@ func CountInjectedTokensFrom(session *structs.Chats, fromMsgID uint64) int {
 	}
 	total := 0
 	for _, tr := range cache[session.NowAgent] {
-		if tr.AnchorMsgID > fromMsgID && tr.LastContent != "" {
+		if tr.AnchorMsgID <= fromMsgID {
+			continue
+		}
+		if tr.MediaKind == MediaKindImage {
+			// 图片没有 last_content，按模型实际计费的图片 token 估算。
+			total += tr.MediaTokens
+			continue
+		}
+		if tr.LastContent != "" {
 			total += u.EstimateTokens(tr.LastContent)
 		}
 	}
@@ -1103,12 +1149,41 @@ func RenderTraceBlocks(session *structs.Chats) (topBlock string, eventBlocks map
 		// 拼接期活跃裁剪（docs/trace-cache-spec.md §4.5）：events 已按 summary 边界截断，
 		// 不在其中即"边界之前 / 无事件"的 trace——本轮不注入，但数据库行保留（审计不丢数据）。
 		// @docs 快照、虚拟对象（@tree）与 skill 入口文件的内容不来自消息事件，不参与该裁剪。
-		if events != nil && !hasEvent && !isDocsPath(path) && !isProviderContentPath(path) && !isSkillTracePath(path) {
+		// 图片 trace 与虚拟对象同类：内容由服务端每个请求重建（图片库），不依赖消息事件。
+		if events != nil && !hasEvent && !isDocsPath(path) && !isProviderContentPath(path) && !isSkillTracePath(path) && traceObj.MediaKind != MediaKindImage {
 			continue
 		}
 		// 被 read unread=true 抑制的虚拟对象本轮不注入：traces 行与基线/锚点都保留，
 		// 恢复注入时能原位（或按预算走 diff）回归，而不是整块搬到消息列表末尾。
 		if isVirtualContentSuppressed(session, path) {
+			continue
+		}
+		// 图片 trace：内容不可 diff，永远整块注入；未变化时留在原锚点，
+		// 有事件承载时锚到事件，否则末尾落位（由 build 层回写锚点）。
+		if traceObj.MediaKind == MediaKindImage {
+			im, ok := loadTraceImage(session, nowpath, traceObj)
+			if !ok {
+				continue
+			}
+			if im.Hash != traceObj.MediaHash {
+				updateTraceImageRow(session, path, im, traceObj.MediaSourceHash)
+			}
+			eventMsgID := uint64(0)
+			if ev != nil {
+				eventMsgID = ev.MsgID
+			}
+			var ap *AnchorPlan
+			switch {
+			case im.Hash == traceObj.MediaHash && traceObj.AnchorMsgID != 0:
+				ap = &AnchorPlan{Mode: AnchorFull, MsgID: traceObj.AnchorMsgID, Full: true}
+			case eventMsgID != 0:
+				ap = &AnchorPlan{Mode: AnchorFull, MsgID: eventMsgID, Full: true}
+				SetTraceAnchor(session, path, eventMsgID)
+			default:
+				ap = &AnchorPlan{Mode: AnchorTail, Full: true}
+			}
+			anchorPlans[path] = ap
+			eventBlocks[path] = imageFileBlock(path, im)
 			continue
 		}
 		realContent, ok := readTraceFileContent(session, nowpath, traceObj)

@@ -43,6 +43,9 @@ var AgentCapabilities = u.H{
 	"alk.cxykevin.top/msgqueue": u.H{},
 	// 定时任务查询/删除（alk.cxykevin.top/session/cron/list | delete），纯请求-响应，无推送。
 	"alk.cxykevin.top/cron": u.H{},
+	// alk.cxykevin.top/image：prompt 支持 image 内容块（data/uri），图片存于工作区
+	// .alkaid0/images 并以 @image/{id} 虚拟路径供 fs/read 取回。
+	"alk.cxykevin.top/image": u.H{},
 	// 会话 goal：goal/get | goal/set + 推送 alk.cxykevin.top/session/goal。
 	"alk.cxykevin.top/goal": u.H{},
 }

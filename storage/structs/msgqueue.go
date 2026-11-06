@@ -18,8 +18,11 @@ type MsgQueueItems struct {
 	// Kind prompt | command
 	Kind string `gorm:"index"`
 	// Command/Args 仅 command 项使用（如 /compress、/s）。
-	Command   string
-	Args      string `gorm:"type:text"`
-	Text      string `gorm:"type:text"`
+	Command string
+	Args    string `gorm:"type:text"`
+	Text    string `gorm:"type:text"`
+	// Images 图片虚拟路径列表（JSON 数组，元素形如 "@image/{id}"）。
+	// prompt 项出队时用于注册图片 trace 与广播缩略图；为空表示纯文本消息。
+	Images    string `gorm:"type:text"`
 	CreatedAt time.Time
 }

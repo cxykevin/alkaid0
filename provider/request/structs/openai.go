@@ -101,6 +101,22 @@ type promptCacheContentBlock struct {
 	CacheControl *PromptCacheControl `json:"cache_control,omitempty"`
 }
 
+// ImageURL OpenAI 多模态 image_url 内容。
+type ImageURL struct {
+	URL    string `json:"url"`
+	Detail string `json:"detail,omitempty"`
+}
+
+// ContentPart 多模态消息里的非文本内容块（目前仅 image_url）。
+//
+// EstimatedTokens 只用于本地上下文/缓存成本估算，不参与序列化。
+type ContentPart struct {
+	Type            string    `json:"type"`
+	Text            string    `json:"text,omitempty"`
+	ImageURL        *ImageURL `json:"image_url,omitempty"`
+	EstimatedTokens int       `json:"-"`
+}
+
 // Message 消息结构体
 type Message struct {
 	Role             string  `json:"role"` // RoleUser | RoleAssistant | RoleSystem | RoleTool
@@ -116,9 +132,13 @@ type Message struct {
 	// CacheControl 显式缓存断点（仅出站设置，由 ProviderSpecificConfig.EnablePromptCacheBreakpoints 打开）：
 	// 序列化时把 content 转成带 cache_control 的块数组，字段本身不出现在报文里。
 	CacheControl *PromptCacheControl `json:"-"`
+	// ContentParts 非文本内容块（图片）。仅在 user 消息、且没有 tool_calls 时生效；
+	// Content 非空时会在数组最前面补一个 text part。带图片的消息不挂 cache_control。
+	ContentParts []ContentPart `json:"-"`
 }
 
 // MarshalJSON 自定义序列化：
+//   - 带 ContentParts 的 user 消息：content 转成多模态数组（text + image_url）；
 //   - 带 CacheControl 的纯文本消息：content 转成带 cache_control 的块数组（显式缓存断点）；
 //   - assistant 消息携带 tool_calls 且正文为空时省略 content 字段：OpenAI 规范允许携带
 //     tool_calls 的 assistant 消息不带 content；Anthropic 转换代理会拒绝空 text content
@@ -126,6 +146,28 @@ type Message struct {
 //     纯工具调用回放会发出 "content":""。
 func (m Message) MarshalJSON() ([]byte, error) {
 	type messageAlias Message
+	// 多模态：只允许 user 消息且不带 tool_calls。Content 作为首个 text part。
+	if len(m.ContentParts) > 0 && m.Role == RoleUser && len(m.ToolCalls) == 0 {
+		parts := make([]ContentPart, 0, len(m.ContentParts)+1)
+		if m.Content != "" {
+			parts = append(parts, ContentPart{Type: "text", Text: m.Content})
+		}
+		parts = append(parts, m.ContentParts...)
+		if len(parts) > 0 {
+			raw, err := json.Marshal(parts)
+			if err != nil {
+				return nil, err
+			}
+			type messageWithParts struct {
+				messageAlias
+				Content json.RawMessage `json:"content"`
+			}
+			return json.Marshal(messageWithParts{
+				messageAlias: messageAlias(m),
+				Content:      raw,
+			})
+		}
+	}
 	if m.CacheControl != nil && m.Content != "" && len(m.ToolCalls) == 0 {
 		// 显式缓存断点：cache_control 只能挂在 content block 上，把纯文本 content
 		// 转成单元素块数组 [{"type":"text","text":...,"cache_control":{"type":"ephemeral"}}]。
