@@ -45,6 +45,7 @@ alkaid0 对于客户端并 **不强制** 要求客户端初始化，这与 [ACP 
   "alk.cxykevin.top/alkaid0/v0.4": {},
   "alk.cxykevin.top/alkaid0/v0.5": {},
   "alk.cxykevin.top/alkaid0/v0.6": {},
+  "alk.cxykevin.top/alkaid0/v0.7": {},
   "alk.cxykevin.top/msgqueue": {},
   "alk.cxykevin.top/cron": {},
   "alk.cxykevin.top/goal": {}
@@ -55,7 +56,7 @@ alkaid0 对于客户端并 **不强制** 要求客户端初始化，这与 [ACP 
 
 `alk.cxykevin.top/msgqueue` 表示服务端支持会话消息队列。**客户端必须在自己的 `initialize` 请求 `capabilities` 顶层显式声明同名键**（值为 `{}` 或 `true`；缺失、`false` 或 `null` 均视为不支持），服务端才会向该连接推送队列事件（见 §2.8）。未声明的客户端不会收到任何 `msgqueue` 推送，但其 `session/prompt` 仍然可用：提交时服务端会走「终止当前生成 + 合并发送」的降级路径（见 §2.8 末尾）。
 
-其中 `alk.cxykevin.top/alkaid0/v0.4`、`alk.cxykevin.top/alkaid0/v0.5` 与 `alk.cxykevin.top/alkaid0/v0.6` 为 alkaid0 扩展协议版本能力标记。v0.6 包含已结束终端会话内容查询（`alk.cxykevin.top/session/terminal/history`）、`tool_call_update` 顶层的 `alk.cxykevin.top/terminal_id`（终端 ID 与 run id 统一为 `@temp/run/<n>`，终端内容持久化于该路径，见 §5.4）；v0.5 包含 dynworkflow stdout 握手、workflow stdio 控制、workflow 状态持久化、workflow/update_xxx 实时广播与 workflow 快照通知。**v0.5 不提供 workflow 列表方法**——workflow 的枚举统一走 `alk.cxykevin.top/session/terminal/list`（活动）与 `.../terminal/history`（已结束）的 `workflow` 标记（见 §3.1/§3.2）。v0.4 能力保持兼容。
+其中 `alk.cxykevin.top/alkaid0/v0.4`、`alk.cxykevin.top/alkaid0/v0.5`、`alk.cxykevin.top/alkaid0/v0.6` 与 `alk.cxykevin.top/alkaid0/v0.7` 为 alkaid0 扩展协议版本能力标记。v0.7 包含 prompt 的图片内容块与 `@image/{id}` 图片库（`session/prompt` 的 image 块、`read` / `fs/read` 取图、`user_message` 缩略图，见 §4.3）；v0.6 包含已结束终端会话内容查询（`alk.cxykevin.top/session/terminal/history`）、`tool_call_update` 顶层的 `alk.cxykevin.top/terminal_id`（终端 ID 与 run id 统一为 `@temp/run/<n>`，终端内容持久化于该路径，见 §5.4）；v0.5 包含 dynworkflow stdout 握手、workflow stdio 控制、workflow 状态持久化、workflow/update_xxx 实时广播与 workflow 快照通知。**v0.5 不提供 workflow 列表方法**——workflow 的枚举统一走 `alk.cxykevin.top/session/terminal/list`（活动）与 `.../terminal/history`（已结束）的 `workflow` 标记（见 §3.1/§3.2）。v0.4 能力保持兼容。
 
 `session/list`、`session/resume`、`session/close` 是 `session` 基线能力，无需标记。
 
@@ -781,9 +782,9 @@ ACP v2 中 `session/update` 是服务端 → 客户端的通知（含 `session_i
 - `model`（category `model`）：模型选择。
 - `thought_level`（category `thought_level`）：推理强度，可选值 `unset`/`low`/`medium`/`high`/`max`/`xhigh`，经 `session/set_config_option`（`configId: "thought_level"`，`type: "id"`）修改。
 
-### 4.3. 图片内容（`alk.cxykevin.top/image`）
+### 4.3. 图片内容（`alk.cxykevin.top/alkaid0/v0.7`）
 
-服务端在 `initialize` 的 `agentCapabilities` 中声明 `alk.cxykevin.top/image`，表示支持 prompt 里的 image 内容块。
+服务端在 `initialize` 的 `capabilities` 中声明扩展版本能力 `alk.cxykevin.top/alkaid0/v0.7`，表示支持 prompt 里的 image 内容块；图片相关能力不单独声明能力标记（`session.prompt.image` 仍按 ACP v2 基线声明）。
 
 - 请求：`session/prompt` 的 `prompt` 数组可包含 `{"type":"image","mimeType":"image/png","data":"<base64>"}`，或等价的 `{"type":"image","uri":"data:image/png;base64,..."}`；单条 prompt 最多 4 张图片。
 - 存储：服务端按模型配置 `VisionMaxImageDimension`（默认 1568）缩放后写入工作区 `.alkaid0/images/{sha256}.{ext}`（内容寻址），模型只收到缩放后的字节；原图不落库、不写 transcript。

@@ -39,13 +39,13 @@ var AgentCapabilities = u.H{
 	"alk.cxykevin.top/alkaid0/v0.4": u.H{},
 	"alk.cxykevin.top/alkaid0/v0.5": u.H{},
 	"alk.cxykevin.top/alkaid0/v0.6": u.H{},
+	// v0.7：prompt 支持 image 内容块（data/uri），图片存于工作区 .alkaid0/images，
+	// 以 @image/{id} 虚拟路径供 read / fs/read 取回（见 docs/acp/extension.md §4.3）。
+	"alk.cxykevin.top/alkaid0/v0.7": u.H{},
 	// 会话消息队列：客户端需在自己的 capabilities 中显式声明同名能力才会收到推送。
 	"alk.cxykevin.top/msgqueue": u.H{},
 	// 定时任务查询/删除（alk.cxykevin.top/session/cron/list | delete），纯请求-响应，无推送。
 	"alk.cxykevin.top/cron": u.H{},
-	// alk.cxykevin.top/image：prompt 支持 image 内容块（data/uri），图片存于工作区
-	// .alkaid0/images 并以 @image/{id} 虚拟路径供 fs/read 取回。
-	"alk.cxykevin.top/image": u.H{},
 	// 会话 goal：goal/get | goal/set + 推送 alk.cxykevin.top/session/goal。
 	"alk.cxykevin.top/goal": u.H{},
 }
