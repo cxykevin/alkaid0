@@ -58,7 +58,7 @@ func TestGoalContent(t *testing.T) {
 
 func TestWriteGoal_PassOtherPath(t *testing.T) {
 	pass, _, result, _ := writeGoal(&structs.Chats{}, map[string]*any{
-		"path": anyPtr("README.md"),
+		"path": new(any("README.md")),
 	}, nil)
 	if !pass || result != nil {
 		t.Fatalf("non-@goal path should pass through, pass=%v result=%v", pass, result)
@@ -68,9 +68,9 @@ func TestWriteGoal_PassOtherPath(t *testing.T) {
 func TestWriteGoal_SetOnce(t *testing.T) {
 	session := newTestSession(t)
 	pass, _, result, err := writeGoal(session, map[string]*any{
-		"path":   anyPtr("@goal"),
-		"target": anyPtr("@all"),
-		"text":   anyPtr("finish the implementation"),
+		"path":   new(any("@goal")),
+		"target": new(any("@all")),
+		"text":   new(any("finish the implementation")),
 	}, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -94,9 +94,9 @@ func TestWriteGoal_SetOnce(t *testing.T) {
 
 	// 第二次写入必须失败且不修改已有值。
 	_, _, result, _ = writeGoal(session, map[string]*any{
-		"path":   anyPtr("@goal"),
-		"target": anyPtr("@all"),
-		"text":   anyPtr("overwrite"),
+		"path":   new(any("@goal")),
+		"target": new(any("@all")),
+		"text":   new(any("overwrite")),
 	}, nil)
 	if resultSuccess(t, result) {
 		t.Fatal("second write must fail")
@@ -110,9 +110,9 @@ func TestWriteGoal_TooLongAndEmpty(t *testing.T) {
 	session := newTestSession(t)
 	long := strings.Repeat("字", structs.MaxGoalRunes+1)
 	_, _, result, _ := writeGoal(session, map[string]*any{
-		"path":   anyPtr("@goal"),
-		"target": anyPtr("@all"),
-		"text":   anyPtr(long),
+		"path":   new(any("@goal")),
+		"target": new(any("@all")),
+		"text":   new(any(long)),
 	}, nil)
 	if resultSuccess(t, result) {
 		t.Fatal("oversized goal must fail")
@@ -122,9 +122,9 @@ func TestWriteGoal_TooLongAndEmpty(t *testing.T) {
 	}
 
 	_, _, result, _ = writeGoal(session, map[string]*any{
-		"path":   anyPtr("@goal"),
-		"target": anyPtr("@all"),
-		"text":   anyPtr("   "),
+		"path":   new(any("@goal")),
+		"target": new(any("@all")),
+		"text":   new(any("   ")),
 	}, nil)
 	if resultSuccess(t, result) {
 		t.Fatal("empty goal must fail")

@@ -723,10 +723,7 @@ func (p *progressReporter) report(copied, total int64) {
 	}
 	pct := 100
 	if p.total > 0 {
-		pct = min(int(copied*100/p.total), 100)
-		if pct < 0 {
-			pct = 0
-		}
+		pct = max(min(int(copied*100/p.total), 100), 0)
 	}
 	now := time.Now()
 	// 百分比未变时节流到 300ms；百分比变化时最多 120ms 一次，避免高频广播。

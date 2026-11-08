@@ -1,6 +1,7 @@
 package actions
 
 import (
+	"slices"
 	"testing"
 
 	"github.com/cxykevin/alkaid0/storage/structs"
@@ -49,10 +50,8 @@ func captureConnectionCloser(t *testing.T) *[][]uint64 {
 
 func closerCalledWith(calls *[][]uint64, connID uint64) bool {
 	for _, ids := range *calls {
-		for _, id := range ids {
-			if id == connID {
-				return true
-			}
+		if slices.Contains(ids, connID) {
+			return true
 		}
 	}
 	return false
