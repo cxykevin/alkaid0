@@ -20,6 +20,7 @@ func applyLoadPipeline(t *testing.T, raw string) *structs.Config {
 	EnsureCacheDefaults(cfg, json.RawMessage(raw))
 	EnsureElementDefaults(cfg, json.RawMessage(raw))
 	EnsureContainerDefaults(cfg)
+	EnsureCodebaseDefaults(cfg)
 	return cfg
 }
 

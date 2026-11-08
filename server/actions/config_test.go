@@ -654,3 +654,46 @@ func normalizeJSONText(raw json.RawMessage) string {
 	}
 	return compact.String()
 }
+
+// TestConfigSetFillsCodebaseDefaults config/set 把 Context.Codebase 三个调参
+// 写成 0 时应补初始值（0 在运行时一律被当成默认值），落盘文件同样不能是 0；
+// 显式非 0 值必须保留。
+func TestConfigSetFillsCodebaseDefaults(t *testing.T) {
+	defer configSetup(t)()
+
+	reqData := json.RawMessage(`{"Context":{"Codebase":{"BM25Weight":0,"VectorMinSimilarity":0,"BM25RetentionScore":0}}}`)
+	if _, err := ConfigSet(ConfigSetRequest{Config: reqData}, nil, 0); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	cb := config.GlobalConfig.Context.Codebase
+	if cb.BM25Weight != 0.7 || cb.VectorMinSimilarity != 0.5 || cb.BM25RetentionScore != 0 {
+		t.Errorf("Codebase after config/set = %+v, want BM25Weight 0.7 / VectorMinSimilarity 0.5 / BM25RetentionScore 0", cb)
+	}
+
+	savedData, err := os.ReadFile(os.Getenv("ALKAID0_CONFIG_PATH"))
+	if err != nil {
+		t.Fatalf("failed to read saved config: %v", err)
+	}
+	var saved struct {
+		Context struct {
+			Codebase cfgStructs.CodebaseConfig `json:"Codebase"`
+		} `json:"Context"`
+	}
+	if err := json.Unmarshal(savedData, &saved); err != nil {
+		t.Fatalf("failed to unmarshal saved config: %v", err)
+	}
+	if saved.Context.Codebase.BM25Weight != 0.7 || saved.Context.Codebase.VectorMinSimilarity != 0.5 {
+		t.Errorf("saved Codebase = %+v, want BM25Weight 0.7 / VectorMinSimilarity 0.5", saved.Context.Codebase)
+	}
+
+	// 显式调过的值必须保留
+	reqData = json.RawMessage(`{"Context":{"Codebase":{"BM25Weight":0.2,"VectorMinSimilarity":0.9,"BM25RetentionScore":1.5}}}`)
+	if _, err := ConfigSet(ConfigSetRequest{Config: reqData}, nil, 0); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	cb = config.GlobalConfig.Context.Codebase
+	if cb.BM25Weight != 0.2 || cb.VectorMinSimilarity != 0.9 || cb.BM25RetentionScore != 1.5 {
+		t.Errorf("explicit Codebase values lost: %+v", cb)
+	}
+}

@@ -252,6 +252,10 @@ func Load() {
 	// map / slice 字段是整体替换），这里统一归一化为 {} / []，避免 null 在
 	// config/get 与后续 Save 中一直沿用。
 	EnsureContainerDefaults(tempConfig)
+	// Context.Codebase 调参为 0 时填初始值：0 在运行时被 clampWeight 当成默认值
+	// （BM25Weight 0.7 / VectorMinSimilarity 0.5），旧配置里被零值落盘的 0 会让
+	// config/get 与磁盘文件一直显示 0，与实际生效值不符。
+	EnsureCodebaseDefaults(tempConfig)
 	globalConfigMu.Lock()
 	GlobalConfig = tempConfig
 	globalConfigMu.Unlock()
