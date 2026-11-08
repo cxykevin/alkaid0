@@ -121,6 +121,15 @@ func Startup() {
 
 	openai.Start()
 	config.Load()
+	// 加载后立即回写一次：Load 已把配置文件里遗留的 null 容器（历史版本落盘、
+	// 客户端 config/set 传入）归一化为 {} / []，这里落盘让磁盘文件与 config/get
+	// 保持一致。读取失败时 Loaded() 为 false，跳过写入，避免用内存里的默认配置
+	// 覆盖用户的原文件（Load 已在 stderr 报错）。
+	if config.Loaded() {
+		if err := config.Save(); err != nil {
+			fmt.Fprintf(os.Stderr, "config: save after load failed: %v\n", err)
+		}
+	}
 	// 异步初始化 Python venv，不阻塞启动
 	pythonenv.InitializeAsync(config.GlobalConfig.Python, config.Path())
 	log.Load()

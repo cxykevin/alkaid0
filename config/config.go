@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 
 	"github.com/cxykevin/alkaid0/config/structs"
 	"github.com/cxykevin/alkaid0/internal/configutil"
@@ -35,6 +36,20 @@ var (
 	globalConfigMu sync.RWMutex
 	configPath     string
 )
+
+// lastLoadReadable 记录最近一次 Load 是否成功拿到了配置内容（文件不存在或解析成功）。
+// 文件存在但读取失败时为 false——此时内存里是默认配置，调用方不应把它写回磁盘，
+// 否则会把用户的配置文件覆盖成默认值。
+var lastLoadReadable atomic.Bool
+
+// Loaded 报告最近一次 Load 是否成功拿到了配置内容。
+//
+// 返回 false 的唯一情形是配置文件存在但读取失败（权限、I/O 错误、路径是目录等）；
+// 此时 Load 已在 stderr 报错并按默认配置在内存中运行。启动时据此决定是否把
+// 归一化后的配置写回磁盘，避免覆盖读取失败的原文件。
+func Loaded() bool {
+	return lastLoadReadable.Load()
+}
 
 // GlobalConfigSafe 返回当前配置快照。
 // 由于配置采用写时复制，返回的指针在其生命周期内不会再被修改，可安全读取；
@@ -157,6 +172,10 @@ func ensureKey() {
 // 文件不存在或解析失败时会备份原文件（加上 .bak 后缀）并用默认配置兜底。
 // 加载完成后若 Server.Key 为空则自动生成随机密钥并保存。
 func Load() {
+	// 只有真正拿到配置内容（文件不存在或解析成功）时才置 true；
+	// 读取失败分支保持 false，防止启动时的回写覆盖用户文件。
+	lastLoadReadable.Store(false)
+
 	// 使用默认配置初始化（作为任何解析失败的 fallback）。
 	// 用 BuildDefault 构建完整配置，确保 Server.Host/Port/Path 等字段有默认值
 	// （否则全新安装时 WebSocket 服务器会因空 Host/Port/Path 而启动失败）。
@@ -199,6 +218,7 @@ func Load() {
 		Save()
 		// 新创建的配置文件需要自动生成密钥
 		ensureKey()
+		lastLoadReadable.Store(true)
 		return
 	}
 
@@ -215,6 +235,8 @@ func Load() {
 		// 不调用 Save()，GlobalConfig 已是干净默认值
 		// ensureKey() 会在需要时自动触发 Save()
 		ensureKey()
+		// 原文件已改名备份，之后写入的是全新默认配置，不存在覆盖用户数据的问题。
+		lastLoadReadable.Store(true)
 		return
 	}
 
@@ -226,12 +248,17 @@ func Load() {
 	// 元素内未写出的字段需要单独补默认值：否则 Models 里只写 ModelName/ModelID 时
 	// TokenLimit/TopP/ProviderSpecificConfig 等会统统变成零值。
 	EnsureElementDefaults(tempConfig, json.RawMessage(data))
+	// 配置文件里显式写出的 null 会把基底上的空容器覆盖成 nil（encoding/json 对
+	// map / slice 字段是整体替换），这里统一归一化为 {} / []，避免 null 在
+	// config/get 与后续 Save 中一直沿用。
+	EnsureContainerDefaults(tempConfig)
 	globalConfigMu.Lock()
 	GlobalConfig = tempConfig
 	globalConfigMu.Unlock()
 
 	// 加载完成后检查密钥，为空则自动生成
 	ensureKey()
+	lastLoadReadable.Store(true)
 }
 
 // Save 将当前配置序列化为 JSON 并写入配置文件。

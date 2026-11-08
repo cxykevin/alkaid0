@@ -389,4 +389,9 @@ func TestLoadKeepsUnreadableConfigFileUntouched(t *testing.T) {
 	if _, err := os.Stat(cfgPath + ".bak"); err == nil {
 		t.Error("读取失败不应触发改名备份")
 	}
+	// 启动时会按 Loaded() 决定是否回写配置；读取失败时必须为 false，
+	// 否则内存里的默认配置会覆盖磁盘上的原文件。
+	if Loaded() {
+		t.Error("读取失败后 Loaded() 应为 false")
+	}
 }

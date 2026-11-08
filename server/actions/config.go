@@ -90,6 +90,9 @@ func ConfigSet(req ConfigSetRequest, _ func(string, any, *string) error, _ uint6
 		// 置零而不删除。applyPatch 已在 map 字段中直接删除 null 键，这里再
 		// 跑一遍 applyNullDeletes 作为防御，覆盖可能的边界情形。
 		applyNullDeletes(cfg, req.Config)
+		// 副本可能来自尚未归一化的旧配置（历史落盘的 null → nil map / slice），
+		// 保存前统一归一化为 {} / []，避免 null 在 config/get 与落盘文件里一直沿用。
+		config.EnsureContainerDefaults(cfg)
 	}
 	if applyErr != nil {
 		// 补丁应用失败：丢弃副本。写时复制让"失败的 config/set 把半成品补丁

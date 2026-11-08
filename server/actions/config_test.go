@@ -1,6 +1,7 @@
 package actions
 
 import (
+	"bytes"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -560,4 +561,96 @@ func TestConfigSetJSONRPCErrorResponse(t *testing.T) {
 	if err == nil {
 		t.Fatal("缺少 config 字段应返回错误")
 	}
+}
+
+// TestConfigSetNormalizesNilContainers config/set 提交后配置里不应残留 nil map / slice：
+// 旧配置文件可能已经把空容器写成 null（运行时为 nil），clone + 落盘会让 null 一直沿用。
+func TestConfigSetNormalizesNilContainers(t *testing.T) {
+	defer configSetup(t)()
+
+	// 模拟旧配置：内存里这些容器是 nil。
+	config.GlobalConfig.Agent.Fetch.RewriteHeaders = nil
+	config.GlobalConfig.Agent.TerminalEnvs = nil
+	config.GlobalConfig.Context.LSP.LanguageServers = nil
+	config.GlobalConfig.Context.Phrase.Phrases = nil
+	config.GlobalConfig.Hooks.OnUserMessage = nil
+
+	reqData, _ := json.Marshal(map[string]any{
+		"Server": map[string]any{"port": uint16(19996)},
+	})
+	if _, err := ConfigSet(ConfigSetRequest{Config: reqData}, nil, 0); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if config.GlobalConfig.Agent.Fetch.RewriteHeaders == nil {
+		t.Error("Agent.Fetch.RewriteHeaders should not be nil after config/set")
+	}
+	if config.GlobalConfig.Agent.TerminalEnvs == nil {
+		t.Error("Agent.TerminalEnvs should not be nil after config/set")
+	}
+	if config.GlobalConfig.Context.LSP.LanguageServers == nil {
+		t.Error("Context.LSP.LanguageServers should not be nil after config/set")
+	}
+	if config.GlobalConfig.Context.Phrase.Phrases == nil {
+		t.Error("Context.Phrase.Phrases should not be nil after config/set")
+	}
+	if config.GlobalConfig.Hooks.OnUserMessage == nil {
+		t.Error("Hooks.OnUserMessage should not be nil after config/set")
+	}
+
+	// 落盘的 JSON 里这些字段必须是 {} / []，不能是 null。
+	savedData, err := os.ReadFile(os.Getenv("ALKAID0_CONFIG_PATH"))
+	if err != nil {
+		t.Fatalf("failed to read saved config: %v", err)
+	}
+	var saved struct {
+		Agent struct {
+			TerminalEnvs json.RawMessage `json:"TerminalEnvs"`
+			Fetch        struct {
+				RewriteHeaders json.RawMessage `json:"RewriteHeaders"`
+			} `json:"Fetch"`
+		} `json:"Agent"`
+		Context struct {
+			LSP struct {
+				LanguageServers json.RawMessage `json:"LanguageServers"`
+			} `json:"LSP"`
+			Phrase struct {
+				Phrases json.RawMessage `json:"Phrases"`
+			} `json:"Phrase"`
+		} `json:"Context"`
+		Hooks struct {
+			OnUserMessage json.RawMessage `json:"OnUserMessage"`
+		} `json:"Hooks"`
+	}
+	if err := json.Unmarshal(savedData, &saved); err != nil {
+		t.Fatalf("failed to unmarshal saved config: %v", err)
+	}
+	cases := []struct {
+		name string
+		got  json.RawMessage
+		want string
+	}{
+		{"Agent.TerminalEnvs", saved.Agent.TerminalEnvs, "{}"},
+		{"Agent.Fetch.RewriteHeaders", saved.Agent.Fetch.RewriteHeaders, "{}"},
+		{"Context.LSP.LanguageServers", saved.Context.LSP.LanguageServers, "{}"},
+		{"Context.Phrase.Phrases", saved.Context.Phrase.Phrases, "[]"},
+		{"Hooks.OnUserMessage", saved.Hooks.OnUserMessage, "[]"},
+	}
+	for _, c := range cases {
+		if got := normalizeJSONText(c.got); got != c.want {
+			t.Errorf("saved %s = %s, want %s", c.name, got, c.want)
+		}
+	}
+}
+
+// normalizeJSONText 去掉 JSON 文本中的空白，便于比较 {} / []。
+func normalizeJSONText(raw json.RawMessage) string {
+	if len(raw) == 0 {
+		return "<absent>"
+	}
+	var compact bytes.Buffer
+	if err := json.Compact(&compact, raw); err != nil {
+		return string(raw)
+	}
+	return compact.String()
 }
