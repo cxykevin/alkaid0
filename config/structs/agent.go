@@ -26,14 +26,14 @@ type FetchConfig struct {
 
 // AgentsConfig 代理配置结构
 type AgentsConfig struct {
-	Agents                  map[string]AgentConfig
-	IgnoreBuiltinAgents     bool   `default:"false"`
-	GlobalPrompt            string `default:""`
-	SummaryModel            int32
-	TitleModel              int32  // 标题生成模型编号（0 表示回退 DefaultModelID，与 SummaryModel 一致）
+	Agents              map[string]AgentConfig
+	IgnoreBuiltinAgents bool   `default:"false"`
+	GlobalPrompt        string `default:""`
+	SummaryModel        int32
+	TitleModel          int32 // 标题生成模型编号（0 表示回退 DefaultModelID，与 SummaryModel 一致）
 	// GoalCheckModel goal-check 内部代理使用的模型编号。
 	// -1（默认）或 0 表示跟随会话当前模型（LastModelID）；>0 时覆盖内置 goal-check 的模型。
-	GoalCheckModel int32 `default:"-1"`
+	GoalCheckModel          int32  `default:"-1"`
 	MaxCallCount            int32  `default:"50"`
 	DefaultAutoApprove      string `default:"" json:"AutoApprove"` // 全局默认自动批准表达式
 	DefaultAutoReject       string `default:"" json:"AutoReject"`  // 全局默认自动拒绝表达式
