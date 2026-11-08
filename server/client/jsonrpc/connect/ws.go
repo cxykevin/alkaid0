@@ -39,6 +39,16 @@ const readLimit = 16 * 1024 * 1024
 // wsHTTPServer 全局 HTTP 服务器引用，用于优雅关闭
 var wsHTTPServer *http.Server
 
+// closeConns 强制关闭本进程内的 WebSocket 连接（由 StartWs 注册）。
+// 连接被关闭后读循环退出，走正常的 defer 清理（closeConn → 解绑会话）。
+var closeConns = func([]uint64) {}
+
+// CloseConnections 强制关闭指定的客户端连接；不存在或已关闭的连接忽略。
+// 供 server/actions 的强制 GC 断开空闲会话的客户端（客户端重连后 resume）。
+func CloseConnections(connIDs []uint64) {
+	closeConns(connIDs)
+}
+
 // ShutdownWs 优雅关闭 WebSocket HTTP 服务器
 func ShutdownWs(ctx context.Context) error {
 	if wsHTTPServer == nil {
@@ -99,6 +109,39 @@ func httpRequestServerKey(r *http.Request) string {
 	return auth
 }
 
+// forceGC 由上层注入的强制 GC 实现（见 SetForceGC）。
+//
+// connect 不能直接导入 server/actions：actions → jsonrpc → connect 会形成
+// 循环依赖。因此 /gc 的具体实现由 server/client 在装配时注入。
+var forceGC func() any
+
+// SetForceGC 注入 /gc 的强制 GC 实现；返回值为 JSON 可编码的结果对象。
+func SetForceGC(fn func() any) {
+	forceGC = fn
+}
+
+// handleGC 处理 /gc：立即回收所有不活跃会话，延迟 1s 触发 GC 并尝试
+// 把空闲内存归还操作系统。会话释放与进程内存操作都不可对外暴露，
+// 因此与 /info、WebSocket 升级使用同一套 key 鉴权。
+func handleGC(w http.ResponseWriter, r *http.Request) {
+	// 恒定时间比较，避免时序侧信道泄露 key 长度/内容
+	if subtle.ConstantTimeCompare([]byte(httpRequestServerKey(r)), []byte(config.GlobalConfig.Server.Key)) != 1 {
+		loggerWs.Error("invalid token on /gc, rejecting request")
+		http.Error(w, "invalid token", http.StatusUnauthorized)
+		return
+	}
+	fn := forceGC
+	if fn == nil {
+		http.Error(w, "gc is not available", http.StatusServiceUnavailable)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("X-Server", product.UserAgent)
+	if err := json.NewEncoder(w).Encode(fn()); err != nil {
+		loggerWs.Error("write /gc response failed: %v", err)
+	}
+}
+
 // getSessionCount 供 /info 返回会话/DB 数；包级变量作为测试缝，
 // 避免测试依赖 chancall 消费者导致阻塞。
 var getSessionCount = GetSessionCount
@@ -156,6 +199,22 @@ func StartWs(handler func(string, func(string) error, uint64) (returnString stri
 	connsMutex := sync.Mutex{}
 	conns := make(map[uint64]*websocket.Conn)
 
+	// 强制关闭连接：在锁内只收集连接对象，锁外再 Close（Close 可能阻塞/触发回调）。
+	closeConns = func(ids []uint64) {
+		connsMutex.Lock()
+		targets := make([]*websocket.Conn, 0, len(ids))
+		for _, id := range ids {
+			if ws, ok := conns[id]; ok {
+				targets = append(targets, ws)
+			}
+		}
+		connsMutex.Unlock()
+		for _, ws := range targets {
+			// 关闭底层连接后读循环退出，defer 中会执行 closeConn 完成会话解绑。
+			_ = ws.Close()
+		}
+	}
+
 	// 显式 mux 允许在同一 HTTP server 上挂载 ACP 与 OpenAI API。
 	mux := http.NewServeMux()
 
@@ -178,6 +237,14 @@ func StartWs(handler func(string, func(string) error, uint64) (returnString stri
 			return
 		}
 		handleInfo(w, r)
+	})
+
+	// /gc：强制回收不活跃会话并在 1s 后触发 GC（必须携带服务端 key，见 handleGC）
+	mux.HandleFunc("/gc", func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/gc" {
+			return
+		}
+		handleGC(w, r)
 	})
 
 	// 处理 WebSocket 连接

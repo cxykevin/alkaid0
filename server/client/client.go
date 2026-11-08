@@ -4,6 +4,7 @@ package client
 import (
 	"github.com/cxykevin/alkaid0/server/actions"
 	"github.com/cxykevin/alkaid0/server/client/jsonrpc"
+	"github.com/cxykevin/alkaid0/server/client/jsonrpc/connect"
 )
 
 // var logger = log.New("client")
@@ -16,6 +17,12 @@ func Start() {
 	// 必须在 InitFuncs 之后启动（rpcSrv 已就绪），且放在 StartWs 之前，
 	// 保证服务开始接受连接时 cron 状态已经加载完成。
 	actions.StartCron()
+	// /gc HTTP 端点（与 SIGUSR2 共用 actions.ForceGC）：connect 不能导入
+	// server/actions（会形成循环依赖），因此在这里注入实现。
+	connect.SetForceGC(func() any { return actions.ForceGC() })
+	// 强制 GC 回收空闲会话时，直接断开这些会话的客户端连接，
+	// 由客户端重连后 session/resume 恢复。
+	actions.SetConnectionCloser(connect.CloseConnections)
 
 	srv.StartWs()
 	srv.Start()

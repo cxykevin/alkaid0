@@ -22,6 +22,8 @@ alkaid0 所默认实现的协议是简单 `Websocket` 而非 [ACP 中建议的 `
 
 REST 端点（如 `/info`、OpenAI 兼容代理）与 WebSocket 共用同一份密钥：除查询参数外，也接受 `Authorization: Bearer <key>` 请求头。`/` 根路径保持公开。
 
+`/gc` 是维护端点：携带正确密钥请求 `/gc?k=<key>` 后，服务端立即释放所有「没有进行中回合」的空闲会话（包括空闲但仍驻留在内存中的 loop 与请求缓存），**有客户端连接的会话同样会被回收**，其客户端连接会被强制断开（重连后通过 `session/resume` 恢复）；仍有进行中回合（请求/接收/工具执行/等待审批）的会话保留。释放完成后延迟 1 秒触发 GC 并尝试把空闲内存归还操作系统；响应为 `{"success":true,"released":<释放会话数>,"retained":<保留会话数>}`。Unix 平台也可向服务进程发送 `SIGUSR2` 触发同一逻辑。
+
 支持 Websocket 桥接的客户端可以直接链接。只支持 stdio 的客户端可以使用提供的 helper 链接。
 
 Websocket 的每个请求体与 stdio 下的每个请求体均相同。

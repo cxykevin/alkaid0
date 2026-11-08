@@ -1491,6 +1491,38 @@ func (obj *sessionObj) stopWorkflowQueue() {
 	obj.workflowQueue.stop()
 }
 
+// releaseSessionResources 释放一个已从会话注册表摘除的会话的全部运行态资源。
+//
+// 调用方必须先持 sessLock 执行 delete(sessions, sessionID)（并停止 releaseTimer），
+// 本函数在锁外执行，可能阻塞（join loop goroutine、等待索引 goroutine）。
+// closeSession、延迟释放与强制 GC（ForceGC）共用同一条清理序列，
+// 避免各路径遗漏步骤或在顺序上出现 use-after-close。
+func releaseSessionResources(obj *sessionObj, sessionID string) {
+	if obj == nil {
+		return
+	}
+	if obj.loop != nil {
+		obj.loop.Cancel()
+	}
+	obj.closePermDone()
+	// 先停消息队列 worker，再 join loop / 关 DB：worker 可能仍在写主消息库。
+	obj.stopMsgQueue()
+	// join loop 后再关 DB：否则 loop 仍可能在使用 sess.DB（use-after-close）。
+	obj.releaseSessionLoop()
+	// SetCallback 的回调 goroutine 不属于 loop 主 goroutine，releaseSessionLoop
+	// 无法 join 它；它可能仍在向客户端广播并访问 sess.DB，这里显式等待。
+	if obj.loop != nil && !obj.loop.WaitCallback(5*time.Second) {
+		logger.Warn("session %s: callback goroutine still running after 5s, closing DB anyway", sessionID)
+	}
+	waitIndex := indexChatHistory(obj.session, obj.cwd)
+	obj.stopWorkflowQueue()
+	closeDB(obj.cwd)
+	// 等后台索引收尾后再返回：它可能重新打开该目录的索引库，与释放后的目录清理相互踩踏。
+	if !waitIndex(5 * time.Second) {
+		logger.Warn("session %s: chat history index goroutine still running after 5s", sessionID)
+	}
+}
+
 // closeSession 关闭会话，引用计数递减，处理资源清理
 func closeSession(sessionID string) {
 	var released *sessionObj
@@ -1516,26 +1548,7 @@ func closeSession(sessionID string) {
 	if released == nil {
 		return
 	}
-	if released.loop != nil {
-		released.loop.Cancel()
-	}
-	released.closePermDone()
-	// 先停消息队列 worker，再 join loop / 关 DB：worker 可能仍在写主消息库。
-	released.stopMsgQueue()
-	// join loop 后再关 DB：否则 loop 仍可能在使用 sess.DB（use-after-close）。
-	released.releaseSessionLoop()
-	// SetCallback 的回调 goroutine 不属于 loop 主 goroutine，releaseSessionLoop
-	// 无法 join 它；它可能仍在向客户端广播并访问 sess.DB，这里显式等待。
-	if released.loop != nil && !released.loop.WaitCallback(5*time.Second) {
-		logger.Warn("session %s: callback goroutine still running after 5s, closing DB anyway", sessionID)
-	}
-	waitIndex := indexChatHistory(released.session, released.cwd)
-	released.stopWorkflowQueue()
-	closeDB(released.cwd)
-	// 等后台索引收尾后再返回：它可能重新打开该目录的索引库，与释放后的目录清理相互踩踏。
-	if !waitIndex(5 * time.Second) {
-		logger.Warn("session %s: chat history index goroutine still running after 5s", sessionID)
-	}
+	releaseSessionResources(released, sessionID)
 }
 
 // cancelSessionRelease 取消会话的延迟释放定时器
@@ -2113,26 +2126,7 @@ func scheduleSessionRelease(sessionID string) {
 		sessLock.Unlock()
 
 		logger.Info("release session %s after %ds timeout", sessionID, timeout)
-		if obj2.loop != nil {
-			obj2.loop.Cancel()
-		}
-		obj2.closePermDone()
-		// 先停消息队列 worker，再 join loop / 关 DB。
-		obj2.stopMsgQueue()
-		// join loop 后再关 DB：否则 loop 仍可能在使用 sess.DB（use-after-close）。
-		obj2.releaseSessionLoop()
-		// SetCallback 的回调 goroutine 不属于 loop 主 goroutine，releaseSessionLoop
-		// 无法 join 它；它可能仍在向客户端广播并访问 sess.DB，这里显式等待。
-		if obj2.loop != nil && !obj2.loop.WaitCallback(5*time.Second) {
-			logger.Warn("session %s: callback goroutine still running after 5s, closing DB anyway", sessionID)
-		}
-		waitIndex := indexChatHistory(obj2.session, obj2.cwd)
-		obj2.stopWorkflowQueue()
-		closeDB(obj2.cwd)
-		// 等后台索引收尾后再返回：它可能重新打开该目录的索引库，与释放后的目录清理相互踩踏。
-		if !waitIndex(5 * time.Second) {
-			logger.Warn("session %s: chat history index goroutine still running after 5s", sessionID)
-		}
+		releaseSessionResources(obj2, sessionID)
 	}
 
 	obj.releaseTimer = time.AfterFunc(time.Duration(timeout)*time.Second, releaseFunc)

@@ -323,6 +323,9 @@ func Startup() {
 		ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT, syscall.SIGQUIT)
 		defer stop()
 
+		// SIGUSR2：强制回收不活跃会话并归还内存（与 HTTP /gc 共用 actions.ForceGC）。
+		startForceGCSignal()
+
 		go func() {
 			<-ctx.Done()
 			logger.Info("received shutdown signal, initiating graceful shutdown...")
