@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"testing"
 )
 
@@ -244,10 +245,5 @@ func TestReconcileMounts(t *testing.T) {
 }
 
 func slicesContain(list []string, want string) bool {
-	for _, item := range list {
-		if item == want {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(list, want)
 }

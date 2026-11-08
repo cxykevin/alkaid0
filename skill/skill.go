@@ -405,7 +405,7 @@ func cleanDescription(raw string) string {
 
 // firstLine 取正文第一段可用文字作为描述（跳过空行与纯分隔线）。
 func firstLine(body string) string {
-	for _, line := range strings.Split(body, "\n") {
+	for line := range strings.SplitSeq(body, "\n") {
 		line = strings.TrimSpace(line)
 		line = strings.TrimSpace(strings.TrimLeft(line, "#"))
 		if line == "" || strings.Trim(line, "-*_=") == "" {

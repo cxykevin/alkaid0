@@ -723,10 +723,7 @@ func (p *progressReporter) report(copied, total int64) {
 	}
 	pct := 100
 	if p.total > 0 {
-		pct = int(copied * 100 / p.total)
-		if pct > 100 {
-			pct = 100
-		}
+		pct = min(int(copied*100/p.total), 100)
 		if pct < 0 {
 			pct = 0
 		}

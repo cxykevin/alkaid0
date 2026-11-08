@@ -8,7 +8,8 @@ import (
 	"github.com/cxykevin/alkaid0/storage/structs"
 )
 
-func anyPtr(v any) *any { return &v }
+//go:fix inline
+func anyPtr(v any) *any { return new(v) }
 
 func newTestSession(t *testing.T) *structs.Chats {
 	t.Helper()

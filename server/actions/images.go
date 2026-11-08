@@ -83,8 +83,8 @@ func decodeImageBlock(block u.H) ([]byte, error) {
 	}
 	if uri, ok := u.GetH[string](block, "uri"); ok && uri != "" {
 		if payload, ok := strings.CutPrefix(uri, "data:"); ok {
-			if idx := strings.Index(payload, ","); idx >= 0 {
-				meta, encoded := payload[:idx], payload[idx+1:]
+			if before, after, ok := strings.Cut(payload, ","); ok {
+				meta, encoded := before, after
 				if strings.Contains(meta, ";base64") {
 					data, err := base64.StdEncoding.DecodeString(encoded)
 					if err == nil {
