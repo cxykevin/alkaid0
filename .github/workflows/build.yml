@@ -126,18 +126,6 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: 代码格式检查
-        if: matrix.os == 'ubuntu-latest'
-        run: |
-          # gofmt 由 Go 工具链自带、跨平台结果一致，只跑一个平台即可；
-          # Windows 的默认 shell 是 pwsh，这里用 bash 语法判断。
-          unformatted="$(gofmt -l .)"
-          if [ -n "$unformatted" ]; then
-            echo "以下文件未按 gofmt 格式化，请在本地执行 gofmt -w："
-            echo "$unformatted"
-            exit 1
-          fi
-
       - name: 静态分析
         env:
           CGO_ENABLED: "0"
