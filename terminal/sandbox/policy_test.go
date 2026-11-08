@@ -12,11 +12,19 @@ import (
 // 不能用 t.TempDir()：它位于系统临时目录，而策略把整个系统临时目录设为可写，
 // 于是"工作区根目录只读"永远不会成立。家目录下除少数显式白名单
 // （.gitconfig、gh 配置、shell 历史等）之外都没有写权限，与真实部署一致。
+//
+// 但容器里 HOME 常常就是系统临时目录（例如 HOME=/tmp）。此时前提不成立——
+// 策略本来就把整个临时目录放进可写白名单，用例断言必然失败，而这种失败是
+// 环境导致、与产品行为无关。这种情况直接跳过，避免把假失败当成回归。
 func policyTestRoot(t *testing.T) string {
 	t.Helper()
 	home, err := os.UserHomeDir()
 	if err != nil || home == "" {
 		t.Skipf("无法定位用户家目录: %v", err)
+	}
+	if homeIsTempDir(home) {
+		t.Skipf("家目录 %s 落在系统临时目录 %s 内，策略天然可写，跳过家目录口径的策略用例",
+			home, os.TempDir())
 	}
 	root, err := os.MkdirTemp(home, ".alk-sandbox-policy-")
 	if err != nil {
@@ -24,6 +32,41 @@ func policyTestRoot(t *testing.T) string {
 	}
 	t.Cleanup(func() { _ = os.RemoveAll(root) })
 	return root
+}
+
+// homeIsTempDir 报告家目录是否落在系统临时目录内（容器里常见的 HOME=/tmp）。
+//
+// 路径统一走 canonicalPath 归一化：macOS 上 /tmp 是 /private/tmp 的符号链接，
+// 直接比字符串会漏判。
+func homeIsTempDir(home string) bool {
+	homeReal := canonicalPath(home)
+	if homeReal == "" {
+		return false
+	}
+	tmpReal := canonicalPath(os.TempDir())
+	if tmpReal == "" {
+		return false
+	}
+	return isWithin(homeReal, tmpReal)
+}
+
+// TestHomeIsTempDir 保证跳过逻辑只在 HOME 真的落在系统临时目录时生效：
+// 一旦判定写错（比如恒为 true），整套策略用例会在所有环境静默跳过。
+func TestHomeIsTempDir(t *testing.T) {
+	tmp := canonicalPath(os.TempDir())
+	if tmp == "" {
+		t.Skip("无法定位系统临时目录")
+	}
+	if !homeIsTempDir(tmp) {
+		t.Fatalf("homeIsTempDir(%q) = false, want true", tmp)
+	}
+	if !homeIsTempDir(filepath.Join(tmp, "alk-sandbox-fake-home")) {
+		t.Fatalf("临时目录的子路径应判为临时目录")
+	}
+	notHome := filepath.Join(string(filepath.Separator)+"alkaid0-not-a-home", "user")
+	if homeIsTempDir(notHome) {
+		t.Fatalf("homeIsTempDir(%q) = true, want false", notHome)
+	}
 }
 
 // newPolicyFixture 构造一个最小工作区/配置目录结构，返回策略与环境无关的路径。

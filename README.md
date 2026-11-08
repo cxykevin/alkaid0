@@ -41,6 +41,23 @@ curl -sSL https://alk.cxykevin.top/i.sh | bash
 # Windows
 irm https://alk.cxykevin.top/i.ps1 | iex
 ```
+
+### 从源码构建
+
+上面的脚本下发的是预编译产物，**不需要**本地 Go 环境；改代码或自行打包时才需要：
+
+- **Go 1.27.3 或更高**（与 `go.mod`、CI 保持一致）
+- 依赖全部为纯 Go，`CGO_ENABLED=0` 可静态构建
+
+```bash
+git clone https://github.com/cxykevin/alkaid0
+cd alkaid0
+CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o alkaid0 .
+./alkaid0
+```
+
+`go generate ./...` 只用于生成发行用的版本/产品信息（`product/build.go`），日常开发可以跳过。提交前建议自行跑一遍 `gofmt -l .`、`go vet ./...` 与 `go test ./...`，CI 同样会检查。
+
 ---
 
 ## 日志

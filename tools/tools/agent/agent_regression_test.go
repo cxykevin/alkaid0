@@ -279,7 +279,7 @@ func TestBuildGlobalPrompt_SkipsInvalidLegacyName(t *testing.T) {
 
 // TestUnuseAgent_GoalCheckRecordedAsRejection 内部 goal-check 的 deactivate_agent
 // 不是普通停用：只记录打回理由并返回成功，不写回传消息、不清空激活状态
-//（清理与切回主 Agent 由 loop 状态机负责）。
+// （清理与切回主 Agent 由 loop 状态机负责）。
 func TestUnuseAgent_GoalCheckRecordedAsRejection(t *testing.T) {
 	db := setupTestDB(t)
 	session := setupTestSession(t, db)
