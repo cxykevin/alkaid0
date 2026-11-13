@@ -2,7 +2,7 @@
 -- runMaintenanceOnce 用进程内表去重）。
 --
 -- 注意：per-connection 的 PRAGMA（foreign_keys / journal_mode / synchronous /
--- cache_size / mmap_size / page_size）**不在这里**，而是由 storage/init.go 的
+-- cache_size / mmap_size / page_size / temp_store）**不在这里**，而是由 storage/init.go 的
 -- perConnPragmas 通过 DSN 的 _pragma 参数下发。原因：用 db.Exec 执行 PRAGMA 只对
 -- 当时那一条连接有效，连接池回收（ConnMaxLifetime 到期 / 连接出错被丢弃）后新建的
 -- 连接会退回 SQLite 默认值，foreign_keys 会静默变成 OFF。

@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -552,7 +553,11 @@ func (cdb *DB) openDB() error {
 		return fmt.Errorf("create db dir: %w", err)
 	}
 
-	db, err := sql.Open("sqlite", dbPath)
+	// temp_store=FILE 走 DSN 而不是 Exec：它是 per-connection 属性，
+	// 连接闲置回收（ConnMaxIdleTime 到期）后新建的连接会退回默认值。
+	// 统一写到磁盘也避免向量检索/BM25 排序的大临时数据常驻内存。
+	dsn := dbPath + "?_pragma=" + url.QueryEscape("temp_store(FILE)")
+	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return fmt.Errorf("sql open: %w", err)
 	}

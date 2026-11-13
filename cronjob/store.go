@@ -25,6 +25,8 @@ var perConnPragmas = []string{
 	"journal_mode(WAL)",
 	"busy_timeout(5000)",
 	"synchronous(NORMAL)",
+	// 与主库一致：临时数据走磁盘，不占进程内存
+	"temp_store(FILE)",
 }
 
 // buildDSN 在 SQLite DSN 上追加 per-connection PRAGMA。

@@ -72,7 +72,7 @@ func db(workdir string) (*sql.DB, error) {
 	}
 	// 单连接串行化：写入只发生在索引/edit，读多写少；避免并发 PRAGMA 交错。
 	d.SetMaxOpenConns(1)
-	if _, err := d.Exec(`PRAGMA busy_timeout=5000; PRAGMA journal_mode=WAL;`); err != nil {
+	if _, err := d.Exec(`PRAGMA busy_timeout=5000; PRAGMA journal_mode=WAL; PRAGMA temp_store=FILE;`); err != nil {
 		_ = d.Close()
 		return nil, fmt.Errorf("outline: pragma: %w", err)
 	}

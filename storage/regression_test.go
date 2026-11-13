@@ -118,6 +118,15 @@ func TestInitDBSetsPragmasOnEveryNewConnection(t *testing.T) {
 	if cacheSize != -512 {
 		t.Fatalf("连接回收后 cache_size 应为 -512，实际 %d", cacheSize)
 	}
+	// temp_store 必须是显式的 FILE(1)：默认值 0 依赖编译期 SQLITE_TEMP_STORE，
+	// 不能保证临时表/排序一定落磁盘（大查询会把临时数据留在内存里）。
+	var tempStore int
+	if err := db.Raw("PRAGMA temp_store").Scan(&tempStore).Error; err != nil {
+		t.Fatalf("PRAGMA temp_store: %v", err)
+	}
+	if tempStore != 1 {
+		t.Fatalf("连接回收后 temp_store 应为 1(FILE)，实际 %d", tempStore)
+	}
 
 	// 行为验证：外键约束在新连接上确实生效（仅 PRAGMA 读数为 1 不足以证明）。
 	// 应用自身的子表现已不声明 chats 外键（只删会话表的设计，见 structs 注记），

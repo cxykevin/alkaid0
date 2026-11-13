@@ -35,6 +35,10 @@ var perConnPragmas = []string{
 	"cache_size(-512)",
 	"mmap_size(2000000)",
 	"page_size(4096)",
+	// 临时表 / 排序溢出统一写到磁盘临时文件，避免大查询（历史回放、统计类
+	// 聚合）把临时数据留在进程内存里推高 RSS。SQLite 的 temp_store 默认值
+	// 取决于编译期 SQLITE_TEMP_STORE，显式设为 FILE 才能保证与构建无关。
+	"temp_store(FILE)",
 }
 
 // isMemoryDBPath 判断 dbPath 是否指向 SQLite 内存数据库。
