@@ -247,6 +247,9 @@ func StartWs(handler func(string, func(string) error, uint64) (returnString stri
 		handleGC(w, r)
 	})
 
+	// /debug/pprof：性能剖析端点，与 /info、/gc 同级鉴权（见 registerPprof）
+	registerPprof(mux)
+
 	// 处理 WebSocket 连接
 	mux.HandleFunc(config.GlobalConfig.Server.Path, func(w http.ResponseWriter, r *http.Request) {
 		// 检查token（查询参数或 Authorization 头）

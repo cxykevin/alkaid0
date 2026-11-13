@@ -24,6 +24,8 @@ REST 端点（如 `/info`、OpenAI 兼容代理）与 WebSocket 共用同一份�
 
 `/gc` 是维护端点：携带正确密钥请求 `/gc?k=<key>` 后，服务端立即释放所有「没有进行中回合」的空闲会话（包括空闲但仍驻留在内存中的 loop 与请求缓存），**有客户端连接的会话同样会被回收**，其客户端连接会被强制断开（重连后通过 `session/resume` 恢复）；仍有进行中回合（请求/接收/工具执行/等待审批）的会话保留。释放完成后延迟 1 秒触发 GC 并尝试把空闲内存归还操作系统；响应为 `{"success":true,"released":<释放会话数>,"retained":<保留会话数>}`。Unix 平台也可向服务进程发送 `SIGUSR2` 触发同一逻辑。
 
+`/debug/pprof` 是性能剖析端点（Go `net/http/pprof`）：与 `/info`、`/gc` 使用同一套鉴权（`?k=<key>` 或 `Authorization: Bearer <key>`，恒定时间比较），缺少或错误的密钥返回 `401 invalid token`，且不会进入 pprof 处理器。可用路径为 `/debug/pprof`（重定向到 `/debug/pprof/`）、`/debug/pprof/`（概览，同时负责命名 profile）、`cmdline`、`profile?seconds=<n>`、`symbol`、`trace?seconds=<n>`，以及 `heap`、`goroutine`、`allocs`、`block`、`mutex`、`threadcreate` 等命名 profile（支持 `?debug=1` 的文本形式），可直接用 `go tool pprof 'http://<host>:<port>/debug/pprof/profile?seconds=30&k=<key>'` 采样。
+
 支持 Websocket 桥接的客户端可以直接链接。只支持 stdio 的客户端可以使用提供的 helper 链接。
 
 Websocket 的每个请求体与 stdio 下的每个请求体均相同。
