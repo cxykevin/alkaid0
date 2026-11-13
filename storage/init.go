@@ -136,6 +136,17 @@ func InitDB(dbPath string) (*gorm.DB, error) {
 	}
 	logger.Info("database automigrate completed")
 
+	// 崩溃恢复：上次进程被强杀时残留的流式追加日志（stream_chunks）在这里合并回
+	// 消息行的 delta/thinking_delta，因此被 kill 的会话重新打开后仍带着最后一段
+	// 已收到的正文（正常情况下收尾事务已删除日志，这里只是一次空查询）。
+	// 与其它迁移一致：失败只记 ERROR、不阻塞数据库打开，下次打开重试。
+	// 本进程仍在进行的流式消息会被跳过（见 structs.RecoverStreamChunks）。
+	if n, recoverErr := structs.RecoverStreamChunks(db); recoverErr != nil {
+		logger.Error("failed to recover streamed message chunks, will retry on next open: %v", recoverErr)
+	} else if n > 0 {
+		logger.Warn("recovered %d streamed message(s) from an abnormal shutdown", n)
+	}
+
 	// 初始化全局配置（单行记录），并读入内存缓存
 	db.FirstOrCreate(&structs.Configs{})
 	_ = ReadGlobalConfigs(db)

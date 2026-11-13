@@ -1088,7 +1088,9 @@ func loadSession(cwd string, id *uint32, knowID bool, hidden ...bool) (*structs.
 				active := obj.activeAgentMessages[resp.MsgID]
 				if active == nil {
 					active = &activeAgentMessage{}
-					// 数据库可能已经刷写了本轮较早的内容，先纳入快照再追加本次 delta。
+					// 兜底：数据库里若已有本轮更早的内容（历史库、崩溃恢复合并过的残留），
+					// 先纳入快照再追加本次 delta。正常流式过程中内容列是空的——正文只在
+					// 收尾事务里写一次（见 provider/request 的 stream_chunks 追加日志）。
 					var persisted structs.Messages
 					if err := sess.DB.Where("id = ? AND chat_id = ?", resp.MsgID, sess.ID).First(&persisted).Error; err == nil {
 						active.Content = persisted.Delta

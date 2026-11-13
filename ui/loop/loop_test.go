@@ -24,8 +24,8 @@ func setupTestDB(t *testing.T) *gorm.DB {
 		t.Fatalf("Failed to init test db: %v", err)
 	}
 
-	// 创建表
-	if err := db.AutoMigrate(&storageStructs.Chats{}, &storageStructs.Messages{}); err != nil {
+	// 创建表（StreamChunk 是流式响应的崩溃恢复日志，SendRequest 会写它）
+	if err := db.AutoMigrate(&storageStructs.Chats{}, &storageStructs.Messages{}, &storageStructs.StreamChunk{}); err != nil {
 		t.Fatalf("Failed to migrate db: %v", err)
 	}
 

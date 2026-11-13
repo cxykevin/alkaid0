@@ -58,13 +58,14 @@ func setupTestDB(t *testing.T) *gorm.DB {
 		t.Fatalf("Failed to open test database: %v", err)
 	}
 
-	// 迁移所有需要的表
+	// 迁移所有需要的表（StreamChunk 是流式响应的崩溃恢复日志，SendRequest 会写它）
 	if err := db.AutoMigrate(
 		&storageStructs.Chats{},
 		&storageStructs.Messages{},
 		&storageStructs.SubAgents{},
 		&storageStructs.Traces{},
 		&storageStructs.ReferFiles{},
+		&storageStructs.StreamChunk{},
 	); err != nil {
 		t.Fatalf("Failed to migrate: %v", err)
 	}

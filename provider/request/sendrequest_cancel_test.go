@@ -52,6 +52,7 @@ func TestSendRequest_ContextCancel_ContentPersisted(t *testing.T) {
 		&storageStructs.Chats{},
 		&storageStructs.Messages{},
 		&storageStructs.SubAgents{},
+		&storageStructs.StreamChunk{},
 	); err != nil {
 		t.Fatalf("Failed to migrate: %v", err)
 	}
@@ -208,6 +209,7 @@ func TestSendRequest_ContextCancel_ImmediateReturn(t *testing.T) {
 		&storageStructs.Chats{},
 		&storageStructs.Messages{},
 		&storageStructs.SubAgents{},
+		&storageStructs.StreamChunk{},
 	); err != nil {
 		t.Fatalf("Failed to migrate: %v", err)
 	}

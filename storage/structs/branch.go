@@ -146,6 +146,11 @@ func DeleteMessage(db *gorm.DB, msgID uint64) error {
 		if err := tx.Delete(&Messages{}, msgID).Error; err != nil {
 			return err
 		}
+		// 一并清掉这条消息的流式追加日志：消息都没了，日志再合并也没有落点
+		// （取消时「一个字都没收到」的占位行删除就走到这里）。
+		if err := tx.Where("message_id = ?", msgID).Delete(&StreamChunk{}).Error; err != nil {
+			return err
+		}
 		if err := tx.Model(&Messages{}).Where("parent_id = ?", msgID).
 			Update("parent_id", nullableID(msg.ParentID)).Error; err != nil {
 			return err

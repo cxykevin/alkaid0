@@ -21,4 +21,7 @@ var Tables = []any{
 	&Workflows{},
 	&WorkflowEvents{},
 	&MsgQueueItems{},
+	// StreamChunk 是流式响应的崩溃恢复日志（见 streamchunk.go）。它不进消息树，
+	// 只在流式过程中短暂存在，收尾事务里即被删除。
+	&StreamChunk{},
 }

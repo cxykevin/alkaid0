@@ -1179,18 +1179,21 @@ func SendRequest(ctx context.Context, session *storageStructs.Chats, callback fu
 
 	var gDelta strings.Builder
 	var gThinkingDelta strings.Builder
-	var pendingDelta strings.Builder
-	var pendingThinkingDelta strings.Builder
-	var lastFlushLen int
-	var lastFlushThinkingLen int
-	// lastFlushPhase 记录最后一次刷写时已落库的 phase，用于判断尾部新到的 phase 是否还需补写。
-	var lastFlushPhase string
 	msgID := reqObj.ID
-	// tokenFlushThreshold 定义了向数据库刷新消息内容的阈值（256 字符）。
-	// 流式响应中每收到一个 token 就写数据库会造成严重 I/O 瓶颈。
-	// 累积到阈值再统一更新可大幅提升吞吐量（约 100x），
-	// 同时保证进程在异常终止时能够保留尽可能多的内容
+	// tokenFlushThreshold 定义了把流式增量落进追加日志的阈值（256 字符）。
+	// 每收到一个 token 就写库会造成严重 I/O 瓶颈，累积到阈值再写一次可以摊薄
+	// 事务开销，同时保证进程被异常 kill 时最多只丢最后不足阈值的一小段。
+	//
+	// 内容列不再随流式过程反复整列 UPDATE：那样每次都要整行重写，长度 n 的响应
+	// 总写入量是 O(n²/阈值)（700 KiB 响应约 1 GB 级行重写 + 同量 WAL）。现在：
+	//   - 正文/思考在内存里用 strings.Builder 累积（零拷贝增长，随时可用）；
+	//   - 每满阈值只把**新增片段**插一行 stream_chunks（写入量与增量成正比）；
+	//   - 收尾时在一个事务里写入最终内容并删掉日志；
+	//   - 被强杀时残留的日志由 storage.InitDB 在下次打开数据库时合并回消息行，
+	//     因此被 kill 的会话仍然带着最后收到的 history。
 	const tokenFlushThreshold = 256
+	journal := storageStructs.NewStreamJournal(db, msgID, tokenFlushThreshold)
+	defer journal.Close()
 
 	// Usage 信息
 	var promptUsage uint32
@@ -1277,34 +1280,12 @@ func SendRequest(ctx context.Context, session *storageStructs.Chats, callback fu
 		delta, thinkingDelta, err := solver.AddToken(body.Choices[0].Delta.Content, stringDefault(body.Choices[0].Delta.ReasoningContent))
 		gDelta.WriteString(delta)
 		gThinkingDelta.WriteString(thinkingDelta)
-		pendingDelta.WriteString(delta)
-		pendingThinkingDelta.WriteString(thinkingDelta)
 		if err != nil {
 			return err
 		}
-
-		// 达到阈值时执行数据库更新（批量刷写，减少 I/O 次数）
-		shouldFlush := pendingDelta.Len()+pendingThinkingDelta.Len() >= tokenFlushThreshold
-		if shouldFlush {
-			gstring := gDelta.String()
-			gtstring := gThinkingDelta.String()
-			if err := db.Model(&storageStructs.Messages{}).Where("id = ?", msgID).Updates(storageStructs.Messages{
-				Delta:            gstring,
-				ThinkingDelta:    gtstring,
-				Phase:            phase,
-				PromptTokens:     promptUsage,
-				CompletionTokens: completionUsage,
-				TotalTokens:      totalUsage,
-				CachedTokens:     cachedUsage,
-			}).Error; err != nil {
-				return err
-			}
-			pendingDelta.Reset()
-			pendingThinkingDelta.Reset()
-			// 记录最后一次刷写时的内容长度，用于后续判断是否需要额外更新
-			lastFlushLen = len(gstring)
-			lastFlushThinkingLen = len(gtstring)
-			lastFlushPhase = phase
+		// 达到阈值时把**新增片段**追加进崩溃恢复日志（不重写内容列）
+		if err := journal.Write(delta, thinkingDelta); err != nil {
+			return err
 		}
 		// 回调函数将增量内容实时推送到 UI 界面（通过 Callback）
 		if err := callback(delta, thinkingDelta, msgID, structs.Usage{
@@ -1397,8 +1378,7 @@ func SendRequest(ctx context.Context, session *storageStructs.Chats, callback fu
 		var wg sync.WaitGroup
 		wg.Add(1)
 		go func(msgID uint64, finalDelta, finalThinkingDelta, toolCallingJSON string,
-			promptUsage, completionUsage, totalUsage, cachedUsage uint32,
-			lastFlushLen, lastFlushThinkingLen int, phase, lastFlushPhase string) {
+			promptUsage, completionUsage, totalUsage, cachedUsage uint32, phase string) {
 			defer wg.Done()
 			defer func() {
 				if r := recover(); r != nil {
@@ -1416,18 +1396,19 @@ func SendRequest(ctx context.Context, session *storageStructs.Chats, callback fu
 				}
 				return
 			}
-			if len(fd) != lastFlushLen || len(ftd) != lastFlushThinkingLen || phase != lastFlushPhase {
-				if err := db.Model(&storageStructs.Messages{}).Where("id = ?", msgID).Updates(storageStructs.Messages{
-					Delta:            fd,
-					ThinkingDelta:    ftd,
-					Phase:            phase,
-					PromptTokens:     promptUsage,
-					CompletionTokens: completionUsage,
-					TotalTokens:      totalUsage,
-					CachedTokens:     cachedUsage,
-				}).Error; err != nil {
-					logger.Error("cancel persist final content: %v", err)
-				}
+			// 收尾：一次写入最终内容并删掉追加日志（单事务）。旧实现要拿
+			// 「最后一次刷写的长度」判断是否还有新内容，现在内容列只在收尾写一次，
+			// 这个判断连同 lastFlush* 一起不需要了。
+			if err := storageStructs.FinalizeStreamMessage(db, msgID, &storageStructs.StreamFinal{
+				Delta:            fd,
+				ThinkingDelta:    ftd,
+				Phase:            phase,
+				PromptTokens:     promptUsage,
+				CompletionTokens: completionUsage,
+				TotalTokens:      totalUsage,
+				CachedTokens:     cachedUsage,
+			}); err != nil {
+				logger.Error("cancel persist final content: %v", err)
 			}
 			if toolCallingJSON != "" {
 				if err := db.Model(&storageStructs.Messages{}).Where("id = ?", msgID).Update("tool_calling_json_string", toolCallingJSON).Error; err != nil {
@@ -1435,8 +1416,7 @@ func SendRequest(ctx context.Context, session *storageStructs.Chats, callback fu
 				}
 			}
 		}(msgID, gDelta.String(), gThinkingDelta.String(), solver.GetToolsOrigin(),
-			promptUsage, completionUsage, totalUsage, cachedUsage,
-			lastFlushLen, lastFlushThinkingLen, phase, lastFlushPhase)
+			promptUsage, completionUsage, totalUsage, cachedUsage, phase)
 		wg.Wait()
 		return true, requestErr
 	}
@@ -1455,21 +1435,18 @@ func SendRequest(ctx context.Context, session *storageStructs.Chats, callback fu
 			return true, err
 		}
 	} else {
-		finalDelta := gDelta.String()
-		finalThinkingDelta := gThinkingDelta.String()
-		// 仅当最后一次刷写后有新内容时才执行数据库更新，避免冗余 I/O
-		if len(finalDelta) != lastFlushLen || len(finalThinkingDelta) != lastFlushThinkingLen || phase != lastFlushPhase {
-			if err := db.Model(&storageStructs.Messages{}).Where("id = ?", msgID).Updates(storageStructs.Messages{
-				Delta:            finalDelta,
-				ThinkingDelta:    finalThinkingDelta,
-				Phase:            phase,
-				PromptTokens:     promptUsage,
-				CompletionTokens: completionUsage,
-				TotalTokens:      totalUsage,
-				CachedTokens:     cachedUsage,
-			}).Error; err != nil {
-				return true, err
-			}
+		// 收尾：一次写入最终内容并删掉追加日志（单事务）。内容列在流式过程中
+		// 不再被反复整列刷新，所以这里必须无条件写入（包括「最终为空」的情况）。
+		if err := storageStructs.FinalizeStreamMessage(db, msgID, &storageStructs.StreamFinal{
+			Delta:            gDelta.String(),
+			ThinkingDelta:    gThinkingDelta.String(),
+			Phase:            phase,
+			PromptTokens:     promptUsage,
+			CompletionTokens: completionUsage,
+			TotalTokens:      totalUsage,
+			CachedTokens:     cachedUsage,
+		}); err != nil {
+			return true, err
 		}
 		// 保存工具调用的原始 JSON 字符串，用于后续审批和执行。
 		// 收尾失败时工具调用可能不完整，保持原有的"不落库"语义。

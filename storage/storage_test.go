@@ -23,6 +23,61 @@ func TestInit(t *testing.T) {
 	defer u.Unwrap(db.DB()).Close()
 }
 
+// TestInitDBRecoversStreamedContentAfterAbnormalShutdown 模拟「流式响应中途进程
+// 被强杀」：第一次打开数据库后只写流式追加日志、从没收尾，关掉连接（等价于进程
+// 消失，活跃登记随之丢失）；再次打开数据库时 InitDB 的崩溃恢复应把日志合并进
+// 消息内容，使重新 resume 的会话带着最后收到的正文。
+func TestInitDBRecoversStreamedContentAfterAbnormalShutdown(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "db.sqlite")
+
+	db, err := InitDB(dbPath)
+	if err != nil {
+		t.Fatalf("首次打开数据库失败: %v", err)
+	}
+	if err := db.Create(&structs.Chats{ID: 77, LastModelID: 1}).Error; err != nil {
+		t.Fatalf("创建会话失败: %v", err)
+	}
+	msg := &structs.Messages{ChatID: 77, Type: structs.MessagesRoleAgent}
+	if err := structs.AppendMessage(db, msg); err != nil {
+		t.Fatalf("创建占位消息失败: %v", err)
+	}
+
+	journal := structs.NewStreamJournal(db, msg.ID, 4)
+	if err := journal.Write("hello ", ""); err != nil {
+		t.Fatalf("写入增量失败: %v", err)
+	}
+	if err := journal.Write("world", ""); err != nil {
+		t.Fatalf("写入增量失败: %v", err)
+	}
+	if err := journal.Flush(); err != nil {
+		t.Fatalf("刷写增量失败: %v", err)
+	}
+	// 进程被强杀：收尾事务从未执行，进程内的活跃登记也随进程一起消失
+	journal.Close()
+	u.Unwrap(db.DB()).Close()
+
+	reopened, err := InitDB(dbPath)
+	if err != nil {
+		t.Fatalf("再次打开数据库失败: %v", err)
+	}
+	defer u.Unwrap(reopened.DB()).Close()
+
+	var got structs.Messages
+	if err := reopened.First(&got, msg.ID).Error; err != nil {
+		t.Fatalf("读取消息失败: %v", err)
+	}
+	if got.Delta != "hello world" {
+		t.Fatalf("重新打开后未恢复流式内容: %q", got.Delta)
+	}
+	var chunks int64
+	if err := reopened.Model(&structs.StreamChunk{}).Count(&chunks).Error; err != nil {
+		t.Fatalf("统计残留日志失败: %v", err)
+	}
+	if chunks != 0 {
+		t.Fatalf("恢复后日志应清空，got %d 行", chunks)
+	}
+}
+
 func TestInitDBMigratesHiddenColumn(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "db.sqlite")
 

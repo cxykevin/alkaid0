@@ -15,7 +15,8 @@ func setupBranchTest(t *testing.T) *gorm.DB {
 	if err != nil {
 		t.Fatalf("打开测试数据库失败: %v", err)
 	}
-	if err := db.AutoMigrate(&Chats{}, &Messages{}); err != nil {
+	// StreamChunk 也要迁移：DeleteMessage 会一并清理流式追加日志
+	if err := db.AutoMigrate(&Chats{}, &Messages{}, &StreamChunk{}); err != nil {
 		t.Fatalf("迁移测试数据库失败: %v", err)
 	}
 	return db
