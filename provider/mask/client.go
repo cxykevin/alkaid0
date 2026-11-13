@@ -138,7 +138,9 @@ func (cm *ClientMasker) streamLocked(key StreamKey) *ahocorasick.Replacer {
 	if eng == nil {
 		return nil
 	}
-	r := ahocorasick.NewReplacer(eng.maskItems())
+	// 同一次展示脱敏内的所有流共用一份自动机（掩码方向），每条流只持有轻量匹配状态。
+	// 每条流各建一份自动机的旧实现会让常驻内存随 key_mappings 行数成倍膨胀。
+	r := eng.maskTrie().NewMatcher()
 	cm.streams[key] = r
 	return r
 }

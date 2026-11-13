@@ -2,6 +2,8 @@ package mask
 
 import (
 	"encoding/base64"
+	"fmt"
+	"math/rand"
 	"net"
 	"strings"
 	"testing"
@@ -13,6 +15,117 @@ import (
 	storageStructs "github.com/cxykevin/alkaid0/storage/structs"
 	"gorm.io/gorm"
 )
+
+// TestEngineSharesOneTrieAcrossStreams 锁定「自动机只建一份、多条流共用」的内存模型。
+//
+// 回归背景：旧实现每条流（正文 / 思考 / 每条工具参数）都各自 NewReplacer 构建一份
+// 完整自动机，而自动机体积与 key_mappings 行数成正比（2255 条映射 ≈ 620 MiB），
+// 一次请求就能把常驻内存推到数 GiB。这里断言同一 Engine 的多条流共用同一个 Trie。
+func TestEngineSharesOneTrieAcrossStreams(t *testing.T) {
+	enableMask(t)
+	db := newTestDB(t)
+	for i := range 50 {
+		suffix := fmt.Sprintf("%02d", i)
+		row := storageStructs.KeyMapping{KeyType: TypeAPIKey, Original: "orig-secret-" + suffix, Masked: "sk-fake-" + suffix}
+		if err := db.Create(&row).Error; err != nil {
+			t.Fatalf("create mapping: %v", err)
+		}
+	}
+	eng := NewEngine(db)
+	if eng == nil {
+		t.Fatal("engine is nil")
+	}
+
+	if got := eng.RestoreContent("sk-fake-01"); got != "orig-secret-01" {
+		t.Fatalf("restore content = %q", got)
+	}
+	trie := eng.trie
+	if trie == nil {
+		t.Fatal("trie not built after first restore")
+	}
+	nodes := trie.NumNodes()
+
+	// 思考流 + 多条工具参数流：都不应构建新的自动机
+	if got := eng.RestoreReasoning("sk-fake-02"); got != "orig-secret-02" {
+		t.Fatalf("restore reasoning = %q", got)
+	}
+	for i := range 8 {
+		if got := eng.RestoreStream(StreamKey{Kind: StreamKindArguments, Index: i}, "sk-fake-03"); got != "orig-secret-03" {
+			t.Fatalf("restore args %d = %q", i, got)
+		}
+	}
+	if eng.trie != trie {
+		t.Fatal("streams rebuilt the automaton instead of sharing one")
+	}
+	if got := eng.trie.NumNodes(); got != nodes {
+		t.Fatalf("node count changed: %d -> %d", nodes, got)
+	}
+
+	// 流之间的状态互不影响：各自独立命中
+	if got := eng.RestoreContent("sk-fake-04"); got != "orig-secret-04" {
+		t.Fatalf("restore content = %q", got)
+	}
+	if got := eng.RestoreReasoning("sk-fake-05"); got != "orig-secret-05" {
+		t.Fatalf("restore reasoning = %q", got)
+	}
+	if got := eng.RestoreStream(StreamKey{Kind: StreamKindArguments, Index: 3}, "sk-fake-06"); got != "orig-secret-06" {
+		t.Fatalf("restore args = %q", got)
+	}
+}
+
+// TestEngineManyMappingsStreamRestore 大量映射（模拟长期会话累积的 key_mappings）
+// 下的流式还原正确性：随机切分 chunk、跨越关键字边界也能完整还原。
+func TestEngineManyMappingsStreamRestore(t *testing.T) {
+	enableMask(t)
+	db := newTestDB(t)
+	const n = 2000
+	rows := make([]storageStructs.KeyMapping, 0, n)
+	originals := make([]string, 0, n)
+	for i := range n {
+		// 假值与真实数据同形：随机长串、几乎不共享前缀
+		orig := fmt.Sprintf("secret-value-%06d-%s", i, strings.Repeat("x", i%17))
+		fake := fmt.Sprintf("sk-fake-%06d-%s", i, strings.Repeat("y", i%17))
+		rows = append(rows, storageStructs.KeyMapping{KeyType: TypeAPIKey, Original: orig, Masked: fake})
+		originals = append(originals, orig)
+	}
+	if err := db.CreateInBatches(rows, 200).Error; err != nil {
+		t.Fatalf("seed mappings: %v", err)
+	}
+
+	eng := NewEngine(db)
+	if eng == nil {
+		t.Fatal("engine is nil")
+	}
+
+	// 文本：随机挑 60 个映射的原值拼在噪声里
+	rnd := rand.New(rand.NewSource(20261113))
+	var want, input strings.Builder
+	for range 60 {
+		noise := strings.Repeat("n", 1+rnd.Intn(20)) + " "
+		want.WriteString(noise)
+		input.WriteString(noise)
+		idx := rnd.Intn(n)
+		// 假值 = 输入流（模型看到的是假值），还原后应得到原值
+		fake := rows[idx].Masked
+		input.WriteString(fake)
+		want.WriteString(originals[idx])
+	}
+
+	var got strings.Builder
+	pos := 0
+	in := input.String()
+	for pos < len(in) {
+		n := 1 + rnd.Intn(11)
+		end := min(pos+n, len(in))
+		got.WriteString(eng.RestoreContent(in[pos:end]))
+		pos = end
+	}
+	rest, _ := eng.FinishRestore()
+	got.WriteString(rest)
+	if got.String() != want.String() {
+		t.Fatalf("round-trip mismatch:\n got %q\nwant %q", got.String(), want.String())
+	}
+}
 
 func newTestDB(t *testing.T) *gorm.DB {
 	db, err := storage.InitDB(":memory:")
@@ -390,6 +503,35 @@ func TestEngineRoundtrip(t *testing.T) {
 		if !strings.Contains(restored.String(), s) {
 			t.Errorf("restored missing %q: %s", s, restored.String())
 		}
+	}
+}
+
+// TestMaskTextMultipleSpansPreservesText 单次前向拼接（maskText 新实现）在多个命中
+// 相邻/分散时都要保持「等长替换 + 区间外文本原样」。
+func TestMaskTextMultipleSpansPreservesText(t *testing.T) {
+	enableMask(t)
+	db := newTestDB(t)
+	eng := NewEngine(db)
+	content := "a 13800138000 b 13800138001 c 45.45.45.45 d"
+	masked := eng.MaskText(content)
+	if len(masked) != len(content) {
+		t.Fatalf("length changed: %d != %d (%q)", len(masked), len(content), masked)
+	}
+	for _, orig := range []string{"13800138000", "13800138001", "45.45.45.45"} {
+		if strings.Contains(masked, orig) {
+			t.Fatalf("masked text still contains %q: %s", orig, masked)
+		}
+	}
+	// 区间外文本必须逐字保留
+	for _, keep := range []string{"a ", " b ", " c ", " d"} {
+		if !strings.Contains(masked, keep) {
+			t.Fatalf("masked text lost %q: %s", keep, masked)
+		}
+	}
+	// 无命中时返回原文（且不产生新映射）
+	plain := "nothing sensitive here"
+	if got := eng.MaskText(plain); got != plain {
+		t.Fatalf("plain text changed: %q", got)
 	}
 }
 

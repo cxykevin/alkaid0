@@ -1,6 +1,8 @@
 package ahocorasick
 
 import (
+	"fmt"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -133,4 +135,113 @@ func TestCaseSensitive(t *testing.T) {
 	if string(out) != "abc XYZ aBc" {
 		t.Fatalf("got %q", string(out))
 	}
+}
+
+func TestClassicOverlaps(t *testing.T) {
+	// 经典 AC 用例：后缀同时是其它关键字前缀。
+	// 语义是「最左最长、命中后回到根、不重叠」：命中 "she" 时不再回退匹配其中的
+	// "he"，命中 "he" 之后 "rs" 也不构成 "hers" —— 期望值即该语义的产物。
+	r := NewReplacer([]Item{
+		{Keyword: "he", Replace: "1"},
+		{Keyword: "she", Replace: "2"},
+		{Keyword: "his", Replace: "3"},
+		{Keyword: "hers", Replace: "4"},
+	})
+	out := r.Stream([]byte("ushers his she he hers"))
+	out = append(out, r.Finish()...)
+	if string(out) != "u2rs 3 2 1 1rs" {
+		t.Fatalf("got %q", string(out))
+	}
+	// 单个 "hers" 的输入同样是「先命中 he 即提交」：命中时刻的最长完成前缀是 "he"，
+	// 不会等到 "hers" 完整匹配 —— 这是旧实现就有的语义，必须原样保留。
+	out = r.Stream([]byte("hers"))
+	out = append(out, r.Finish()...)
+	if string(out) != "1rs" {
+		t.Fatalf("hers -> %q, want %q", string(out), "1rs")
+	}
+	// 只在 "hers" 是唯一关键字时才会整段替换
+	solo := NewReplacer([]Item{{Keyword: "hers", Replace: "4"}})
+	out = solo.Stream([]byte("hers"))
+	out = append(out, solo.Finish()...)
+	if string(out) != "4" {
+		t.Fatalf("solo hers -> %q, want 4", string(out))
+	}
+}
+
+func TestDuplicateKeywordLastWins(t *testing.T) {
+	// 同一关键字重复出现时后者覆盖前者（沿用旧实现语义）
+	r := NewReplacer([]Item{
+		{Keyword: "key", Replace: "old"},
+		{Keyword: "key", Replace: "new"},
+	})
+	out := r.Stream([]byte("key"))
+	out = append(out, r.Finish()...)
+	if string(out) != "new" {
+		t.Fatalf("got %q, want %q", string(out), "new")
+	}
+}
+
+func TestSharedTrieIndependentMatchers(t *testing.T) {
+	// 一份自动机被多条流共享时，各流状态必须互不影响
+	trie := NewTrie([]Item{
+		{Keyword: "sk-secret", Replace: "REAL"},
+		{Keyword: "13912345678", Replace: "13800138000"},
+	})
+	a := trie.NewMatcher()
+	b := trie.NewMatcher()
+	var outA, outB []byte
+	// 交错的 chunk：同一份 trie、两条独立的流
+	for _, chunk := range []string{"sk-se", "139", "cret", "1234", " and ", "5678"} {
+		switch {
+		case strings.HasPrefix(chunk, "sk"), chunk == "cret", chunk == " and ":
+			outA = append(outA, a.Stream([]byte(chunk))...)
+		default:
+			outB = append(outB, b.Stream([]byte(chunk))...)
+		}
+	}
+	outA = append(outA, a.Finish()...)
+	outB = append(outB, b.Finish()...)
+	if string(outA) != "REAL and " {
+		t.Fatalf("stream A got %q", string(outA))
+	}
+	if string(outB) != "13800138000" {
+		t.Fatalf("stream B got %q", string(outB))
+	}
+}
+
+// TestTrieMemoryPerNode 锁定自动机的内存模型：占用必须与节点数线性且常数极小。
+//
+// 回归背景：旧实现每个节点内联 [256]*node（≈2 KiB/节点），key_mappings 增长到
+// 2255 条（28 万节点）时单个自动机就要 620 MiB；而请求侧还会为正文/思考/每条
+// 工具参数各建一份，一次请求就能把常驻内存推到数 GiB。改为扁平 CSR 布局后
+// 每节点约 30 字节，这里用 96 字节/节点的上限把它钉住。
+func TestTrieMemoryPerNode(t *testing.T) {
+	items := make([]Item, 0, 2000)
+	for i := range 2000 {
+		// 40 字节、几乎不共享前缀的关键字（模拟脱敏假值）
+		kw := fmt.Sprintf("%08x-%08x-%08x-%08x-%08x", i*2654435761, i*40503+7, i*97+11, i*13+3, i*7+1)
+		items = append(items, Item{Keyword: kw, Replace: strings.Repeat("x", 16)})
+	}
+
+	runtime.GC()
+	var before runtime.MemStats
+	runtime.ReadMemStats(&before)
+
+	trie := NewTrie(items)
+
+	runtime.GC()
+	var after runtime.MemStats
+	runtime.ReadMemStats(&after)
+	runtime.KeepAlive(trie)
+
+	nodes := trie.NumNodes()
+	if nodes < len(items)*8 {
+		t.Fatalf("unexpected node count %d for %d keywords", nodes, len(items))
+	}
+	used := int64(after.HeapAlloc) - int64(before.HeapAlloc)
+	perNode := used / int64(nodes)
+	if perNode > 96 {
+		t.Fatalf("automaton uses %d bytes/node (%d KiB total, %d nodes); want <= 96", perNode, used>>10, nodes)
+	}
+	t.Logf("nodes=%d retained=%dKiB perNode=%dB", nodes, used>>10, perNode)
 }

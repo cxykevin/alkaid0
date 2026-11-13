@@ -1,7 +1,7 @@
 package mask
 
 import (
-	"slices"
+	"strings"
 	"sync"
 	"sync/atomic"
 
@@ -59,18 +59,24 @@ type PendingArg struct {
 }
 
 // Engine 是安全 key 上下文的引擎：出站脱敏 + 响应流式还原。
-// 每个请求创建一个 Engine（映射表很小，全量加载 + 重建 AC 自动机开销可忽略）。
+//
+// 每个请求创建一个 Engine：映射表全量加载进内存，AC 自动机按需构建一次并在该
+// 请求的所有流之间共享（见 trieLocked）。自动机体积只与关键字总长度成正比，
+// 映射表很大（长期会话累积的 key_mappings 可达数千行）时也不会随流数量放大。
 type Engine struct {
-	db           *gorm.DB
-	cfg          configStructs.DataMaskConfig
-	mu           sync.RWMutex
-	origToMask   map[KeyRef]string // 原值 → 假值（脱敏方向）
-	maskToOrig   map[string]string // 假值 → 原值（还原方向）
-	reps         map[StreamKey]*ahocorasick.Replacer
-	repItems     []ahocorasick.Item // 重建还原器用的条目（惰性创建各流时复用）
-	repOrder     []StreamKey        // 流创建顺序，便于稳定地刷出残留
-	reasoningRep *ahocorasick.Replacer
-	custom       []string // /mask add 的自定义脱敏值（精确匹配）
+	db            *gorm.DB
+	cfg           configStructs.DataMaskConfig
+	mu            sync.RWMutex
+	origToMask    map[KeyRef]string // 原值 → 假值（脱敏方向）
+	maskToOrig    map[string]string // 假值 → 原值（还原方向）
+	reps          map[StreamKey]*ahocorasick.Replacer
+	repOrder      []StreamKey           // 流创建顺序，便于稳定地刷出残留
+	reasoningRep  *ahocorasick.Replacer // 思考流的还原状态
+	trie          *ahocorasick.Trie     // 所有流共享的自动机（惰性构建，见 trieLocked）
+	trieVer       uint64                // trie 对应的 mappingVersion
+	clientTrie    *ahocorasick.Trie     // 「原值 → 假值」方向的自动机（客户端展示脱敏）
+	clientTrieVer uint64                // clientTrie 对应的 mappingVersion
+	custom        []string              // /mask add 的自定义脱敏值（精确匹配）
 }
 
 // NewEngine 创建引擎。功能未启用 / db 为 nil / 映射表不存在时返回 nil（调用方零行为变化）。
@@ -111,7 +117,7 @@ func (e *Engine) loadCustom() {
 	}
 }
 
-// loadMappings 全量加载映射并重建两个还原器。
+// loadMappings 全量加载映射。自动机不在这里构建：见 trieLocked（惰性 + 共享）。
 func (e *Engine) loadMappings() {
 	var rows []storageStructs.KeyMapping
 	if err := e.db.Find(&rows).Error; err != nil {
@@ -122,23 +128,37 @@ func (e *Engine) loadMappings() {
 		e.origToMask[KeyRef{r.KeyType, r.Original}] = r.Masked
 		e.maskToOrig[r.Masked] = r.Original
 	}
-	e.rebuildReplacersLocked()
 }
 
-// rebuildReplacersLocked 依据当前 maskToOrig 重建还原器（调用方须持写锁）。
-// 各条流按需惰性创建，重建时连同已有状态一起清空。
-func (e *Engine) rebuildReplacersLocked() {
+// trieLocked 返回当前映射对应的自动机（调用方须持写锁）。
+//
+// 自动机是只读且跨流共享的：正文流、思考流与每条工具参数流各持一个轻量匹配状态
+// （ahocorasick.Replacer），但只共用这一份 Trie。此前每条流都各自构建一份完整
+// 自动机，而自动机体积随 key_mappings 行数线性增长（2255 条映射 ≈ 620 MiB），
+// 一次请求里几条流就能把常驻内存推到数 GiB。
+//
+// 新映射建立时 mappingVersion 递增，这里按代次重建一次即可；已经建立的流继续用
+// 旧自动机（它的未决缓冲不会被打断），新流用新自动机。
+func (e *Engine) trieLocked() *ahocorasick.Trie {
+	v := mappingVersion.Load()
+	if e.trie != nil && e.trieVer == v {
+		return e.trie
+	}
 	items := make([]ahocorasick.Item, 0, len(e.maskToOrig))
 	for masked, orig := range e.maskToOrig {
 		items = append(items, ahocorasick.Item{Keyword: masked, Replace: orig})
 	}
-	e.repItems = items
-	e.reps = make(map[StreamKey]*ahocorasick.Replacer)
-	e.repOrder = nil
-	e.reasoningRep = ahocorasick.NewReplacer(items)
+	e.trie = ahocorasick.NewTrie(items)
+	e.trieVer = v
+	return e.trie
 }
 
-// replacerLocked 取出（必要时创建）指定流的还原器。调用方须持写锁。
+// invalidateTrieLocked 丢弃自动机缓存，下次还原时按最新映射重建（调用方须持写锁）。
+func (e *Engine) invalidateTrieLocked() {
+	e.trie = nil
+}
+
+// replacerLocked 取出（必要时创建）指定流的还原状态。调用方须持写锁。
 func (e *Engine) replacerLocked(key StreamKey) *ahocorasick.Replacer {
 	if e.reps == nil {
 		e.reps = make(map[StreamKey]*ahocorasick.Replacer)
@@ -146,7 +166,7 @@ func (e *Engine) replacerLocked(key StreamKey) *ahocorasick.Replacer {
 	if r, ok := e.reps[key]; ok {
 		return r
 	}
-	r := ahocorasick.NewReplacer(e.repItems)
+	r := e.trieLocked().NewMatcher()
 	e.reps[key] = r
 	e.repOrder = append(e.repOrder, key)
 	return r
@@ -179,10 +199,10 @@ func (e *Engine) MaskMessages(messages []structs.Message) []structs.Message {
 			}
 		}
 	}
-	// 新映射入库后重建还原器，保证本次请求响应的还原覆盖新假值
+	// 新映射入库后作废自动机缓存，保证本次请求响应的还原覆盖新假值（按需重建一次）。
 	if changed {
 		e.mu.Lock()
-		e.rebuildReplacersLocked()
+		e.invalidateTrieLocked()
 		e.mu.Unlock()
 	}
 	return out
@@ -198,12 +218,18 @@ func (e *Engine) MaskText(text string) string {
 	return out
 }
 
-// maskItems 返回当前「原值 → 假值」映射的 AC 自动机条目快照。
-// 供客户端展示侧的流式脱敏使用：已知敏感值即使被切分到多个 chunk，
-// 也能被完整替换。
-func (e *Engine) maskItems() []ahocorasick.Item {
-	e.mu.RLock()
-	defer e.mu.RUnlock()
+// maskTrie 返回「原值 → 假值」方向的自动机（客户端展示侧的流式脱敏使用）：
+// 已知敏感值即使被切分到多个 chunk，也能被完整替换。
+//
+// 方向与还原用的 trie 相反（关键字是原值），因此单独缓存一份；同样只构建一次、
+// 供该 ClientMasker 的所有流共享。
+func (e *Engine) maskTrie() *ahocorasick.Trie {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	v := mappingVersion.Load()
+	if e.clientTrie != nil && e.clientTrieVer == v {
+		return e.clientTrie
+	}
 	items := make([]ahocorasick.Item, 0, len(e.origToMask))
 	for ref, fake := range e.origToMask {
 		if ref.Original == "" || fake == "" || ref.Original == fake {
@@ -211,10 +237,12 @@ func (e *Engine) maskItems() []ahocorasick.Item {
 		}
 		items = append(items, ahocorasick.Item{Keyword: ref.Original, Replace: fake})
 	}
-	return items
+	e.clientTrie = ahocorasick.NewTrie(items)
+	e.clientTrieVer = v
+	return e.clientTrie
 }
 
-// maskText 对单段文本执行脱敏替换（从右到左，假值等长索引不回移）。
+// maskText 对单段文本执行脱敏替换（单次前向拼接；假值与原值等长）。
 func (e *Engine) maskText(text string) (string, bool) {
 	e.mu.RLock()
 	spans := detectSensitive(text, &e.cfg, e.maskToOrig)
@@ -226,22 +254,29 @@ func (e *Engine) maskText(text string) (string, bool) {
 	if len(spans) == 0 {
 		return text, false
 	}
-	result := []byte(text)
-	for _, s := range slices.Backward(spans) {
+	// 单次前向拼接：resolveSpans 已保证 spans 升序且互不重叠，假值与原值等长，
+	// 因此一遍扫描即可完成。旧实现在循环里「删一段 + 重新拼整段」，K 个命中就要
+	// K 份整段文本拷贝——长会话里单条消息可达数百 KB、命中几十处，白白放大
+	// 内存峰值与 GC 压力（这条路径每次请求都会跑）。
+	var b strings.Builder
+	b.Grow(len(text) + 16)
+	prev := 0
+	replaced := false
+	for _, s := range spans {
 		fake, err := e.lookupOrCreate(s.Type, s.Original)
-		if err != nil {
+		if err != nil || fake == "" || fake == s.Original {
 			continue
 		}
-		if fake == "" || fake == s.Original {
-			continue
-		}
-		buf := make([]byte, 0, len(result))
-		buf = append(buf, result[:s.Start]...)
-		buf = append(buf, fake...)
-		buf = append(buf, result[s.End:]...)
-		result = buf
+		b.WriteString(text[prev:s.Start])
+		b.WriteString(fake)
+		prev = s.End
+		replaced = true
 	}
-	return string(result), true
+	if !replaced {
+		return text, false
+	}
+	b.WriteString(text[prev:])
+	return b.String(), true
 }
 
 // lookupOrCreate 查找或创建「原值 → 假值」映射（db 为唯一事实源，保证同 key 同假值）。
@@ -306,10 +341,16 @@ func (e *Engine) RestoreContent(s string) string {
 
 // RestoreReasoning 流式还原思考 chunk（独立状态）。
 func (e *Engine) RestoreReasoning(s string) string {
-	e.mu.RLock()
+	if s == "" {
+		return s
+	}
+	e.mu.Lock()
+	if e.reasoningRep == nil {
+		e.reasoningRep = e.trieLocked().NewMatcher()
+	}
 	r := e.reasoningRep
-	e.mu.RUnlock()
-	if r == nil || s == "" {
+	e.mu.Unlock()
+	if r == nil {
 		return s
 	}
 	return string(r.Stream([]byte(s)))
