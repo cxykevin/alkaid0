@@ -55,4 +55,19 @@ const (
 	// 一次通知就会把 tools 之后的整个前缀（含全部历史）打掉（实测命中掉到 tools 前缀大小）。
 	// 由 Build 写入、RequestBody 作为消息列表末尾的独立块注入。
 	TempKeySystemNotices = "system:notices"
+	// TempKeyTraceWindow 本轮回放窗口（TraceWindow）。图片 trace 没有 read/edit 事件，
+	// 不能靠 TempKeyTraceEvents 裁剪，只能按窗口起点判断锚点消息是否还在回放范围内。
+	TempKeyTraceWindow = "trace:window"
 )
+
+// TraceWindow 本轮回放窗口信息，由 build.DetectTraceEvents 在扫描消息历史时写入。
+//
+// 窗口与 RequestBody 的回放范围同源（遇到 summary 截断，最多 maxReplayPage 页）。
+// 图片块没有事件可跟随，若不在窗口内就必须停止注入：否则被压缩掉的历史图片会在
+// 每个请求里重新读取、base64 编码并追加到上下文，内存与 token 只增不减。
+type TraceWindow struct {
+	// StartMsgID 窗口内最早一条消息的 DB id；0 表示窗口为空（没有可回放历史）。
+	StartMsgID uint64
+	// Empty 窗口内没有任何消息。
+	Empty bool
+}

@@ -145,3 +145,62 @@ func TestTraceStoredImageAnchorsAtMessage(t *testing.T) {
 		t.Fatalf("anchor plan = %#v, want AnchorFull at 42", plan)
 	}
 }
+
+// 图片没有 read/edit 事件，必须按回放窗口（summary 边界）裁剪：
+// 锚点消息已被压缩掉的图片不能再注入，否则每个请求都会重新读图 + base64 注入，
+// 上下文和内存只增不减。
+func TestImageTracePrunedOutsideReplayWindow(t *testing.T) {
+	session, dir := newImageTestSession(t)
+	writeTestPNG(t, filepath.Join(dir, "pic.png"))
+
+	path := any("pic.png")
+	if _, _, _, err := Trace(session, map[string]*any{"path": &path}, nil); err != nil {
+		t.Fatalf("Trace: %v", err)
+	}
+	var tr structs.Traces
+	if err := session.DB.Where("chat_id = ? AND path = ?", session.ID, "pic.png").First(&tr).Error; err != nil {
+		t.Fatalf("trace row missing: %v", err)
+	}
+	src, ok := loadTraceImage(session, dir, tr)
+	if !ok || src.Hash == "" {
+		t.Fatal("loadTraceImage failed")
+	}
+	if err := TraceStoredImage(session, src, 42); err != nil {
+		t.Fatalf("TraceStoredImage: %v", err)
+	}
+	refPath := "@image/" + src.ID
+
+	render := func(window structs.TraceWindow) map[string]FileBlock {
+		t.Helper()
+		if session.TemporyDataOfSession == nil {
+			session.TemporyDataOfSession = map[string]any{}
+		}
+		session.TemporyDataOfSession[structs.TempKeyTraceWindow] = window
+		_, blocks, err := RenderTraceBlocks(session)
+		if err != nil {
+			t.Fatalf("RenderTraceBlocks: %v", err)
+		}
+		return blocks
+	}
+
+	// 窗口起点 100：锚点 42 已落在 summary 之前，两张图片块都不应出现。
+	blocks := render(structs.TraceWindow{StartMsgID: 100})
+	if _, ok := blocks["pic.png"]; ok {
+		t.Fatal("image read before the replay window must not be rendered")
+	}
+	if _, ok := blocks[refPath]; ok {
+		t.Fatal("stored image anchored before the replay window must not be rendered")
+	}
+
+	// 窗口起点 42：锚点仍在窗口内，保持原样注入。
+	blocks = render(structs.TraceWindow{StartMsgID: 42})
+	if fb, ok := blocks[refPath]; !ok || fb.Image == nil {
+		t.Fatalf("stored image inside the replay window missing: %#v", blocks[refPath])
+	}
+
+	// 空窗口（没有任何可回放历史）：图片无处可锚，同样不注入。
+	blocks = render(structs.TraceWindow{Empty: true})
+	if _, ok := blocks[refPath]; ok {
+		t.Fatal("image must not be rendered when the replay window is empty")
+	}
+}

@@ -780,6 +780,7 @@ func InvalidateTraceCache(session *structs.Chats) {
 	delete(session.TemporyDataOfSession, "tools:trace")
 	delete(session.TemporyDataOfSession, structs.TempKeyTraceEvents)
 	delete(session.TemporyDataOfSession, structs.TempKeyTracePrevEvents)
+	delete(session.TemporyDataOfSession, structs.TempKeyTraceWindow)
 	delete(session.TemporyDataOfSession, structs.TempKeyTraceFileBlocks)
 	delete(session.TemporyDataOfSession, structs.TempKeyTraceDiffPlan)
 	delete(session.TemporyDataOfSession, structs.TempKeyTraceAnchorPlan)
@@ -1037,6 +1038,35 @@ func canKeepEventDiff(session *structs.Chats, path string) bool {
 	return ok
 }
 
+// imageTraceInWindow 判断图片 trace 是否仍属于本轮回放窗口。
+//
+// 图片没有 read/edit 事件，TempKeyTraceEvents 的活跃集合里不会出现它；如果沿用
+// "无事件即跳过"会被整批裁掉，如果完全豁免又会把 summary 之前的所有图片每轮重新
+// 读取、base64 编码并注入——上下文与内存只增不减（0.7.0 图片支持的内存问题即源于此）。
+// 因此单独按回放窗口判断：锚点消息仍在窗口内（或被窗口内的新 read 事件承载）才注入。
+func imageTraceInWindow(session *structs.Chats, traceObj structs.Traces, hasEvent bool) bool {
+	if session == nil || session.TemporyDataOfSession == nil {
+		return true
+	}
+	win, ok := session.TemporyDataOfSession[structs.TempKeyTraceWindow].(structs.TraceWindow)
+	if !ok {
+		// 未经过 DetectTraceEvents（测试 / 直接调用 RenderTraceBlocks）：维持旧行为。
+		return true
+	}
+	if hasEvent {
+		// 窗口内重新 read 了这张图片：由事件锚点承载，旧锚点是否过期都不影响本轮注入。
+		return true
+	}
+	if win.Empty {
+		return false
+	}
+	if traceObj.AnchorMsgID != 0 {
+		return traceObj.AnchorMsgID >= win.StartMsgID
+	}
+	// 既没有锚点也没有窗口内事件：只能末尾落位，而末尾落位会让它永远留在上下文里。
+	return false
+}
+
 // RenderTraceBlocks 读取当前 agent 的 Traces 列表，按事件映射分区渲染内容块：
 //   - 有最近 read/edit 事件的文件 → 存入 eventBlocks（map[path]FileBlock）并写入
 //     session.TemporyDataOfSession[TempKeyTraceFileBlocks]，供 build 包按事件插入；
@@ -1161,6 +1191,11 @@ func RenderTraceBlocks(session *structs.Chats) (topBlock string, eventBlocks map
 		// 图片 trace：内容不可 diff，永远整块注入；未变化时留在原锚点，
 		// 有事件承载时锚到事件，否则末尾落位（由 build 层回写锚点）。
 		if traceObj.MediaKind == MediaKindImage {
+			// 先判窗口再读图：被 summary 压缩掉的图片连文件都不必读，
+			// 否则每轮都会把所有历史图片重新读盘 + base64 编码，内存白白翻倍。
+			if !imageTraceInWindow(session, traceObj, hasEvent) {
+				continue
+			}
 			im, ok := loadTraceImage(session, nowpath, traceObj)
 			if !ok {
 				continue
@@ -1174,11 +1209,13 @@ func RenderTraceBlocks(session *structs.Chats) (topBlock string, eventBlocks map
 			}
 			var ap *AnchorPlan
 			switch {
-			case im.Hash == traceObj.MediaHash && traceObj.AnchorMsgID != 0:
-				ap = &AnchorPlan{Mode: AnchorFull, MsgID: traceObj.AnchorMsgID, Full: true}
-			case eventMsgID != 0:
+			case eventMsgID != 0 && eventMsgID > traceObj.AnchorMsgID:
+				// 窗口内重新 read 了这张图：锚到新事件并推进锚点（含 summary 后的重读）。
 				ap = &AnchorPlan{Mode: AnchorFull, MsgID: eventMsgID, Full: true}
 				SetTraceAnchor(session, path, eventMsgID)
+			case traceObj.AnchorMsgID != 0:
+				// 内容未变化：留在原锚点，字节与位置都不动。
+				ap = &AnchorPlan{Mode: AnchorFull, MsgID: traceObj.AnchorMsgID, Full: true}
 			default:
 				ap = &AnchorPlan{Mode: AnchorTail, Full: true}
 			}

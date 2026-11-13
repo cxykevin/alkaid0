@@ -1011,6 +1011,14 @@ func DetectTraceEvents(db *gorm.DB, session *structs.Chats, agentCode string) er
 	if session.TemporyDataOfSession == nil {
 		session.TemporyDataOfSession = make(map[string]any)
 	}
+	// 记录本轮回放窗口：图片 trace 没有 read/edit 事件，不能靠事件表裁剪，
+	// 否则 summary 边界之前的图片会在每个请求里重新读取并 base64 注入，
+	// 上下文与内存都只增不减。窗口为空表示没有可回放历史，图片也无处可锚。
+	traceWindow := structs.TraceWindow{Empty: len(window) == 0}
+	if len(window) > 0 {
+		traceWindow.StartMsgID = window[0].ID
+	}
+	session.TemporyDataOfSession[structs.TempKeyTraceWindow] = traceWindow
 	session.TemporyDataOfSession[structs.TempKeyTraceEvents] = eventMap
 	session.TemporyDataOfSession[structs.TempKeyTracePrevEvents] = prevMap
 	return nil
@@ -1188,12 +1196,23 @@ func insertEventContentBlocks(l *list.List, dbIDToElement map[uint64]*list.Eleme
 			}
 		}
 		if plan.Mode == trace.AnchorTail {
+			if fb, ok := fileBlocks[path]; ok && fb.Image != nil {
+				// 图片没有"末尾落位"语义：末尾落位的块下一轮仍以自身为锚点，会永久留在
+				// 上下文里并每轮重新 base64 编码。没有有效锚点的图片直接放弃本轮注入。
+				continue
+			}
 			tailPaths = append(tailPaths, path)
 			continue
 		}
 		anchor := findAnchor(plan.MsgID)
 		if anchor == nil {
-			// 锚点不可渲染 → 回退末尾（见函数注释）
+			if fb, ok := fileBlocks[path]; ok && fb.Image != nil {
+				// 锚点消息已不在本轮回放窗口（被 summary 压缩 / 分支切换 / 分页滑出）：
+				// 图片只在原锚点原位注入，不能退回末尾，否则历史图片会每轮重新追加、
+				// 上下文与内存只增不减。
+				continue
+			}
+			// 文本块锚点不可渲染 → 回退末尾（见函数注释）
 			tailPaths = append(tailPaths, path)
 			continue
 		}
