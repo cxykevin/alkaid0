@@ -70,6 +70,19 @@ CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o alkaid0 .
 
 ---
 
+## 运行时内存调优
+
+启动时按可用内存（物理内存与 cgroup 限额取较小值；Linux 上会沿进程所在 cgroup 逐级向上读取 v1/v2 内存限额）自动设置 Go 运行时的 GC 参数：
+
+- `GOMEMLIMIT`：`max(128 MiB, 可用内存 / 32)`——不足 4 GiB 内存固定 128 MiB，8 GiB 内存 256 MiB、16 GiB 512 MiB、32 GiB 1 GiB，之后每翻倍内存翻倍限制。水位压得远低于整机内存，超过后 GC 会更积极回收并归还内存。
+- `GOGC`：保持 Go 默认的 100。水位已由软限制控制，放宽 GOGC 只会放大两次 GC 之间的堆峰值。
+
+手动调优优先：只要设置了 `GOGC`、`GOMEMLIMIT`，或在 `GODEBUG` 里使用了 GC 相关键（`gctrace`、`gcpacertrace`、`gcstoptheworld`、`madvdontneed`），启动时就不会改动任何运行时参数。
+
+> 调优只在启动时应用一次，不影响 `/gc` 与 `SIGUSR2` 触发的强制回收。
+
+---
+
 ## 配置
 
 路径

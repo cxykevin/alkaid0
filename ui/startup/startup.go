@@ -6,7 +6,6 @@ import (
 	"os"
 	"os/signal"
 	"runtime"
-	"runtime/debug"
 	"strings"
 	"syscall"
 	"time"
@@ -115,9 +114,10 @@ func Startup() {
 
 	logger.Info("starting alkaid0...")
 
-	// 设置 Go 运行时内存软限制，让 GC 在内存超限时更积极回收并归还给 OS
-	// 避免 idle 时 Go 运行时持有过多不释放的内存
-	debug.SetMemoryLimit(256 * 1024 * 1024) // 256MB
+	// 启动时按可用内存（物理内存与 cgroup 限额取小）设置 GC 分配参数：
+	// 软限制默认取 1/2 可用内存，内存充裕时放宽 GOGC 减少 GC 次数。
+	// 用户手动设置 GOGC / GOMEMLIMIT（或 GODEBUG 的 GC 键）时完全跳过。
+	tuneRuntimeMemory()
 
 	openai.Start()
 	config.Load()
