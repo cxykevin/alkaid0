@@ -32,16 +32,26 @@ type workflowView struct {
 	logs map[string][]string
 	// logDropped 标记该节点是否因上限丢弃过日志（渲染时提示）。
 	logDropped map[string]bool
-	// results 节点 id → 已渲染的 Result 文本（node_result 事件）。
-	results map[string]string
+	// results 节点 id → 已渲染的 Result（node_result 事件）。
+	results map[string]workflowResult
 	// seen 已加入 nodeOrder 的节点，避免重复。
 	seen map[string]bool
+}
+
+// workflowResult 渲染后的节点终值；omitted 是因行数上限省略的行数。
+type workflowResult struct {
+	text    string
+	omitted int
 }
 
 const (
 	// workflowViewMaxLogsPerNode 每个节点保留的 node_log 行数：超出丢弃最早的，
 	// 避免高频 print 的工作流在内存里无限增长。
 	workflowViewMaxLogsPerNode = 100
+	// workflowViewMaxResultLines 单个节点 Result 保留的行数：Agent 节点的终值
+	// 往往是整篇文档，不设上限会把视图顶出临时对象的 2000 行截断线，节点图与
+	// 其它节点的 Result 反而读不到。
+	workflowViewMaxResultLines = 120
 	// workflowViewMaxTotalLines 渲染结果的总行数上限：UpdateTempObject 只保留
 	// 最后 2000 行，超过会把视图顶部（图与靠前的节点）截掉，因此视图与附加的
 	// 原始输出合计控制在该上限内。
@@ -58,7 +68,7 @@ func newWorkflowView() *workflowView {
 		states:     make(map[string]string),
 		logs:       make(map[string][]string),
 		logDropped: make(map[string]bool),
-		results:    make(map[string]string),
+		results:    make(map[string]workflowResult),
 		seen:       make(map[string]bool),
 	}
 }
@@ -110,7 +120,8 @@ func (v *workflowView) Apply(ev WorkflowEvent) {
 			return
 		}
 		v.addNode(id)
-		v.results[id] = renderWorkflowResult(ev.Data["result"])
+		text, omitted := renderWorkflowResult(ev.Data["result"])
+		v.results[id] = workflowResult{text: text, omitted: omitted}
 	}
 }
 
@@ -210,9 +221,19 @@ func (v *workflowView) Render(raw string) string {
 			b.WriteString("\n")
 		}
 		if result, ok := v.results[id]; ok {
-			b.WriteString("  Result: ")
-			b.WriteString(result)
-			b.WriteString("\n")
+			for i, line := range strings.Split(result.text, "\n") {
+				if i == 0 {
+					b.WriteString("  Result: ")
+				} else {
+					// 多行终值整体缩进到 Result 之下，read 时才不会与节点日志混在一起。
+					b.WriteString("    ")
+				}
+				b.WriteString(line)
+				b.WriteString("\n")
+			}
+			if result.omitted > 0 {
+				fmt.Fprintf(&b, "  (result truncated, %d more lines)\n", result.omitted)
+			}
 		}
 	}
 	viewLines := strings.Count(b.String(), "\n")
@@ -270,18 +291,27 @@ func workflowStateMark(state string) string {
 }
 
 // renderWorkflowResult 渲染 node_result 的值：字符串原样输出（保持多行内容），
-// 其余值用紧凑 JSON，序列化失败时退回 fmt 的默认格式。
-func renderWorkflowResult(value any) string {
-	if s, ok := value.(string); ok {
-		return s
+// 其余值用紧凑 JSON，序列化失败时退回 fmt 的默认格式。超过
+// workflowViewMaxResultLines 行时只保留前若干行，并返回省略的行数。
+func renderWorkflowResult(value any) (string, int) {
+	text := ""
+	switch {
+	case value == nil:
+		text = "null"
+	default:
+		if s, ok := value.(string); ok {
+			text = s
+		} else if encoded, err := json.Marshal(value); err == nil {
+			text = string(encoded)
+		} else {
+			text = fmt.Sprint(value)
+		}
 	}
-	if value == nil {
-		return "null"
+	lines := strings.Split(text, "\n")
+	if len(lines) <= workflowViewMaxResultLines {
+		return text, 0
 	}
-	if encoded, err := json.Marshal(value); err == nil {
-		return string(encoded)
-	}
-	return fmt.Sprint(value)
+	return strings.Join(lines[:workflowViewMaxResultLines], "\n"), len(lines) - workflowViewMaxResultLines
 }
 
 // workflowEventString 从事件字段取字符串（类型不符时返回空串）。

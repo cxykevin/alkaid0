@@ -365,7 +365,7 @@ dynworkflow 在 `session/new` 创建 Agent 会话时，按 alkaid0 的根级扩�
 
 #### 事件更新
 
-workflow 事件按 runId 持久化完整 graph、当前 node/agent 状态和有序事件日志，并广播为以下顶层 `session/update`：`alk.cxykevin.top/session/terminal/workflow/update_graph`、`update_node`、`update_node_result`、`update_agents_start`、`update_agent`、`update_node_code`、`update_node_log`。公共字段 `sessionId`、`runId`、`sessionUpdate`、`eventType`、`time`、`workflow` 以及事件字段直接放在 `update` 顶层，不放 `_meta` 或 `body`。graph 是完整快照，其余事件是增量更新。`node_result` 携带节点 `Result(value)` 的终值（缓存命中重放同样上报），需要 dynworkflow ≥ 0.1.3；`graph.nodes[].name` 是 `@flow.node("...")` 的显示名。
+workflow 事件按 runId 持久化完整 graph、当前 node/agent 状态和有序事件日志，并广播为以下顶层 `session/update`：`alk.cxykevin.top/session/terminal/workflow/update_graph`、`update_node`、`update_node_result`、`update_agents_start`、`update_agent`、`update_node_code`、`update_node_log`。公共字段 `sessionId`、`runId`、`sessionUpdate`、`eventType`、`time`、`workflow` 以及事件字段直接放在 `update` 顶层，不放 `_meta` 或 `body`。graph 是完整快照，其余事件是增量更新。`node_result` 携带节点 `Result(value)` 的终值（缓存命中重放同样上报），需要 dynworkflow ≥ 0.1.3；`graph.nodes[].name` 是 `@flow.node("...")` 的显示名。dynworkflow 0.1.4 起一个节点可以同时返回 `Result` 与下游任务，因此同一节点会先上报 `node_result`、随后继续上报下游节点的 `node` 事件（`Result` 不再终止调度）。venv 初始化会确保 dynworkflow ≥ 0.1.4，旧版本不会上报 `node_result`，workflow 视图里也就读不到 `Result:`。
 
 #### 事件字段
 
@@ -400,7 +400,7 @@ workflow 终端的临时对象内容不是原始 stdout，而是按事件流渲�
 
 - 前若干行是节点图的 mermaid 边（按 graph 中的节点/边顺序，去掉重复边）；
 - 每个节点一行：未运行为 `[ ]`、运行中为 `[-]`、结束（done/error/terminated）为 `[X]`；`{id}` 是节点函数名，`{NodeName}` 是显示名（dynworkflow < 0.1.3 时回退到节点启动事件 `node_code.name`）；
-- 该节点的 `node_log` 逐行缩进两格；有 `node_result` 时追加 `Result: {value}`（字符串原样，其余为紧凑 JSON）；
+- 该节点的 `node_log` 逐行缩进两格；有 `node_result` 时追加 `Result: {value}`（字符串原样，其余为紧凑 JSON）。多行终值首行写在 `Result:` 之后，其余行缩进四格，保证读到的内容仍然归属该节点；单个终值最多保留 120 行，超出以 `(result truncated, N more lines)` 提示——否则一个超长终值会把视图顶出临时对象的 2000 行截断线，节点图与其它节点的 Result 反而读不到；
 - 视图之后用 `----- raw output -----` 分隔并附加原始 stdout/stderr（Python traceback 等仍可见）。
 
 视图尚未收到 `graph` 时（workflow 启动阶段）临时对象仍是原始输出，与 terminal 一致。内存与落盘均有上界：每节点保留最近 100 行日志（超出以 `(earlier log lines omitted)` 提示），视图与附加原始输出合计不超过 1900 行——临时对象只保留末尾 2000 行，超过会把视图顶部截掉。

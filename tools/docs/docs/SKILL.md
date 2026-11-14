@@ -41,9 +41,19 @@ A node is scheduled only after every declared argument has been filled. If `val1
 Supported node return values:
 
 - `None`: finish the node.
-- `d.Result(value)`: store a terminal result.
+- `d.Result(value)`: store the node result (`dynworkflow >= 0.1.4`).
 - One downstream task: continue with one node.
 - A `list` or `tuple` of downstream tasks: continue with multiple nodes.
+- A combination such as `return d.Result(value), next_node(x=value)`: store the result **and** schedule downstream nodes. A node may return at most one `Result`, and a `Result` never blocks downstream scheduling.
+
+```python
+@flow.node("Summarize and continue")
+def summarize_and_continue() -> d.NodeResult:
+    summary = build_summary()
+    return d.Result(summary), report(summary=summary)
+```
+
+The stored result is available through `Result.result()`. It is also the `Result:` value shown under the node when reading the workflow view (`@temp/run/<n>`), so keep it serializable (non-serializable values are reported as their `str()` form).
 
 ## Call Agents
 
@@ -101,9 +111,11 @@ Independent nodes run concurrently. When a node fails, it is immediately marked 
 flow.run(start())
 ```
 
+`Flow.run` also listens for JSONL control commands on stdin. On platforms with `fork` (Linux/macOS) the workflow executes in a forked child process; on platforms without `fork` (Windows) it executes in the current process. Either way the host reads events from stdout, so do not print non-protocol data while reporting is enabled.
+
 ## Caching
 
-Persistent caching takes effect only when the relevant workflow, node, function source, session scope, and arguments can be represented in the cache key. A node whose source or arguments cannot be serialized is not cached. The cache is also bypassed when the cache backend is unavailable.
+Persistent caching takes effect only when the relevant workflow, node, function source, session scope, and arguments can be represented in the cache key. A node whose source or arguments cannot be serialized is not cached. The cache is also bypassed when the cache backend is unavailable. A cache hit replays the stored node result and downstream scheduling (including the `Result` + downstream combination introduced in `dynworkflow >= 0.1.4`).
 
 ## Clean history value
 

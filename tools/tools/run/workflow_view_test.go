@@ -97,14 +97,71 @@ func TestWorkflowStateMark(t *testing.T) {
 
 // TestRenderWorkflowResult 验证终值渲染：字符串原样、nil 为 null、其余紧凑 JSON。
 func TestRenderWorkflowResult(t *testing.T) {
-	if got := renderWorkflowResult("plain"); got != "plain" {
-		t.Errorf("string result = %q", got)
+	if got, omitted := renderWorkflowResult("plain"); got != "plain" || omitted != 0 {
+		t.Errorf("string result = %q (omitted %d)", got, omitted)
 	}
-	if got := renderWorkflowResult(nil); got != "null" {
-		t.Errorf("nil result = %q", got)
+	if got, omitted := renderWorkflowResult(nil); got != "null" || omitted != 0 {
+		t.Errorf("nil result = %q (omitted %d)", got, omitted)
 	}
-	if got := renderWorkflowResult(map[string]any{"b": 1, "a": 2}); got != `{"a":2,"b":1}` {
-		t.Errorf("object result = %q", got)
+	if got, omitted := renderWorkflowResult(map[string]any{"b": 1, "a": 2}); got != `{"a":2,"b":1}` || omitted != 0 {
+		t.Errorf("object result = %q (omitted %d)", got, omitted)
+	}
+}
+
+// TestRenderWorkflowResultTruncatesLongValue 验证超长终值只保留前若干行并报告省略行数。
+func TestRenderWorkflowResultTruncatesLongValue(t *testing.T) {
+	lines := make([]string, workflowViewMaxResultLines+5)
+	for i := range lines {
+		lines[i] = fmt.Sprintf("line-%d", i)
+	}
+	got, omitted := renderWorkflowResult(strings.Join(lines, "\n"))
+	if omitted != 5 {
+		t.Fatalf("omitted = %d, want 5", omitted)
+	}
+	if n := strings.Count(got, "\n") + 1; n != workflowViewMaxResultLines {
+		t.Fatalf("kept %d lines, want %d", n, workflowViewMaxResultLines)
+	}
+	if !strings.Contains(got, "line-0") || strings.Contains(got, "line-120") {
+		t.Fatalf("truncation kept the wrong lines")
+	}
+}
+
+// TestWorkflowViewMultiLineResult 验证多行终值整体缩进到 Result 之下，并与节点日志区分。
+func TestWorkflowViewMultiLineResult(t *testing.T) {
+	v := newWorkflowView()
+	v.Apply(workflowViewEvent(t, `{"type":"graph","graph":{"nodes":{"n":{"name":"N"}},"edges":{},"start":["n"]}}`))
+	v.Apply(workflowViewEvent(t, `{"type":"node_log","nodeId":"n","message":"log line"}`))
+	v.Apply(workflowViewEvent(t, `{"type":"node_result","nodeId":"n","result":"first\nsecond\nthird"}`))
+	got := v.Render("")
+	want := strings.Join([]string{
+		"- [ ] n: N",
+		"  log line",
+		"  Result: first",
+		"    second",
+		"    third",
+		"",
+	}, "\n")
+	if got != want {
+		t.Fatalf("render mismatch:\n--- got ---\n%s\n--- want ---\n%s", got, want)
+	}
+}
+
+// TestWorkflowViewResultTruncationNotice 验证超长终值在视图中附带省略提示。
+func TestWorkflowViewResultTruncationNotice(t *testing.T) {
+	v := newWorkflowView()
+	v.Apply(workflowViewEvent(t, `{"type":"graph","graph":{"nodes":{"n":{"name":"N"}},"edges":{},"start":["n"]}}`))
+	lines := make([]string, workflowViewMaxResultLines+3)
+	for i := range lines {
+		lines[i] = fmt.Sprintf("r%d", i)
+	}
+	payload, err := json.Marshal(map[string]any{"type": "node_result", "nodeId": "n", "result": strings.Join(lines, "\n")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	v.Apply(workflowViewEvent(t, string(payload)))
+	got := v.Render("")
+	if !strings.Contains(got, "(result truncated, 3 more lines)") {
+		t.Fatalf("missing truncation notice:\n%s", got)
 	}
 }
 

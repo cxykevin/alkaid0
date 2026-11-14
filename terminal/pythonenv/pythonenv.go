@@ -42,11 +42,31 @@ var (
 	// commandRunner is replaceable by package tests so initialization remains offline.
 	commandRunner = runCommand
 
+	// commandOutputRunner is replaceable by package tests so version probes remain offline.
+	commandOutputRunner = runCommandOutput
+
 	// pythonVersionRunner is replaceable by package tests so version checks remain offline.
 	pythonVersionRunner = runPythonVersion
 )
 
 const minimumPythonMinor = 12
+
+// minimumDynworkflowVersion dynworkflow 的最低可用版本：workflow 节点终值
+// （`node_result`，read @temp/run/<n> 视图里的 `Result:`）自 0.1.3 起才上报；
+// 0.1.4 起 Result 可与下游调度同时返回，并修正了 Result 取值。低于该版本的
+// 已有 venv 必须升级，否则工作流跑完也读不到任何 Result。
+const minimumDynworkflowVersion = "0.1.4"
+
+// requiredPackages 初始化时必须存在的包；minVersion 非空时低于该版本会升级
+// （此前的实现只在包缺失时安装，已有旧版的 venv 永远不会更新）。
+var requiredPackages = []struct {
+	Name       string
+	MinVersion string
+}{
+	{Name: "ipython"},
+	{Name: "openai"},
+	{Name: "dynworkflow", MinVersion: minimumDynworkflowVersion},
+}
 
 // VenvDir returns the most recently initialized virtual environment directory.
 // It returns an empty string until Initialize succeeds.
@@ -213,16 +233,9 @@ func initialize(ctx context.Context, cfg structs.PythonConfig, configPath string
 		return fmt.Errorf("pythonenv: invalid venv Python: %w", err)
 	}
 
-	for _, packageName := range []string{"ipython", "openai", "dynworkflow"} {
-		if err := commandRunner(ctx, venvPython, "-m", "pip", "show", packageName); err != nil {
-			logger.Info("installing %s package...", packageName)
-			args := []string{"-m", "pip", "install", packageName}
-			if strings.TrimSpace(cfg.Source) != "" {
-				args = append(args, "--index-url", cfg.Source)
-			}
-			if err := commandRunner(ctx, venvPython, args...); err != nil {
-				return fmt.Errorf("pythonenv: install %s: %w", packageName, err)
-			}
+	for _, pkg := range requiredPackages {
+		if err := ensurePackage(ctx, venvPython, cfg.Source, pkg.Name, pkg.MinVersion); err != nil {
+			return err
 		}
 	}
 
@@ -237,6 +250,86 @@ func initialize(ctx context.Context, cfg structs.PythonConfig, configPath string
 	stateMu.Unlock()
 
 	return nil
+}
+
+// ensurePackage 确保包已安装且版本不低于 minVersion（minVersion 为空时只要求已安装）。
+// 已安装但过旧时执行 `pip install -U`，并在升级后复查——否则镜像源落后时
+// dynworkflow 会静默停留在不支持的版本，workflow 的 Result 永远读不到。
+func ensurePackage(ctx context.Context, python, indexURL, name, minVersion string) error {
+	installedVersion, installed := installedPackageVersion(ctx, python, name)
+	if installed && (minVersion == "" || versionAtLeast(installedVersion, minVersion)) {
+		return nil
+	}
+	if installed {
+		logger.Info("%s %s is older than required %s, upgrading...", name, installedVersion, minVersion)
+	} else {
+		logger.Info("installing %s package...", name)
+	}
+	args := []string{"-m", "pip", "install"}
+	if installed {
+		args = append(args, "-U")
+	}
+	args = append(args, name)
+	if strings.TrimSpace(indexURL) != "" {
+		args = append(args, "--index-url", indexURL)
+	}
+	if err := commandRunner(ctx, python, args...); err != nil {
+		if installed {
+			// 已有旧版可用时不让升级失败连带禁用整个 Python 环境：
+			// 旧版 dynworkflow 仍能执行工作流，只是读不到 Result。
+			logger.Warn("upgrade %s failed (workflow results may be unavailable): %v", name, err)
+			return nil
+		}
+		return fmt.Errorf("pythonenv: install %s: %w", name, err)
+	}
+	if minVersion == "" {
+		return nil
+	}
+	version, ok := installedPackageVersion(ctx, python, name)
+	if !ok || !versionAtLeast(version, minVersion) {
+		logger.Warn("%s %s or newer is required, but %q is installed (workflow results may be unavailable)", name, minVersion, version)
+	}
+	return nil
+}
+
+// installedPackageVersion 读取 venv 中已安装包的版本（pip show）。
+// ok=false 表示未安装或读取失败，调用方按未安装处理。
+func installedPackageVersion(ctx context.Context, python, name string) (string, bool) {
+	output, err := commandOutputRunner(ctx, python, "-m", "pip", "show", name)
+	if err != nil {
+		return "", false
+	}
+	for line := range strings.SplitSeq(string(output), "\n") {
+		if value, found := strings.CutPrefix(strings.TrimSpace(line), "Version:"); found {
+			return strings.TrimSpace(value), true
+		}
+	}
+	return "", false
+}
+
+// versionAtLeast 比较点分版本号（只比较前三段数字，忽略 dev/rc/post 等后缀）。
+func versionAtLeast(got, want string) bool {
+	gotParts, wantParts := parseVersionParts(got), parseVersionParts(want)
+	for i := range len(wantParts) {
+		if gotParts[i] != wantParts[i] {
+			return gotParts[i] > wantParts[i]
+		}
+	}
+	return true
+}
+
+// parseVersionParts 取版本号前三段数字；缺失或非数字段按 0 处理。
+func parseVersionParts(version string) [3]int {
+	var parts [3]int
+	for i, segment := range strings.SplitN(strings.TrimSpace(version), ".", len(parts)) {
+		for _, ch := range segment {
+			if ch < '0' || ch > '9' {
+				break
+			}
+			parts[i] = parts[i]*10 + int(ch-'0')
+		}
+	}
+	return parts
 }
 
 func findPython(ctx context.Context, configured string) (string, error) {
@@ -330,6 +423,12 @@ func runCommand(ctx context.Context, name string, args ...string) error {
 	cmd.Stdout = nil
 	cmd.Stderr = nil
 	return cmd.Run()
+}
+
+// runCommandOutput 执行命令并返回 stdout（用于读取 pip show 的版本信息）。
+func runCommandOutput(ctx context.Context, name string, args ...string) ([]byte, error) {
+	cmd := exec.CommandContext(ctx, name, args...)
+	return cmd.Output()
 }
 
 func runPythonVersion(ctx context.Context, name string) ([]byte, error) {
