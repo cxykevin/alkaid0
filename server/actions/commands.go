@@ -313,12 +313,25 @@ var commandMaps = map[string]*cmdObj{
 		},
 	},
 	"/mask": {
-		Description: "Manage custom mask values — add <value> masks a value outbound and restores it in the response, del <value> stops masking it",
-		Hint:        "add <value> | del <value>",
+		Description: "Manage custom mask values — add <value> masks a value outbound and restores it in the response, del <value> stops masking it, clean [--force] evicts stale key mappings now",
+		Hint:        "add <value> | del <value> | clean [--force]",
 		Function: func(obj *sessionObj, arg string) (bool, error) {
 			parts := strings.SplitN(strings.TrimSpace(arg), " ", 2)
+			// clean 不带 <value>，单独分支处理（触发一次映射淘汰，见 maskevict.go）。
+			if op := strings.ToLower(strings.TrimSpace(parts[0])); op == "clean" {
+				extra := ""
+				if len(parts) > 1 {
+					extra = strings.TrimSpace(parts[1])
+				}
+				msg, err := maskCleanCommand(obj, extra)
+				if err != nil {
+					return false, err
+				}
+				broadcastCmdText(obj, msg)
+				return false, nil
+			}
 			if len(parts) != 2 {
-				return false, fmt.Errorf("Usage: /mask add <value> | /mask del <value>")
+				return false, fmt.Errorf("Usage: /mask add <value> | /mask del <value> | /mask clean [--force]")
 			}
 			op, val := strings.TrimSpace(parts[0]), strings.TrimSpace(parts[1])
 			if val == "" {

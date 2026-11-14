@@ -346,6 +346,8 @@ C:\ProgramData\alkaid0\config.json
 
 演示或直播时可开启 `mask_client_messages`：发往客户端的内容（用户消息、AI 正文/思考、工具参数、历史回放、摘要与会话标题）同样显示为假值，且与模型侧使用同一套映射；模型输入与本地数据库仍保留原文。默认关闭，依赖 `enable` 总开关。
 
+映射表会随会话历史增长，因此默认开启自动淘汰（`key_mapping_evict_enable`）：超过 `key_mapping_idle_hours`（默认 24，下限 6）既没有被出站脱敏命中、也没有新建的映射会被分批删除；`/mask add` 添加的 `custom` 映射永不自动删除。阈值不应小于所用模型的 prompt 缓存保留期（DeepSeek 3h、Anthropic 5m–1h），否则同一个原值可能换到新假值而让前缀缓存失效；`key_mapping_max_rows`（默认 5000）只是软上限，剩余行都还在热窗口内时只记告警、不越过空闲阈值强删。需要立刻清理时用 `/mask clean`；`/mask clean --force` 忽略空闲阈值清掉所有非自定义映射，适合数据库已经很大且接受一次前缀缓存失效的场景。
+
 ### 事件钩子（Hooks）
 
 配置中的 `Hooks` 可以在会话的关键时刻执行外部命令。命令在事件发生时**同步执行**（阻塞到命令退出后才继续会话流程），适合做桌面通知、日志归档、外部系统联动等。
@@ -493,7 +495,7 @@ C:\ProgramData\alkaid0\config.json
 - `/help`: 显示命令帮助（无参数）
 - `/index [clean|status|cancel|lsp-reset]`: 构建代码库索引（提取 LSP 符号 → 提交 embedding 任务）；子命令：`clean` 清库、`status` 显示进度、`cancel` 停止、`lsp-reset` 重置 LSP 失败计数
 - `/init`: 分析代码库并生成 AGENTS.md 指导文件（无参数）
-- `/mask add <值>|del <值>`: 管理自定义脱敏值，`add` 出站脱敏并在响应中还原，`del` 停止脱敏
+- `/mask add <值>|del <值>|clean [--force]`: 管理自定义脱敏值，`add` 出站脱敏并在响应中还原，`del` 停止脱敏；`clean` 立即清理过期的自动映射（默认按 `key_mapping_idle_hours` 判定，`--force` 忽略空闲阈值清掉所有非自定义映射）
 - `/reload`: 从磁盘重载配置（无参数）
 - `/s [short]`: 发送已配置短语，`/s <short>` 展开并发送，`/s`（无参数）列出所有短语
 - `/title [标题]`: 设置会话标题，无参数时回退到 AI 生成标题

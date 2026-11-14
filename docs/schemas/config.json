@@ -1094,7 +1094,11 @@
                 "mask_ip": false,
                 "mask_session_cookie": false,
                 "mask_jwt": true,
-                "mask_client_messages": false
+                "mask_client_messages": false,
+                "key_mapping_evict_enable": true,
+                "key_mapping_idle_hours": 24,
+                "key_mapping_max_rows": 5000,
+                "key_mapping_evict_batch": 500
             },
             "properties": {
                 "enable": {
@@ -1139,6 +1143,29 @@
                     "type": "boolean",
                     "description": "是否把发送给客户端的会话消息也替换为脱敏后的内容（演示/直播用）：开启后客户端看到的用户消息、AI 正文/思考、工具参数、历史回放与摘要均为同格式假值；模型输入与本地数据库仍保留原文。仅在 enable=true 时生效。",
                     "default": false
+                },
+                "key_mapping_evict_enable": {
+                    "type": "boolean",
+                    "description": "是否自动淘汰长时间未使用的「原值 → 假值」映射。关闭后映射表会随会话历史无限增长。仅在 enable=true 时生效。",
+                    "default": true
+                },
+                "key_mapping_idle_hours": {
+                    "type": "integer",
+                    "description": "映射空闲多少小时后可被淘汰（默认 24，下限 6）。阈值不应小于所用模型的 prompt 缓存保留期（DeepSeek 3h、Anthropic 5m–1h），否则同一个原值可能换到新假值而让前缀缓存失效。",
+                    "minimum": 0,
+                    "default": 24
+                },
+                "key_mapping_max_rows": {
+                    "type": "integer",
+                    "description": "映射行数软上限（默认 5000）：只用于告警，剩余行都还在空闲阈值内时不会强删。",
+                    "minimum": 1,
+                    "default": 5000
+                },
+                "key_mapping_evict_batch": {
+                    "type": "integer",
+                    "description": "单批删除行数（默认 500），控制单个事务大小。",
+                    "minimum": 1,
+                    "default": 500
                 }
             }
         },

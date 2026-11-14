@@ -147,6 +147,15 @@ func InitDB(dbPath string) (*gorm.DB, error) {
 		logger.Warn("recovered %d streamed message(s) from an abnormal shutdown", n)
 	}
 
+	// 脱敏映射淘汰的前置迁移：把历史行的 last_used 回填为创建时间。
+	// 新列默认 0，若不回填，第一次清理会把所有历史行都当成"从远古起没用过"删掉。
+	// 只更新 last_used = 0 的行，幂等。失败不阻塞打开（下次重试）。
+	if n, backfillErr := structs.BackfillKeyMappingLastUsed(db); backfillErr != nil {
+		logger.Error("failed to backfill key mapping last_used, will retry on next open: %v", backfillErr)
+	} else if n > 0 {
+		logger.Info("backfilled last_used for %d key mapping row(s)", n)
+	}
+
 	// 初始化全局配置（单行记录），并读入内存缓存
 	db.FirstOrCreate(&structs.Configs{})
 	_ = ReadGlobalConfigs(db)

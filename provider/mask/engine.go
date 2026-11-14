@@ -69,6 +69,7 @@ type Engine struct {
 	mu            sync.RWMutex
 	origToMask    map[KeyRef]string // 原值 → 假值（脱敏方向）
 	maskToOrig    map[string]string // 假值 → 原值（还原方向）
+	origID        map[KeyRef]uint64 // 原值 → key_mappings 行 id（刷新 last_used 用）
 	reps          map[StreamKey]*ahocorasick.Replacer
 	repOrder      []StreamKey           // 流创建顺序，便于稳定地刷出残留
 	reasoningRep  *ahocorasick.Replacer // 思考流的还原状态
@@ -77,6 +78,11 @@ type Engine struct {
 	clientTrie    *ahocorasick.Trie     // 「原值 → 假值」方向的自动机（客户端展示脱敏）
 	clientTrieVer uint64                // clientTrie 对应的 mappingVersion
 	custom        []string              // /mask add 的自定义脱敏值（精确匹配）
+
+	// usageMu 保护 touched：本次请求里命中的映射行 id（去重）。
+	// 独立于 mu 是为了不让脱敏热路径（RLock）升级成写锁。
+	usageMu sync.Mutex
+	touched map[uint64]struct{}
 }
 
 // NewEngine 创建引擎。功能未启用 / db 为 nil / 映射表不存在时返回 nil（调用方零行为变化）。
@@ -97,6 +103,7 @@ func NewEngine(db *gorm.DB) *Engine {
 		cfg:        cfg,
 		origToMask: make(map[KeyRef]string),
 		maskToOrig: make(map[string]string),
+		origID:     make(map[KeyRef]uint64),
 	}
 	e.loadMappings()
 	e.loadCustom()
@@ -125,8 +132,11 @@ func (e *Engine) loadMappings() {
 		return
 	}
 	for _, r := range rows {
-		e.origToMask[KeyRef{r.KeyType, r.Original}] = r.Masked
+		ref := KeyRef{r.KeyType, r.Original}
+		e.origToMask[ref] = r.Masked
 		e.maskToOrig[r.Masked] = r.Original
+		// 记下行 id：命中时要批量刷新 last_used/hits（见 FlushUsage）。
+		e.origID[ref] = r.ID
 	}
 }
 
@@ -205,6 +215,9 @@ func (e *Engine) MaskMessages(messages []structs.Message) []structs.Message {
 		e.invalidateTrieLocked()
 		e.mu.Unlock()
 	}
+	// 请求级批量刷新 last_used/hits：淘汰只认这个字段，而整份 prompt 每轮都会
+	// 重新脱敏，所以仍在发送窗口里的原值永远不会变"冷"。
+	e.FlushUsage()
 	return out
 }
 
@@ -263,10 +276,12 @@ func (e *Engine) maskText(text string) (string, bool) {
 	prev := 0
 	replaced := false
 	for _, s := range spans {
-		fake, err := e.lookupOrCreate(s.Type, s.Original)
+		fake, id, err := e.lookupOrCreate(s.Type, s.Original)
 		if err != nil || fake == "" || fake == s.Original {
 			continue
 		}
+		// 记录本次请求命中的映射：请求结束时批量刷新 last_used（淘汰的唯一依据）。
+		e.markUsed(id)
 		b.WriteString(text[prev:s.Start])
 		b.WriteString(fake)
 		prev = s.End
@@ -280,19 +295,22 @@ func (e *Engine) maskText(text string) (string, bool) {
 }
 
 // lookupOrCreate 查找或创建「原值 → 假值」映射（db 为唯一事实源，保证同 key 同假值）。
-func (e *Engine) lookupOrCreate(typ, original string) (string, error) {
+// 同时返回映射行的 id，供调用方记录"本次请求用到了它"（淘汰判断的唯一依据）。
+func (e *Engine) lookupOrCreate(typ, original string) (string, uint64, error) {
+	ref := KeyRef{typ, original}
 	e.mu.RLock()
-	if m, ok := e.origToMask[KeyRef{typ, original}]; ok {
+	if m, ok := e.origToMask[ref]; ok {
+		id := e.origID[ref]
 		e.mu.RUnlock()
-		return m, nil
+		return m, id, nil
 	}
 	e.mu.RUnlock()
 
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	// double-check
-	if m, ok := e.origToMask[KeyRef{typ, original}]; ok {
-		return m, nil
+	if m, ok := e.origToMask[ref]; ok {
+		return m, e.origID[ref], nil
 	}
 
 	for range 8 {
@@ -300,24 +318,82 @@ func (e *Engine) lookupOrCreate(typ, original string) (string, error) {
 		if fake == original || fake == "" {
 			continue
 		}
-		row := storageStructs.KeyMapping{KeyType: typ, Original: original, Masked: fake}
+		// 创建即"热"：last_used 直接写当前时间，避免刚建的行被当成古董立刻淘汰。
+		now := uint64(evictNow().Unix())
+		row := storageStructs.KeyMapping{
+			KeyType:  typ,
+			Original: original,
+			Masked:   fake,
+			LastUsed: now,
+			Hits:     1,
+		}
 		if err := e.db.Create(&row).Error; err == nil {
-			e.origToMask[KeyRef{typ, original}] = fake
+			e.origToMask[ref] = fake
 			e.maskToOrig[fake] = original
+			e.origID[ref] = row.ID
 			mappingVersion.Add(1)
-			return fake, nil
+			return fake, row.ID, nil
 		}
 		// 唯一索引冲突：可能是并发请求已建同 original（复用），或 masked 冲突（换一个）
 		var existing storageStructs.KeyMapping
 		if e.db.Where("key_type = ? AND original = ?", typ, original).First(&existing).Error == nil {
-			e.origToMask[KeyRef{typ, original}] = existing.Masked
+			e.origToMask[ref] = existing.Masked
 			e.maskToOrig[existing.Masked] = existing.Original
+			if existing.LastUsed == 0 {
+				// 历史行（新列尚未回填）：先当热行，别让第一次清理就删掉它。
+				existing.LastUsed = now
+				_ = e.db.Model(&storageStructs.KeyMapping{}).Where("id = ?", existing.ID).
+					Update("last_used", now).Error
+			}
+			e.origID[ref] = existing.ID
 			mappingVersion.Add(1)
-			return existing.Masked, nil
+			return existing.Masked, existing.ID, nil
 		}
 	}
 	logger.Warn("data mask: failed to create mapping for %s", typ)
-	return original, nil
+	return original, 0, nil
+}
+
+// markUsed 记录本次请求命中的映射行（去重），由 FlushUsage 批量落库。
+func (e *Engine) markUsed(id uint64) {
+	if e == nil || id == 0 {
+		return
+	}
+	e.usageMu.Lock()
+	if e.touched == nil {
+		e.touched = make(map[uint64]struct{}, 8)
+	}
+	e.touched[id] = struct{}{}
+	e.usageMu.Unlock()
+}
+
+// FlushUsage 把本次请求命中的映射批量写回 last_used / hits。
+//
+// 必须在请求真正发出前调用（MaskMessages 结尾）：淘汰只认 last_used，若延后到
+// 响应结束才刷新，一个正在进行的请求所用的映射可能仍显示为"很久没用过"而被删掉。
+// 每次请求只有一条 UPDATE，与消息条数无关。
+func (e *Engine) FlushUsage() {
+	if e == nil || e.db == nil {
+		return
+	}
+	e.usageMu.Lock()
+	ids := make([]uint64, 0, len(e.touched))
+	for id := range e.touched {
+		ids = append(ids, id)
+	}
+	clear(e.touched)
+	e.usageMu.Unlock()
+	if len(ids) == 0 {
+		return
+	}
+	if err := e.db.Model(&storageStructs.KeyMapping{}).Where("id IN ?", ids).
+		Updates(map[string]any{
+			"last_used": uint64(evictNow().Unix()),
+			"hits":      gorm.Expr("hits + 1"),
+		}).Error; err != nil {
+		// 刷新失败只影响淘汰判断（该行可能被过早淘汰），不影响本次脱敏。
+		logger.Warn("data mask: refresh key mapping usage: %v", err)
+	}
 }
 
 // RestoreStream 流式还原指定流的分片（状态仅在该流内跨调用保持）。

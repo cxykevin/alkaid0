@@ -66,6 +66,23 @@ func IsStreamMessageActive(db *gorm.DB, messageID uint64) bool {
 	return ok
 }
 
+// HasActiveStreams 报告该库里是否还有本进程尚未收尾的流式消息。
+// 供"空闲时刻才做"的维护任务使用（如脱敏映射淘汰），避免在回合进行中动库。
+func HasActiveStreams(db *gorm.DB) bool {
+	if db == nil {
+		return false
+	}
+	active := false
+	activeStreamMessages.Range(func(key, _ any) bool {
+		if k, ok := key.(streamMessageKey); ok && k.db == db {
+			active = true
+			return false
+		}
+		return true
+	})
+	return active
+}
+
 // StreamJournal 把一条流式响应的增量按阈值追加到 stream_chunks。
 //
 // 调用方负责在内存里累积完整正文（收尾时一次性写入），Journal 只负责记录

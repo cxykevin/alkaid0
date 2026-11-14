@@ -27,4 +27,17 @@ type DataMaskConfig struct {
 	// 仅影响发往客户端的内容：模型输入与本地数据库仍保留原文。
 	// 依赖 Enable 总开关（映射表与出站脱敏共用）。
 	MaskClientMessages bool `json:"mask_client_messages" default:"false"`
+	// KeyMappingEvictEnable 是否自动淘汰过期的「原值 → 假值」映射，默认开启。
+	// 关闭后 key_mappings 恢复"只增不删"的旧行为（不推荐：表会随会话历史无限增长）。
+	KeyMappingEvictEnable bool `json:"key_mapping_evict_enable" default:"true"`
+	// KeyMappingIdleHours 映射空闲多久后可被淘汰（小时，默认 24，下限 6）。
+	// 语义：超过该时长既没出现在出站脱敏、也没新建，说明原值已不在发送窗口里，
+	// 删掉不会改变仍会发送的内容，因此不会破坏 provider 的 prompt prefix cache。
+	// 该值必须不小于所用模型的 prompt 缓存保留期（DeepSeek 3h、Anthropic 5m–1h）。
+	KeyMappingIdleHours int `json:"key_mapping_idle_hours" default:"24"`
+	// KeyMappingMaxRows 单库映射行数软上限（默认 5000）：只用于告警，
+	// 不会越过 KeyMappingIdleHours 强删——热窗口内的行永远保留。
+	KeyMappingMaxRows int `json:"key_mapping_max_rows" default:"5000"`
+	// KeyMappingEvictBatch 单批删除行数（默认 500），控制单个事务大小。
+	KeyMappingEvictBatch int `json:"key_mapping_evict_batch" default:"500"`
 }

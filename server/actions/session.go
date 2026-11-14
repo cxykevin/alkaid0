@@ -1360,6 +1360,10 @@ func loadSession(cwd string, id *uint32, knowID bool, hidden ...bool) (*structs.
 		// 只看到默认空闲状态，而服务端已经跑起来了，停止键因此失效（实测于 alcoh）。
 		// 改由调用方在连接注册后唤醒：SessionNew / SessionResume 见各自函数，
 		// cron 投递见 dispatchCronPrompt。worker 本身仍在此启动，保持队列可用。
+
+		// 会话加载是一个天然的空闲时刻：顺手淘汰过期的脱敏映射
+		// （见 maskevict.go，节流 + 有活跃流时跳过）。
+		maybeEvictKeyMappings(cwd, sess.DB)
 		return sess, nil
 	}
 	// 会话已存在，递增引用计数（在锁保护下）
