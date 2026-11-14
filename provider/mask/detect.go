@@ -1,12 +1,12 @@
 package mask
 
 import (
+	"cmp"
 	"encoding/base64"
 	"encoding/json"
-	"fmt"
 	"net"
 	"regexp"
-	"sort"
+	"slices"
 	"strings"
 	"sync"
 
@@ -65,35 +65,83 @@ var keyPrefixes = []string{
 // sortedPrefixes 按长度降序排列的前缀，用于取最长命中前缀。
 var sortedPrefixes = func() []string {
 	p := append([]string(nil), keyPrefixes...)
-	sort.Slice(p, func(i, j int) bool { return len(p[i]) > len(p[j]) })
+	slices.SortFunc(p, func(a, b string) int { return len(b) - len(a) })
 	return p
 }()
 
-var prefixKeyRe = sync.OnceValue(func() *regexp.Regexp {
-	alt := strings.Join(sortedPrefixes, "|")
-	return regexp.MustCompile(`\b(?:` + alt + `)[A-Za-z0-9_-]{8,}\b`)
-})
+// keyPrefixByFirst 按首字节分桶的前缀表。
+//
+// 前缀检测原先跑 `\b(?:sk-or-v1-|...|cdk_)[A-Za-z0-9_-]{8,}\b`：28 个分支的长交替让
+// 正则引擎在每个字节位置都要尝试全部分支（90 KB 文本 10 ms 量级）。改成逐字节查桶、
+// 命中前缀后再做一遍线性后缀校验，同一文本只要几十微秒，且零分配。
+var keyPrefixByFirst = func() [256][]string {
+	var t [256][]string
+	for _, p := range sortedPrefixes {
+		t[p[0]] = append(t[p[0]], p)
+	}
+	return t
+}()
 
-var bareHexRe = sync.OnceValue(func() *regexp.Regexp {
-	return regexp.MustCompile(fmt.Sprintf(`\b[0-9a-fA-F]{%d,}\b`, minBareKeyLen))
-})
+// 字符分类（ASCII），对应正则里的 \w / [0-9a-fA-F] / [A-Za-z0-9_-] / [0-9a-fA-F:.]。
+func isLowerAlpha(c byte) bool { return c >= 'a' && c <= 'z' }
 
-var bareAlnumRe = sync.OnceValue(func() *regexp.Regexp {
-	return regexp.MustCompile(fmt.Sprintf(`\b[A-Za-z0-9_-]{%d,}\b`, minBareKeyLen))
-})
+func isUpperAlpha(c byte) bool { return c >= 'A' && c <= 'Z' }
 
-var phoneRe = sync.OnceValue(func() *regexp.Regexp {
-	return regexp.MustCompile(`\b1[3-9]\d{9}\b`)
-})
+func isWordChar(c byte) bool {
+	return c == '_' || isDigit(c) || isLowerAlpha(c) || isUpperAlpha(c)
+}
 
-// ipv4QuadRe 匹配点分十进制候选，再用 net.ParseIP + 上下文校验过滤。
+func isHexChar(c byte) bool {
+	return isDigit(c) || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')
+}
+
+// isTokenChar 等价于 [A-Za-z0-9_-]。
+func isTokenChar(c byte) bool {
+	return c == '-' || c == '_' || isDigit(c) || isLowerAlpha(c) || isUpperAlpha(c)
+}
+
+// isIPv6RunChar 等价于 [0-9a-fA-F:.]。
+func isIPv6RunChar(c byte) bool {
+	return c == ':' || c == '.' || isHexChar(c)
+}
+
+// lowerASCII 只折叠 ASCII 大写字母（与 (?i) 在 ASCII 文本上的效果一致）。
+func lowerASCII(c byte) byte {
+	if c >= 'A' && c <= 'Z' {
+		return c + ('a' - 'A')
+	}
+	return c
+}
+
+// containsFold 做 ASCII 大小写不敏感的 Contains，不分配。
+// 用于 session/token 这类关键词的廉价预筛（Go 标准库的大小写不敏感匹配会先 ToLower）。
+func containsFold(s, sub string) bool {
+	n, m := len(s), len(sub)
+	if m == 0 || m > n {
+		return false
+	}
+	first := lowerASCII(sub[0])
+	for i := 0; i+m <= n; i++ {
+		if lowerASCII(s[i]) != first {
+			continue
+		}
+		j := 1
+		for ; j < m; j++ {
+			if lowerASCII(s[i+j]) != lowerASCII(sub[j]) {
+				break
+			}
+		}
+		if j == m {
+			return true
+		}
+	}
+	return false
+}
+
+// ipv4QuadRe 是重构前 IPv4 候选所用的正则；生产路径已改为 detectIPv4 的手写扫描，
+// 这里只保留给 detect_equiv_test 当参考实现。删掉它会让差分测试无法编译。
 var ipv4QuadRe = sync.OnceValue(func() *regexp.Regexp {
 	return regexp.MustCompile(`(?:[0-9]{1,3}\.){3}[0-9]{1,3}`)
-})
-
-// ipv6RunRe 匹配可能构成 IPv6 的「十六进制+冒号+点」连续段，再用 net.ParseIP 校验。
-var ipv6RunRe = sync.OnceValue(func() *regexp.Regexp {
-	return regexp.MustCompile(`[0-9a-fA-F:.]{3,}`)
 })
 
 var sessionRe = sync.OnceValue(func() *regexp.Regexp {
@@ -109,10 +157,6 @@ var cookiePairRe = sync.OnceValue(func() *regexp.Regexp {
 	return regexp.MustCompile(`([^;=,\s]+)=([^;,]+)`)
 })
 
-var jwtRe = sync.OnceValue(func() *regexp.Regexp {
-	return regexp.MustCompile(`[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}`)
-})
-
 // detectSensitive 扫描文本中的敏感区间。maskToOrig 用于跳过已脱敏的假值。
 func detectSensitive(text string, cfg *configStructs.DataMaskConfig, maskToOrig map[string]string) []Span {
 	if text == "" {
@@ -122,73 +166,161 @@ func detectSensitive(text string, cfg *configStructs.DataMaskConfig, maskToOrig 
 	if cfg.MaskJWT {
 		spans = append(spans, detectJWT(text)...)
 	}
-	if cfg.MaskSession {
+	// Cookie/Set-Cookie 头必然包含 "ookie"：正文里几乎不出现，先用一次廉价查找
+	// 跳过整条多行正则（它对每个字节位置都要尝试 ^\s* 锚点）。
+	if cfg.MaskSession && strings.Contains(text, "ookie") {
 		spans = append(spans, detectCookieHeader(text)...)
 	}
 	if cfg.MaskAPIKey {
 		spans = append(spans, detectPrefixKey(text)...)
 		spans = append(spans, detectBareKey(text)...)
 	}
-	if cfg.MaskSession {
+	// session 正则要求「关键词 + [=:] + 值」；先用两次廉价判断（必须出现 =/:，且必须
+	// 出现关键词）跳过大小写不敏感的多分支正则 —— 普通正文既没有 =/:，也没有这些词。
+	if cfg.MaskSession &&
+		(strings.IndexByte(text, '=') >= 0 || strings.IndexByte(text, ':') >= 0) &&
+		(containsFold(text, "session") || containsFold(text, "sid") ||
+			containsFold(text, "token") || containsFold(text, "cookie")) {
 		spans = append(spans, detectSessionValue(text)...)
 	}
 	if cfg.MaskPhone {
 		spans = append(spans, detectPhone(text)...)
 	}
-	if cfg.MaskIP {
+	// 不含 '.' 也不含 ':' 的文本不可能出现 IP。
+	if cfg.MaskIP && (strings.IndexByte(text, '.') >= 0 || strings.IndexByte(text, ':') >= 0) {
 		spans = append(spans, detectIP(text, cfg)...)
 	}
 	return resolveSpans(spans, maskToOrig)
 }
 
+// detectPrefixKey 识别带已知前缀的 key。
+//
+// 原实现是一条 28 分支的长交替正则 `\b(?:sk-or-v1-|...|cdk_)[A-Za-z0-9_-]{8,}\b`，
+// 每个字节位置都要尝试全部分支。这里改为逐字节查首字符桶 + 线性后缀校验，语义等价：
+// 前缀取最长、匹配不重叠、两端都要落在 \b 上。
 func detectPrefixKey(text string) []Span {
 	var spans []Span
-	for _, loc := range prefixKeyRe().FindAllStringIndex(text, -1) {
-		s := text[loc[0]:loc[1]]
-		spans = append(spans, Span{Start: loc[0], End: loc[1], Type: TypeAPIKey, Original: s})
+	n := len(text)
+	for i := 0; i < n; i++ {
+		pfxLen := 0
+		for _, p := range keyPrefixByFirst[text[i]] {
+			if strings.HasPrefix(text[i:], p) {
+				pfxLen = len(p)
+				break
+			}
+		}
+		if pfxLen == 0 {
+			continue
+		}
+		// 前缀前的 \b：前一个字符不能是单词字符。
+		if i > 0 && isWordChar(text[i-1]) {
+			continue
+		}
+		body := i + pfxLen
+		end := body
+		for end < n && isTokenChar(text[end]) {
+			end++
+		}
+		// 结尾的 \b 要求最后一个字符是 \w：贪婪吃满后把尾部 '-' 回溯掉。
+		for end > body && !isWordChar(text[end-1]) {
+			end--
+		}
+		if end-body < 8 {
+			continue
+		}
+		spans = append(spans, Span{Start: i, End: end, Type: TypeAPIKey, Original: text[i:end]})
+		i = end - 1 // 与 FindAllStringIndex 一致：匹配之间不重叠
 	}
 	return spans
 }
 
+// detectBareKey 识别没有前缀、但足够长的裸 token。
+//
+// 原实现跑两条正则（hex 80+ / [A-Za-z0-9_-] 80+）。后者是前者的超集：hex 字符都属于
+// [A-Za-z0-9_-]，最长 run 的两端必然落在 \b 上（run 边界外不可能是 \w 字符），
+// 同起点时 resolveSpans 只保留更长的那条 —— 所以最终结果等于「alnum 那条」。
+// 这里直接按最长 run 扫描，比两条正则各跑一遍快得多，且命中与否都是零分配。
 func detectBareKey(text string) []Span {
 	var spans []Span
-	for _, loc := range bareHexRe().FindAllStringIndex(text, -1) {
-		s := text[loc[0]:loc[1]]
-		if isHexKey(s) {
-			spans = append(spans, Span{Start: loc[0], End: loc[1], Type: TypeAPIKey, Original: s})
+	n := len(text)
+	for i := 0; i < n; {
+		if !isTokenChar(text[i]) {
+			i++
+			continue
 		}
-	}
-	for _, loc := range bareAlnumRe().FindAllStringIndex(text, -1) {
-		s := text[loc[0]:loc[1]]
-		spans = append(spans, Span{Start: loc[0], End: loc[1], Type: TypeAPIKey, Original: s})
+		start := i
+		for i < n && isTokenChar(text[i]) {
+			i++
+		}
+		end := i
+		// '-' 不是 \w：落在两端时正则的 \b 会回溯掉它们。
+		for start < end && text[start] == '-' {
+			start++
+		}
+		for end > start && text[end-1] == '-' {
+			end--
+		}
+		if end-start < minBareKeyLen {
+			continue
+		}
+		spans = append(spans, Span{Start: start, End: end, Type: TypeAPIKey, Original: text[start:end]})
 	}
 	return spans
 }
 
+// detectPhone 识别中国大陆手机号（等价于 `\b1[3-9]\d{9}\b`）。
+// 固定 11 位数字用手写扫描比正则快得多：切出数字 run 后校验长度与两侧边界即可。
 func detectPhone(text string) []Span {
 	var spans []Span
-	for _, loc := range phoneRe().FindAllStringIndex(text, -1) {
-		s := text[loc[0]:loc[1]]
-		spans = append(spans, Span{Start: loc[0], End: loc[1], Type: TypePhone, Original: s})
+	n := len(text)
+	for i := 0; i < n; i++ {
+		if !isDigit(text[i]) {
+			continue
+		}
+		start := i
+		for i < n && isDigit(text[i]) {
+			i++
+		}
+		if i-start != 11 {
+			continue
+		}
+		// 两端 \b：数字 run 两侧不能紧邻单词字符（字母/数字/下划线）。
+		if start > 0 && isWordChar(text[start-1]) {
+			continue
+		}
+		if i < n && isWordChar(text[i]) {
+			continue
+		}
+		if text[start] != '1' || text[start+1] < '3' || text[start+1] > '9' {
+			continue
+		}
+		spans = append(spans, Span{Start: start, End: i, Type: TypePhone, Original: text[start:i]})
 	}
 	return spans
 }
 
 func detectIP(text string, cfg *configStructs.DataMaskConfig) []Span {
-	var spans []Span
-	for _, loc := range ipv4QuadRe().FindAllStringIndex(text, -1) {
-		s := text[loc[0]:loc[1]]
-		if !ipv4ContextOK(text, loc[0], loc[1]) {
-			continue
-		}
-		ip := net.ParseIP(s)
-		if ip == nil || ip.To4() == nil || !isPublicIP(ip) || ipWhitelisted(ip, cfg.MaskIPWhitelist) {
-			continue
-		}
-		spans = append(spans, Span{Start: loc[0], End: loc[1], Type: TypeIP, Original: s})
+	spans := detectIPv4(text, cfg)
+	// 没有冒号就不可能有 IPv6。
+	if strings.IndexByte(text, ':') < 0 {
+		return spans
 	}
-	for _, loc := range ipv6RunRe().FindAllStringIndex(text, -1) {
-		s := text[loc[0]:loc[1]]
+	// IPv6 候选是 `[0-9a-fA-F:.]{3,}` 的连续段：原先交给正则，而英文正文里 a-f 字母与
+	// 点号极多，正则要在几乎每个字节位置尝试（90 KB 文本十几毫秒）。改成一次线性扫描。
+	n := len(text)
+	for i := 0; i < n; {
+		if !isIPv6RunChar(text[i]) {
+			i++
+			continue
+		}
+		start := i
+		for i < n && isIPv6RunChar(text[i]) {
+			i++
+		}
+		if i-start < 3 {
+			continue
+		}
+		s := text[start:i]
 		if !strings.Contains(s, ":") {
 			continue
 		}
@@ -196,9 +328,62 @@ func detectIP(text string, cfg *configStructs.DataMaskConfig) []Span {
 		if ip == nil || ip.To16() == nil || ip.To4() != nil || !isPublicIP(ip) || ipWhitelisted(ip, cfg.MaskIPWhitelist) {
 			continue
 		}
-		spans = append(spans, Span{Start: loc[0], End: loc[1], Type: TypeIP, Original: s})
+		spans = append(spans, Span{Start: start, End: i, Type: TypeIP, Original: s})
 	}
 	return spans
+}
+
+// detectIPv4 手写扫描 IPv4 候选（等价于 `(?:[0-9]{1,3}\.){3}[0-9]{1,3}` 的非重叠匹配）。
+// 候选的推进与 FindAllStringIndex 一致：一旦按「四段数字」切成候选就跳过其内部，
+// 上下文校验（ipv4ContextOK）只决定是否采用，不影响推进位置。
+func detectIPv4(text string, cfg *configStructs.DataMaskConfig) []Span {
+	var spans []Span
+	n := len(text)
+	for i := 0; i < n; i++ {
+		if !isDigit(text[i]) {
+			continue
+		}
+		start := i
+		end, ok := matchIPv4Quad(text, start)
+		if !ok {
+			continue
+		}
+		i = end - 1 // 与 FindAllStringIndex 一致：匹配之间不重叠
+		s := text[start:end]
+		if !ipv4ContextOK(text, start, end) {
+			continue
+		}
+		ip := net.ParseIP(s)
+		if ip == nil || ip.To4() == nil || !isPublicIP(ip) || ipWhitelisted(ip, cfg.MaskIPWhitelist) {
+			continue
+		}
+		spans = append(spans, Span{Start: start, End: end, Type: TypeIP, Original: s})
+	}
+	return spans
+}
+
+// matchIPv4Quad 从 start 起匹配 `d.d.d.d`（每段 1-3 位数字），返回结束下标。
+func matchIPv4Quad(text string, start int) (int, bool) {
+	n := len(text)
+	j := start
+	for seg := 0; seg < 4; seg++ {
+		k := j
+		for k < n && k-j < 3 && isDigit(text[k]) {
+			k++
+		}
+		if k == j {
+			return 0, false
+		}
+		if seg < 3 {
+			if k >= n || text[k] != '.' {
+				return 0, false
+			}
+			j = k + 1
+		} else {
+			j = k
+		}
+	}
+	return j, true
 }
 
 // ipWhitelisted 判断 IP 是否命中白名单：先查内置的知名公共 DNS/NTP 白名单，
@@ -306,13 +491,51 @@ func detectCookieHeader(text string) []Span {
 	return spans
 }
 
+// detectJWT 识别三段式 JWT（等价于 `[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}`）。
+//
+// 该正则没有 \b 且三段都是「贪婪取最长 run」，所以手写扫描一次即可：按 run 切分，
+// 依次要求「长度 ≥8 + 后接 '.'」。英文正文里点号密集，正则每次都要回溯，这里是 O(n)。
 func detectJWT(text string) []Span {
 	var spans []Span
-	for _, loc := range jwtRe().FindAllStringIndex(text, -1) {
-		s := text[loc[0]:loc[1]]
-		if isJWT(s) {
-			spans = append(spans, Span{Start: loc[0], End: loc[1], Type: TypeJWT, Original: s})
+	n := len(text)
+	i := 0
+	for i < n {
+		if !isTokenChar(text[i]) {
+			i++
+			continue
 		}
+		start := i
+		for i < n && isTokenChar(text[i]) {
+			i++
+		}
+		if i-start < 8 || i >= n || text[i] != '.' {
+			continue // i 停在 '.' 或 run 末尾，下一轮自然跳过非 token 字符
+		}
+		d1 := i
+		j := d1 + 1
+		seg2 := j
+		for j < n && isTokenChar(text[j]) {
+			j++
+		}
+		if j-seg2 < 8 || j >= n || text[j] != '.' {
+			i = j
+			continue
+		}
+		d2 := j
+		k := d2 + 1
+		seg3 := k
+		for k < n && isTokenChar(text[k]) {
+			k++
+		}
+		if k-seg3 < 8 {
+			i = k
+			continue
+		}
+		s := text[start:k]
+		if isJWT(s) {
+			spans = append(spans, Span{Start: start, End: k, Type: TypeJWT, Original: s})
+		}
+		i = k // 与 FindAllStringIndex 一致：匹配之间不重叠
 	}
 	return spans
 }
@@ -339,21 +562,28 @@ func detectCustom(text string, customs []string) []Span {
 }
 
 // resolveSpans 过滤已脱敏区间、排序（起点升序、同起点长者优先）、消解重叠。
+//
+// 全程原地操作：过滤与消解都把结果写回同一个底层数组（写指针始终不超前读指针），
+// 因此除了排序本身之外不再分配中间切片。spans 由各 detector 拼接而来，调用方
+// 用完即弃，原地改写是安全的。
 func resolveSpans(spans []Span, maskToOrig map[string]string) []Span {
-	filtered := make([]Span, 0, len(spans))
+	filtered := spans[:0]
 	for _, s := range spans {
 		if _, ok := maskToOrig[s.Original]; ok {
 			continue // 本身已是假值，不重复脱敏
 		}
 		filtered = append(filtered, s)
 	}
-	sort.Slice(filtered, func(i, j int) bool {
-		if filtered[i].Start != filtered[j].Start {
-			return filtered[i].Start < filtered[j].Start
+	if len(filtered) < 2 {
+		return filtered
+	}
+	slices.SortFunc(filtered, func(a, b Span) int {
+		if a.Start != b.Start {
+			return cmp.Compare(a.Start, b.Start)
 		}
-		return filtered[i].End > filtered[j].End
+		return cmp.Compare(b.End, a.End) // 同起点长者优先
 	})
-	res := make([]Span, 0, len(filtered))
+	res := filtered[:0]
 	lastEnd := -1
 	for _, s := range filtered {
 		if s.Start >= lastEnd {

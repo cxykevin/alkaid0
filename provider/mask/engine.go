@@ -83,6 +83,10 @@ type Engine struct {
 	// 独立于 mu 是为了不让脱敏热路径（RLock）升级成写锁。
 	usageMu sync.Mutex
 	touched map[uint64]struct{}
+	// usageBuf / updateArgs 是 FlushUsage 的可复用缓冲：每个请求都会刷新一次用量，
+	// 命中 id 切片与 UPDATE 参数 map 没必要每次重新分配（值本身每次都会改写）。
+	usageBuf   []uint64
+	updateArgs map[string]any
 }
 
 // NewEngine 创建引擎。功能未启用 / db 为 nil / 映射表不存在时返回 nil（调用方零行为变化）。
@@ -376,21 +380,27 @@ func (e *Engine) FlushUsage() {
 	if e == nil || e.db == nil {
 		return
 	}
+	// 整个刷新都在 usageMu 内完成：ids 与 updateArgs 是复用缓冲，不能让并发的
+	// FlushUsage 互相改写（DB 写入本身只关心本次的 id 列表）。
 	e.usageMu.Lock()
-	ids := make([]uint64, 0, len(e.touched))
+	defer e.usageMu.Unlock()
+	if len(e.touched) == 0 {
+		return
+	}
+	ids := e.usageBuf[:0]
 	for id := range e.touched {
 		ids = append(ids, id)
 	}
+	e.usageBuf = ids
 	clear(e.touched)
-	e.usageMu.Unlock()
-	if len(ids) == 0 {
-		return
+	args := e.updateArgs
+	if args == nil {
+		args = make(map[string]any, 2)
+		e.updateArgs = args
 	}
-	if err := e.db.Model(&storageStructs.KeyMapping{}).Where("id IN ?", ids).
-		Updates(map[string]any{
-			"last_used": uint64(evictNow().Unix()),
-			"hits":      gorm.Expr("hits + 1"),
-		}).Error; err != nil {
+	args["last_used"] = uint64(evictNow().Unix())
+	args["hits"] = gorm.Expr("hits + 1")
+	if err := e.db.Model(&storageStructs.KeyMapping{}).Where("id IN ?", ids).Updates(args).Error; err != nil {
 		// 刷新失败只影响淘汰判断（该行可能被过早淘汰），不影响本次脱敏。
 		logger.Warn("data mask: refresh key mapping usage: %v", err)
 	}
