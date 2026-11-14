@@ -182,17 +182,18 @@ func TestP118SendRequestCancelResetsState(t *testing.T) {
 	}
 }
 
-// TestP118ExecuteToolCallsErrorResetsState 工具执行前的校验失败（同轮两个生命周期
-// 调用）必须把 WaitApprove 复位到 Idle。修复前停在 WaitApprove。
+// TestP118ExecuteToolCallsErrorResetsState 工具调用解析失败必须把
+// WaitApprove 复位到 Idle。修复前停在 WaitApprove。
 func TestP118ExecuteToolCallsErrorResetsState(t *testing.T) {
 	session, cleanup := newStateTestSession(t, 1)
 	defer cleanup()
 	session.State = state.StateWaitApprove
 
-	payload := `[{"name":"activate_agent","id":"a","parameters":{}},{"name":"deactivate_agent","id":"b","parameters":{}}]`
+	// 非法工具 JSON：在执行入口解析阶段失败，属于 P1-18/F3 覆盖的早期 return。
+	payload := `[{"name":"activate_agent","id":"a","parameters":`
 	_, err := ExecuteToolCalls(session, payload)
 	if err == nil {
-		t.Fatal("expected lifecycle validation error")
+		t.Fatal("expected tool payload parse error")
 	}
 	if session.State != state.StateIdle {
 		t.Fatalf("ExecuteToolCalls error left State=%v, want Idle", session.State)

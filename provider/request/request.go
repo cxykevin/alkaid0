@@ -937,9 +937,8 @@ func ExecuteToolCalls(session *storageStructs.Chats, toolCallingJSON string) (ok
 	if session.DB == nil {
 		return true, errors.New("db not initialized")
 	}
-	// 错误返回时状态必然回到 Idle（P1-18/F3）：此前 validateAgentLifecycleCalls、
-	// JSON 反序列化等早期 return 会把会话永久留在 WaitApprove/ToolCalling，
-	// 客户端状态机卡死、后续请求无法开始。
+	// 错误返回时状态必然回到 Idle（P1-18/F3）：此前 JSON 反序列化等早期 return
+	// 会把会话永久留在 WaitApprove/ToolCalling，客户端状态机卡死、后续请求无法开始。
 	defer func() {
 		if err == nil {
 			return
@@ -951,11 +950,22 @@ func ExecuteToolCalls(session *storageStructs.Chats, toolCallingJSON string) (ok
 			}
 		}
 	}()
-	// 一轮响应只能进行一次子代理生命周期切换。多个 activate_agent/
-	// deactivate_agent 会让同一轮后续调用依据过期的会话状态执行，导致激活、
-	// 停用顺序和回传内容不确定；在任何 OnHook 执行前拒绝整批调用。
-	if err := validateAgentLifecycleCalls(toolCallingJSON); err != nil {
+	// activate_agent / deactivate_agent 必须独占一次响应：它们切换共享的会话
+	// 生命周期状态，与其它调用（包括另一个生命周期调用）同批执行时，激活/停用
+	// 顺序与子代理回传内容都不确定。这里不执行任何工具，只把英文纠正提示作为
+	// role:tool 结果写回，模型下一轮会看到并改为单独调用或使用 workflow。
+	if parallelCalls, lifecycleTool, err := detectParallelAgentLifecycle(toolCallingJSON); err != nil {
 		return true, err
+	} else if len(parallelCalls) > 0 {
+		if err := injectParallelAgentLifecycleError(session, parallelCalls, lifecycleTool); err != nil {
+			return true, err
+		}
+		logger.Warn("chat %d mixed %s with %d other tool call(s), rejecting the batch",
+			session.ID, lifecycleTool, len(parallelCalls)-1)
+		if saveErr := session.SaveState(state.StateIdle); saveErr != nil {
+			return true, saveErr
+		}
+		return true, nil
 	}
 	// 相同工具调用循环检测：AI 已连续多次以相同参数调用同一工具且结果未变时，
 	// 注入纠正消息打断（不执行工具），避免无限循环重试。此机制优先于一切执行逻辑，
@@ -1509,26 +1519,82 @@ func SendRequest(ctx context.Context, session *storageStructs.Chats, callback fu
 	return ok, nil
 }
 
-// validateAgentLifecycleCalls rejects a batch containing more than one
-// activate_agent or deactivate_agent call. Lifecycle changes mutate the shared
-// session state, so executing multiple changes from one model response is
-// ambiguous and can lose the subagent handoff.
-func validateAgentLifecycleCalls(payload string) error {
-	var calls []struct {
-		Name string `json:"name"`
+const (
+	// parallelAgentActivationError is the correction returned to the model when
+	// activate_agent is mixed with other tool calls in one response.
+	parallelAgentActivationError = "ActivateAgent does not support parallel execution, use workflow instead of agent."
+	// parallelAgentDeactivationError is the symmetric correction for
+	// deactivate_agent.
+	parallelAgentDeactivationError = "DeactivateAgent does not support parallel execution, use workflow instead of agent."
+)
+
+// parallelLifecycleError returns the correction for the lifecycle tool that was
+// mixed with other calls.
+func parallelLifecycleError(toolName string) string {
+	if toolName == "deactivate_agent" {
+		return parallelAgentDeactivationError
 	}
-	if err := stdjson.Unmarshal([]byte(payload), &calls); err != nil {
+	return parallelAgentActivationError
+}
+
+// isAgentLifecycleTool reports whether name is a subagent lifecycle tool.
+func isAgentLifecycleTool(name string) bool {
+	return name == "activate_agent" || name == "deactivate_agent"
+}
+
+// detectParallelAgentLifecycle reports whether a response mixes an agent
+// lifecycle call (activate_agent or deactivate_agent) with any other tool call
+// (including another lifecycle call). Lifecycle changes mutate the shared
+// session state, so such a batch cannot be executed in order. It returns every
+// call in the batch and the name of the first lifecycle call so the rejection
+// can be paired with each assistant tool_call.
+func detectParallelAgentLifecycle(payload string) ([]ToolCall, string, error) {
+	calls, err := ParseToolsFromJSON(payload)
+	if err != nil {
+		return nil, "", err
+	}
+	if len(calls) < 2 {
+		return nil, "", nil
+	}
+	for _, call := range calls {
+		if isAgentLifecycleTool(call.Name) {
+			return calls, call.Name, nil
+		}
+	}
+	return nil, "", nil
+}
+
+// injectParallelAgentLifecycleError writes one role:tool failure result per call
+// in the rejected batch. Every assistant tool_call needs a matching result
+// (strict providers reject unpaired calls), and the message reaches the model on
+// the next round so it can retry with a lone lifecycle call or a workflow.
+func injectParallelAgentLifecycleError(session *storageStructs.Chats, calls []ToolCall, lifecycleTool string) error {
+	if session.DB == nil {
+		return errors.New("db not initialized")
+	}
+	ret, err := stdjson.Marshal(map[string]any{
+		"success": false,
+		"error":   parallelLifecycleError(lifecycleTool),
+	})
+	if err != nil {
 		return err
 	}
-	count := 0
+	items := make([]map[string]any, 0, len(calls))
 	for _, call := range calls {
-		if call.Name != "activate_agent" && call.Name != "deactivate_agent" {
-			continue
-		}
-		count++
-		if count > 1 {
-			return fmt.Errorf("only one activate_agent or deactivate_agent call is allowed per response")
-		}
+		items = append(items, map[string]any{
+			"name":   call.Name,
+			"id":     call.ID,
+			"return": string(ret),
+		})
 	}
-	return nil
+	buf, err := stdjson.Marshal(items)
+	if err != nil {
+		return err
+	}
+	return storageStructs.AppendMessage(session.DB, &storageStructs.Messages{
+		ChatID:  session.ID,
+		Delta:   string(buf),
+		Type:    storageStructs.MessagesRoleTool,
+		AgentID: &session.CurrentAgentID,
+	})
 }
