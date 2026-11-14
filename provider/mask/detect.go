@@ -366,7 +366,7 @@ func detectIPv4(text string, cfg *configStructs.DataMaskConfig) []Span {
 func matchIPv4Quad(text string, start int) (int, bool) {
 	n := len(text)
 	j := start
-	for seg := 0; seg < 4; seg++ {
+	for seg := range 4 {
 		k := j
 		for k < n && k-j < 3 && isDigit(text[k]) {
 			k++

@@ -161,7 +161,7 @@ func NewTrie(items []Item) *Trie {
 
 	// 3. 根状态转移表（0 = 无转移，根自身下标也是 0，因此不会冲突）。
 	//    必须在 BFS 之前填好：BFS 求 fail 时会用 step(..., 0) 做根状态查询。
-	for b := 0; b < 256; b++ {
+	for b := range 256 {
 		if next := t.child(0, byte(b)); next >= 0 {
 			t.rootNext[b] = next
 		}

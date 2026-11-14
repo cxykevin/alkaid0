@@ -26,10 +26,7 @@ var (
 // 取空闲阈值的 1/4（最少 1h）：比阈值小得多，清理时机足够及时；
 // 又不会随会话加载频率抖动。
 func keyMappingEvictInterval(idleHours int) time.Duration {
-	h := idleHours / 4
-	if h < 1 {
-		h = 1
-	}
+	h := max(idleHours/4, 1)
 	return time.Duration(h) * time.Hour
 }
 
