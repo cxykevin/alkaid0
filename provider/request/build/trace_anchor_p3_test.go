@@ -364,3 +364,90 @@ func TestRequestBody_VirtualPlanWithoutEvent_Injected(t *testing.T) {
 		t.Fatalf("虚拟对象的落位计划必须被执行（末尾落位）, got %v", contents)
 	}
 }
+
+// TestShouldOmitSupersededEdits 省略历史 edit 调用的成本门：
+// 收益 = savedTok*cacheMult*omitLookaheadRounds（后续每轮少传），代价 = suffixTok（本轮断链重算）。
+func TestShouldOmitSupersededEdits(t *testing.T) {
+	// 小 edit（约 10 token 参数）+ 长后缀：省下的 token 远不值一次整段重算 → 不省略
+	if shouldOmitSupersededEdits(10, 3000, 0.02) {
+		t.Error("小 edit + 长后缀不应省略（断链代价远大于收益）")
+	}
+	// 整文件重写（约 4500 token 参数）+ 同样后缀：仍然不划算
+	if shouldOmitSupersededEdits(4500, 9000, 0.02) {
+		t.Error("大参数 + 长后缀仍不应省略")
+	}
+	// 编辑点就在尾巴附近（suffix 很小）时才值得省略
+	if !shouldOmitSupersededEdits(4500, 200, 0.02) {
+		t.Error("后缀很小时应省略")
+	}
+	// 没有可省内容 / 负值防御
+	if shouldOmitSupersededEdits(0, 0, 0.02) {
+		t.Error("没有可省内容时不应触发")
+	}
+}
+
+// TestRequestBody_MultipleTailBlocksMergedIntoOneMessage 末尾落位的多个块必须合并成**一条**消息。
+//
+// 所有末尾落位的块都会回写同一个 AnchorMsgID，下一轮以 AnchorFull 命中该锚点时由 groups
+// 合并渲染。若首轮拆成多条、次轮合并成一条，字节与位置全变——每会话首次必然断链一次
+// （e2e 实测 @cron/@memory/@task/@tree 四条独立消息合并后丢失 ~8KB 前缀）。
+func TestRequestBody_MultipleTailBlocksMergedIntoOneMessage(t *testing.T) {
+	config.GlobalConfigSwap(*config.GlobalConfig)
+	db := setupTestDB(t)
+	setupTestConfig()
+	if err := db.AutoMigrate(&structs.Traces{}, &structs.ReferFiles{}); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	chatID := uint32(47)
+	msgs := setupAnchorPlanChat(t, db, chatID)
+
+	blocks := map[string]trace.FileBlock{
+		"@cron": {Name: "@cron", Size: "7", Length: 7, Text: "cron\n"},
+		"@tree": {Name: "@tree", Size: "7", Length: 7, Text: "tree\n"},
+	}
+	first := eventTestChatLn(map[string]*structs.TraceEvent{}, blocks)
+	first.ID = chatID
+	first.DB = db
+	first.NowAgent = ""
+	first.TemporyDataOfSession[structs.TempKeyTraceAnchorPlan] = map[string]*trace.AnchorPlan{
+		"@cron": {Mode: trace.AnchorTail, Full: true},
+		"@tree": {Mode: trace.AnchorTail, Full: true},
+	}
+	contents := requestFor(t, db, chatID, first)
+	if len(contents) < 2 {
+		t.Fatalf("请求至少要包含 system + 尾块: %v", contents)
+	}
+	last := contents[len(contents)-1]
+	if !strings.Contains(last, "cron") || !strings.Contains(last, "tree") {
+		t.Fatalf("末尾落位必须把多个块合并成一条消息: %q", last)
+	}
+	if strings.Contains(contents[len(contents)-2], "<readFiles>") {
+		t.Fatalf("末尾落位不得拆成多条消息: %v", contents)
+	}
+
+	// 次轮：两个块都以 AnchorFull 命中同一锚点（上一轮回写的 tailMsgID），
+	// 合并渲染结果必须与上一轮的末尾消息**逐字节一致**，前缀缓存才能命中。
+	tailID := msgs[1].ID
+	second := eventTestChatLn(map[string]*structs.TraceEvent{}, blocks)
+	second.ID = chatID
+	second.DB = db
+	second.NowAgent = ""
+	second.TemporyDataOfSession[structs.TempKeyTraceAnchorPlan] = map[string]*trace.AnchorPlan{
+		"@cron": {Mode: trace.AnchorFull, MsgID: tailID, Full: true},
+		"@tree": {Mode: trace.AnchorFull, MsgID: tailID, Full: true},
+	}
+	nextContents := requestFor(t, db, chatID, second)
+	merged := ""
+	for _, c := range nextContents {
+		if strings.Contains(c, "<readFiles>") && strings.Contains(c, "cron") && strings.Contains(c, "tree") {
+			merged = c
+			break
+		}
+	}
+	if merged == "" {
+		t.Fatalf("次轮未找到合并块: %v", nextContents)
+	}
+	if merged != last {
+		t.Errorf("首轮尾块与次轮合并块字节必须一致\n首轮: %q\n次轮: %q", last, merged)
+	}
+}

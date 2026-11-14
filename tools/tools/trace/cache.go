@@ -30,6 +30,12 @@ const (
 	// diffMaxTOverOldRatio diff 相对原内容的长度上限（方案2 候选的上下文膨胀安全阀）。
 	// 超过即放弃保留；1× 太保守（见 decideDiffPlan 注释），2× 在"少重算前缀"与"控制上下文膨胀"之间取平衡。
 	diffMaxTOverOldRatio = 2.0
+	// diffOverBudgetLimit read 重读 / 视图升级（无新 edit 事件）时放宽的倍数上限。
+	//
+	// 这类变化的旧块往往远小于新块（大文件首读给 outline、重读给全文），严格按 2× 判定会
+	// 无条件搬家：旧块位置之后整段消息按全价重算，代价远大于多留一份小旧块。放宽后仍由
+	// 成本模型（KeepDiffPlan）用真实后缀复核，8× 只是防病态上下文膨胀的绝对安全阀。
+	diffOverBudgetLimit = 8.0
 )
 
 // cacheModelConfig 读取当前模型（session.LastModelID）的缓存倍率与保留分钟，取不到回退默认。
@@ -129,7 +135,7 @@ type AnchorPlan struct {
 //
 // @temp/* 临时对象与普通文件同等对待（自 2026-09-26 起，见 docs/trace-cache-spec.md）：
 // 它的 oldContent 同样来自 traces.last_content，只是内容源在 ReferFiles 而非磁盘。
-func decideDiffPlan(path, oldContent, newContent string, timeout bool, mult float32) (DiffPlan, bool) {
+func decideDiffPlan(path, oldContent, newContent string, timeout bool, mult float32, allowOverBudget bool) (DiffPlan, bool) {
 	// 历史会话（@history/{session_id}）的滚动窗口：增量只保留新增消息，
 	// 滚出窗口的旧消息不写成删除行。
 	if structs.IsHistoryPath(path) {
@@ -145,12 +151,21 @@ func decideDiffPlan(path, oldContent, newContent string, timeout bool, mult floa
 	dTok := u.EstimateTokens(diff)
 	oTok := u.EstimateTokens(oldContent)
 	nTok := u.EstimateTokens(newContent)
-	// 上下文膨胀安全阀：diff 超过原内容 diffMaxTOverOldRatio 倍时放弃保留。
+	// 上下文膨胀安全阀：diff 超过原内容 limit 倍时放弃保留。
 	// 1×（diff 一超过原文件就放弃）对"旧块锚在很早位置"的对象过于激进：放弃 diff 意味着
 	// 从旧锚点起重算整段历史，代价远大于多留一份缓存旧块 + 大 diff（实测：工作区树翻倍时
-	// 那一轮命中率从 ~95% 掉到 51%）。当前取 2×，阈值以内的取舍交给 KeepDiffPlan 成本模型
+	// 那一轮命中率从 ~95% 掉到 51%）。默认取 2×，阈值以内的取舍交给 KeepDiffPlan 成本模型
 	// （它已经把 betweenTok 的连锁成本算进去）。
-	if float64(dTok) > float64(oTok)*diffMaxTOverOldRatio {
+	//
+	// allowOverBudget（read 重读 / 视图升级等无新 edit 事件的变化）：旧块往往远小于新块
+	// （大文件首读注入 outline、重读注入全文），严格 2× 会无条件搬家、让整段后缀按全价重算。
+	// 这里放宽到 diffOverBudgetLimit，实际是否保留仍由 KeepDiffPlan 用真实后缀成本决定。
+	// edit 引发的大改写（S1）不走这条放宽，保持原有 2× 硬阈值。
+	limit := diffMaxTOverOldRatio
+	if allowOverBudget {
+		limit = diffOverBudgetLimit
+	}
+	if float64(dTok) > float64(oTok)*limit {
 		return DiffPlan{}, false
 	}
 	// 旧块必须与"上次以完整块注入的字节"完全一致，否则前缀缓存恰在旧块处断裂。

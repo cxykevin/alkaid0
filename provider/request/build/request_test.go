@@ -1218,7 +1218,8 @@ func TestRequestBody_RebuildOmitsSupersededEdits(t *testing.T) {
 
 	msgs := []structs.Messages{
 		{ChatID: 40, Type: structs.MessagesRoleUser, Delta: "edit a.txt"},
-		{ChatID: 40, Type: structs.MessagesRoleAgent, ToolCallingJSONString: `[{"name":"edit","id":"call_e1","parameters":{"path":"a.txt","target":"@all","text":"NEW CONTENT"}}]`},
+		// edit 参数足够大：省略它省下的 token 才值得一次前缀断链（见 shouldOmitSupersededEdits）
+		{ChatID: 40, Type: structs.MessagesRoleAgent, ToolCallingJSONString: `[{"name":"edit","id":"call_e1","parameters":{"path":"a.txt","target":"@all","text":"yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy"}}]`},
 		{ChatID: 40, Type: structs.MessagesRoleTool, Delta: `[{"name":"edit","id":"call_e1","return":"{"success":true}"}]`},
 		{ChatID: 40, Type: structs.MessagesRoleUser, Delta: "read a.txt"},
 		{ChatID: 40, Type: structs.MessagesRoleAgent, ToolCallingJSONString: `[{"name":"read","id":"call_r1","parameters":{"path":"a.txt"}}]`},
@@ -1287,7 +1288,7 @@ func TestRequestBody_RebuildOmitsSupersededEdits(t *testing.T) {
 	if err := db.Where("id = ?", msgs[1].ID).First(&row).Error; err != nil {
 		t.Fatalf("reload edit message: %v", err)
 	}
-	if !strings.Contains(row.ToolCallingJSONString, "call_e1") || !strings.Contains(row.ToolCallingJSONString, "NEW CONTENT") {
+	if !strings.Contains(row.ToolCallingJSONString, "call_e1") || !strings.Contains(row.ToolCallingJSONString, "yyyyyyyyyyyyyyyyyyyy") {
 		t.Errorf("数据库行不得被请求体省略影响：%q", row.ToolCallingJSONString)
 	}
 
@@ -1297,7 +1298,7 @@ func TestRequestBody_RebuildOmitsSupersededEdits(t *testing.T) {
 		t.Fatalf("stored tool call unparsable: %v (%q)", err, row.ToolCallingJSONString)
 	}
 	display := fmt.Sprintf("%v", structs.BuildToolCallingContent("edit", msgs[1].ID, stored[0]["parameters"]))
-	if !strings.Contains(display, "NEW CONTENT") || !strings.Contains(display, "a.txt") {
+	if !strings.Contains(display, "yyyy") || !strings.Contains(display, "a.txt") {
 		t.Errorf("前端展示必须保留完整参数：%s", display)
 	}
 }
@@ -1538,7 +1539,8 @@ func TestRequestBody_OmittedAllToolCallsNoEmptyArray(t *testing.T) {
 	msgs := []structs.Messages{
 		{ChatID: 47, Type: structs.MessagesRoleUser, Delta: "创建并确认"},
 		{ChatID: 47, Type: structs.MessagesRoleAgent, ThinkingDelta: "我先创建文件，然后读一遍确认。",
-			ToolCallingJSONString: `[{"name":"edit","id":"call_e1","parameters":{"path":"E2E_NOTES.md","target":"@all","text":"notes"}}]`},
+			// 省略收益必须大过断链代价，才会真正省略（见 shouldOmitSupersededEdits）
+			ToolCallingJSONString: `[{"name":"edit","id":"call_e1","parameters":{"path":"E2E_NOTES.md","target":"@all","text":"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"}}]`},
 		{ChatID: 47, Type: structs.MessagesRoleTool, Delta: `[{"name":"edit","id":"call_e1","return":"{\"success\":true}"}]`},
 		{ChatID: 47, Type: structs.MessagesRoleAgent, ThinkingDelta: "读一遍确认。",
 			ToolCallingJSONString: `[{"name":"read","id":"call_r1","parameters":{"path":"E2E_NOTES.md"}}]`},

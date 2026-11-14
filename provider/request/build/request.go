@@ -456,8 +456,9 @@ scan:
 			diffPlans, _ := chatLn.TemporyDataOfSession[structs.TempKeyTraceDiffPlan].(map[string]trace.DiffPlan)
 			rebuilt := insertEventContentBlocks(responseDeltaList, dbIDToElement, lastRenderedMsgID, em, prevEm, diffPlans, plans, chatLn)
 			// 方案1（放弃 diff 缓存、注入完整内容）之后，该文件在注入点之前的 edit 调用
-			// 已被完整内容覆盖，从请求体里去掉（连同其结果）。
-			omitSupersededEditCalls(responseDeltaList, dbIDToElement, rebuilt)
+			// 已被完整内容覆盖，可考虑从请求体里去掉（连同其结果）。是否真的去掉由
+			// omitSupersededEditCalls 按「省下的参数 token」与「断链重算成本」比较决定。
+			omitSupersededEditCalls(responseDeltaList, dbIDToElement, rebuilt, cachePriceMultiplier(modelConfig))
 		}
 	}
 	// 内部运行期通知（后台任务结束 / shell 停止等）：作为**消息列表末尾**的独立块注入。
@@ -1256,20 +1257,37 @@ func insertEventContentBlocks(l *list.List, dbIDToElement map[uint64]*list.Eleme
 	}
 	// 末尾落位：内容变了但没有新消息承载（后台刷新 / 外部改写）的块统一追加到列表最后，
 	// 让每轮只重算"尾巴"，而不是从旧锚点起重算整段历史。按 path 排序保证字节稳定。
+	//
+	// 同一 tailMsgID 的多个 path 必须合并成**一条** user 消息：所有末尾落位的块都会回写
+	// AnchorMsgID=tailMsgID，下一轮以 AnchorFull 命中同一锚点时由 groups 合并渲染。
+	// 早期实现每 path 单独 PushBack（首轮 @cron/@memory/@task/@tree 四条独立消息），
+	// 次轮合并成一条，字节与位置全变——每会话首次必然断链一次（e2e 实测丢失 ~8KB）。
 	sort.Strings(tailPaths)
+	var tailFrags []trace.FileBlock
+	var tailParts []reqStruct.ContentPart
+	tailContributed := make([]string, 0, len(tailPaths))
 	for _, p := range tailPaths {
-		var content string
-		var parts []reqStruct.ContentPart
-		if fb, ok := fileBlocks[p]; ok {
-			content = renderBlock(fb)
-			if part, ok := imageContentPart(fb); ok {
-				parts = append(parts, part)
-			}
-		}
-		if content == "" && len(parts) == 0 {
+		fb, ok := fileBlocks[p]
+		if !ok {
 			continue
 		}
-		l.PushBack(reqStruct.Message{Role: "user", Content: content, ContentParts: parts})
+		tailFrags = append(tailFrags, fb)
+		tailContributed = append(tailContributed, p)
+		if part, ok := imageContentPart(fb); ok {
+			tailParts = append(tailParts, part)
+		}
+	}
+	if len(tailFrags) > 0 || len(tailParts) > 0 {
+		content, err := trace.RenderTraceBlock(tailFrags)
+		if err != nil {
+			logger.Error("render trace tail block error: %v", err)
+			content = ""
+		}
+		if content != "" || len(tailParts) > 0 {
+			l.PushBack(reqStruct.Message{Role: "user", Content: content, ContentParts: tailParts})
+		}
+	}
+	for _, p := range tailContributed {
 		renderedFull[p] = struct{}{}
 		if chatLn == nil || tailMsgID == 0 {
 			continue
@@ -1289,20 +1307,58 @@ func insertEventContentBlocks(l *list.List, dbIDToElement map[uint64]*list.Eleme
 	return rebuilt
 }
 
-// omitSupersededEditCalls 在「方案1：放弃 diff 缓存、注入完整内容」发生后，把该文件在注入事件
-// 之前的所有 edit 调用连同其 role:"tool" 结果从请求体里去掉：注入的完整块已经代表文件当前内容，
-// 逐次 edit 的参数（尤其是整文件 text）纯属重复占用上下文。
+// omitSupersededEditCalls 在「方案1：放弃 diff 缓存、注入完整内容」发生后，评估是否把该文件
+// 在注入事件之前的 edit 调用连同其 role:"tool" 结果从请求体里去掉。
 //
-// rebuilt 由 insertEventContentBlocks 返回（path → 注入完整内容的 read 事件）。
-// 只处理确实进入本次回放窗口的消息（dbIDToElement 里有的），且只省略注入点之前（dbID 更小）的调用；
-// 注入点及其之后的 edit 保持回放。整个 assistant 轮次只剩被省略的调用时，连该消息一起移除。
-func omitSupersededEditCalls(l *list.List, dbIDToElement map[uint64]*list.Element, rebuilt map[string]*structs.TraceEvent) {
+// 为什么不再是"无条件省略"：被省略的 edit 调用位于历史中段，删掉它会让「从该消息起、到列表
+// 末尾」的整段前缀失效（缓存按逐字节前缀匹配），本轮按全价重算 suffix。收益只是这些参数在
+// 后续每轮不再出现在请求里（按缓存命中价 cacheMult 计）。e2e 实测：省下 40 字节的 edit 参数
+// 换来 12KB 重算；整文件重写省 18KB、换 34.8KB 重算——绝大多数情况下不划算。
+//
+// 只有 savedTok*cacheMult*omitLookaheadRounds > suffixTok 时才真正省略（见
+// shouldOmitSupersededEdits）。rebuilt 由 insertEventContentBlocks 返回（path → 注入完整
+// 内容的 read 事件）；只处理确实进入本次回放窗口的消息，且只省略注入点之前（dbID 更小）的调用。
+func omitSupersededEditCalls(l *list.List, dbIDToElement map[uint64]*list.Element, rebuilt map[string]*structs.TraceEvent, cacheMult float32) {
 	if len(rebuilt) == 0 {
 		return
 	}
+	// dry-run：收集候选，统计收益与最早被删位置（决定断链起点），不修改链表。
 	omitted := make(map[string]struct{})
-	var emptied []*list.Element
+	savedTok := 0
+	var earliestEl *list.Element
+	var earliestID uint64
 	for dbID, el := range dbIDToElement {
+		if el == nil {
+			continue
+		}
+		m, ok := el.Value.(reqStruct.Message)
+		if !ok || len(m.ToolCalls) == 0 {
+			continue
+		}
+		for _, c := range m.ToolCalls {
+			if c.ID == "" || c.Function == nil || c.Function.Name != "edit" {
+				continue
+			}
+			ev, ok := rebuilt[toolCallArgumentPath(c.Function.Arguments)]
+			if !ok || dbID >= ev.MsgID {
+				continue
+			}
+			omitted[c.ID] = struct{}{}
+			savedTok += u.EstimateTokens(c.Function.Arguments)
+			if earliestEl == nil || dbID < earliestID {
+				earliestEl = el
+				earliestID = dbID
+			}
+		}
+	}
+	if len(omitted) == 0 {
+		return
+	}
+	if !shouldOmitSupersededEdits(savedTok, suffixTokenIndex(l)[earliestEl], cacheMult) {
+		return
+	}
+	var emptied []*list.Element
+	for _, el := range dbIDToElement {
 		if el == nil {
 			continue
 		}
@@ -1313,12 +1369,9 @@ func omitSupersededEditCalls(l *list.List, dbIDToElement map[uint64]*list.Elemen
 		kept := make([]reqStruct.StreamToolCall, 0, len(m.ToolCalls))
 		removed := false
 		for _, c := range m.ToolCalls {
-			if c.ID != "" && c.Function != nil && c.Function.Name == "edit" {
-				if ev, ok := rebuilt[toolCallArgumentPath(c.Function.Arguments)]; ok && dbID < ev.MsgID {
-					omitted[c.ID] = struct{}{}
-					removed = true
-					continue
-				}
+			if _, hit := omitted[c.ID]; hit {
+				removed = true
+				continue
 			}
 			kept = append(kept, c)
 		}
@@ -1344,9 +1397,6 @@ func omitSupersededEditCalls(l *list.List, dbIDToElement map[uint64]*list.Elemen
 	for _, el := range emptied {
 		l.Remove(el)
 	}
-	if len(omitted) == 0 {
-		return
-	}
 	// 结果消息（含被终止调用的占位）按 tool_call_id 删除，保证 assistant 的每个 tool_call 仍有配对的 role:tool。
 	for e := l.Front(); e != nil; {
 		next := e.Next()
@@ -1357,6 +1407,40 @@ func omitSupersededEditCalls(l *list.List, dbIDToElement map[uint64]*list.Elemen
 		}
 		e = next
 	}
+}
+
+// omitLookaheadRounds 评估「省略历史 edit 调用」收益时假定的会话剩余轮数。
+//
+// 实际剩余轮数不可知，取一个保守上限：宁可少省略（保住前缀缓存），也不要为省一点参数
+// 让整段后缀按全价重算。
+const omitLookaheadRounds = 20
+
+// defaultCachePriceMultiplier 模型未配置 CachePriceMultiplier 时的缓存命中价倍率，
+// 与 tools/tools/trace 的 cacheDefaultMultiplier 保持一致。
+const defaultCachePriceMultiplier float32 = 0.2
+
+// cachePriceMultiplier 返回模型的缓存命中价倍率（相对输入全价），未配置时回退默认值。
+func cachePriceMultiplier(m *cfgStruct.ModelConfig) float32 {
+	if m != nil && m.CachePriceMultiplier > 0 {
+		return m.CachePriceMultiplier
+	}
+	return defaultCachePriceMultiplier
+}
+
+// shouldOmitSupersededEdits 判断省略历史 edit 调用是否划算。
+//
+//	收益 = savedTok * cacheMult * omitLookaheadRounds（后续每轮少传这些参数）
+//	代价 = suffixTok（从最早被省位置到列表末尾，本轮整段按未命中重算）
+//
+// savedTok 为被省掉参数 token 之和；suffixTok 为断链后需要重算的后缀 token。
+func shouldOmitSupersededEdits(savedTok, suffixTok int, cacheMult float32) bool {
+	if savedTok <= 0 {
+		return false
+	}
+	if cacheMult <= 0 {
+		cacheMult = defaultCachePriceMultiplier
+	}
+	return float64(savedTok)*float64(cacheMult)*omitLookaheadRounds > float64(suffixTok)
 }
 
 // toolCallArgumentPath 从回放后的工具调用 arguments JSON 里取 path 参数；取不到返回空串。

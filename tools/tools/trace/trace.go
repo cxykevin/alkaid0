@@ -1240,7 +1240,10 @@ func RenderTraceBlocks(session *structs.Chats) (topBlock string, eventBlocks map
 		if ev == nil && !isProviderContentPath(path) {
 			// 无事件信息（@docs 快照 / 未走事件检测的调用路径，如直接调用或测试）：维持旧语义。
 			// 生产链路由 Build → DetectTraceEvents 保证事件表恒被写入（即使是空表），不会走到这里。
-			legacyPlan, keep := decideDiffPlan(path, traceObj.LastContent, newContent, timeout, mult)
+			// 无事件承载的变化（后台刷新 / 外部改写 / 直接调用）没有 edit 事件，
+			// 按 read 类变化处理：真实磁盘文件放宽膨胀阈值，交给 KeepDiffPlan 用真实后缀成本复核。
+			// 虚拟对象与 @temp（定期刷新的快照/工具输出）保持原有 2× 阈值。
+			legacyPlan, keep := decideDiffPlan(path, traceObj.LastContent, newContent, timeout, mult, !strings.HasPrefix(path, "@"))
 			if keep && !canKeepEventDiff(session, path) {
 				keep = false
 			}
@@ -1312,7 +1315,12 @@ func RenderTraceBlocks(session *structs.Chats) (topBlock string, eventBlocks map
 			// 此时固定走 AnchorDiffTail（旧块留原锚点、增量追加列表末尾），
 			// 两个块的位置仍然可控。
 			if prevMsgID != 0 && (prevMsgID != eventMsgID || structs.IsHistoryPath(path)) {
-				if plan, keep := decideDiffPlan(path, traceObj.LastContent, newContent, timeout, mult); keep {
+				// edit 事件引发的改写保持 2× 硬阈值（大改写直接搬家，实测更便宜）；
+				// 真实磁盘文件的 read 重读 / 视图升级 / 无事件外部改写放宽阈值，由 KeepDiffPlan
+				// 用真实后缀成本决定「保留旧块 + diff」还是搬家。虚拟对象与 @temp
+				// （定期刷新的快照 / 工具输出）保持 2× 阈值不动。
+				allowOverBudget := !strings.HasPrefix(path, "@") && (ev == nil || !ev.IsEdit)
+				if plan, keep := decideDiffPlan(path, traceObj.LastContent, newContent, timeout, mult, allowOverBudget); keep {
 					// 方案2：旧块字节稳定地留在旧锚点，增量块锚到最新位置；
 					// 旧端存档与注入锚点都不推进，下一次 diff 的旧端仍然稳定（前缀缓存不被打断）。
 					diffPlans[path] = plan

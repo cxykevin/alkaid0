@@ -10,19 +10,19 @@ import (
 
 func TestDecideDiffPlan(t *testing.T) {
 	// 首次跟踪（oldContent 空）→ 方案1
-	if _, keep := decideDiffPlan("a.txt", "", "new", false, 0.2); keep {
+	if _, keep := decideDiffPlan("a.txt", "", "new", false, 0.2, false); keep {
 		t.Error("first trace should be 方案1 (keep=false)")
 	}
 	// 无变化 → 方案1
-	if _, keep := decideDiffPlan("a.txt", "same\n", "same\n", false, 0.2); keep {
+	if _, keep := decideDiffPlan("a.txt", "same\n", "same\n", false, 0.2, false); keep {
 		t.Error("no change should be 方案1")
 	}
 	// 超时 → 方案1
-	if _, keep := decideDiffPlan("a.txt", "old\n", "new\n", true, 0.2); keep {
+	if _, keep := decideDiffPlan("a.txt", "old\n", "new\n", true, 0.2, false); keep {
 		t.Error("timeout should be 方案1")
 	}
 	// 内容太短：统一 diff 的固定开销（文件头 + @@ + 上下文行）就会超过 2× 比例上限 → 方案1
-	if _, keep := decideDiffPlan("@temp/x", "old", "new", false, 0.2); keep {
+	if _, keep := decideDiffPlan("@temp/x", "old", "new", false, 0.2, false); keep {
 		t.Error("短内容 + 固定 diff 开销应走方案1（比例上限）")
 	}
 	// 大改动（diff 超过 2× 安全阀）→ 方案1
@@ -30,15 +30,31 @@ func TestDecideDiffPlan(t *testing.T) {
 	for range 20 {
 		newBig.WriteString("line\n")
 	}
-	if _, keep := decideDiffPlan("a.txt", "one\n", newBig.String(), false, 0.2); keep {
+	if _, keep := decideDiffPlan("a.txt", "one\n", newBig.String(), false, 0.2, false); keep {
 		t.Error("diff exceeding the 2x cap should force 方案1")
+	}
+	// read 重读 / 视图升级：放宽阈值后同一份 diff 应成为方案2 候选，
+	// 最终是否保留交给 KeepDiffPlan 用真实后缀成本复核（S1 的 edit 大改写不受影响）。
+	var oldShort strings.Builder
+	for range 10 {
+		oldShort.WriteString("aaaa\n")
+	}
+	var newMid strings.Builder
+	for range 30 {
+		newMid.WriteString("bbbb\n")
+	}
+	if _, keep := decideDiffPlan("a.txt", oldShort.String(), newMid.String(), false, 0.2, false); keep {
+		t.Error("未放宽时 diff 超 2× 上限应走方案1")
+	}
+	if _, keep := decideDiffPlan("a.txt", oldShort.String(), newMid.String(), false, 0.2, true); !keep {
+		t.Error("allowOverBudget 时超 2× 但未超 8× 应返回方案2 候选")
 	}
 	// 比例上限的另一侧：内容够大时同一比例的小改动 diff 占比很低 → 保留
 	var bigOld strings.Builder
 	for i := range 40 {
 		fmt.Fprintf(&bigOld, "long content line %02d with plenty of text\n", i)
 	}
-	if _, keep := decideDiffPlan("a.txt", bigOld.String(), bigOld.String()+"one more line\n", false, 0.2); !keep {
+	if _, keep := decideDiffPlan("a.txt", bigOld.String(), bigOld.String()+"one more line\n", false, 0.2, false); !keep {
 		t.Error("长内容 + 小增量应保留（diff 占比低）")
 	}
 
@@ -54,7 +70,7 @@ func TestDecideDiffPlan(t *testing.T) {
 	new.WriteString(strings.Join(lines, "\n"))
 	new.WriteString("\n")
 
-	plan, keep := decideDiffPlan("a.txt", old.String(), new.String(), false, 0.2)
+	plan, keep := decideDiffPlan("a.txt", old.String(), new.String(), false, 0.2, false)
 	if !keep {
 		t.Fatal("small change should be 方案2 (keep=true)")
 	}
