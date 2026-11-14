@@ -16,11 +16,18 @@ func Enabled() bool {
 }
 
 // All 返回配置的全部短语（仅在启用时，保持配置顺序）。
+//
+// 未启用、或短语表缺失/被写成 null 时返回空切片而不是 nil：本函数的结果会被
+// 直接序列化（如 alk.cxykevin.top/phrases/list），nil 切片会变成 "phrases": null，
+// 客户端拿到 null 后既无法遍历也无法在配置树里新增（null 不是数组）。
 func All() []cfgStructs.Phrase {
 	if !Enabled() {
-		return nil
+		return []cfgStructs.Phrase{}
 	}
-	return config.GlobalConfig.Context.Phrase.Phrases
+	if phrases := config.GlobalConfig.Context.Phrase.Phrases; phrases != nil {
+		return phrases
+	}
+	return []cfgStructs.Phrase{}
 }
 
 // Lookup 按短键查询短语（短键两侧空白被忽略）。
