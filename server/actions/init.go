@@ -48,6 +48,8 @@ var AgentCapabilities = u.H{
 	"alk.cxykevin.top/cron": u.H{},
 	// 会话 goal：goal/get | goal/set + 推送 alk.cxykevin.top/session/goal。
 	"alk.cxykevin.top/goal": u.H{},
+	// 会话 role（agent tag）：role/get | role/set + configOptions 的 role 选项。
+	"alk.cxykevin.top/role": u.H{},
 }
 
 // AgentInfo 服务端信息常量

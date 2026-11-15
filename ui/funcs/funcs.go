@@ -92,6 +92,9 @@ func InitChat(db *gorm.DB, chat *structs.Chats) (*structs.Chats, error) {
 	if err != nil {
 		return nil, err
 	}
+	// 会话 role（agent tag）与子代理配置分开加载：role 只作用于主 agent，
+	// 子代理激活时优先使用子代理配置，停用后自动回落到这里解析出的 role。
+	agents.LoadRole(chat)
 	return chat, nil
 }
 

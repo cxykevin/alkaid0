@@ -1,6 +1,9 @@
 package actions
 
-import "github.com/cxykevin/alkaid0/config"
+import (
+	"github.com/cxykevin/alkaid0/config"
+	"github.com/cxykevin/alkaid0/provider/request/agents"
+)
 
 // updateCfgsToConns 将当前配置广播推送到所有已连接的会话
 func updateCfgsToConns() {
@@ -16,12 +19,21 @@ func updateCfgsToConns() {
 	type sessModel struct {
 		sid     string
 		modelID uint32
+		role    string
 		effort  string
 	}
 	updates := make([]sessModel, 0, len(sessionIDs))
 	for _, sid := range sessionIDs {
 		if sess, ok := sessions[sid]; ok {
-			updates = append(updates, sessModel{sid: sid, modelID: sess.session.LastModelID, effort: sess.session.ReasoningEffort})
+			// 配置热重载后 role 的提示词/模型/审批规则可能已变化，重新解析一次。
+			// 解析失败只告警并回退默认主 agent（见 agents.LoadRole）。
+			agents.LoadRole(sess.session)
+			updates = append(updates, sessModel{
+				sid:     sid,
+				modelID: sess.session.EffectiveModelID(),
+				role:    sess.session.Role,
+				effort:  sess.session.ReasoningEffort,
+			})
 		}
 	}
 	sessLock.Unlock()
@@ -31,7 +43,7 @@ func updateCfgsToConns() {
 			SessionID: u.sid,
 			Update: SessionUpdateUpdate{
 				SessionUpdate: "config_option_update",
-				ConfigOptions: buildConfigOptions(uint32(u.modelID), u.effort),
+				ConfigOptions: buildConfigOptions(uint32(u.modelID), u.role, u.effort),
 			},
 		}, 0)
 	}

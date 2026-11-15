@@ -20,6 +20,7 @@ import (
 	"github.com/cxykevin/alkaid0/hooks"
 	"github.com/cxykevin/alkaid0/provider/mask"
 	"github.com/cxykevin/alkaid0/provider/request"
+	"github.com/cxykevin/alkaid0/provider/request/agents"
 	"github.com/cxykevin/alkaid0/storage"
 	"github.com/cxykevin/alkaid0/storage/structs"
 	runTool "github.com/cxykevin/alkaid0/tools/tools/run"
@@ -39,9 +40,36 @@ type SessionNewRequest struct {
 	// dynworkflow 等客户端把 dyn.cxykevin.top/hidden 直接放在 params 顶层。
 	// 用 RawMessage 承接，类型不符时按未设置处理，避免整个 session/new 解码失败。
 	Hidden json.RawMessage `json:"dyn.cxykevin.top/hidden,omitempty"`
+	// Role 根级扩展参数：新建会话时直接指定会话角色（agent tag）。
+	// 同样接受 params.args 内位置；非字符串按未设置处理。
+	Role json.RawMessage `json:"alk.cxykevin.top/session/role,omitempty"`
 }
 
 const sessionNewHiddenArg = "dyn.cxykevin.top/hidden"
+const sessionNewRoleArg = "alk.cxykevin.top/session/role"
+
+// sessionNewRole 读取 alk.cxykevin.top/session/role：同时接受 params 根级
+// （扩展约定）与 params.args 内（历史形状）；非字符串/空白按未设置处理。
+func sessionNewRole(root json.RawMessage, args map[string]json.RawMessage) string {
+	if role, ok := sessionNewRoleValue(root); ok {
+		return role
+	}
+	if role, ok := sessionNewRoleValue(args[sessionNewRoleArg]); ok {
+		return role
+	}
+	return ""
+}
+
+func sessionNewRoleValue(raw json.RawMessage) (string, bool) {
+	if len(raw) == 0 {
+		return "", false
+	}
+	var role string
+	if json.Unmarshal(raw, &role) != nil {
+		return "", false
+	}
+	return strings.TrimSpace(role), true
+}
 
 // sessionNewHidden 读取 dyn.cxykevin.top/hidden：同时接受 params 根级（扩展约定）
 // 与 params.args 内（历史形状）两种位置；值必须是布尔 true，其余类型按未设置处理。
@@ -296,8 +324,11 @@ func getDefaultModel() string {
 	return fmt.Sprintf("%d/%s", id, obj.ModelID)
 }
 
-// buildConfigOptions 生成配置选项列表（ACP v2：model 经 configOptions 暴露，含 thought_level 选项）
-func buildConfigOptions(currentModelID uint32, reasoningEffort string) []ConfigOption {
+// buildConfigOptions 生成配置选项列表（ACP v2：model 经 configOptions 暴露，
+// 含 role（会话角色/agent tag）与 thought_level 选项）。
+// currentModelID 应传 EffectiveModelID：role 覆盖模型时下拉展示的是实际生效的模型。
+// role 传会话当前角色 tag（空串 = 默认主 agent）。
+func buildConfigOptions(currentModelID uint32, role string, reasoningEffort string) []ConfigOption {
 	cfg := config.GlobalConfig.Model.Models
 	options := make([]ConfigOptionValue, 0, len(cfg))
 
@@ -330,6 +361,25 @@ func buildConfigOptions(currentModelID uint32, reasoningEffort string) []ConfigO
 		}
 	}
 
+	// 会话角色（agent tag）选项：空值 = 默认主 agent（Internal 代理不可选）。
+	roleOptions := make([]ConfigOptionValue, 0, len(agents.RoleOptions())+1)
+	roleOptions = append(roleOptions, ConfigOptionValue{
+		Value:       "",
+		Name:        "Default",
+		Description: "Default main agent",
+	})
+	for _, ro := range agents.RoleOptions() {
+		name := ro.DisplayName
+		if name == "" {
+			name = ro.Name
+		}
+		roleOptions = append(roleOptions, ConfigOptionValue{
+			Value:       ro.Name,
+			Name:        name,
+			Description: ro.Description,
+		})
+	}
+
 	// 推理强度（thought_level）选项
 	effort := reasoningEffort
 	if effort == "" {
@@ -344,6 +394,15 @@ func buildConfigOptions(currentModelID uint32, reasoningEffort string) []ConfigO
 			Type:         "select",
 			CurrentValue: currentValue,
 			Options:      options,
+		},
+		{
+			ConfigID:     "role",
+			Name:         "Role",
+			Description:  "Session role (agent tag)",
+			Category:     "role",
+			Type:         "select",
+			CurrentValue: role,
+			Options:      roleOptions,
 		},
 		{
 			ConfigID:     "thought_level",
@@ -2152,9 +2211,21 @@ func SessionNew(req SessionNewRequest, call func(string, any, *string) error, co
 
 	var id uint32
 	hidden := sessionNewHidden(req.Hidden, req.Args)
+	// 先校验 role 再建会话：非法 tag 直接报错，不留下一个刚创建的空会话。
+	role := sessionNewRole(req.Role, req.Args)
+	if role != "" {
+		if _, err := agents.ResolveRole(role); err != nil {
+			return SessionNewResponse{}, err
+		}
+	}
 	sess, err := loadSession(req.Cwd, &id, false, hidden)
 	if err != nil {
 		return SessionNewResponse{}, fmt.Errorf("new session failed: %v", err)
+	}
+	if role != "" {
+		if err := applySessionRole(sess, role); err != nil {
+			return SessionNewResponse{}, fmt.Errorf("apply role: %v", err)
+		}
 	}
 
 	sessionID := cwd2SessionID(req.Cwd, id)
@@ -2195,8 +2266,9 @@ func SessionNew(req SessionNewRequest, call func(string, any, *string) error, co
 	}
 
 	return SessionNewResponse{
-		SessionID:     sessionID,
-		ConfigOptions: buildConfigOptions(currentModelID, sess.ReasoningEffort),
+		SessionID: sessionID,
+		// role 覆盖模型时展示实际生效的模型，避免下拉与真实请求不一致。
+		ConfigOptions: buildConfigOptions(sess.EffectiveModelID(), sess.Role, sess.ReasoningEffort),
 	}, nil
 }
 
@@ -2631,7 +2703,8 @@ func SessionResume(req SessionResumeRequest, call func(string, any, *string) err
 			}
 		}
 	}
-	modelID := sess.LastModelID
+	// 有效模型：活跃子代理 > 会话 role > LastModelID（role 覆盖模型时下拉同步展示）。
+	modelID := sess.EffectiveModelID()
 
 	availableCommands := availableCommandList()
 	err = broadcastSessionUpdate(req.SessionID, u.H{
@@ -2644,16 +2717,17 @@ func SessionResume(req SessionResumeRequest, call func(string, any, *string) err
 		logger.Warn("failed to broadcast session update: %v", err)
 	}
 
+	configOptions := buildConfigOptions(modelID, sess.Role, sess.ReasoningEffort)
 	err = broadcastSessionUpdate(req.SessionID, SessionUpdate{
 		SessionID: req.SessionID,
 		Update: SessionUpdateUpdate{
 			SessionUpdate: "config_option_update",
-			ConfigOptions: buildConfigOptions(modelID, sess.ReasoningEffort),
+			ConfigOptions: configOptions,
 		},
 	}, 0)
 
 	return SessionResumeResponse{
-		ConfigOptions: buildConfigOptions(modelID, sess.ReasoningEffort),
+		ConfigOptions: configOptions,
 		Cursor:        nextCursor,
 	}, nil
 }
@@ -2726,7 +2800,8 @@ func SessionSetConfigOption(req SessionSetConfigOptionRequest, call func(string,
 	if req.ConfigID == "" {
 		return SessionSetConfigOptionResponse{}, fmt.Errorf("configId is empty")
 	}
-	if req.Value == "" {
+	// role 允许空值（表示清除、回到默认主 agent），其余选项仍要求非空。
+	if req.Value == "" && req.ConfigID != "role" {
 		return SessionSetConfigOptionResponse{}, fmt.Errorf("value is empty")
 	}
 
@@ -2751,6 +2826,12 @@ func SessionSetConfigOption(req SessionSetConfigOptionRequest, call func(string,
 	switch req.ConfigID {
 	case "model":
 		logger.Info("set model %s in session=%s", req.Value, req.SessionID)
+		// 会话 role 显式配置了模型时，EffectiveModelID 会覆盖本次选择：直接报错，
+		// 避免"设置成功但请求仍用 role 模型"的静默不一致。
+		if !sess.HasActiveAgent() && sess.RoleConfig.AgentModel > 0 {
+			return SessionSetConfigOptionResponse{}, fmt.Errorf(
+				"model is overridden by session role %q; clear the role first", sess.Role)
+		}
 		// 解析模型值格式："index/modelId"
 		parts := strings.SplitN(req.Value, "/", 2)
 		if len(parts) != 2 {
@@ -2787,12 +2868,19 @@ func SessionSetConfigOption(req SessionSetConfigOptionRequest, call func(string,
 			return SessionSetConfigOptionResponse{}, fmt.Errorf("invalid thought level: %s", req.Value)
 		}
 
+	case "role":
+		// 空 value 表示清除角色；applySessionRole 与私有 RPC 共用校验/落库逻辑。
+		logger.Info("set role %q in session=%s", req.Value, req.SessionID)
+		if err := applySessionRole(sess, req.Value); err != nil {
+			return SessionSetConfigOptionResponse{}, err
+		}
+
 	default:
 		return SessionSetConfigOptionResponse{}, fmt.Errorf("unknown config option: %s", req.ConfigID)
 	}
 
-	// 生成更新后的配置选项列表
-	configOptions := buildConfigOptions(sess.LastModelID, sess.ReasoningEffort)
+	// 生成更新后的配置选项列表：model 展示实际生效值（role 可能覆盖模型）。
+	configOptions := buildConfigOptions(sess.EffectiveModelID(), sess.Role, sess.ReasoningEffort)
 
 	// 广播配置更新到所有连接到该会话的客户端
 	err = broadcastSessionUpdate(req.SessionID, SessionUpdate{
@@ -2859,6 +2947,8 @@ type SessionInfo struct {
 	SessionID string `json:"sessionId"`
 	Cwd       string `json:"cwd"`
 	Title     string `json:"title"`
+	// Role 会话角色（agent tag，空串 = 默认主 agent）。客户端列表页可直接展示。
+	Role string `json:"role,omitempty"`
 	// UpdatedAt 最后活动时间（RFC 3339，UTC）。历史数据未记录时间时显示为 Unix 纪元 "1970-01-01T00:00:00Z"。
 	UpdatedAt string `json:"updatedAt"`
 }
@@ -2991,6 +3081,7 @@ func SessionList(req SessionListRequest, call func(string, any, *string) error, 
 			SessionID: cwd2SessionID(req.Cwd, chat.ID),
 			Cwd:       req.Cwd,
 			Title:     tit,
+			Role:      chat.Role,
 			UpdatedAt: formatSessionUpdatedAt(chat),
 		}
 	}

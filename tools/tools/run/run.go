@@ -426,11 +426,9 @@ func runTask(session *structs.Chats, mp map[string]*any, cross []*any) (bool, []
 		}
 	}
 
-	// 检查强制策略、配置和环境变量以禁用沙盒（策略见 sandbox_policy.go）
-	disableSandbox := sandboxForceDisabled ||
-		config.GlobalConfig.Agent.DisableSandbox ||
-		session.CurrentAgentConfig.DisableSandbox ||
-		os.Getenv("ALKAID0_DISABLE_SANDBOX") == "true"
+	// 检查强制策略、配置和环境变量以禁用沙盒（策略见 sandbox_policy.go）。
+	// 生效配置：活跃子代理 > 会话 role > 零值；未配置时与全局/环境变量取或。
+	disableSandbox := sandboxDisabledByConfig(session)
 
 	// 检查环境是否支持沙盒
 	if sandboxFlag && !disableSandbox {

@@ -60,6 +60,10 @@ func InitFuncs(srv *jsonrpc.Server) {
 		jsonrpc.Set(srv, "alk.cxykevin.top/session/goal/get", GoalGet)
 		jsonrpc.Set(srv, "alk.cxykevin.top/session/goal/set", GoalSet)
 
+		// 会话角色（agent tag；读写 + 作为 configId="role" 暴露给 set_config_option）
+		jsonrpc.Set(srv, "alk.cxykevin.top/session/role/get", RoleGet)
+		jsonrpc.Set(srv, "alk.cxykevin.top/session/role/set", RoleSet)
+
 		// 会话消息队列（仅向声明了 alk.cxykevin.top/msgqueue 能力的连接推送）
 		jsonrpc.Set(srv, "alk.cxykevin.top/session/msgqueue/list", MsgQueueList)
 		jsonrpc.Set(srv, "alk.cxykevin.top/session/msgqueue/cancel", MsgQueueCancel)

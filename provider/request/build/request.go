@@ -508,9 +508,11 @@ scan:
 		systemContent += config.GlobalConfig.Agent.GlobalPrompt + "\n\n"
 	}
 
-	// 3. agent提示词
-	if agentCode != "" {
-		systemContent += agentCfg.AgentPrompt + "\n\n"
+	// 3. agent 提示词：活跃子代理与会话 role 都经 agentCfg 传入
+	//    （Build 已取 session.EffectiveAgentConfig）。有非空 AgentPrompt 时替换默认
+	//    主 agent 提示词——role 与子代理同语义；没有则使用内置 DefaultAgent。
+	if prompt := strings.TrimSpace(agentCfg.AgentPrompt); prompt != "" {
+		systemContent += prompt + "\n\n"
 	} else {
 		systemContent += prompts.DefaultAgent + "\n\n"
 	}

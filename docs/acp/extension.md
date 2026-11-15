@@ -52,13 +52,16 @@ alkaid0 对于客户端并 **不强制** 要求客户端初始化，这与 [ACP 
   "alk.cxykevin.top/alkaid0/v0.7": {},
   "alk.cxykevin.top/msgqueue": {},
   "alk.cxykevin.top/cron": {},
-  "alk.cxykevin.top/goal": {}
+  "alk.cxykevin.top/goal": {},
+  "alk.cxykevin.top/role": {}
 }
 ```
 
 `alk.cxykevin.top/goal` 表示服务端支持会话 goal 的读写与推送（`.../session/goal/get`、`.../session/goal/set`，以及 `session/update` 中的 `alk.cxykevin.top/session/goal` 快照事件，见 §2.9/§3.12）。goal 推送与请求重试通知（§2.10）都是普通 `session/update` 通知，不要求客户端在 `initialize` 中声明能力。
 
 `alk.cxykevin.top/msgqueue` 表示服务端支持会话消息队列。**客户端必须在自己的 `initialize` 请求 `capabilities` 顶层显式声明同名键**（值为 `{}` 或 `true`；缺失、`false` 或 `null` 均视为不支持），服务端才会向该连接推送队列事件（见 §2.8）。未声明的客户端不会收到任何 `msgqueue` 推送，但其 `session/prompt` 仍然可用：提交时服务端会走「终止当前生成 + 合并发送」的降级路径（见 §2.8 末尾）。
+
+`alk.cxykevin.top/role` 表示服务端支持会话级 role（agent tag）：`session/new` 的 `alk.cxykevin.top/session/role` 参数、`configOptions` 中 `configId: "role"`、`session/set_config_option` 的 role 分支、私有方法 `.../session/role/get` / `.../session/role/set`（见 §3.13/§4.2），以及 `session/list` 每项返回的 `role` 字段。纯请求-响应 + `config_option_update` 广播，不要求客户端额外声明。
 
 其中 `alk.cxykevin.top/alkaid0/v0.4`、`alk.cxykevin.top/alkaid0/v0.5`、`alk.cxykevin.top/alkaid0/v0.6` 与 `alk.cxykevin.top/alkaid0/v0.7` 为 alkaid0 扩展协议版本能力标记。v0.7 包含 prompt 的图片内容块与 `@image/{id}` 图片库（`session/prompt` 的 image 块、`read` / `fs/read` 取图、`user_message` 缩略图，见 §4.3）；v0.6 包含已结束终端会话内容查询（`alk.cxykevin.top/session/terminal/history`）、`tool_call_update` 顶层的 `alk.cxykevin.top/terminal_id`（终端 ID 与 run id 统一为 `@temp/run/<n>`，终端内容持久化于该路径，见 §5.4）；v0.5 包含 dynworkflow stdout 握手、workflow stdio 控制、workflow 状态持久化、workflow/update_xxx 实时广播与 workflow 快照通知。**v0.5 不提供 workflow 列表方法**——workflow 的枚举统一走 `alk.cxykevin.top/session/terminal/list`（活动）与 `.../terminal/history`（已结束）的 `workflow` 标记（见 §3.1/§3.2）。v0.4 能力保持兼容。
 
@@ -753,6 +756,49 @@ ACP v2 中 `session/update` 是服务端 → 客户端的通知（含 `session_i
   "updatedAt": "2026-11-05T12:00:00+08:00" } }
 ```
 
+### 3.13. `alk.cxykevin.top/session/role/*`
+
+读写会话级 role（agent tag）。能力标记 `alk.cxykevin.top/role` 表示服务端支持本组方法、`configOptions` 的 `role` 选项与 `session/new` 的 role 参数。
+
+role 的取值是 `config.Agent.Agents` 或内置代理里的 tag 名（即 `<agent_tags>` 中的 `tag_name`）。非空时该会话的主 agent 改用对应 `AgentConfig`：提示词替换默认主 agent 提示词，模型（`AgentModel > 0` 时）、自动审批/拒绝规则、`DisableSandbox` 等也随 role 生效。优先级为 **活跃子代理 > 会话 role > 默认主 agent**。**Internal 代理不能作为 role**（例如内置的 `goal-check`）。
+
+两个方法都要求 `sessionId` 已由当前连接通过 `session/new` / `session/resume` 绑定；允许冷会话（服务端重启后内存注册表为空），但 `sessionId` 中的工作目录必须是规范绝对路径且已存在 `.alkaid0`。
+
+| 方法 | 请求 | 响应 |
+|---|---|---|
+| `.../session/role/get` | `{ sessionId }` | `{ role, roles: RoleOption[] }` |
+| `.../session/role/set` | `{ sessionId, role }` | `{ role }` |
+
+- `role` ***string***：当前 role tag；空字符串表示未设置（默认主 agent）。`set` 传空串即清除。
+- `roles` ***RoleOption[]***：可选 role 列表，已过滤 Internal 代理，按 tag 名升序：`{ name, displayName, description, modelId }`。
+- 未知 tag 返回 `role "<tag>" not found`；Internal 代理返回 `role "<tag>" is internal and cannot be used as a session role`。
+- `set` 成功后立即落库（`chats.role` 单列更新）。会话在内存中时同步运行时配置并向该会话所有连接广播 `config_option_update`（`configOptions` 的 `currentValue` 随 `role` 与生效模型刷新）；冷会话只落库，下次加载会话时解析生效。广播失败只记日志，不影响写入结果。
+- `get` 对冷会话只读取数据库中的 `role`，返回的 `roles` 由当前配置生成。
+- `session/new` 支持根级私有参数 `"alk.cxykevin.top/session/role": "<tag>"`，也接受 `params.args` 内同名字段；根级优先，非字符串或空白按未设置处理。**role 在创建会话之前校验**：非法 tag 直接返回错误，不会留下一个空的会话（`cwd` 下不会创建 `.alkaid0`）。
+- `session/list` 返回的每个 `SessionInfo` 可带 `role` ***string?***（空 role 省略），客户端列表页可直接展示。
+- 会话忙碌时也允许修改，同一回合的下一轮请求立即生效；本组方法不触发模型回合。
+- **role 覆盖模型时的改写限制**：若 `role` 的 `AgentModel > 0`，`session/set_config_option`（`configId: "model"`）会返回 `model is overridden by session role "<tag>"; clear the role first`，避免"设置成功但请求仍用 role 模型"的静默不一致。清除 role 后即可正常切换模型。
+
+`RoleOption`：
+
+```json
+{
+  "name": "reviewer",
+  "displayName": "Reviewer",
+  "description": "只读审查，不改代码",
+  "modelId": 2
+}
+```
+
+```jsonc
+// 请求
+{ "jsonrpc": "2.0", "id": 1, "method": "alk.cxykevin.top/session/role/set",
+  "params": { "sessionId": "sess_7:/path/to/project", "role": "reviewer" } }
+
+// 响应
+{ "jsonrpc": "2.0", "id": 1, "result": { "role": "reviewer" } }
+```
+
 ## 4. 字段扩展
 
 ### 4.1. [Tool Calls 的 Content 字段](https://agentclientprotocol.com/protocol/v2/tool-calls#content)
@@ -779,12 +825,15 @@ ACP v2 中 `session/update` 是服务端 → 客户端的通知（含 `session_i
 
 > 注：ACP v2 约定实现自定义 type 以 `_` 开头，`alk.cxykevin.top/calling_info` 不含 `_`。因该字段为 alkaid0 自有客户端消费，维持现状（已知合规性问题）。
 
-### 4.2. 配置选项（`configId` 与 `thought_level`）
+### 4.2. 配置选项（`configId` / `role` / `thought_level`）
 
 `session/new` / `session/resume` 响应与 `config_option_update` 中的 `configOptions` 遵循 ACP v2：`configId`（非 `id`）、`name`、`description`、`category`、`type`、`currentValue`、`options`。当前提供：
 
-- `model`（category `model`）：模型选择。
+- `model`（category `model`）：模型选择。`currentValue` 是**实际生效**的模型：会话 role 配置了 `AgentModel > 0` 时显示 role 的模型；此时通过 `session/set_config_option` 改模型会报错（见 §3.13）。
+- `role`（category `role`）：会话角色（agent tag）。`options` 首项是 `{ "value": "", "name": "Default", "description": "Default main agent" }`（清除 role），其余为可用 tag（已过滤 Internal 代理）；`currentValue` 为空串表示默认主 agent。经 `session/set_config_option`（`configId: "role"`）修改，**允许空 `value`**（清除角色），其余配置项仍要求非空。
 - `thought_level`（category `thought_level`）：推理强度，可选值 `unset`/`low`/`medium`/`high`/`max`/`xhigh`，经 `session/set_config_option`（`configId: "thought_level"`，`type: "id"`）修改。
+
+修改 `model` / `role` / `thought_level` 后服务端都会广播 `config_option_update`，`configOptions` 随之刷新（role 改变时模型 `currentValue` 也可能变化）。`role` 的语义、校验与私有 RPC 见 §3.13。
 
 ### 4.3. 图片内容（`alk.cxykevin.top/alkaid0/v0.7`）
 

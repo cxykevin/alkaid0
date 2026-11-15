@@ -118,11 +118,9 @@ func pythonTask(session *structs.Chats, mp map[string]*any, cross []*any) (bool,
 		}
 	}
 
-	// 强制策略优先（见 sandbox_policy.go）：沙盒修复前一律在沙盒外执行。
-	disableSandbox := sandboxForceDisabled ||
-		config.GlobalConfig.Agent.DisableSandbox ||
-		session.CurrentAgentConfig.DisableSandbox ||
-		os.Getenv("ALKAID0_DISABLE_SANDBOX") == "true"
+	// 强制策略优先（见 sandbox_policy.go）。
+	// 生效配置：活跃子代理 > 会话 role > 零值；未配置时与全局/环境变量取或。
+	disableSandbox := sandboxDisabledByConfig(session)
 
 	if sandboxFlag && !disableSandbox {
 		if !sandbox.IsSandboxSupported() {

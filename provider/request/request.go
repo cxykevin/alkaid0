@@ -359,15 +359,15 @@ func EvaluateApprovalRules(session *storageStructs.Chats, toolCalls []ToolCall) 
 		}
 	}
 
-	// 先读取 Agent 级别的配置，作为最高优先级。
-	// CurrentAgentConfig 仅在子代理活跃时有效；主会话必须直接使用全局规则。
-	autoApprove := ""
-	autoReject := ""
-	if session.CurrentAgentID != "" || session.NowAgent != "" {
-		autoApprove = strings.TrimSpace(session.CurrentAgentConfig.AutoApprove)
-		autoReject = strings.TrimSpace(session.CurrentAgentConfig.AutoReject)
-		logger.Debug("EvaluateRules: active agent=%q, AutoApprove=%q, AutoReject=%q",
-			session.CurrentAgentID, autoApprove, autoReject)
+	// 先读取 Agent 级别的配置，作为最高优先级：活跃子代理 > 会话 role。
+	// role 的对应规则为空时按"主 agent 的批准设置"处理——继续回退全局默认，
+	// 再叠加内置规则；不做"空规则 = 全部拒绝"这种语义变化。
+	agentCfg := session.EffectiveAgentConfig()
+	autoApprove := strings.TrimSpace(agentCfg.AutoApprove)
+	autoReject := strings.TrimSpace(agentCfg.AutoReject)
+	if session.HasActiveAgent() || session.Role != "" {
+		logger.Debug("EvaluateRules: active agent=%q role=%q, AutoApprove=%q, AutoReject=%q",
+			session.CurrentAgentID, session.Role, autoApprove, autoReject)
 	}
 
 	// 配置优先级：活跃 Agent 配置 > 全局默认配置。
@@ -433,7 +433,7 @@ func EvaluateApprovalRules(session *storageStructs.Chats, toolCalls []ToolCall) 
 			result, runErr := expr.Run(rejectProgram, map[string]any{
 				"ToolCalls": callsMap,
 				"ToolCall":  call.AsMap(),
-				"Agent":     session.CurrentAgentConfig,
+				"Agent":     agentCfg,
 				"Workdir":   workdir,
 			})
 			if runErr != nil {
@@ -459,7 +459,7 @@ func EvaluateApprovalRules(session *storageStructs.Chats, toolCalls []ToolCall) 
 		result, runErr := expr.Run(approveProgram, map[string]any{
 			"ToolCalls": callsMap,
 			"ToolCall":  call.AsMap(),
-			"Agent":     session.CurrentAgentConfig,
+			"Agent":     agentCfg,
 			"Workdir":   workdir,
 		})
 		if runErr != nil {

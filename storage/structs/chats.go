@@ -46,7 +46,12 @@ type Chats struct {
 	Title           string // 用户设置的标题（/title 命令写入）
 	AITitle         string // AI 生成的标题（自动生成/compress 重生成写入）
 	ReasoningEffort string
-	Task            string // 任务计划（markdown 列表，@task 虚拟对象编辑，持久化到 chats 表）
+	// Role 会话角色（agent tag 名，见 config.Agent.Agents 与内置 agents）。
+	// 非空时该会话的主 agent 使用对应 tag 的提示词/模型/审批规则/沙盒配置；
+	// 空串表示默认主 agent。Internal 代理不能作为会话角色。
+	// 只影响主 agent：活跃子代理始终优先，停用后自动回落到该角色。
+	Role string
+	Task string // 任务计划（markdown 列表，@task 虚拟对象编辑，持久化到 chats 表）
 	// Goal 会话目标（≤1024 rune）。设置后不可由 AI 修改，仅能通过 /goal 或私有协议清除/覆盖。
 	// 非空时：goal 注入 system 最顶端、请求失败无限指数重试、主 agent 结束后进入 goal-check。
 	Goal   string `gorm:"type:text"`
@@ -61,12 +66,16 @@ type Chats struct {
 	UpdatedAt time.Time
 	// === 会话过程参数 ===
 	// agentLifecycleMu 串行化激活/停用，避免并发工具调用重复改变会话状态。
-	agentLifecycleMu         sync.Mutex          `gorm:"-" json:"-"`
-	contextHolder            *contextHolder      `gorm:"-" json:"-"`
-	Stop                     bool                `gorm:"-" json:"-"`
-	DB                       *gorm.DB            `gorm:"-" json:"-"`
-	CurrentAgentID           string              `gorm:"-" json:"-"`
-	CurrentAgentConfig       structs.AgentConfig `gorm:"-" json:"-"`
+	agentLifecycleMu   sync.Mutex          `gorm:"-" json:"-"`
+	contextHolder      *contextHolder      `gorm:"-" json:"-"`
+	Stop               bool                `gorm:"-" json:"-"`
+	DB                 *gorm.DB            `gorm:"-" json:"-"`
+	CurrentAgentID     string              `gorm:"-" json:"-"`
+	CurrentAgentConfig structs.AgentConfig `gorm:"-" json:"-"`
+	// RoleConfig 已解析的会话角色配置（chats.role 对应的 AgentConfig）。
+	// 与 CurrentAgentConfig 分开存放：子代理激活/停用时只会改写前两者，
+	// 停用后主 agent 自动回落到这个角色配置，不会丢失。
+	RoleConfig               structs.AgentConfig `gorm:"-" json:"-"`
 	CurrentActivatePath      string              `gorm:"-" json:"-"`
 	EnableScopes             map[string]bool     `gorm:"-" json:"-"`
 	TemporyDataOfRequest     map[string]any      `gorm:"-" json:"-"`
@@ -148,8 +157,48 @@ type PlanEntry struct {
 	Status   string `json:"status"`   // pending | in_progress | completed
 }
 
-// EffectiveModelID 返回本次请求应使用的模型 ID：
-// 活跃子代理配置了模型时优先用它，否则用会话最后选择的模型。
+// HasActiveAgent 是否存在活跃的子代理（普通子代理或内部代理）。
+// 活跃时其配置优先于会话 role。
+func (c *Chats) HasActiveAgent() bool {
+	return c != nil && (c.CurrentAgentID != "" || c.NowAgent != "")
+}
+
+// EffectiveAgentConfig 返回本次请求应使用的 agent 配置，优先级：
+// 活跃子代理 > 会话 role > 零值（默认主 agent）。
+//
+// 子代理使用 CurrentAgentConfig，会话 role 使用独立的 RoleConfig——
+// 两者不能共用一个字段：子代理停用时会把 CurrentAgentConfig 清零，
+// 若 role 也存在那里就会被一并丢掉。
+func (c *Chats) EffectiveAgentConfig() structs.AgentConfig {
+	if c == nil {
+		return structs.AgentConfig{}
+	}
+	if c.HasActiveAgent() {
+		return c.CurrentAgentConfig
+	}
+	return c.RoleConfig
+}
+
+// SetRoleRuntime 记录已解析的会话角色配置（持久化列 chats.role 由调用方负责写入）。
+func (c *Chats) SetRoleRuntime(tag string, cfg structs.AgentConfig) {
+	if c == nil {
+		return
+	}
+	c.Role = tag
+	c.RoleConfig = cfg
+}
+
+// ClearRoleRuntime 清除运行时角色配置（持久化列由调用方负责写入空串）。
+func (c *Chats) ClearRoleRuntime() {
+	if c == nil {
+		return
+	}
+	c.Role = ""
+	c.RoleConfig = structs.AgentConfig{}
+}
+
+// EffectiveModelID 返回本次请求应使用的模型 ID，优先级：
+// 活跃子代理配置的模型 > 会话 role 配置的模型 > 会话最后选择的模型。
 //
 // 这是**唯一**的模型解析入口：此前这段判断在 5 处各抄了一份
 // （request.SendRequest、build.Build、ui/loop、run/python、actions.currentTokenLimit），
@@ -159,11 +208,13 @@ func (c *Chats) EffectiveModelID() uint32 {
 	if c == nil {
 		return 0
 	}
-	if c.CurrentAgentID != "" {
-		// 只有正数才是显式指定；0 / -1（内部代理“跟随会话模型”）都回退 LastModelID。
+	// 只有正数才是显式指定；0 / -1（内部代理、role “跟随会话模型”）都继续往下回退。
+	if c.HasActiveAgent() {
 		if id := c.CurrentAgentConfig.AgentModel; id > 0 {
 			return uint32(id)
 		}
+	} else if id := c.RoleConfig.AgentModel; id > 0 {
+		return uint32(id)
 	}
 	return c.LastModelID
 }

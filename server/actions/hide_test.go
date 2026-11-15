@@ -25,7 +25,7 @@ func TestBuildConfigOptionsHideFilter(t *testing.T) {
 		},
 	}
 
-	options := buildConfigOptions(0, "unset")
+	options := buildConfigOptions(0, "", "unset")
 	var modelOpt *ConfigOption
 	for i := range options {
 		if options[i].ConfigID == "model" {
@@ -67,7 +67,7 @@ func TestBuildConfigOptionsCurrentValueFallback(t *testing.T) {
 	}
 
 	// 当前模型 1 被隐藏：currentValue 应回退到 0/vis-a
-	options := buildConfigOptions(1, "unset")
+	options := buildConfigOptions(1, "", "unset")
 	var modelOpt *ConfigOption
 	for i := range options {
 		if options[i].ConfigID == "model" {
@@ -97,7 +97,7 @@ func TestBuildConfigOptionsCurrentValueKeepsVisible(t *testing.T) {
 		},
 	}
 
-	options := buildConfigOptions(1, "unset")
+	options := buildConfigOptions(1, "", "unset")
 	var modelOpt *ConfigOption
 	for i := range options {
 		if options[i].ConfigID == "model" {

@@ -38,13 +38,14 @@ const (
 	diffOverBudgetLimit = 8.0
 )
 
-// cacheModelConfig 读取当前模型（session.LastModelID）的缓存倍率与保留分钟，取不到回退默认。
+// cacheModelConfig 读取当前生效模型（EffectiveModelID：活跃子代理 > 会话 role >
+// LastModelID）的缓存倍率与保留分钟，取不到回退默认。
 func cacheModelConfig(session *structs.Chats) (float32, int32) {
 	cfg := config.GlobalConfigSafe()
 	if cfg == nil {
 		return cacheDefaultMultiplier, cacheDefaultRetention
 	}
-	m, ok := cfg.Model.Models[int32(session.LastModelID)]
+	m, ok := cfg.Model.Models[int32(session.EffectiveModelID())]
 	if !ok {
 		return cacheDefaultMultiplier, cacheDefaultRetention
 	}

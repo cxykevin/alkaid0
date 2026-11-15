@@ -69,7 +69,9 @@ func Build(db *gorm.DB, session *storageStructs.Chats) (*reqStruct.ChatCompletio
 	// AgentModel。此前这里直接用 chatLine.LastModelID，于是请求体里的 model 与全部
 	// 模型参数取自父模型，而连接目标/落库/计费/上下文统计按子代理模型走——轻则参数
 	// 不符，重则子代理模型跨供应商时直接 404。
-	body, err := RequestBody(session.ID, int32(session.EffectiveModelID()), agentCode, tools, db, addSystemPrompt, traces, session.CurrentAgentConfig, chatLine)
+	// 生效配置：活跃子代理 > 会话 role > 零值（默认主 agent）。
+	// 提示词、审批说明、审批规则都从这里取值，role 与子代理走同一条路径。
+	body, err := RequestBody(session.ID, int32(session.EffectiveModelID()), agentCode, tools, db, addSystemPrompt, traces, session.EffectiveAgentConfig(), chatLine)
 	if err != nil {
 		logger.Error("build request body error %v", err)
 		return nil, err
