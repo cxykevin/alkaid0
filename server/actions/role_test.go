@@ -5,6 +5,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/cxykevin/alkaid0/config"
 	cfgStructs "github.com/cxykevin/alkaid0/config/structs"
@@ -225,6 +226,15 @@ func TestSessionNewWithRole(t *testing.T) {
 	obj, ok := lookupSession(resp.SessionID)
 	if !ok || obj.session == nil {
 		t.Fatal("session not loaded in memory")
+	}
+	// Windows 上 codebase 索引 goroutine 会持有 .alkaid0/codebase.sqlite；
+	// 必须等它结束，否则 t.TempDir 清理会因文件被占用而失败。
+	if obj.indexDone != nil {
+		select {
+		case <-obj.indexDone:
+		case <-time.After(15 * time.Second):
+			t.Error("timeout waiting for async index goroutine")
+		}
 	}
 	if obj.session.Role != "reviewer" || obj.session.RoleConfig.AgentName != "Reviewer" {
 		t.Errorf("session/new 运行时 role = %q / %q", obj.session.Role, obj.session.RoleConfig.AgentName)
